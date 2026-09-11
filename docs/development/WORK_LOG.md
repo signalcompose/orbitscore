@@ -17,6 +17,54 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor: fold the /simplify findings for #883 bundle C (Sep 11, 2026)
+
+**Date**: 2026-09-11
+**Status**: ✅ 完了（PR #884）
+
+`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行起動。
+**独立した 3 観点が同じ 2 機構に収束**したので、指摘単位ではなく**機構単位**で直した
+（CLAUDE.md「指摘単位のローカルパッチは禁止・振動の主因」）。
+
+| 機構 | 収束した観点 | 修正 |
+|---|---|---|
+| **A** 述語の所在 | reuse / efficiency / altitude の 3 つ | `lineNeedsBus` を `audio-line.ts` の **export 純関数**へ + `AudioLine.needsBus()`（`elements` を直読・コピーしない） |
+| **B** 補完の重複 | reuse / efficiency / altitude の 3 つ | `scanVarDeclarations()` へ一本化 + 正規表現をモジュール定数へ |
+| **C** 分岐の畳み込み | simplification のみ | `output(dest ?? {kind:'master'})` / `resolveDest` が `undefined` を吸収 |
+
+#### A の根拠（3 観点が別々の理由で同じ結論に達した）
+
+- **reuse**: 設計 §2.3 が「`audio-line.ts` に純関数として置く」と**コード例まで示していた**
+- **efficiency**: `snapshot()` は `return [...this.elements]` で**配列を丸ごとコピー**する。
+  述語は走査するだけなのでコピーは使い捨て。`elements` は private なので、
+  **`audio-line.ts` に置くことが非コピーの唯一の経路**
+- **altitude**: 束 S の instrument 経路（設計 §2.2.1）が**同じ述語**を使う。`Sequence` の
+  private ローカル式のままだと、束 S は private へ手を伸ばすか書き写すかになり**ドリフトする**
+
+#### B の根拠
+
+`var NAME = <ident>.<member>` を拾うループが 2 箇所に写されており、`\b` の有無や
+`output\s*\(` の扱いが将来ずれて**片方だけ直る**形だった。加えて 1 回の補完で同じ文書を
+**4 回走査**していた（`matchAll`×2 + `split`×2）。`(` がトリガー文字に足されて発火頻度も上がる経路。
+
+#### 採らなかった指摘
+
+補完の `output-string` / `output-node` を 1 つの kind に畳む案は**却下**。
+正規表現・語彙状態（`string` vs `code`）・候補の中身（バス"名" vs 変数"識別子"）・
+`CompletionItemKind`（`Value` vs `Variable`）がすべて異なり、畳むと `mode` 判別フィールドが
+要るだけで**複雑さは減らず名前が変わるだけ**（simplification agent が実読して同じ結論）。
+
+#### 検証
+
+```
+Test Files  160 passed | 4 skipped (164)      Tests  2352 passed | 68 skipped (2420)
+```
+
+lint 緑 / 🔴 `git diff main...HEAD --exit-code -- tests/e2e/output-line-expectations.ts` **無出力**
+（束 C の検算が simplify 後も保たれている）。
+
+---
+
 ### feat(dsl): make output() default to master and migrate every score (#883 bundle C) (Sep 11, 2026)
 
 **Date**: 2026-09-11

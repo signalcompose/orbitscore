@@ -492,15 +492,8 @@ export class Sequence {
     // truth, but it is equivalent to today's direct path and therefore must not consume one
     // of the eight sequence buses. Allocate only when the declared line needs processing or
     // routing that the direct path cannot realize. Fixed gain/pan remain event-side until then.
-    const lineNeedsBus = this._line
-      .snapshot()
-      .some(
-        (element) =>
-          element.kind === 'rack' ||
-          (element.kind === 'output' &&
-            !(element.dest.kind === 'master' && !element.thru && element.db === 0)),
-      )
-    if (!this._insertBus && lineNeedsBus) {
+    // 🔴 述語の定義は `AudioLine.needsBus()` 側にある（束 S の instrument 経路が同じものを使う）。
+    if (!this._insertBus && this._line.needsBus()) {
       this._insertBus = this.global.ensureSequenceInsertBus(name)
     }
   }
@@ -563,11 +556,10 @@ export class Sequence {
   output(dest?: string | number | OutputDest, opts: OutputOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
     assertOutputOptions(opts, `Sequence '${name}': output`)
-    if (dest === undefined) {
-      return this.applyOutputElement({ kind: 'master' }, opts, 'output')
-    }
-    if (typeof dest === 'object') {
-      return this.applyOutputElement(dest, opts, 'output')
+    // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
+    // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
+    if (dest === undefined || typeof dest === 'object') {
+      return this.applyOutputElement(dest ?? { kind: 'master' }, opts, 'output')
     }
     const destinationName = typeof dest === 'number' ? String(dest) : dest
     if (!destinationName || !destinationName.trim()) {

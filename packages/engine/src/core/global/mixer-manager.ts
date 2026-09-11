@@ -337,7 +337,7 @@ export class MixerManager {
         assertOutputOptions(opts, `Mixer bus '${formatReceiverId(kind, name)}': output`)
         await this.applyLineElement(bus, {
           kind: 'output',
-          dest: dest === undefined ? { kind: 'master' } : this.resolveDest(dest),
+          dest: this.resolveDest(dest),
           thru: opts.thru ?? false,
           db: opts.db ?? 0,
           sugar: 'output',
@@ -377,7 +377,10 @@ export class MixerManager {
   /** §2.1/§3.3 resolution (minus the LinkAudio/render-bus branches, which do not apply to a
    * bus-to-bus route): an already-resolved `OutputDest`, the `"master"` reserved word, a
    * declared sum/aux bus name, or an `"L,R"` physical-channel-pair shorthand. */
-  private resolveDest(value: string | OutputDest): OutputDest {
+  private resolveDest(value?: string | OutputDest): OutputDest {
+    // #883 §4: an omitted destination IS `output("master")` — keep that knowledge here with
+    // the rest of the destination resolution instead of leaking it into each call site.
+    if (value === undefined) return { kind: 'master' }
     if (typeof value === 'object') return value
     const resolved = resolveNamedOutputDest(value, (name) => this.resolveNode(name))
     if (resolved) return resolved

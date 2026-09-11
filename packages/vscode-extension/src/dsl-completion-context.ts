@@ -171,32 +171,51 @@ export function extractTopLevelDeclaredNames(sourceText: string): string[] {
   return extractVarDeclarations(sourceText)
 }
 
+/**
+ * 🔴 **`var NAME = <ident>.<member>` を拾う唯一の実装。**
+ *
+ * `member` の部分だけを差し替えて sum / aux / mixer ノードの 3 通りに使う。以前はこの
+ * ループが 2 箇所に写されており、`\b` の有無や `output\s*\(` の扱いが将来ずれて
+ * **片方だけ直る**形だった（CLAUDE.md の DRY 節が名指ししている型）。
+ *
+ * 正規表現はモジュール定数から渡す — 補完は打鍵ごとに走るので、呼び出しのたびに
+ * `new RegExp` を組み立てない。
+ */
+function scanVarDeclarations(lines: readonly string[], pattern: RegExp, into: Set<string>): void {
+  for (const line of lines) {
+    const match = pattern.exec(line)
+    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') into.add(match[1])
+  }
+}
+
+const VAR_NODE_PATTERNS = {
+  sum: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.sum\b/,
+  aux: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.aux\b/,
+  /** sum / aux に加えて `mix.output(3, 4)` の物理アウトノードも拾う。 */
+  mixerNode: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(?:(?:sum|aux)\b|output\s*\()/,
+} as const
+
+const GLOBAL_BUS_STRING_PATTERNS = {
+  sum: /\bglobal\.sum\(\s*"([^"\n]+)"/g,
+  aux: /\bglobal\.aux\(\s*"([^"\n]+)"/g,
+} as const
+
 /** Returns string or variable names declared for a sum/aux bus before the cursor. */
 export function extractDeclaredBusNames(sourceText: string, kind: 'sum' | 'aux'): string[] {
   const names = new Set<string>()
-  const pattern = new RegExp(`\\bglobal\\.${kind}\\(\\s*"([^"\\n]+)"`, 'g')
+  const pattern = GLOBAL_BUS_STRING_PATTERNS[kind]
+  pattern.lastIndex = 0
   for (const match of sourceText.matchAll(pattern)) {
     if (lexicalStateAt(sourceText, match.index ?? 0) === 'code' && match[1]) names.add(match[1])
   }
-  const nodePattern = new RegExp(
-    `^\\s*var\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*[A-Za-z_$][\\w$]*\\.${kind}\\b`,
-  )
-  for (const line of sourceText.split(/\r?\n/)) {
-    const match = nodePattern.exec(line)
-    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
-  }
+  scanVarDeclarations(sourceText.split(/\r?\n/), VAR_NODE_PATTERNS[kind], names)
   return [...names]
 }
 
 /** Returns mixer-node variables declared by `mix.sum`, `mix.aux`, or `mix.output(...)`. */
 export function extractDeclaredMixerNodeNames(sourceText: string): string[] {
   const names = new Set<string>()
-  const pattern =
-    /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(?:(?:sum|aux)\b|output\s*\()/
-  for (const line of sourceText.split(/\r?\n/)) {
-    const match = pattern.exec(line)
-    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
-  }
+  scanVarDeclarations(sourceText.split(/\r?\n/), VAR_NODE_PATTERNS.mixerNode, names)
   return [...names]
 }
 

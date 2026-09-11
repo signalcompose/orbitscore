@@ -193,6 +193,23 @@ function forEachLiveLine(visit: (line: AudioLine) => void): void {
  */
 let frameOpen = false
 
+/**
+ * #883 §2.3「実現の省略」: a line needs a daemon bus only when it asks for something the
+ * direct engine path cannot realize — a rack, or an exit that is not a plain master exit.
+ *
+ * 🔴 **This is the single definition.** 束 S の instrument 経路（設計 §2.2.1）は
+ * `SetSourceRouting` の宛先（`none` / `master` / `bus`）を**同じ述語**で選ぶ。ここに
+ * 置かずに呼び出し側へ書き写すと、audio 経路と instrument 経路の判定がドリフトする。
+ */
+export function lineNeedsBus(elements: readonly LineElement[]): boolean {
+  return elements.some(
+    (element) =>
+      element.kind === 'rack' ||
+      (element.kind === 'output' &&
+        !(element.dest.kind === 'master' && !element.thru && element.db === 0)),
+  )
+}
+
 /** One ordered audio line, including the evaluation-batch cursor rules. */
 export class AudioLine {
   private elements: LineElement[] = []
@@ -349,6 +366,17 @@ export class AudioLine {
 
   snapshot(): readonly LineElement[] {
     return [...this.elements]
+  }
+
+  /**
+   * #883 §2.3: does this line need a daemon bus, or can the direct engine path realize it?
+   *
+   * Reads `elements` directly instead of going through `snapshot()` — the predicate only
+   * scans, and `snapshot()` copies the whole array on every `output()` / `send()`, which
+   * live coding re-evaluates constantly.
+   */
+  needsBus(): boolean {
+    return lineNeedsBus(this.elements)
   }
 
   private nextOrdinal(element: LineElement): number {
