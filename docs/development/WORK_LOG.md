@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
+
+PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
+#860 自身が `34e12b3` で dev サイトを更新しているが、**引用の再アンカーが 3 箇所ずれていた**。
+`check-citations.mjs` は「引用文字列が実ファイルと一致するか」しか見ないので、
+**別の関数に一致してしまった引用は緑のまま通る**。
+
+| 箇所 | 何が起きていたか |
+|---|---|
+| `sites/dev{,/en}/signal-chain/mixer-audio-line.md` | bus post-loop の `LineOp::Output` 腕を引用していたはずが、`execute_master_line`（master 側）の `LineOp::Output` 腕に再アンカーされていた。直後の本文「`Output` として実行されるのは `Master` / `Bus` / `Device` の 3 つ」と引用が食い違う（master 側は `Device` 以外を `debug_assert!(false)` で落とす）。`output.rs:2566-2592` へ戻した |
+| 同上（pan 節） | `apply_line_pan` の引用が切り詰められ、直後の本文が指す **`√2`** が引用内に無くなっていた。`√2` は #859 で `line_pan_coefficients` へ切り出されたので、その関数（`output.rs:2227-2243`）の引用を足した |
+| `sites/dev{,/en}/rust-engine/index.md` | `render_block_with_sources` の引用が 4 行はみ出して `execute_master_line` のシグネチャを含んでいた。`1846-1932`（関数の閉じ括弧）で止めた |
+
+あわせて、#859 が**コード引用だけ更新して本文を更新しなかった**箇所を直した
+（`sites/dev{,/en}/rust-engine/index.md` の `advance_gain` 節）。旧本文の
+「block が ramp より長ければ 1 回で目標へ到達」は、いまはブロック**終端**の値の話であって、
+ブロック内は `ramp_frames` サンプルかけて補間される。これは #859 が直した欠陥そのものなので、
+そのまま残すと修正前の振る舞いを説明する文が残ることになる。
+
+4 章の `verified-against` / `verified-at` を `e4d4199` / 2026-09-11 に更新。
+
+検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
 ### docs(sites): follow PR #857 — a benign warn is an input to the release gate (#855) (Sep 11, 2026)
 
 マージ済み PR [#857](https://github.com/signalcompose/orbitscore/pull/857)（merge commit `a6e1f13`）への
@@ -150,6 +172,7 @@ instrument が note ポートを持たない場合も debug になる。ただ�
 
 検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
 `cargo test -p orbit-clap-host --lib` **29 passed**。
+
 ### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
 
 owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって
@@ -853,6 +876,135 @@ Output の宛先・出現序数で対応付けて seed する。これが無い�
 `SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
 
 ---
+### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
+
+#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
+
+```
+AssertionError: expected 9 to be less than or equal to 8
+ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
+       stat '.../T/orbitscore_1789065642138_xx52jsw'
+```
+
+**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
+する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
+エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
+
+`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
+engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
+**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
+
+**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
+いた。孤児が溜まる。
+
+## 🔴 変異検証が別の穴を見つけた
+
+修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
+この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
+接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
+
+| 変異 | 結果 |
+|---|---|
+| ENOENT も含め全部握り潰す | 1 failed |
+| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
+| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
+| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
+| restore | 5 passed・baseline とバイト一致 |
+
+## テストはモックを使わず実物のファイルシステム条件で書いた
+
+`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
+最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
+
+| 条件 | 作り方 | Node が出すもの |
+|---|---|---|
+| レース | dangling symlink | 本物の `ENOENT` |
+| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
+| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
+
+`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
+
+捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
+結果的に良い方向へ転んだ。
+
+`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
+
+Closes #855
+### ci(release): fail a tag push whose version disagrees with the .vsix (#843) (Sep 11, 2026)
+
+**追記（`/simplify` 後・2026-09-11）**: cleanup 4 体のうち 2 体が実質的な指摘を出した。
+
+🔴 **Altitude — 正本設計が既に同じ照合を規定していた。** `docs/design/656-release-design.md`
+§4.4 が「`git describe --exact-match` があるとき、その tag が `v<拡張の version>` と一致すること」を
+**`make-local-release.sh` のローカル preflight**（= **タグを作る前**）に置く設計として確定させていた。
+私はそれを確認せずに CI 側だけを書いた。
+
+**押された後より前に止まる方が良い** — タグ push は準公開的な行為で、間違えると remote タグの
+削除と re-tag が要る。ただし手でタグを打つ経路が残る限り CI 側も**最後の砦**として意味がある。
+そこで **`checkTagAgainstVersion` / `versionCore` を export したまま**にし、
+設計文書の §4.4 に「preflight はこれを import すること・同じ規則を書き起こさないこと」を明記した。
+
+🔴 **§4.4 は私の bump 計画の誤りも正した。** 私は「拡張 package.json・`ENGINE_VERSION`・
+`DSL_VERSION` の 3 つを揃える」と書いていたが、§4.4 は明確に:
+
+| 場所 | 規則 |
+|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。**同期しない** |
+| `DSL_VERSION` | **別軸**（spec 版）。**同期しない** |
+
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+**Simplification** — `versionCore()` を package.json 側にも適用しているのに、
+**接尾辞付きの package.json を渡すテストが 1 本も無かった**（裏づけの無い汎用性）。
+テストを 1 本足して明示した（7 → 8 件）。
+
+**Reuse / Efficiency** — 指摘なし。Reuse の Minor 1 件（テストの `REPO_ROOT` が
+`bundled-child-binaries.spec.ts` と重複）は**見送った**: 実質 2 行で、
+かつ**この PR の範囲外のファイル**に触ることになるため。
+
+
+
+`release.yml` が**タグ名と `packages/vscode-extension/package.json` の version を
+照合していなかった**。`vsce package` は資産名を package.json から取るので、`v3.0.0` を
+打っても package.json が `2.1.0` のままなら、**Release のタイトルは v3.0.0・唯一の資産は
+`orbitscore-darwin-arm64-2.1.0.vsix`** になる。どこにもエラーは出ず、
+**ダウンロードした人にしか見えない**。
+
+**照合は X.Y.Z のコアだけ**にした。既存タグを実測したところ、この repo の規約は
+「prerelease の接尾辞はタグにだけ付き、package.json は素の X.Y.Z」だった:
+
+| タグ | その時点の package.json |
+|---|---|
+| `v1.1.0-rc1` / `-rc2` / `-rc3` | `1.1.0` |
+| `v1.0.1-rc1` | `1.0.1` |
+| `v2.0.0` | `2.0.0` |
+
+タグ全体を照合すると、この規約に沿った rc タグがすべて落ちる。
+
+🔴 **ロジックをワークフローに埋めず `scripts/check-release-tag-version.mjs` へ出した。**
+埋め込むと (a) タグを打つ前に手元で確かめられない (b) テストが書けない。
+スクリプトなら `node scripts/check-release-tag-version.mjs v3.0.0` で事前に確認できる。
+
+置き場所は **Setup Node.js の直後・`npm ci` の前**。約 25 分のビルドの手前で数秒で落ちる。
+Setup Node.js より後にしたのは、runner イメージ同梱の Node ではなく**ピン留めした Node**で
+走らせるため。
+
+**検証**（変異は `$TMPDIR` へバックアップしてから実施）:
+
+| 変異 | 結果 |
+|---|---|
+| 照合を `if (false)` に無効化 | 2 failed |
+| workflow がスクリプトを呼ばなくなる | 1 failed |
+| 接尾辞の除去をやめる（rc タグが落ちる） | 2 failed |
+| エラー文から資産名を伏せる | 1 failed |
+| restore | 7 passed・両ファイル baseline とバイト一致 |
+
+🔴 **記録**: 最初の変異検証で `git checkout` を restore に使い、**新規ファイル（未追跡）は
+戻らず、tracked なワークフローは自分の未コミット編集ごと消えた**。
+`mutation-backup-must-use-tmpdir` の「コミット済みなら `git checkout --` が確実」は
+**裏を返すと未コミットなら確実に壊す**。未コミットの作業に変異をかけるなら
+`$TMPDIR` へコピーしてから。
 
 ### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
 

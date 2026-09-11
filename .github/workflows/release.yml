@@ -55,6 +55,16 @@ jobs:
           node-version: '22' # match root package.json engines (>=22.0.0); bumped from 20 in iter3 fix
           cache: 'npm' # node_modules cache keyed on package-lock.json (~55s saved on warm runs)
 
+      # 🔴 Fail in seconds, before the ~25-minute build, if the tag and the version that
+      # `vsce package` will stamp on the .vsix disagree. See the script's header for why
+      # the two can silently diverge. Placed after Setup Node.js so it runs on the pinned
+      # Node rather than whatever the runner image happens to ship.
+      - name: Check the tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-tag-version.mjs
+
       - name: Install npm dependencies
         run: npm ci # CI-mode install: lockfile validated, faster than npm install
 
