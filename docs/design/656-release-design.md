@@ -228,6 +228,17 @@ make-local-release.sh [--sign] [--notarize] [--out <dir>]  # 旧フォーク用�
 
 **preflight の検査（`exit 1`）**: `git describe --exact-match` があるとき、その tag が `v<拡張の version>` と一致すること。**これが無いと `vsce package` は package.json の版で焼くのに、GitHub Release は tag の版で作られ、静かにずれる**（`release.yml:114` と `:245-248` が別の値を見ている）。
 
+✅ **規則の実装は `scripts/check-release-tag-version.mjs` に在る**（#843・2026-09-11）。
+`checkTagAgainstVersion(tag, packageVersion)` / `versionCore(value)` を export しているので、
+**preflight はこれを import する**こと。🔴 **同じ規則を書き起こさない** — DRY 節が名指しする
+「同じルールが 2 箇所に別実装で存在し、片方だけ更新されてズレる」型になる。
+
+現在この関数は `release.yml` の **タグ push 後**（`Setup Node.js` の直後・`npm ci` の前）からも
+呼ばれている。preflight の方が**一段早い**（タグを作る前に止まる）ので本命だが、
+タグを手で打つ経路が残る限り CI 側も残す — **押された後の最後の砦**として。
+比較は X.Y.Z のコアのみ。既存タグの実測（`v1.1.0-rc1` / `-rc2` / `-rc3`・`v1.0.1-rc1` が
+いずれも接尾辞なしの package.json の上にあった）に基づく。
+
 🔴 **一方通行**: バージョン番号の付け方（正本をどこに置くか・app と vsix を揃えるか）は、一度リリースすると利用者の更新経路と Marketplace の版履歴に焼き付く。**裁定待ち (7)。**
 
 ### 4.5 検証ゲート — `scripts/verify-vsix.sh` を切り出して両経路で共有する

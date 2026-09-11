@@ -10,6 +10,20 @@
 // Comparison is on the X.Y.Z core only. The convention in this repo is that a prerelease
 // suffix lives in the tag and not in package.json — measured on the existing tags:
 // v1.1.0-rc1 / -rc2 / -rc3 and v1.0.1-rc1 each sat on a bare package.json version.
+// The package side is passed through the same strip so a suffixed package.json still matches
+// a tag carrying the same core (see the spec test for that case); nothing in the repo produces
+// one today, but silently disagreeing about it would be worse than being explicit.
+//
+// 🔴 This is the CI half of a check the release design already specifies:
+// `docs/design/656-release-design.md` §4.4 puts the same comparison in the LOCAL preflight of
+// `scripts/orbitstudio/make-local-release.sh` (#659), i.e. BEFORE the tag is created. That is
+// the better place — a pushed tag is semi-public and recovering means deleting the remote tag
+// and re-tagging. This module exports `checkTagAgainstVersion` / `versionCore` precisely so
+// that preflight can import them instead of writing the rule a second time.
+//
+// 🔴 §4.4 also settles what does NOT move with the tag: `ENGINE_VERSION` (session-log meta
+// header) and `DSL_VERSION` (spec version) are SEPARATE AXES and are deliberately not synced
+// to the extension version. Only `packages/vscode-extension/package.json` is the 正本.
 //
 // Usage:
 //   node scripts/check-release-tag-version.mjs v3.0.0

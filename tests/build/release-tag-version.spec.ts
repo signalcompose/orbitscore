@@ -29,6 +29,14 @@ describe('release tag / packaged version guard (#843)', () => {
     expect(checkTagAgainstVersion('v1.0.1-rc1', '1.0.1').ok).toBe(true)
   })
 
+  it('accepts a suffixed package.json when the tag carries the same core', () => {
+    // Nothing in the repo produces a suffixed package.json today (the convention keeps the
+    // suffix on the tag). The strip is applied to both sides anyway, so make that explicit
+    // rather than leaving an untested branch — `/simplify` flagged exactly this gap.
+    expect(checkTagAgainstVersion('v1.1.0-rc1', '1.1.0-rc1').ok).toBe(true)
+    expect(checkTagAgainstVersion('v1.1.0', '1.1.0-rc1').ok).toBe(true)
+  })
+
   it('still rejects a prerelease tag whose core disagrees', () => {
     // Suffix-stripping must not become a way to smuggle a wrong core past the guard.
     expect(checkTagAgainstVersion('v3.0.0-rc1', '2.1.0').ok).toBe(false)

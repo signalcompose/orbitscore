@@ -19,6 +19,39 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### ci(release): fail a tag push whose version disagrees with the .vsix (#843) (Sep 11, 2026)
 
+**追記（`/simplify` 後・2026-09-11）**: cleanup 4 体のうち 2 体が実質的な指摘を出した。
+
+🔴 **Altitude — 正本設計が既に同じ照合を規定していた。** `docs/design/656-release-design.md`
+§4.4 が「`git describe --exact-match` があるとき、その tag が `v<拡張の version>` と一致すること」を
+**`make-local-release.sh` のローカル preflight**（= **タグを作る前**）に置く設計として確定させていた。
+私はそれを確認せずに CI 側だけを書いた。
+
+**押された後より前に止まる方が良い** — タグ push は準公開的な行為で、間違えると remote タグの
+削除と re-tag が要る。ただし手でタグを打つ経路が残る限り CI 側も**最後の砦**として意味がある。
+そこで **`checkTagAgainstVersion` / `versionCore` を export したまま**にし、
+設計文書の §4.4 に「preflight はこれを import すること・同じ規則を書き起こさないこと」を明記した。
+
+🔴 **§4.4 は私の bump 計画の誤りも正した。** 私は「拡張 package.json・`ENGINE_VERSION`・
+`DSL_VERSION` の 3 つを揃える」と書いていたが、§4.4 は明確に:
+
+| 場所 | 規則 |
+|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。**同期しない** |
+| `DSL_VERSION` | **別軸**（spec 版）。**同期しない** |
+
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+**Simplification** — `versionCore()` を package.json 側にも適用しているのに、
+**接尾辞付きの package.json を渡すテストが 1 本も無かった**（裏づけの無い汎用性）。
+テストを 1 本足して明示した（7 → 8 件）。
+
+**Reuse / Efficiency** — 指摘なし。Reuse の Minor 1 件（テストの `REPO_ROOT` が
+`bundled-child-binaries.spec.ts` と重複）は**見送った**: 実質 2 行で、
+かつ**この PR の範囲外のファイル**に触ることになるため。
+
+
+
 `release.yml` が**タグ名と `packages/vscode-extension/package.json` の version を
 照合していなかった**。`vsce package` は資産名を package.json から取るので、`v3.0.0` を
 打っても package.json が `2.1.0` のままなら、**Release のタイトルは v3.0.0・唯一の資産は
