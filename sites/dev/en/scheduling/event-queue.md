@@ -673,10 +673,10 @@ There are three key design decisions.
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain()`: master gain is not folded into the event (#643)
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:3-14` — `LOOP_TIMER_LEAD_MS` (look-ahead stage 2)
 - `packages/engine/src/midi/midi-scheduler.ts:157-176` — the MIDI-side `scheduleStepMarker()` (#654)
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-390` — the SC `start()` (historical / opt-out path)
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-390` — the SC `start()` (historical / opt-out path; **the whole file was deleted in #502** — this and the next three lines give its location as of commit `58f558f5`)
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:440-462` — the SC `clearSequenceEvents()`
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:476-509` — the SC `executePlayback()` (fire-now)
-- `packages/engine/src/audio/supercollider/types.ts:10-25` — the SC `ScheduledPlay`
+- `packages/engine/src/audio/supercollider/types.ts:10-25` — the SC `ScheduledPlay` (**the whole file was deleted in #502**)
 - `docs/archive/WORK_LOG_2026-07.md` 6.179 — cutover #108 (2026-07-03)
 - `docs/archive/WORK_LOG_2026-07.md` 6.194 / 6.198 — the #390 `[STEP]` marker / the two mechanisms and measurements of #389 timing jitter
 - `docs/archive/WORK_LOG_2026-08.md` 6.421 — the #654 MIDI-side playhead

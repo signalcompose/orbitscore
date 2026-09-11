@@ -34,7 +34,7 @@ npm run docs:dev      # http://localhost:5173 (HMR 付き)
 - `signal-chain/` — Part IV (ラック SC.10・ミキサー / オーディオライン)
 - `plugin-hosting/` — Part V (概観・プラグイン UI・カタログと差し替え)
 - `editor/` — Part VI (VS Code 拡張・インライン実行・MCP と gated E2E)
-- `audio/` — Part VII (SuperCollider 経路 = `ORBITSCORE_ENGINE=sc` の opt-out・歴史的読解)
+- `audio/` — Part VII (SuperCollider 経路 = かつての `ORBITSCORE_ENGINE=sc` opt-out・#502 で削除済み・歴史的読解)
 - `decisions/` — Part VIII ADR
 - `glossary.md` — 用語集
 - `en/` — 上記の英語ミラー (同名パス)

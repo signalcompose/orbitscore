@@ -54,6 +54,14 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 >
 > **v1 の現在地**: 実装は今も旧版どおり（`gain` / `pan` は発音側・出力先は後勝ちの単一スロット）。
 > 信号層への移動は **PR-O3（wire）→ PR-O4（DSL）**で入る。
+>
+> 🔴 **2026-09-11 更新（[#834](https://github.com/signalcompose/orbitscore/pull/834) マージ）**:
+> PR-O4 の**前半**（daemon 側）が入り、`SetBusLine` の wire は `pan` op と mono デバイス宛先を
+> 受理して RT で実行するようになった。**それでも上の「現在地」は変わらない** — TS 側に
+> `setBusLine` の呼び出し元がまだ無いため（`packages/engine/src/audio/rust-engine/daemon-client.ts:715-718`）、
+> 譜面が `gain` / `pan` / 出力先をどう書いても届くのは従来どおり `SetBusRouting` と発音側のパンである。
+> 信号層への移動が**ユーザーから見える**ようになるのは、後半の束（`611-output-line`）で
+> DSL 表面が切り替わったときである。
 
 ## SC.2 ミキサー宣言
 

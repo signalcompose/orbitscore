@@ -21,10 +21,10 @@ How does OrbitScore's VS Code extension (`packages/vscode-extension`, package ve
 3. [Workspace Trust and untrustedWorkspaces](#workspace-trust-and-untrustedworkspaces)
 4. [Module-Level State](#module-level-state)
 5. [The Big Picture of the `activate()` Function](#the-big-picture-of-the-activate-function)
-6. [Status Bar: Two Indicators and the Engine Kind](#status-bar-two-indicators-and-the-engine-kind)
+6. [Status Bar: Two Indicators](#status-bar-two-indicators)
 7. [Command Registration](#command-registration)
 8. [IntelliSense and Diagnostics Registration](#intellisense-and-diagnostics-registration)
-9. [Binary Resolution: scsynth and the Daemon](#binary-resolution-scsynth-and-the-daemon)
+9. [Binary Resolution: the Daemon](#binary-resolution-the-daemon)
 10. [Spawning the Engine Process](#spawning-the-engine-process)
 11. [Communication Protocol with the Engine](#communication-protocol-with-the-engine)
 12. [Stopping the Engine and the Lifecycle Identity Guard](#stopping-the-engine-and-the-lifecycle-identity-guard)
@@ -41,11 +41,10 @@ VS Code extensions run on a dedicated Node.js process called the **Extension Hos
 VS Code Renderer (UI)
     └── Extension Host (Node.js)  ← extension code runs
             └── engine process (node engine/dist/cli-audio.js repl)  ← OrbitScore DSL engine
-                    ├── orbit-audio-daemon (Rust, default, WebSocket)
-                    └── scsynth (SuperCollider, only when orbitscore.engine is "sc", OSC)
+                    └── orbit-audio-daemon (Rust, the only backend, WebSocket)
 ```
 
-Which audio process it is depends on the `orbitscore.engine` setting (default `"rust"`). This branch shows up throughout the chapter.
+There is only one audio process: `orbit-audio-daemon`. The `orbitscore.engine` setting (default `"rust"`) used to let you pick scsynth (SuperCollider, OSC) instead, and that branch showed up throughout the chapter, but both the setting and the branch were removed in [#840](https://github.com/signalcompose/orbitscore/pull/840) (#502). Where the text below touches that branch, it now says so.
 
 ---
 
@@ -216,7 +215,7 @@ The omitted block is the table that hands 25 handlers (`evaluate` / `startEngine
 
 ---
 
-## Status Bar: Two Indicators and the Engine Kind
+## Status Bar: Two Indicators
 
 There are **two** status bar indicators. Their priority values differ, determining the order from the right edge:
 
@@ -466,13 +465,15 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 
 The daemon resolver is `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw`. It has no silent fallback; if nothing is found, it fails loud with an exception (see [ADR-003](/en/decisions/adr-003-scsynth-bundle) — a historical record of the decision for the scsynth resolver it covers; that resolver was removed in #502).
 
-::: warning The scsynth candidates cannot be reached from a shipped build (#836, 2026-09-10)
-Since [#836](https://github.com/signalcompose/orbitscore/pull/836), `packages/engine/scripts/sync-dist.js` deletes `engine/scsynth` and the synced `dist/audio/supercollider/` every time it syncs the engine into the extension. So in a shipped `.vsix`:
+::: warning The scsynth resolver is gone from the extension (#836 → #838, 2026-09-10)
+First, [#836](https://github.com/signalcompose/orbitscore/pull/836) made `packages/engine/scripts/sync-dist.js` delete `engine/scsynth` and the synced `dist/audio/supercollider/` every time it syncs the engine into the extension. From that point, in a shipped `.vsix`:
 
-- the `bundle` candidate path (`<engine root>/scsynth/Contents/Resources/scsynth`) does not exist
-- **the very module** the code above `require`s — `../engine/dist/audio/supercollider/scsynth-resolver` — does not exist either
+- the `bundle` candidate path (`<engine root>/scsynth/Contents/Resources/scsynth`) did not exist
+- **the very module** the extension `require`d — `../engine/dist/audio/supercollider/scsynth-resolver` — did not exist either
 
-`resolveScsynthForUI()` catches the require failure, writes `❌ scsynth resolver failed: …` to the outputChannel and returns `null`, so what happens under the `sc` kind is now "the resolver cannot be loaded". The extension's TypeScript was **not** touched by #836 — removing the SC TypeScript implementation and the extension surface is, per the #836 description, "the next PR".
+The extension's TypeScript was not touched by #836, so `resolveScsynthForUI()` caught the require failure, wrote `❌ scsynth resolver failed: …` to the outputChannel and returned `null`.
+
+Then [#838](https://github.com/signalcompose/orbitscore/pull/838) (part of bundle [#840](https://github.com/signalcompose/orbitscore/pull/840)) **deleted `resolveScsynthForUI()` outright**, and no reference to `scsynth` remains anywhere under `packages/vscode-extension/src/`. Because that was a runtime `require` that never goes through `tsc`, deleting the engine-side source alone would have left type-checking green while the code failed at runtime (the "runtime `require` trap" in the #840 description). The only binary resolution left is the daemon side, `resolveDaemonForUI()`.
 :::
 
 ---
@@ -889,17 +890,15 @@ flowchart TD
     subgraph ExtHost["Extension Host (Node.js)"]
         B["activate()"]
         B --> C["StatusBarItem × 2"]
-        B --> D["19 commands + 2 TreeViews"]
+        B --> D["17 commands + 2 TreeViews"]
         B --> E["IntelliSense providers\n(chain / pitch scope / plugin catalog)"]
         B --> F["DiagnosticCollection\n(open / change / close / initial pass)"]
-        B --> G["getConfiguredEngineKind()"]
         B --> MCP["MCP server\n(only when port is nonzero)"]
         LC["engine-lifecycle.ts\n(pure functions, identity guard)"]
         BR["bridges × 4\n(FIFO / timeout / drain)"]
     end
 
-    G -->|"rust"| H1["resolveDaemonForUI()\n→ engine/dist/.../daemon-client.js"]
-    G -->|"sc"| H2["resolveScsynthForUI()\n→ engine/dist/.../scsynth-resolver.js"]
+    B --> H1["resolveDaemonForUI()\n→ engine/dist/.../daemon-client.js"]
 
     D -->|"startEngine()"| N["child_process.spawn\n(node engine/dist/cli-audio.js repl)"]
     N -->|"stdin: DSL + //# meta lines"| O["Engine Process\n(OrbitScore REPL)"]
@@ -907,8 +906,7 @@ flowchart TD
     LC --> P["Output Channel + log ring"]
     LC --> BR
     LC --> PH["playhead decorations"]
-    O -->|"WebSocket"| Q1["orbit-audio-daemon\n(default)"]
-    O -->|"OSC/UDP"| Q2["scsynth\n(sc only)"]
+    O -->|"WebSocket"| Q1["orbit-audio-daemon\n(the only backend)"]
     MCP -->|"evaluate / run_selection / get_log …"| B
 ```
 
@@ -945,19 +943,19 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 
 - [activate() / deactivate()](/en/glossary#activate--deactivate) — VS Code extension lifecycle functions. The `activate()` covered in detail in this chapter does all the registration
 - [activationEvents](/en/glossary#activationevents) — the two kinds `"onStartupFinished"` and `"onLanguage:orbitscore"` realize always-on activation
-- [workspace trust (untrustedWorkspaces)](/en/glossary#workspace-trust-untrustedworkspaces) — the declaration of whether the extension may activate in an untrusted workspace. `supported: true` plus 2 `restrictedConfigurations`
+- [workspace trust (untrustedWorkspaces)](/en/glossary#workspace-trust-untrustedworkspaces) — the declaration of whether the extension may activate in an untrusted workspace. `supported: true` plus, since #502, an **empty** `restrictedConfigurations`
 - [Extension Host](/en/glossary#extension-host) — the Node.js process where extension code runs. The parent process of the engine process
 - [StatusBarItem](/en/glossary#statusbaritem) — manages the two: `statusBarItem` (priority 100) and `bundleStatusItem` (priority 99)
 - [language ID (orbitscore)](/en/glossary#language-id-orbitscore) — the language ID assigned to `.orbs` files. IntelliSense, diagnostics, and key bindings all filter by this ID
 - [DiagnosticCollection](/en/glossary#diagnosticcollection) — the diagnostic collection that `updateDiagnostics()` writes to. Updated on open / change / close
-- [scsynth](/en/glossary#scsynth) — the audio server binary that `resolveScsynthForUI()` resolves before startup, only under the `sc` kind
-- [strict mode (scsynth resolver)](/en/glossary#strict-mode-scsynth-resolver) — the fail-loud design that cancels the spawn itself if the binary is not found. Inherited by the daemon side
+- [scsynth](/en/glossary#scsynth) — the audio server binary that `resolveScsynthForUI()` used to resolve before startup, only under the `sc` kind. Removed together with its resolution path in #502 (historical reading)
+- [strict mode (scsynth resolver)](/en/glossary#strict-mode-scsynth-resolver) — the fail-loud design that cancels the spawn itself if the binary is not found. The scsynth-side implementation was removed in #502; the daemon resolver carries the policy forward
 - [MethodChainContext](/en/glossary#methodchaincontext) — the method chain state representation that IntelliSense uses to provide context-aware completion candidates
 
 ## Related ADRs
 
 - [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the history of the engine's audio backend and its position after cutover #108
-- [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle) — the decision behind the fail-loud design of `resolveScsynthForUI()` / `resolveDaemonForUI()`
+- [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle) — the decision behind the fail-loud design of `resolveScsynthForUI()` / `resolveDaemonForUI()`. The scsynth side was removed in #502; only `resolveDaemonForUI()` implements this design today
 
 ## Next Exploration Candidates
 
@@ -980,9 +978,9 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/extension.ts:150-284` — live playhead decoration management (#390)
 - `packages/vscode-extension/src/extension.ts:286-498` — entire `activate()`: log-ring monkey-patch, status bar, config listeners, command / TreeView registration, diagnostics, MCP server, auto-start
 - `packages/vscode-extension/src/extension.ts:500-521` — `deactivate()`
-- `packages/vscode-extension/src/extension.ts:653-710` — `getConfiguredEngineKind()` / `resolveScsynthForUI()` / `resolveDaemonForUI()`
-- `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
-- `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (branches on engine kind) / `restartEngine()` / `reloadWindow()`
+- `packages/vscode-extension/src/extension.ts:628-642` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
+- `packages/vscode-extension/src/extension.ts:644-664` — `updateBundleStatus()` (`maybeShowBundleNotice()` was scsynth-only and was removed in #502)
+- `packages/vscode-extension/src/extension.ts:666-683` — `showCommands()` (the engine-kind branch was removed in #502; it now always focuses the Engine view) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/extension.ts:1479-1587` — `setupStdoutHandler()`: bridge dispatch through `createLinePrefixer` + `StringDecoder`, and the `applyEngineStdoutChunk` call (#773)
 - `packages/vscode-extension/src/extension.ts:1589-1642` — `createLinePrefixer()`: reassembling a chunk stream into lines (carrying `partial` over, `flush()`, skipping empty lines), plus the implementation comment enumerating all four "chunk → line" routes (#756 / #773)
 - `packages/vscode-extension/src/extension.ts:1644-1680` — `setupStderrHandler()`: line-wise `ERROR:` prefixing and the flush on `end`
@@ -1000,7 +998,7 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/dsl-method-catalog.ts:1-14` — duplication of the completion vocabulary and test-enforced equality
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark` (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
-- `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` priority chain
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` priority chain (**the whole file was deleted in #502**; this is its location as of commit `58f558f5`. The surviving counterpart is the daemon resolver on the next line)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — the daemon-side 5-candidate chain
 - `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — code review comments on adopting scsynth strict mode and preventing double notification

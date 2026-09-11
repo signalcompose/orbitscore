@@ -1567,7 +1567,7 @@ kick.loop
 After evaluating it, observe "the full length of the wiring" with the following steps (the same
 path as the pre-merge gate in CLAUDE.md).
 
-1. Start OrbitStudio with `ORBITSCORE_MCP_PORT=39123` and confirm the engine is up with `get_engine_state`
+1. Start stock VS Code with `ORBITSCORE_MCP_PORT=39123` and `--extensionDevelopmentPath=packages/vscode-extension` (since #830; the procedure is in the "pre-merge gate" section of CLAUDE.md) and confirm the engine is up with `get_engine_state`
 2. Evaluate the score above with `evaluate_orbitscore`. **`ok` alone proves nothing**, so check
    with `get_log` that no ERROR lines were added and that exactly one
    `[orbit-effect-rack] child spawned pid=...` line appeared
@@ -1597,7 +1597,8 @@ on real hardware:
 ```
 
 > NOTE: unverified — needs confirmation: the environment this chapter was written in (a Linux
-> sandbox) cannot launch OrbitStudio or the rack child (macOS-only), so the author did not run
+> sandbox) cannot launch the extension host (stock VS Code since #830) or the rack child
+> (macOS-only), so the author did not run
 > the four steps above in this session. The expected observations at each step (one child, an
 > unchanged PID, a save into `states/`) are based on the assertions of the gated E2E
 > `#628 R28` and the measurements in WORK_LOG 6.396 / 6.401.
@@ -1650,7 +1651,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `rust/crates/orbit-std-gain/tests/contract.rs:114-145,159-215` — contract tests pinning the param name and processing a real buffer
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — assembling the `.clap` bundle
 - `scripts/copy-daemon-bin.sh:131-132` — bundling `std-plugins/Gain.clap`
-- `.github/workflows/release.yml:86-98,191-200` — the real Gain test and the bundling gate inside the `.vsix`
+- `.github/workflows/release.yml:88-100,184-193` — the real Gain test and the bundling gate inside the `.vsix`
 - `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — the #780 fix (`line!()` replaced by a `static AtomicU64` counter) and the regression test on uniqueness itself
 - `CLAUDE.md:658-674` — the three lines of the pre-merge gate (when `--ignored` is used, when it is not, and why)
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — the intermittent SIGBUS in the unconditional gate and the hole in the `--ignored` filter

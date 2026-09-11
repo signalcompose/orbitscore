@@ -101,6 +101,12 @@ snare.play(0, 0, 1, (1, 1, 1, 1))
 `gain()` と `pan()` はアンダースコアの有無にかかわらず、常に即時反映されます。`gain(-6)` と `_gain(-6)` は同じ効果です。
 :::
 
+::: info 固定値の gain() / pan() はチェーン上の位置を持ちます
+`gain(-6)` のような**固定値**は、`effect()` / `send()` / `output()` と同じ 1 本の線に、書いた順で並びます。`kick.gain(-6).effect(...)` と `kick.effect(...).gain(-6)` では、エフェクトに入る音量が違います。詳しくは [sum と aux/send](../mixing/routing.md) を参照してください。
+
+`gain(random(...))` のような**ランダム値**は従来どおり発音ごとに適用され、線の要素にはなりません。
+:::
+
 #### 音量の目安
 
 | 値 | 効果 |
@@ -359,7 +365,7 @@ CLAP / VST3 プラグインをホストする機能です。詳しい解説は [
 | `instrument(spec, pluginId, statePath)` | pluginId と state を両方指定する 3 引数形 | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
 
 - 対応形式は `.clap` / `.vst3`（`.component` は未対応）。シーケンスごとに独立したインスタンスを持ち、音色は共有されません。
-- `seq.effect()` / `sum` バスへの `output()` / `send()` は **audio と instrument** で使えます。`midi()` は外部機器へ送るためミキサーの出口を持たず、いずれもエラーになります。
+- `seq.effect()` / ミキサーの宛先を取る `output()` / `send()` は **audio と instrument** で使えます。`midi()` は外部機器へ送るためミキサーの出口を持たず、いずれもエラーになります。
 
 ### グローバル / シーケンス — エフェクトを挿す
 
@@ -412,21 +418,37 @@ drums.effect([])                                        // 全部外す（削除
 |---|---|---|
 | `global.sum(name)` | グループバスを宣言する（冪等） | `global.sum("drum")` |
 | `global.aux(name)` | リターンバスを宣言する（冪等） | `global.aux("rev")` |
-| `sum("name")` / `aux("name")` | 宣言済みバスへの参照（`.effect()` / `.ui()` をチェーンできる） | `sum("drum").effect("GlueComp")` |
-| `seq.output(name)` | シーケンスの出力先をグループバスに指定する（audio / instrument） |
+| `sum("name")` / `aux("name")` | 宣言済みバスへの参照（`.effect()` / `.ui()` / `.output()` / `.send()` / `.gain()` / `.pan()` をチェーンできる） | `sum("drum").effect("GlueComp")` |
+| `seq.output(dest)` | シーケンスの出力先を指定する（audio / instrument）。既定は**終端**（そこで線が終わる） | `kick.output("drum")` |
+| `seq.output(dest, thru: true)` | その宛先へ音をコピーしつつ、線は先へ進む（分岐） | `kick.output("rev", thru: true)` |
+| `seq.output(dest, db: n)` | 宛先へ送る量を dB で指定する | `kick.output("rev", thru: true, db: -12)` |
 | `seq.output(n)` | 数値レンダーバス（1〜16・スコアモード）🔴 **仕様上は撤回済み** | `kick.output(1)` |
-| `seq.send(name, amount)` | リターンバスへ送る量を指定（post-fader 固定・複数 send 可） | `kick.send("rev", 0.3)` |
+| `seq.send(name, db)` | リターンバスへ送る量を dB で指定する（複数 send 可）。`output(name, thru: true, db: db)` と同じ意味 | `kick.send("rev", -12)` |
+| `seq.send(name, db, enabled: false)` | その send を止める（チェーン上の位置は保持） | `kick.send("rev", -12, enabled: false)` |
 
-- `sum` は 1 段のみ（ネスト不可）。
-- `output(name)` / `send(name, amount)` は **audio と instrument** で使えます（`midi()` では使えません）。
-- `send()` の第 2 引数は線形 gain（0.0〜1.0 目安、上限は clamp されません）。
+`output(dest)` の `dest` は次の順に解決されます。
+
+| 書き方 | 意味 |
+|---|---|
+| `output("master")` | マスタートラック（予約語） |
+| `output("名前")` | 宣言済みの `sum` バスまたは `aux` バス |
+| `output("3,4")` | 物理出力の 3ch と 4ch |
+| `output(変数)` | `var cue = mix.output(3, 4)` のように宣言したミキサーノード |
+| `output("名前")` | 上のどれにも当たらない名前は LinkAudio チャンネル名 |
+
+- `output(name)` / `send(name, db)` は **audio と instrument** で使えます（`midi()` では使えません）。
+- `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線に並びます**。書く位置が違えば結果が変わります。詳しくは [sum と aux/send](../mixing/routing.md) を参照してください。
+- `output()` を 1 つも書かなかった場合は、線の最後に `output("master")` があるものとして扱われます。
+- `master` はマスタートラックを指す予約語なので、`var master = mix.output(1, 2)` のようにミキサーノードへ付けるとエラーになります。`mix.output(1, 2)` は物理デバイスの 1ch・2ch であって、マスタートラックではありません。
+- `mix.output(n)` のように 1 チャンネルだけ書くとモノラル出力になります（L+R がマージされます）。
 - `global.linkAudio()` とミキサー機能（sum/aux/プラグインエフェクト全般）は同時に使えません。
 
-::: warning この表の 2 行は仕様が変わりました（実装は未追従）
-2026-09-03 の仕様改訂（#611 / #649）で次の 2 点が決まりました。**どちらもまだ実装されていない**ので、今日のコードの書き方は上の表のとおりです。
+::: danger `send()` の第 2 引数の単位が dB に変わりました（2026-09-10）
+以前は線形 gain（0.0〜1.0 目安）でしたが、**dB になりました**（core spec MX.3 / #611）。`send("rev", 0.3)` は「線形 0.3」ではなく「**+0.3 dB**（ほぼ素通し）」として読まれ、**エラーにならず音だけが変わります**。線形 `0.3` に相当するのは `-10.5` です。名前付き引数 `amount:` は廃止され、書くとエラーになります（`db:` を使ってください）。
+:::
 
-- **`seq.output(n)`（数値レンダーバス）は撤回されました**（core spec MX.2.3）。宛先は「宣言されたノード」であるという裁定と合わないためです。stem への書き出しは `mix.render(...)` で宣言したノードを宛先に取る形になります。今日の実装は `kick.output(1)` を受理し続けます。
-- **`send()` の第 2 引数の単位は dB になります**（core spec MX.3）。`send("rev", 0.3)` は「線形 0.3」から「**+0.3 dB**」へ読み替えられ、**エラーにならず音だけが変わります**。詳しくは [sum と aux/send](../mixing/routing.md) を参照してください。
+::: warning `seq.output(n)`（数値レンダーバス）は仕様上撤回済みです
+2026-09-03 の仕様改訂（#611 / #649）で撤回が決まりました（core spec MX.2.3）。宛先は「宣言されたノード」であるという裁定と合わないためです。stem への書き出しは `mix.render(...)` で宣言したノードを宛先に取る形になります。今日の実装は `kick.output(1)` を受理し続けます。
 :::
 
 ---

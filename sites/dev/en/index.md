@@ -21,11 +21,12 @@ For details, see [`docs/development/DEV_LEARNING_SITE.md`](https://github.com/si
 - **Part IV. Signal Chain / Mixer** — racks (SC.10), sum / aux / send / output, master gain
 - **Part V. Plugin Hosting** — CLAP / VST3 hosting, plugin UI, the catalog and replacement
 - **Part VI. Editor Integration** — the VS Code extension, inline execution, the MCP server and gated real-device E2E
-- **Part VII. SuperCollider Path (removal decided #502)** — historical reading of the former default path, reachable with `ORBITSCORE_ENGINE=sc` (the code itself is scheduled for removal from the repository by the 2026-09-10 ruling #827 / #502)
+- **Part VII. SuperCollider Path (removed in #502)** — historical reading of the former default path, reachable with `ORBITSCORE_ENGINE=sc` (the code itself was removed from the repository by the 2026-09-10 ruling #827 / #502 — bundling, build and licensing in PR [#836](https://github.com/signalcompose/orbitscore/pull/836), the implementation and the editor surface in PR [#838](https://github.com/signalcompose/orbitscore/pull/838))
 - **Part VIII. ADR / Glossary** — design decisions and glossary
 
-Every chapter was re-verified against commit `69dc968` on 2026-09-01. Following the 2026-09-10 ruling
-(#827 / #502) to remove the SuperCollider path, the SC-only chapters (former III-1 "Communication with
+Every chapter was re-verified against commit `69dc968` on 2026-09-01. Acting on the 2026-09-10 ruling
+(#827 / #502), [#840](https://github.com/signalcompose/orbitscore/pull/840) removed the SuperCollider
+path, and the SC-only chapters (former III-1 "Communication with
 SuperCollider" and former III-3 "scsynth Bundle and Path Resolution") have been removed from the site;
 their record lives on, with a warning, in ADR-001 / ADR-003. III-2 "Audio File Playback," which covers
 SC across a broader topic, remains for now, with its code citations annotated as a snapshot from before

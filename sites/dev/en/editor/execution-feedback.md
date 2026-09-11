@@ -1,8 +1,8 @@
 ---
 title: "IV-2. Inline Execution and Feedback"
 chapter-id: "IV-2"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: ded9709
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -572,7 +572,7 @@ There are 9 kinds of diagnostic checks in total:
 | 3 | Deprecated `sequence ` keyword | `extension.ts:4029-4038` | Warning + `Deprecated` tag |
 | 4 | `global` state-setter once-per-file | `analyzeGlobalOncePerFile` | Warning |
 | 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
-| 6 | `.output()` before / without `global.linkAudio()` | `analyzeOutputWithoutLinkAudio` | Warning |
+| 6 | `.output()` before / without `global.linkAudio()` (mixer destinations excluded — #611) | `analyzeOutputWithoutLinkAudio` | Warning |
 | 7 | Sounding sequence without `.output()` in a LinkAudio file | `analyzeLinkAudioMissingOutput` | **Error** |
 | 8 | Empty argument `.output("")` | `analyzeEmptyOutputArg` | **Error** |
 | 9 | Plugin name absent from the catalog (#638) | `analyzeUnknownPluginNames` | Warning |
@@ -660,6 +660,22 @@ What is interesting is that `undefined` is deliberately left out of this union. 
 A skip does not vanish quietly either: `logSkipOnce()` prints `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。`. A looping sequence re-resolves its dispatch target every bar, so the same reason is deduped to a single line (`_dispatchSkipLoggedFor` holds the previous reason and is reset when `.output()` sets a channel).
 
 Diagnostics 7 and 8 stay at **Error** severity, not because the runtime throws, but because **that sequence will not sound at all in a LinkAudio session**. Missing it at edit time means hunting for the reason for the silence in the log.
+
+#### The Destinations Diagnostic 6 Now Skips (#611)
+
+Diagnostic 6 warns when `.output()` appears without a `linkAudio()` declaration. #611 widened the set of destinations `output()` accepts, so the check started catching **names that resolve long before LinkAudio is ever consulted**. `output("master")` and `output("drums")` (a declared sum/aux bus) work fine without `linkAudio()`, so warning there tells the user that **working code has no effect**.
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:257-262
+    for (const m of line.matchAll(outputCallPattern)) {
+      const target = m[1]
+      // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.
+      if (target === 'master' || mixerBuses.has(target) || PHYSICAL_PAIR_PATTERN.test(target)) {
+        continue
+      }
+```
+
+The skip order mirrors the engine's own resolution order (`Sequence.resolveLineDest()` / `resolveNamedOutputDest()`), with **LinkAudio last**: `"master"` → a declared sum/aux name → an `"L,R"` physical-channel pair → a LinkAudio channel name. Bus names are collected from the whole document — a live-coding file is re-evaluated as a whole, so `global.sum(...)` written *below* the sequences that target it is the normal case, not an edge case.
 
 ### 9. Unknown Plugin Name (Warning)
 

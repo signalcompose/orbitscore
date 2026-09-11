@@ -1532,7 +1532,7 @@ kick.loop
 
 評価したら、次の手順で「配線の全長」を観測します（CLAUDE.md のマージ前ゲートと同じ動線です）。
 
-1. OrbitStudio を `ORBITSCORE_MCP_PORT=39123` 付きで起動し、`get_engine_state` でエンジン起動を確認する
+1. stock VS Code を `ORBITSCORE_MCP_PORT=39123` + `--extensionDevelopmentPath=packages/vscode-extension` 付きで起動し（#830 以降。手順は CLAUDE.md「マージ前ゲート」）、`get_engine_state` でエンジン起動を確認する
 2. 上の楽譜を `evaluate_orbitscore` で評価する。**`ok` だけでは何も証明されない**ので、
    `get_log` で ERROR が増えていないことと、`[orbit-effect-rack] child spawned pid=...` の行が
    1 行だけ出ていることを確認する
@@ -1561,8 +1561,8 @@ manifest が残っています:
   {"kind":"standard","name":"Gain","params":{"db":-6.0},"enabled":true}]}
 ```
 
-> NOTE: unverified — needs confirmation: 本章の執筆環境（Linux sandbox）では OrbitStudio と
-> rack child（macOS 限定）を起動できないため、上の 4 ステップは著者が本セッションで実行して
+> NOTE: unverified — needs confirmation: 本章の執筆環境（Linux sandbox）では拡張ホスト（#830 以降は
+> stock VS Code）と rack child（macOS 限定）を起動できないため、上の 4 ステップは著者が本セッションで実行して
 > いません。各ステップで期待する観測（child が 1 つ・PID 不変・`states/` への保存）は
 > gated E2E `#628 R28` のアサーションと WORK_LOG 6.396 / 6.401 の実測に基づいています。
 
@@ -1613,7 +1613,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `rust/crates/orbit-std-gain/tests/contract.rs:114-145,159-215` — param 名の固定と実バッファ処理の契約テスト
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — `.clap` bundle の組み立て
 - `scripts/copy-daemon-bin.sh:131-132` — `std-plugins/Gain.clap` の同梱
-- `.github/workflows/release.yml:86-98,191-200` — 実 Gain テストと `.vsix` 内の同梱ゲート
+- `.github/workflows/release.yml:88-100,184-193` — 実 Gain テストと `.vsix` 内の同梱ゲート
 - `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — #780 の修正（`line!()` を `static AtomicU64` の連番へ）と、一意性そのものへの退行検知テスト
 - `CLAUDE.md:658-674` — マージ前ゲートの 3 行（`--ignored` 付き / 無しの使い分けとその理由）
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — 無条件ゲートの間欠 SIGBUS と `--ignored` フィルタの穴
