@@ -31,6 +31,10 @@ on:
       - 'packages/vscode-extension/**'
       - 'packages/engine/**'
       - 'scripts/copy-daemon-bin.sh'
+      - 'scripts/install-bundle-deps.sh'
+      - 'scripts/install-engine-deps.sh'
+      - 'scripts/install-extension-deps.sh'
+      - 'scripts/check-vsix-bundled-deps.mjs'
 
 permissions:
   contents: write # required for gh release create
@@ -105,7 +109,13 @@ jobs:
 
       - name: Package .vsix
         working-directory: packages/vscode-extension
-        run: npx vsce package --target "$VSIX_TARGET" --no-yarn
+        # 🔴 --no-dependencies is load-bearing (#873). The original dependency walk
+        # returned hoisted root paths as ../../node_modules/..., which .vscodeignore
+        # silently excluded. Putting local duplicates beside the package then made
+        # vsce map root + local sources onto one .vsix entry, which VSIX rejects.
+        # With the walk disabled, install-extension-deps.sh puts dependencies in
+        # dist/node_modules and vsce ships them as ordinary files.
+        run: npx vsce package --target "$VSIX_TARGET" --no-yarn --no-dependencies
 
       - name: Verify .vsix native runtime integrity (post-package gate)
         run: |
@@ -165,21 +175,17 @@ jobs:
           fi
           echo "orbit-plugin-scan present and executable in packaged .vsix"
 
-          # 🔴 エンジンのランタイム依存（#654）: `packages/engine/package.json` の
-          # dependencies が .vsix の `engine/node_modules/` に**全部**入っているか。
+          # 🔴 バンドルされたランタイム依存（WORK_LOG 6.119 / 6.422 / #873）。
+          # 宣言を数えるだけでなく、出荷物内の実際の require 起点から解決する。
           #
           # これが抜けても **ビルドは緑・パッケージングも成功・インストールも成功**し、
-          # エンジンの初回評価で `Cannot find module` になって初めて分かる。
-          # 実際 `yaml` が npm の hoist で抜けた（install-engine-deps.sh を修正済みだが、
-          # 出荷物そのものを見る検査をここにも置く）。
-          ENGINE_DEPS=$(node -e 'console.log(Object.keys(require("./packages/engine/package.json").dependencies).join(" "))')
-          for DEP in $ENGINE_DEPS; do
-            if [ ! -d "$VSIX_CHECK/extension/engine/node_modules/$DEP" ]; then
-              echo "::error::engine runtime dependency '$DEP' missing from packaged .vsix at engine/node_modules/ — the engine would crash with \"Cannot find module\" on first evaluate" >&2
-              exit 1
-            fi
-            echo "engine dependency $DEP present in packaged .vsix"
-          done
+          # 利用者の実行時に `Cannot find module` になって初めて分かる。engine 側では
+          # WORK_LOG 6.119 と 6.422、拡張側では #873 で実際に起きた。拡張側は
+          # `@modelcontextprotocol/sdk` が同じく抜けて **activate() がまったく走らなかった**
+          # （cold install で発覚）。install-engine-deps.sh と
+          # install-extension-deps.sh が共有スクリプト経由でそれぞれを入れる。
+          #
+          node scripts/check-vsix-bundled-deps.mjs "$VSIX_CHECK"
 
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
