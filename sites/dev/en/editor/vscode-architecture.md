@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: a2ac724
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, and to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08, and to #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874), bundling the extension's own runtime dependencies) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
@@ -212,6 +212,51 @@ The last two are written like this.
 ```
 
 The omitted block is the table that hands 25 handlers (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) to `startOrbitScoreMcpServer()`. The internals of the MCP server and the gated E2E are left to [IV-3. MCP Server and Gated Real-Device E2E](/en/editor/mcp-and-gated-e2e). `autoStartConfiguredRustEngine()` auto-starts the engine under the `rust` kind when an output device is saved, and checks liveness 5 seconds later (`extension.ts:1699-1723`).
+
+### In the shipped artifact it died before `activate()` (#873)
+
+The `activate()` we have been reading was, on a plain VS Code with the `.vsix` installed, **never running a single line**. PR [#874](https://github.com/signalcompose/orbitscore/pull/874) found this by trying a cold install — launching as an installed extension, without `--extensionDevelopmentPath`. The exception comes not from the body of `activate()` but from loading the module itself.
+
+```
+Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
+  at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
+```
+
+Why at load time? Because `extension.ts` imports from `./mcp-server` (`extension.ts:43`), and `mcp-server.ts` loads the MCP SDK with a top-level `require`.
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:52-58
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js') as {
+  McpServer: new (info: { name: string; version: string }) => McpServerLike
+}
+const { StreamableHTTPServerTransport } =
+  require('@modelcontextprotocol/sdk/server/streamableHttp.js') as {
+    StreamableHTTPServerTransport: new (opts: {
+```
+
+That `require` sits at the top level of the file rather than inside a function, so it is never deferred to the fifth job of the previous section (starting the MCP server). If the SDK is absent from the bundle, `activate()` throws before reaching its first line — whether the MCP port is 0, and whether or not a single `.orbs` file is open.
+
+What made it absent was npm workspaces hoisting. `packages/vscode-extension/package.json` declares `@modelcontextprotocol/sdk` and `zod` as runtime dependencies, but both are hoisted to the repository root. `.vscodeignore` drops everything outside the package with `../../**` and `../*/**`, so the `extension/node_modules` that `vsce package` shipped held only `@types` and `undici-types` — that is the measurement recorded in #874.
+
+The fix is to put the extension's own dependencies back into the bundle at the end of the build.
+
+```json
+// packages/vscode-extension/package.json:419-421
+    "build": "npm run build:engine && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
+    "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
+    "build:engine": "cd ../engine && npm run build && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
+```
+
+`install-engine-deps.sh` (for the engine) and `install-extension-deps.sh` (for the extension) are both thin wrappers; the substance lives in the shared `scripts/install-bundle-deps.sh`. What it does is run `npm install` in a temporary directory that has no workspace root above it, then move the resulting `node_modules` into the bundle — with nowhere to hoist to, every declared dependency is necessarily written locally. The same class of accident had already happened twice on the engine side (WORK_LOG 6.119 for `@julusian/midi` / `uuid` / `ws`, 6.422 for `yaml`); the extension side was simply the one left undefended.
+
+The interesting part is **where** they land: the extension's dependencies go into `dist/node_modules` (`install-extension-deps.sh:37-40`). The script header gives two reasons. One is that `vsce package` excludes the package-root `node_modules` unconditionally, and a `!node_modules/**` negation in `.vscodeignore` cannot override it — while nested ones such as `engine/node_modules` and `dist/node_modules` ship normally. The other is Node's resolution order: seen from `dist/mcp-server.js`, `dist/node_modules` is the first candidate, so no path rewriting is needed. Alongside it, `vsce package` now carries `--no-dependencies`, which switches off the dependency walk that was returning hoisted root paths in the first place (`.github/workflows/release.yml:118`).
+
+The regression gate changed too. The post-package check in `release.yml` used to count dependency names from `packages/engine/package.json` and test for directories; now `node scripts/check-vsix-bundled-deps.mjs` **resolves from the real files inside the shipped artifact**. The script is explicit that its guarantee is not uniform with depth: depth 1 is a real `require.resolve()` (a broken `exports` map or a missing entry point fails there), while depth > 1 only locates the directory the way Node would, so an ESM-only transitive package passes as long as it is present. Resolving every edge for real was tried and rejected — it reddens the release over ESM-only transitive packages the CJS code never requires — and walking the actual `import` graph with esbuild was filed as #875 instead.
+
+::: warning The gated E2E cannot reach this path
+The real-device gated E2E launches VS Code with `--extensionDevelopmentPath` (`tests/e2e/orbitstudio-mcp-gated.spec.ts:728`). In that shape the dependencies always resolve from the hoisted repository root, so **the suite stays green even with an empty bundle**. That makes one more path reachable only by a cold install (the other is the daemon's `extension-bundle` branch — under `--extensionDevelopmentPath` the repository's `rust/target/release` is picked up instead). The cold-install verification in #874 was done by hand and has not been landed as an automated test.
+:::
 
 ---
 
@@ -934,6 +979,7 @@ The main changes that entered the extension between the first draft on 2026-05-0
 | Correlating evaluation results via `//#evalMark` (`EvalMarkBridge`), an independent stdout branch | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:1501-1509` |
 | The `browsePlugins` command and the unknown-plugin-name diagnostic | #638 | §6.412 (2026-08-29), `extension.ts:2285-2298`, `extension.ts:4095-4112` → [PH-3](/en/plugin-hosting/catalog) |
 | The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)" (rotated out of the current log), `package.json:34-43` |
+| The extension's own runtime dependencies (`@modelcontextprotocol/sdk` / `zod`) bundled into `dist/node_modules`. On a cold install hoisting kept them out of the `.vsix` and `activate()` died at module load | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)", `packages/vscode-extension/package.json:419-420`, `scripts/install-bundle-deps.sh` |
 
 The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEngine` is synchronous and requires scsynth" no longer hold at 69dc968.
 
@@ -998,6 +1044,13 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/dsl-method-catalog.ts:1-14` — duplication of the completion vocabulary and test-enforced equality
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark` (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
+- `packages/vscode-extension/src/mcp-server.ts:52-80` — the top-level `require` of the MCP SDK and `zod`. Evaluated before `activate()`, so a bundling gap takes down activation entirely (#873)
+- `packages/vscode-extension/package.json:419-420` — `install-extension-deps.sh` appended to `build` / `build:clean` (#873)
+- `scripts/install-bundle-deps.sh:13-37` — the hoisting problem itself, the table of the two engine-side and one extension-side incidents, and why the esbuild migration (#875) is called the destination rather than this stopgap
+- `scripts/install-extension-deps.sh:10-28` — the two reasons the destination is `dist/node_modules`, and the path to `--no-dependencies`
+- `scripts/check-vsix-bundled-deps.mjs:83-98` — the post-package gate stating that its guarantee differs between depth 1 and depth > 1
+- `.github/workflows/release.yml:118` / `:188` — `vsce package --no-dependencies` and the call into the dependency gate that resolves from the shipped artifact
+- Issue [#873](https://github.com/signalcompose/orbitscore/issues/873) / PR [#874](https://github.com/signalcompose/orbitscore/pull/874) — `activate()` never running at all on a cold install
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` priority chain (**the whole file was deleted in #502**; this is its location as of commit `58f558f5`. The surviving counterpart is the daemon resolver on the next line)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — the daemon-side 5-candidate chain
 - `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
