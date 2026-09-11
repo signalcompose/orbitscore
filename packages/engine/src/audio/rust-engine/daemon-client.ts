@@ -29,7 +29,10 @@ import type {
   PluginUnloadResult,
   PluginStateSaveResult,
   PluginStateSaveTarget,
+  WireLineOp,
 } from '../types'
+
+export type { WireDest, WireLineOp } from '../types'
 
 import {
   DaemonConnectionError,
@@ -83,18 +86,6 @@ export interface AudioDeviceListEntry {
   direction: 'output' | 'input'
 }
 
-export type WireDest =
-  | { kind: 'master' }
-  | { kind: 'bus'; name: string }
-  | { kind: 'device'; channels: [number, number] }
-  | { kind: 'render'; id: string }
-  | { kind: 'link'; channel: string }
-
-export type WireLineOp =
-  | { op: 'rack' }
-  | { op: 'gain'; gain: number }
-  | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
-
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000
@@ -112,7 +103,6 @@ export interface DaemonBinaryResolution {
 }
 
 /**
- * scsynth-resolver の isExecutableFile と同一規則（executable regular file）。
  * 候補の viability 判定に使う — 存在するだけで exec bit の無いファイル
  * （.vsix 展開でパーミッションが落ちた bundle 等）を pre-check 段階で弾き、
  * 「緑チェック → spawn EACCES で後追い失敗」を防ぐ。
@@ -197,14 +187,14 @@ export function createDaemonStderrLineRouter(
  * Resolve the `orbit-audio-daemon` binary path via the candidate order used at
  * spawn time: explicit override → `ORBIT_AUDIO_DAEMON_PATH` env → monorepo
  * release build → monorepo debug build → .vsix-bundled binary (Issue #306).
- * Exported (C2) so UI code can pre-check daemon availability the same way
- * `resolveScsynthForUI` pre-checks scsynth, without duplicating the candidate
- * list. `DaemonClient.resolveDaemonBinary` delegates to this — candidate
- * order/content is unchanged, only the per-candidate `source` label is new.
+ * Exported (C2) so UI code can pre-check daemon availability without
+ * duplicating the candidate list. `DaemonClient.resolveDaemonBinary`
+ * delegates to this — candidate order/content is unchanged, only the
+ * per-candidate `source` label is new.
  *
- * 各候補は「executable regular file」であることを要求する（scsynth 側の
- * resolveScsynthPath と同じ検査水準）。非 viable な候補は次候補へ落ちる —
- * これは従来の existsSync が「不在なら次へ」としていた意味論の自然な拡張。
+ * 各候補は「executable regular file」であることを要求する。非 viable な候補は
+ * 次候補へ落ちる — これは従来の existsSync が「不在なら次へ」としていた意味論の
+ * 自然な拡張。
  */
 /**
  * UI index → wire の `chain_path` 変換。**これが唯一の写像**（#652 で集約）。

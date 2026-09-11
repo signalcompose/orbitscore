@@ -1,5 +1,7 @@
 # OrbitScore Performance Testing
 
+> 🔴 **歴史的記録**: 本書は SuperCollider バックエンド時代（cutover #108 以前）の手順です。SuperCollider 経路は **#502（2026-09-10）で削除**され、現在のバックエンドは Rust `orbit-audio-daemon` 単独です。現行の実機検証手順は [`docs/testing/TESTING_GUIDE.md`](TESTING_GUIDE.md) と `npm run test:e2e:gated` を参照してください。
+
 **Last Updated**: 2025-10-26
 **Test Environment**: macOS, Node.js v22+, VS Code / Cursor / Claude Code
 

@@ -110,7 +110,7 @@ export interface InterpreterState {
 
 ```typescript
 // packages/engine/src/interpreter/interpreter-v2.ts:171-230 (file import の本体と session-log hook の設置を省略)
-    // Ensure SuperCollider is booted
+    // Ensure the audio engine is booted
     await this.ensureBooted()
 
     // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in
@@ -147,7 +147,7 @@ export interface InterpreterState {
 
 順序をまとめると:
 
-1. `ensureBooted()` — 音声バックエンドが起動済みか確認し、未起動なら起動 (コメントは「SuperCollider」のままですが、既定では Rust daemon が起動します)
+1. `ensureBooted()` — 音声バックエンドが起動済みか確認し、未起動なら起動 (唯一のバックエンドである Rust daemon が起動する)
 2. `processFileImports()` — `import { ... } from "./x.orbs"` を entry 自身の宣言より先に評価 (存在する場合のみ)
 3. `processGlobalInit()` — `var global = init GLOBAL` の処理 (存在する場合のみ)
 4. `setDocumentDirectory()` — `documentDirectory` オプションがあれば Global に設定
@@ -243,7 +243,7 @@ export async function processSequenceInit(
 初期化が終わると、`statements` の各要素が `processStatement()` に渡されます。[I-1](/pipeline/text-to-ast) で「パーサーはすべての `<id>.method()` を `type: 'sequence'` として出力する」と説明しました。その判断をここで正しく解決するのが `processStatement()` の `'sequence'` ケースです。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:61-115
+// packages/engine/src/interpreter/process-statement.ts:63-117
 export async function processStatement(
   statement: Statement,
   state: InterpreterState,
@@ -338,7 +338,7 @@ flowchart TD
 `processGlobalStatement()` も `processSequenceStatement()` も、レシーバーを取り出したあとは `applyMethodChain()` に処理を委ねます。`processGlobalStatement()` を例に見ると:
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:394-411
+// packages/engine/src/interpreter/process-statement.ts:412-429
 export async function processGlobalStatement(
   statement: GlobalStatement,
   state: InterpreterState,
@@ -362,7 +362,7 @@ export async function processGlobalStatement(
 `applyMethodChain()` は「主メソッドを呼び、続けて `chain` の各要素を呼ぶ」というループを 1 箇所に集約したものです。レシーバーの種類 (Global / Sequence / バス参照 / ミキサーノード) に関わらず同じループを通るので、チェーンの意味論が 1 箇所で定義されます。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:117-141
+// packages/engine/src/interpreter/process-statement.ts:119-143
 /**
  * Apply a statement's main call and then its chained calls to `receiver`,
  * threading each call's return value into the next (methods return `this` to
@@ -393,7 +393,7 @@ async function applyMethodChain(
 各ホップでは `resolveChainDispatch()` が「この名前は DSL メソッドか、プラグイン呼び出しか、ミキサールーティングか」を判定します。ここで気をつけたいのは、パーサーが記録した `invocation` がこの段階で意味を持つことです。Global に対して括弧なしで DSL メソッドを書くと、次のガードが働きます。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:148-167
+// packages/engine/src/interpreter/process-statement.ts:150-169
     const dispatch = resolveChainDispatch(receiver, method, state, invocation)
     if (
       dispatch.kind === 'dsl-method' &&
@@ -444,55 +444,46 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 引数の多くはそのまま渡されますが、いくつか特別な変換が入ります。
 
 ```typescript
-// packages/engine/src/interpreter/evaluate-method.ts:58-107
+// packages/engine/src/interpreter/evaluate-method.ts:58-145
+/**
+ * #611 §3.8: methods that fold one or more `name:` arguments into a single trailing options
+ * object instead of the staged-error path below. `output`/`send` are the only ones today
+ * (`{ thru, db }` / `{ db, enabled }`) — every other DSL method's named args stay staged.
+ */
+const NAMED_ARG_SCHEMA: Readonly<Record<string, Readonly<Record<string, 'boolean' | 'number'>>>> = {
+  output: { thru: 'boolean', db: 'number' },
+  send: { db: 'number', enabled: 'boolean' },
+}
+
 export async function processArguments(methodName: string, args: any[]): Promise<any[]> {
   const processed: any[] = []
+  const schema = NAMED_ARG_SCHEMA[methodName]
+  const options: Record<string, unknown> = {}
+  let sawNamedArg = false
 
   for (const arg of args) {
     if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
-      // Plugin-name dispatch handles selectors before reaching this function.
-      // Any named argument that arrives here belongs to a DSL method and must
-      // receive an explicit staged error (SC.3.3).
-      let stage: string
-      switch (arg.name) {
-        case 'format':
-        case 'vendor':
-          stage =
-            `string-form ${methodName}() does not accept selectors; ` +
-            `use the plugin-name method form Name(format: "vst3")`
-          break
-        case 'sidechain':
-          stage = 'sidechain routing arrives in #409'
-          break
-        case 'outs':
-          stage = 'multi-output routing arrives in #409'
-          break
-        default:
-          stage = 'parameter values require the Rust param-set/enumeration protocol in S4'
+      // #611 §2.1/§2.3: `amount:` was the pre-#611 send() unit (linear 0.0-1.0); it was
+      // renamed to `db:` and its unit changed to decibels. A script still writing `amount:`
+      // must fail loudly instead of having that value silently misread as dB.
+      if (methodName === 'send' && arg.name === 'amount') {
+        throw new Error(
+          `send() no longer accepts amount: — it was renamed to db: and its unit changed ` +
+            `from linear (0.0-1.0) to decibels (#611).`,
+        )
       }
-      throw new Error(
-        `named argument "${arg.name}:" in ${methodName}() is not executable yet: ` +
-          `${stage} (#517).`,
-      )
-    }
-    if (methodName === 'beat' && arg.numerator !== undefined) {
-      // Handle meter: beat(4 by 4) -> beat(4, 4)
-      processed.push(arg.numerator, arg.denominator)
-    } else if (methodName === 'beat' && typeof arg === 'number') {
-      // ERROR: beat() must use "n by m" syntax, not single number
-      throw new Error(
-        `beat() requires meter notation: beat(${arg} by 4) instead of beat(${arg})\n` +
-          `This is essential for polymeter support where different time signatures create independent bar lengths.`,
-      )
-    } else if (methodName === 'play') {
-      // Play arguments are passed as-is (already PlayElement[])
-      processed.push(arg)
-    } else {
+      if (schema && arg.name in schema) {
+        const expectedType = schema[arg.name]
+        if (typeof arg.value !== expectedType) {
+          throw new Error(
+            `${methodName}() named argument "${arg.name}:" must be a ${expectedType}, got ` +
+  // ...
       // Most arguments are passed through
       processed.push(arg)
     }
   }
 
+  if (sawNamedArg) processed.push(options)
   return processed
 }
 ```
@@ -506,7 +497,7 @@ export async function processArguments(methodName: string, args: any[]): Promise
 `RUN()`, `LOOP()`, `MUTE()` は `processTransportStatement()` が処理します。これらはトグルではなく、**単方向の上書き (unidirectional)** という設計が特徴です。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:507-550
+// packages/engine/src/interpreter/process-statement.ts:525-568
 export async function processTransportStatement(
   statement: TransportStatement,
   state: InterpreterState,

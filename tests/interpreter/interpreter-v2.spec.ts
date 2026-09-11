@@ -1,9 +1,10 @@
 /**
  * Tests for the object-oriented Interpreter V2
  *
- * NOTE: These tests are skipped by default because they require SuperCollider server to be running.
+ * NOTE: These tests are skipped by default because they require the Rust audio
+ * daemon (orbit-audio-daemon) to be running.
  * To run these tests:
- * 1. Start SuperCollider server manually
+ * 1. Build the daemon (cd rust && cargo build --release)
  * 2. Remove .skip from describe.skip()
  * 3. Run: npm test -- tests/interpreter/interpreter-v2.spec.ts
  */
@@ -21,7 +22,7 @@ describe.skip('Interpreter V2 - Object-Oriented Implementation', () => {
   })
 
   afterEach(async () => {
-    // Clean up SuperCollider server
+    // Clean up the audio engine
     if (interpreter) {
       const state = interpreter.getState()
       for (const globalName in state.globals) {

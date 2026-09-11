@@ -8,6 +8,12 @@ import { GainOptions } from '../types'
 
 import { generateRandomValue } from './random-utils'
 
+/** Shared fixed-gain range rule for sequence and mixer-bus line writers. */
+export function clampGainDb(valueDb: number): number {
+  if (valueDb === -Infinity) return -Infinity
+  return Math.max(-60, Math.min(12, valueDb))
+}
+
 /**
  * Gain parameter manager
  */
@@ -35,11 +41,7 @@ export class GainManager {
       this._gainRandom = undefined
       // Clamp to -60 dB (effectively silent) to +12 dB (prevent clipping)
       // -Infinity is allowed for complete silence
-      if (valueDb === -Infinity) {
-        this._gainDb = -Infinity
-      } else {
-        this._gainDb = Math.max(-60, Math.min(12, valueDb))
-      }
+      this._gainDb = clampGainDb(valueDb)
     }
 
     return {

@@ -578,7 +578,7 @@ this separation. Completion works as long as the file exists, even when no engin
 Two commands are registered under `contributes.commands` in `package.json`.
 
 ```json
-// packages/vscode-extension/package.json:120-131
+// packages/vscode-extension/package.json:103-114
       {
         "command": "orbitscore.rescanPlugins",
         "title": "OrbitScore: Rescan Plugin Catalog",
@@ -656,7 +656,7 @@ fresh catalog.
 MCP's `list_plugins` / `rescan_plugins` share the same `loadPluginCatalog()` / `runPluginScan()`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1044-1054
+// packages/vscode-extension/src/mcp-server.ts:1029-1039
   server.registerTool(
     'list_plugins',
     {
@@ -773,7 +773,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3859-3869
+// packages/vscode-extension/src/extension.ts:3421-3431
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -876,7 +876,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4239-4255
+// packages/vscode-extension/src/extension.ts:3801-3817
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7216-7228
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7478-7490
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1027,7 +1027,7 @@ RMS is nearly identical and "RMS differs significantly" would be a false asserti
 Instead the VST3 side carries a +7 semitone state and the two are told apart by frequency.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4035-4043
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4167-4175
       const e4Hz = estimateFundamentalHz(capture, segments.e4!)
       const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1056,7 +1056,7 @@ by bus name**, and the render side's `InsertBusStage` holds the processor direct
 rebuild of the same ChildSlot**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6460-6468
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6685-6693
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1077,7 +1077,7 @@ dry (never silence) plus forget-and-ensure — which is why the three effect man
 `failurePolicy: 'forget-and-ensure'`.
 
 ```typescript
-// packages/engine/src/core/global.ts:164-188
+// packages/engine/src/core/global.ts:169-193
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -1144,7 +1144,7 @@ mechanism was unified onto `ApplyEffectChain`, and the protocol doc marks
 `superseded by ApplyEffectChain (#628)`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6026-6034
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -1198,7 +1198,7 @@ disappearing insert. The state save itself is performed atomically by the daemon
 `save_dropped` in `ApplyEffectChain`, so unlike the instrument side TS does not call save.
 
 ```typescript
-// packages/engine/src/core/global.ts:1380-1402
+// packages/engine/src/core/global.ts:1393-1415
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
     const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)
@@ -1266,7 +1266,7 @@ applied (the `engaged` wiring is cut)" can be distinguished numerically.
 Removal is `effect([])`.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4342-4348
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4478-4484
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1284,7 +1284,7 @@ PID appeared" at the time of #625; with the rack, **the PID not changing** is th
 of "no respawn = the dry window is gone".
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4200-4213
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4336-4349
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1305,7 +1305,7 @@ R-E3 (replacement with a nonexistent path) asserted "dry — neither A nor B" un
 is prepare-commit, it pins by audio that **B keeps playing even after the failure**.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4555-4570
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4691-4706
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //

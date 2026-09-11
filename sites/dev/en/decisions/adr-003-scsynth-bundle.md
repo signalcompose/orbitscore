@@ -12,7 +12,7 @@ status: draft
 The scsynth bundle and the strict resolver belong to the SuperCollider path. Since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179), this path is used **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code, `orbitscore.engine: "sc"`); on the default Rust path scsynth is not even resolved. However, the "fail-loud resolver" pattern this ADR decided on is reused as-is for resolving `orbit-audio-daemon` (see "Consequences revisited (2026-09)" at the end). For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// (removed, as of 58f558f5) packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,10 +22,39 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// (removed, as of 58f558f5) packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+:::
+
+::: warning This code has been removed
+The SuperCollider-path code cited by this ADR was **removed from the repository by the
+2026-09-10 ruling (#827 / #502)**. The code snippets below are a snapshot from before the
+removal (commit `58f558f5`) and no longer exist in the current repository. This ADR remains
+as a record of the decision.
+:::
+
+::: warning The bundle itself is gone too (#836, 2026-09-10)
+The very thing this ADR is about — **bundling scsynth** — was removed from the repository by
+[#836](https://github.com/signalcompose/orbitscore/pull/836). The following went together:
+
+- `scripts/extract-scsynth-bundle.sh` (the body of `npm run build:bundle`) and
+  `scripts/verify-bundle.sh` (the body of `npm run verify:bundle`), plus both npm scripts
+- The `!engine/scsynth/**` / `!engine/supercollider/**` / `!legal/**` keep entries in
+  `packages/vscode-extension/.vscodeignore`
+- `packages/vscode-extension/legal/scsynth-LICENSE.GPL-3.0` and `legal/scsynth-NOTICE`
+- The `brew install --cask supercollider`, `build:bundle`, `verify:bundle` and post-packaging
+  `verify-bundle.sh` steps in `.github/workflows/release.yml`
+
+On top of that, `packages/engine/scripts/sync-dist.js` now **explicitly deletes**
+`engine/scsynth` and `engine/supercollider`, as well as `dist/audio/supercollider/` and
+`dist/audio/supercollider-player.*` inside the synced copy, every time it syncs the engine into
+the extension. The shipped `.vsix` therefore contains no SC assets at all (measured in the #836
+description: zero SC references; the `.vsix` is 7.4 MB, about 11.5 MB smaller).
+
+Read the "is bundled" / "run `build:bundle`" statements in the body below as **historical
+record** from here on.
 :::
 
 # ADR-003 scsynth bundle strict mode
@@ -67,7 +96,7 @@ To solve this, in Issue #131 (Epic: v1.0 ICMC Ready Phase 1), the policy of bund
 It is clearly written in the comments of `scsynth-resolver.ts`:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:1-17
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L1-17
 /**
  * scsynth binary path resolver.
  *
@@ -132,7 +161,7 @@ This is the audio-binary version of the classic "works only on the dev machine" 
 Let's look at the core part of `scsynth-resolver.ts`:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:76-99
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L76-99
 export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution {
   const searched: string[] = []
 
@@ -168,7 +197,7 @@ Priority is expressed by a chain using `??` (nullish coalescing):
 If all return `null`, `ScsynthNotFoundError` is thrown. The `searched` array contains "the list of paths that were searched but not found" and is included in the error message.
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:34-45
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L34-45
 export class ScsynthNotFoundError extends Error {
   public readonly searched: string[]
 
@@ -188,7 +217,7 @@ The error message describes "which paths were searched" and "the workaround in t
 Let's also confirm the implementation of `bundleCandidatePath()`:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:57-59
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L57-59
 function bundleCandidatePath(): string {
   return path.resolve(__dirname, '../../../scsynth/Contents/Resources/scsynth')
 }
@@ -265,7 +294,7 @@ That was the situation (for the later story about the daemon, see "Consequences 
 
 ## Use on the VS Code Extension Side
 
-As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-architecture), the VS Code extension calls the resolver via `resolveScsynthForUI()`. At 69dc968, however, this call happens only when `orbitscore.engine` is `sc`. The result of resolution is used to display the status bar indicator `bundleStatusItem`:
+As covered in this ADR (above) and [IV-1](/en/editor/vscode-architecture), the VS Code extension calls the resolver via `resolveScsynthForUI()`. At 69dc968, however, this call happens only when `orbitscore.engine` is `sc`. The result of resolution is used to display the status bar indicator `bundleStatusItem`:
 
 | engine kind | `resolution.source` | bundleStatusItem display |
 |---|---|---|
@@ -275,7 +304,7 @@ As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-arc
 | `rust` | (scsynth is not resolved) | hidden if the daemon resolves; otherwise `$(error) daemon: not found` |
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:747-771
+// (removed, as of 58f558f5) packages/vscode-extension/src/extension.ts L747-771
   bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {
@@ -322,6 +351,8 @@ Two workarounds:
 1. **Via environment variable**: add `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` to `.zshenv` or similar
 2. **Bundle extraction**: run `npm run build:bundle` first to place the binary in `engine/scsynth/`
 
+🔴 **The second one is impossible since [#836](https://github.com/signalcompose/orbitscore/pull/836).** The `build:bundle` script and `scripts/extract-scsynth-bundle.sh` were deleted, and `sync-dist.js` wipes `engine/scsynth` on every sync. The only remaining workaround is the first one (`ORBIT_SCSYNTH_PATH`).
+
 Since cutover #108, in addition to this, `ORBITSCORE_ENGINE=sc` (`orbitscore.engine: "sc"` in VS Code) is needed just to select the SC path in the first place.
 
 ---
@@ -334,12 +365,21 @@ Following the ADR format, this records the consequences after the decision.
 
 Cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) switched the default backend to Rust, but the scsynth bundle itself remains. The engine-kind branching of #377 (`docs/archive/WORK_LOG_2026-07.md` §6.186) records, regarding release.yml, that "the scsynth-related steps (brew install / build:bundle / verify:bundle) are kept unchanged (interim owner decision: keep the scsynth bundle as-is in Phase 1)." Therefore, even at 69dc968, the `.vsix` ships both the SC bundle and the daemon binary.
 
+### And then the bundle was removed (#836, 2026-09-10)
+
+"Kept as-is" ended just before the stable tag. [#836](https://github.com/signalcompose/orbitscore/pull/836) removed the SC bundling, build and licensing in one go, leaving the `.vsix` shipping only the daemon binary. The PR description gives two deciding reasons:
+
+- **Licensing**: the current `.vsix` bundles a **GPL scsynth** because of the keep entries in `.vscodeignore`, and `release.yml` publishes to Marketplace / Open VSX on `v*` tags. So it had to go before the stable tag (owner ruling, `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5)
+- **Ordering**: `build:copy-engine` was copying `packages/engine/supercollider`, so the copying side had to be removed **before** the copy source
+
+`packages/sc-link-audio/` (the GPL-2.0-or-later SC LinkAudio plugin) and the two `.gitmodules` entries went at the same time, leaving the repository with no git submodules at all. The GPL isolation gate in `rust/deny.toml` was **not** touched — its subject is Ableton Link's `orbit-link-audio`, which is a different thing from SC.
+
 ### The strict resolver pattern was inherited by the daemon
 
 The core of this ADR — "fail loud, no silent fallback, a candidate must be an executable file" — is carried over as-is into `resolveDaemonBinaryPath()`. #306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) added the `.vsix`-bundled daemon as the last candidate, and in review Round 2 of #366 (§6.186) the finding that "it only checks `existsSync` and does not look at the exec bit — asymmetric with `isExecutableFile` on the scsynth side" led to the daemon side also requiring an executable regular file. The candidate order is `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:111-111
+// (removed, as of 58f558f5) packages/engine/src/audio/rust-engine/daemon-client.ts L111-111
   source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
 ```
 
@@ -373,11 +413,10 @@ The "no re-signing required" conclusion in this ADR was about scsynth, which can
 
 ## Next Exploration Candidates
 
-- Implementation of the `build:bundle` script (`scripts/extract-scsynth-bundle.sh`) — details of the processing that extracts and places scsynth from SC.app
+- ~~Implementation of the `build:bundle` script (`scripts/extract-scsynth-bundle.sh`)~~ — **deleted in #836**; read it at a pre-removal commit if you need it
 - `scripts/copy-daemon-bin.sh` — the daemon-side bundling script. Why it is limited to `darwin-arm64`, and the ordering guarantee in release.yml
-- Bundle strategies for Windows / Linux — supporting platforms beyond the macOS-targeted universal binary
-- Bundle update flow for SC.app version-up — the Update policy in `SCSYNTH_BUNDLE_MANIFEST.md` (re-extract on Major/Minor bump only)
-- Handling of the GPL-3.0 license for the bundled inclusion — the detail of the issue noted in `SCSYNTH_BUNDLE_MANIFEST.md` as "strongly maintain GPL-3.0 aggregation property"
+- ~~Bundle strategies for Windows / Linux~~ / ~~Bundle update flow for SC.app version-up~~ — **moot: #836 removed the bundling itself**
+- ~~Handling of the GPL-3.0 license for the bundled inclusion~~ — **resolved by #836 removing the bundle**; `legal/scsynth-LICENSE.GPL-3.0` and `legal/scsynth-NOTICE` were deleted with it
 - Status of the daemon's signing / notarization — how the §6.185 follow-up was handled afterward
 
 ---

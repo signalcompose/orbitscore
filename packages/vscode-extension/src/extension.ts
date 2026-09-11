@@ -332,31 +332,15 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
-  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)
+  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)。daemon
+  // が解決できない時だけ表示するエラー・インジケータ（健全時は非表示）。
   bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
-  // Click → orbitscore.scsynthPath に絞った設定画面に直接遷移
-  // (tooltip 案内と一致、maybeShowBundleNotice の "Open Settings" ボタンとも統一)
   bundleStatusItem.command = {
     command: 'workbench.action.openSettings',
-    title: 'Open scsynth settings',
-    arguments: ['orbitscore.scsynthPath'],
+    title: 'Open OrbitScore settings',
+    arguments: ['orbitscore'],
   }
   updateBundleStatus()
-  updateStatusBarEngineAction()
-
-  // Re-evaluate bundle status when user changes the override setting or
-  // switches engine kind (#377: kind gates whether scsynth is even resolved).
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration('orbitscore.scsynthPath') ||
-        e.affectsConfiguration('orbitscore.engine')
-      ) {
-        updateBundleStatus()
-      }
-      if (e.affectsConfiguration('orbitscore.engine')) updateStatusBarEngineAction()
-    }),
-  )
 
   // Rebuild playhead decoration types when the palette changes (#390) so a
   // running loop picks up new colors on the next repaint without a reload.
@@ -377,8 +361,6 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.restartEngine', restartEngine),
     vscode.commands.registerCommand('orbitscore.reloadWindow', reloadWindow),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
-    vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
-    vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
@@ -467,7 +449,6 @@ export async function activate(context: vscode.ExtensionContext) {
           startEngine: (options) => startEngineForAgent(options),
           stopEngine: () => stopEngineForAgent(),
           getEngineState: () => getEngineStateForAgent(),
-          forceKillScsynth: () => forceKillScsynthForAgent(),
           listAudioDevices: () => listAudioDevicesForAgent(),
           selectAudioDevice: (device) => selectAudioDeviceForAgent(device),
           configureFlash: (options) => configureFlashForAgent(options),
@@ -645,64 +626,10 @@ async function openWalkthrough(): Promise<void> {
 }
 
 /**
- * Read `orbitscore.engine` and normalize it to 'rust' | 'sc'.
- *
- * 正規化の決定は engine 側の `resolveEngineKind` (engine-backend の compiled JS を
- * runtime require — `resolveScsynthForUI` と同じパターン) に委ね、一箇所に保つ。
- * UI 側は戻り値 ('supercollider' | 'rust') を設定 enum のラベル ('sc' | 'rust') に
- * 写すだけ。resolver が読めない (require 失敗) 場合はローカル正規化（engine 側と同一規則
- * — 'sc'/'supercollider' のみ SC、それ以外は rust）に倒す。ここで raw を無視して
- * 無条件 rust に倒すと、明示的に `orbitscore.engine: "sc"` を設定したユーザーの意図が
- * resolver 不読という無関係な理由で握り潰される（C1）。
- */
-function getConfiguredEngineKind(): 'rust' | 'sc' {
-  const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const backendModule = require('../engine/dist/audio/engine-backend') as {
-      resolveEngineKind: (raw: string | undefined) => 'supercollider' | 'rust'
-    }
-    return backendModule.resolveEngineKind(raw) === 'supercollider' ? 'sc' : 'rust'
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(
-      `⚠️ engine-backend resolver unavailable — falling back to local normalization: ${reason}`,
-    )
-    const v = raw?.trim().toLowerCase()
-    return v === 'sc' || v === 'supercollider' ? 'sc' : 'rust'
-  }
-}
-
-/**
- * Resolve scsynth via shared resolver (engine の compiled JS を runtime require).
- * Returns null on failure. 失敗時は outputChannel に reason を log するため
- * View Logs から原因を追える (engine/dist/ 不在 vs. bundle 不在 vs. その他)。
- */
-function resolveScsynthForUI(): { path: string; source: string } | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
-      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
-    }
-    const userOverride = vscode.workspace
-      .getConfiguration('orbitscore')
-      .get<string>('scsynthPath', '')
-      .trim()
-    return resolverModule.resolveScsynthPath(userOverride ? { explicit: userOverride } : undefined)
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(`❌ scsynth resolver failed: ${reason}`)
-    return null
-  }
-}
-
-/**
  * Resolve the native Rust daemon binary via shared resolver (engine の
- * compiled JS を runtime require). Returns null on failure. Symmetric to
- * `resolveScsynthForUI()` — same runtime-require pattern, same
- * log-reason-to-outputChannel-on-failure behavior (C2). Used to pre-check
- * daemon availability under the `rust` engine kind, mirroring how
- * `resolveScsynthForUI()` pre-checks scsynth under the `sc` kind.
+ * compiled JS を runtime require). Returns null on failure — reason is logged
+ * to outputChannel so it's traceable from View Logs. Used to pre-check daemon
+ * availability before spawning the engine process.
  */
 function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
@@ -715,166 +642,34 @@ function resolveDaemonForUI(): { path: string; source: string } | null {
 }
 
 /**
- * Refresh the bundle status bar item to reflect the current resolution.
+ * Refresh the bundle status bar item to reflect daemon resolution.
  *
- * engine kind (#377, #366 C2): when `orbitscore.engine` resolves to \`rust\`,
- * scsynth is not part of the picture at all, but the native daemon binary
- * still needs to be resolvable — pre-check it via `resolveDaemonForUI()` and
- * surface an error state (rather than a blind "native" success indicator) if
- * it's missing. Only \`sc\` kind runs the scsynth resolution below.
- *
- * Strict mode (Issue #136): resolver は SC.app / Spotlight 暗黙 fallback を
- * 持たないため、source は \`bundle\` / \`env\` / \`explicit\` のいずれか。
- * 解決失敗時は error 状態を強調表示する。
+ * Strict mode (Issue #136): resolver has no implicit fallback (Spotlight etc.),
+ * so failure means the daemon binary genuinely could not be found — surface an
+ * error state (rather than a blind "native" success indicator).
  */
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
-  if (getConfiguredEngineKind() === 'rust') {
-    const daemonResolution = resolveDaemonForUI()
-    if (!daemonResolution) {
-      bundleStatusItem.show()
-      bundleStatusItem.text = '$(error) daemon: not found'
-      bundleStatusItem.tooltip =
-        'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
-      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
-      return
-    }
-    // 既定（Rust・健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の
-    // 意味がない）。daemon 不在エラーと SC バックエンド時のみ表示する。
-    bundleStatusItem.hide()
-    return
-  }
-  bundleStatusItem.show()
-  const resolution = resolveScsynthForUI()
-  if (!resolution) {
-    bundleStatusItem.text = '$(error) scsynth: not found'
+  const daemonResolution = resolveDaemonForUI()
+  if (!daemonResolution) {
+    bundleStatusItem.show()
+    bundleStatusItem.text = '$(error) daemon: not found'
     bundleStatusItem.tooltip =
-      'Bundled scsynth not found. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.'
+      'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
     bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     return
   }
-  bundleStatusItem.backgroundColor = undefined
-  switch (resolution.source) {
-    case 'bundle':
-      bundleStatusItem.text = '$(check) scsynth (bundled)'
-      bundleStatusItem.tooltip = `Using bundled scsynth\n${resolution.path}`
-      break
-    case 'env':
-    case 'explicit':
-      bundleStatusItem.text = '$(gear) scsynth (custom)'
-      bundleStatusItem.tooltip = `Using user-overridden scsynth\n${resolution.path}`
-      break
-    default:
-      bundleStatusItem.text = '$(question) scsynth: unknown source'
-      bundleStatusItem.tooltip = resolution.path
-  }
-}
-
-/**
- * Show error notification when scsynth resolution fails.
- *
- * engine kind (#377): under \`rust\` kind, scsynth resolution is not part of
- * the startup path at all, so this notice must not fire — early return before
- * calling \`resolveScsynthForUI()\`.
- *
- * Strict mode (Issue #136): bundle / env / explicit が解決できれば silent。
- * いずれも見つからない場合は毎回エラー表示 (修復必須)。
- * \`globalState\` の dismiss 機構は持たない (silent fallback がないため
- * 「無視して動かす」選択肢自体がない)。
- */
-async function maybeShowBundleNotice(): Promise<void> {
-  if (!outputChannel) return
-  if (getConfiguredEngineKind() === 'rust') return
-  const resolution = resolveScsynthForUI()
-  if (resolution) {
-    // bundle / env / explicit いずれも resolved → 通知不要
-    return
-  }
-  const choice = await vscode.window.showErrorMessage(
-    '⚠️ scsynth not found. OrbitScore requires the bundled scsynth to start. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.',
-    'Open Settings',
-    'View Logs',
-  )
-  if (choice === 'Open Settings') {
-    vscode.commands.executeCommand('workbench.action.openSettings', 'orbitscore.scsynthPath')
-  } else if (choice === 'View Logs') {
-    outputChannel.show()
-  }
+  // 既定（健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の意味がない）。
+  bundleStatusItem.hide()
 }
 
 function showCommands() {
-  // SC バックエンド専用コマンドは engine=sc の時だけ載せる（既定 Rust では非表示）。
-  const isScBackend = vscode.workspace.getConfiguration('orbitscore').get<string>('engine') === 'sc'
-  if (!isScBackend) {
-    vscode.commands.executeCommand('orbitscore.engineView.focus')
-    return
-  }
-  const scItems: Array<vscode.QuickPickItem & { command: string }> = [
-    {
-      label: 'Start Engine',
-      description: 'Boot the audio engine',
-      detail: 'Start the OrbitScore audio engine (Rust daemon)',
-      command: 'orbitscore.toggleEngine',
-    },
-    {
-      label: 'Start Engine (Debug)',
-      description: 'Boot with full logging',
-      detail: 'Start the engine with verbose debug output',
-      command: 'orbitscore.startEngineDebug',
-    },
-    {
-      label: 'Run Selection',
-      description: 'Cmd+Enter',
-      detail: 'Execute selected code or the current line',
-      command: 'orbitscore.runSelection',
-    },
-    {
-      label: 'Stop Engine',
-      description: 'Stop the engine process',
-      detail: 'Stop the audio engine',
-      command: 'orbitscore.stopEngine',
-    },
-    {
-      label: 'Select Audio Device (SC)',
-      description: 'Choose output device',
-      detail: 'Select the audio output device for the SuperCollider backend',
-      command: 'orbitscore.selectAudioDevice',
-    },
-    {
-      label: 'Force Kill scsynth (SC)',
-      description: 'killall scsynth',
-      detail: 'Escape hatch — force-kill any orphan scsynth processes',
-      command: 'orbitscore.forceKillScsynth',
-    },
-    {
-      label: 'Configure Flash',
-      description: 'Customize flash settings',
-      detail: 'Configure flash count, duration, color, and opacity',
-      command: 'orbitscore.configureFlash',
-    },
-    {
-      label: 'Reload',
-      description: 'Reload window',
-      detail: 'Restart the extension and re-evaluate the file',
-      command: 'workbench.action.reloadWindow',
-    },
-  ]
-
-  vscode.window.showQuickPick(scItems).then((selection) => {
-    if (!selection) return
-    vscode.commands.executeCommand(selection.command)
-  })
-}
-
-function updateStatusBarEngineAction(): void {
-  if (!statusBarItem) return
-  statusBarItem.tooltip =
-    getConfiguredEngineKind() === 'rust' ? 'Open Audio Engine Settings' : 'Click to show commands'
+  vscode.commands.executeCommand('orbitscore.engineView.focus')
 }
 
 async function restartEngine(): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-  if (getConfiguredEngineKind() === 'rust' && !resolveAudioDeviceSetting(workspaceRoot)) {
+  if (!resolveAudioDeviceSetting(workspaceRoot)) {
     vscode.window.showInformationMessage('Select an output device in Audio Engine Settings first')
     return
   }
@@ -1191,8 +986,6 @@ function shouldFilterLine(line: string): boolean {
   if (
     line.includes('🎵 OrbitScore') ||
     line.includes('✅ Initialized') ||
-    line.includes('✅ SuperCollider server ready') ||
-    line.includes('✅ SynthDef loaded') ||
     line.includes('✅ Mastering effect') ||
     line.includes('🎵 Live coding mode')
   ) {
@@ -1788,8 +1581,8 @@ function isEngineRunning(): boolean {
  * Resolve the effective output device (#484 D3). The `orbitscore.audioDevice`
  * VS Code setting is the primary source going forward (works without a
  * workspace file, discoverable via the Engine view); the legacy
- * `.orbitscore.json` `audioDevice` key (written by `selectAudioDevice` /
- * the MCP `select_audio_device` tool, #388) is kept as a fallback for
+ * `.orbitscore.json` `audioDevice` key (written by the Engine view's
+ * device-click flow / the MCP `select_audio_device` tool, #388) is kept as a fallback for
  * back-compat with existing workspaces. Empty string means "system default".
  */
 function resolveAudioDeviceSetting(workspaceRoot: string): string {
@@ -1802,7 +1595,6 @@ function resolveAudioDeviceSetting(workspaceRoot: string): string {
 }
 
 async function autoStartConfiguredRustEngine(): Promise<void> {
-  if (getConfiguredEngineKind() !== 'rust') return
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
   const saved = resolveAudioDeviceSetting(workspaceRoot)
   if (!saved) return
@@ -1990,7 +1782,7 @@ async function engineViewToggleEngine(): Promise<void> {
     return
   }
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-  if (getConfiguredEngineKind() === 'rust' && !resolveAudioDeviceSetting(workspaceRoot)) {
+  if (!resolveAudioDeviceSetting(workspaceRoot)) {
     vscode.window.showInformationMessage('Select an output device below first')
     return
   }
@@ -2031,12 +1823,6 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   const deviceName = deviceNameFromNodeId(node.id)
   if (!deviceName) return
 
-  if (getConfiguredEngineKind() !== 'rust') {
-    // SC retains its established write-and-restart flow.
-    await writeAudioDeviceSetting(deviceName)
-    engineViewProvider?.refresh()
-    return
-  }
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
   const selectedDevice = resolveAudioDeviceSetting(workspaceRoot)
   const action = resolveDeviceClickAction(deviceName, selectedDevice, isEngineRunning())
@@ -2056,56 +1842,52 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   }
 
   // D2.5 (#484): try the live `//#selectAudioDevice` bridge before falling back to the
-  // restart prompt. SC backend skips straight to the restart flow — it's an
-  // optimization to avoid a pointless round-trip (repl-mode.ts never wires up the
-  // bridge for SC), not a necessity to dodge the timeout.
-  if (getConfiguredEngineKind() === 'rust') {
-    try {
-      const result = await sendSelectAudioDeviceMeta(deviceName)
-      if (result.ok) {
-        engineViewProvider?.refresh()
-        vscode.window.showInformationMessage(`🔊 switched to "${result.device ?? deviceName}"`)
-        return
-      }
-      // #501 review Important #4: surface the specific failure rather than
-      // silently falling through to the generic "applies on next start" prompt.
-      outputChannel?.appendLine(`⚠️ live device switch failed: ${result.error}`)
-      // 既知のコードは翻訳文だけで何が起きたか分かる。未知のエラーにだけ何の失敗かを前置する。
-      const failureMessage = hasTranslatedSelectAudioDeviceError(result.error)
-        ? translateSelectAudioDeviceError(result.error)
-        : `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`
-      // 🔴 音が鳴り続けている失敗に「Restart Engine」を出さない（#661 F4・engine-view.ts の
-      // `SELECT_AUDIO_DEVICE_ERRORS` 参照）。再起動すると起動経路のポリシーで host 既定へ移り、
-      // 「演奏中のタイプミスで音が移らない」という裁定を UI が自分で壊す。
-      if (!liveSwitchFailureNeedsRestart(result.error)) {
-        void vscode.window.showWarningMessage(failureMessage)
-        return
-      }
-      const choice = await vscode.window.showWarningMessage(failureMessage, 'Restart Engine')
-      if (choice === 'Restart Engine') {
-        stopEngine()
-        setTimeout(
-          () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
-          2200,
-        )
-      }
-      return
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      outputChannel?.appendLine(`⚠️ live device switch bridge error: ${message}`)
-      const choice = await vscode.window.showWarningMessage(
-        `🔊 live device switch bridge error: ${message}`,
-        'Restart Engine',
-      )
-      if (choice === 'Restart Engine') {
-        stopEngine()
-        setTimeout(
-          () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
-          2200,
-        )
-      }
+  // restart prompt.
+  try {
+    const result = await sendSelectAudioDeviceMeta(deviceName)
+    if (result.ok) {
+      engineViewProvider?.refresh()
+      vscode.window.showInformationMessage(`🔊 switched to "${result.device ?? deviceName}"`)
       return
     }
+    // #501 review Important #4: surface the specific failure rather than
+    // silently falling through to the generic "applies on next start" prompt.
+    outputChannel?.appendLine(`⚠️ live device switch failed: ${result.error}`)
+    // 既知のコードは翻訳文だけで何が起きたか分かる。未知のエラーにだけ何の失敗かを前置する。
+    const failureMessage = hasTranslatedSelectAudioDeviceError(result.error)
+      ? translateSelectAudioDeviceError(result.error)
+      : `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`
+    // 🔴 音が鳴り続けている失敗に「Restart Engine」を出さない（#661 F4・engine-view.ts の
+    // `SELECT_AUDIO_DEVICE_ERRORS` 参照）。再起動すると起動経路のポリシーで host 既定へ移り、
+    // 「演奏中のタイプミスで音が移らない」という裁定を UI が自分で壊す。
+    if (!liveSwitchFailureNeedsRestart(result.error)) {
+      void vscode.window.showWarningMessage(failureMessage)
+      return
+    }
+    const choice = await vscode.window.showWarningMessage(failureMessage, 'Restart Engine')
+    if (choice === 'Restart Engine') {
+      stopEngine()
+      setTimeout(
+        () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+        2200,
+      )
+    }
+    return
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`⚠️ live device switch bridge error: ${message}`)
+    const choice = await vscode.window.showWarningMessage(
+      `🔊 live device switch bridge error: ${message}`,
+      'Restart Engine',
+    )
+    if (choice === 'Restart Engine') {
+      stopEngine()
+      setTimeout(
+        () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+        2200,
+      )
+    }
+    return
   }
 }
 
@@ -2148,41 +1930,23 @@ async function startEngine(
     return false
   }
 
-  // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
-  // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
-  // the native daemon doesn't need scsynth to be resolvable.
-  const engineKind = getConfiguredEngineKind()
-
-  // Pre-check: scsynth / daemon が解決できない場合は engine spawn を行わず、エラー
-  // Notification のみ表示する。spawn してから boot 失敗するとユーザーに
-  // 二重通知 (resolver エラー + engine 終了ログ) が出てしまうのを防ぐ
-  // (claude-review on PR #155 の Significant 指摘 #2)。
-  // 解決できた場合はその path を engine spawn に再利用 (Minor #1: 二重 fs.statSync 回避)。
-  let scResolution: { path: string; source: string } | null = null
-  if (engineKind === 'sc') {
-    scResolution = resolveScsynthForUI()
-    if (!scResolution) {
-      void maybeShowBundleNotice()
-      return false
-    }
-  } else {
-    // rust kind (C2): daemon 解決可否を spawn 前に pre-check する。従来は
-    // これが無く、daemon 未解決のまま engine CLI を spawn していた —
-    // 「Engine started」の成功トーストが先に出て、後から engine CLI 内部の
-    // daemon spawn 失敗ログが追いかけてくるだけの偽成功 UX になっていた。
-    // env への daemon path 注入はしない: spawn される engine CLI 自身が同一の
-    // compiled `resolveDaemonBinaryPath()` を実行するため、ここでの解決結果と
-    // 決定的に同一になる（再注入する理由が無い）。
-    const daemonResolution = resolveDaemonForUI()
-    if (!daemonResolution) {
-      outputChannel?.appendLine(
-        '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
-      )
-      vscode.window.showErrorMessage(
-        '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
-      )
-      return false
-    }
+  // Pre-check: daemon が解決できない場合は engine spawn を行わず、エラー Notification
+  // のみ表示する。spawn してから boot 失敗するとユーザーに二重通知 (resolver エラー +
+  // engine 終了ログ) が出てしまうのを防ぐ (claude-review on PR #155 の Significant 指摘 #2)。
+  // 従来はこの pre-check が無く、daemon 未解決のまま engine CLI を spawn していた —
+  // 「Engine started」の成功トーストが先に出て、後から engine CLI 内部の daemon spawn
+  // 失敗ログが追いかけてくるだけの偽成功 UX になっていた。env への daemon path 注入は
+  // しない: spawn される engine CLI 自身が同一の compiled `resolveDaemonBinaryPath()` を
+  // 実行するため、ここでの解決結果と決定的に同一になる（再注入する理由が無い）。
+  const daemonResolution = resolveDaemonForUI()
+  if (!daemonResolution) {
+    outputChannel?.appendLine(
+      '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
+    )
+    vscode.window.showErrorMessage(
+      '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
+    )
+    return false
   }
 
   const effectiveDebugMode =
@@ -2229,28 +1993,7 @@ async function startEngine(
     outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
   }
 
-  // Audio backend selection (#377, post-cutover #369). Engine kind MUST be set
-  // explicitly on env — cutover flipped the *unset* default to `rust`, so a
-  // bare `delete env.ORBITSCORE_ENGINE` (unset) always resolves to `rust` now
-  // — unconditionally (I1). Whether the extension host process happened to
-  // inherit an ORBITSCORE_ENGINE env var from its own launch environment is
-  // irrelevant to this: `delete` removes it either way, and unset ==> rust
-  // regardless. Both branches set the var explicitly so the configured kind
-  // is authoritative regardless of inherited env state.
-  if (engineKind === 'rust') {
-    env.ORBITSCORE_ENGINE = 'rust'
-    outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
-  } else {
-    env.ORBITSCORE_ENGINE = 'sc'
-
-    // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
-    // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
-    // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
-    // scResolution is guaranteed non-null here: the 'sc' branch above returns
-    // early when resolution fails.
-    env.ORBIT_SCSYNTH_PATH = scResolution!.path
-    outputChannel?.appendLine(`🔧 scsynth (${scResolution!.source}): ${scResolution!.path}`)
-  }
+  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 
   // Spawn engine process
   try {
@@ -2321,7 +2064,7 @@ export function stopEngine(): boolean {
     engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
-    // This allows the engine to clean up SuperCollider properly
+    // This allows the engine to clean up the audio backend properly
     proc.kill('SIGTERM')
 
     // Force kill after 2 seconds if still running.
@@ -2348,37 +2091,6 @@ export function stopEngine(): boolean {
     return true
   }
   return false
-}
-
-/**
- * Force-kill any stray scsynth processes (escape hatch for zombie cleanup).
- *
- * Normal stop is handled via \`stopEngine\` (graceful SIGTERM through the engine
- * process). This command is for cases where the engine process itself was
- * SIGKILL'd / force-quit and left an orphan scsynth, or for clearing leftover
- * processes from external manual boots during development.
- */
-function forceKillScsynth() {
-  outputChannel?.appendLine('🔪 Force-killing scsynth processes...')
-
-  // killall covers both bundled and system scsynth (intentional — escape hatch
-  // should clean up everything). Exit code 1 = "no process found" (not an error).
-  // execFile (not exec) for consistency with selectAudioDevice (no shell, even
-  // though args are hardcoded here so no injection risk).
-  child_process.execFile('killall', ['scsynth'], (error) => {
-    if (error) {
-      if (error.code === 1) {
-        outputChannel?.appendLine('✅ No scsynth processes found')
-        vscode.window.showInformationMessage('✅ No scsynth processes running')
-      } else {
-        outputChannel?.appendLine(`⚠️ Error: ${error.message}`)
-        vscode.window.showWarningMessage(`⚠️ Failed to kill scsynth: ${error.message}`)
-      }
-    } else {
-      outputChannel?.appendLine('✅ scsynth processes killed')
-      vscode.window.showInformationMessage('✅ scsynth killed')
-    }
-  })
 }
 
 /**
@@ -2494,126 +2206,6 @@ async function rescanPlugins(): Promise<void> {
   }
 }
 
-/** One SuperCollider-reported audio device (shared shape for the palette QuickPick and the MCP tools). */
-interface DetectedAudioDevice {
-  label: string
-  id: number
-  description: string
-}
-
-/**
- * Boot scsynth briefly with `-u <port>` to read its device-list boot log,
- * parse it, then clean up the temporary process. Shared by `selectAudioDevice`
- * (palette) and the MCP `list_audio_devices` / `select_audio_device` tools —
- * extracted rather than duplicated (#388).
- *
- * Cleanup runs immediately after parsing (not only on a completed selection,
- * as the original inline version did) so a cancelled QuickPick — or an agent
- * that calls list_audio_devices without following up with select_audio_device
- * — never leaves the temporary scsynth running.
- */
-function detectAudioDevices(scPath: string): Promise<DetectedAudioDevice[]> {
-  // Destructured (not `child_process.execFile`) so this reads identically to
-  // the direct-invocation form used elsewhere in this file. execFile (not
-  // exec) runs scPath without a shell, so user-configured values
-  // (orbitscore.scsynthPath) containing `;` etc. can't become command
-  // injection (claude-review #155 の必須対応、CWE-78 緩和)。
-  const { execFile } = child_process
-  return new Promise((resolve) => {
-    execFile(scPath, ['-u', '57199'], { timeout: 3000 }, (_error, stdout) => {
-      // Cleanup temp scsynth (and sclang if any from system SC). Shell-free
-      // invocation; we ignore the result (best-effort cleanup).
-      execFile('killall', ['scsynth', 'sclang'], () => {
-        /* best-effort, ignore error */
-      })
-
-      // Parse device list from SuperCollider's boot log
-      const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
-      const devices: DetectedAudioDevice[] = []
-      let match
-      while ((match = deviceRegex.exec(stdout ?? '')) !== null) {
-        const deviceId = parseInt(match[1])
-        const deviceName = match[2]
-        devices.push({ label: deviceName, id: deviceId, description: `Device ID: ${deviceId}` })
-      }
-      resolve(devices)
-    })
-  })
-}
-
-/** Merge `audioDevice` into .orbitscore.json, preserving any other keys. Shared by `selectAudioDevice` (palette) and the MCP `select_audio_device` tool (#388). */
-function writeAudioDeviceConfig(configPath: string, deviceLabel: string): void {
-  let config: any = {}
-  if (fs.existsSync(configPath)) {
-    config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-  }
-  config.audioDevice = deviceLabel
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-}
-
-async function selectAudioDevice() {
-  // engine kind (#377): device selection is implemented against scsynth's
-  // boot-log device listing and has no Rust-engine equivalent yet. Surface
-  // this explicitly rather than silently probing for (and failing to find)
-  // scsynth under the 'rust' kind.
-  if (getConfiguredEngineKind() === 'rust') {
-    outputChannel?.appendLine(
-      '⚠️ Audio device selection is not supported with the Rust engine (orbitscore.engine: "rust"); using system default output.',
-    )
-    vscode.window.showWarningMessage(
-      '⚠️ Audio device selection is not yet supported with the Rust engine (orbitscore.engine: "rust"). The system default output device is used. Set orbitscore.engine to "sc" to use SuperCollider device selection.',
-    )
-    return
-  }
-
-  outputChannel?.appendLine('🔊 Detecting audio devices...')
-
-  // Get workspace root
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
-  if (!workspaceFolder) {
-    vscode.window.showErrorMessage('⚠️ No workspace folder open')
-    return
-  }
-
-  const configPath = path.join(workspaceFolder.uri.fsPath, '.orbitscore.json')
-
-  vscode.window.showInformationMessage(
-    '🔊 Detecting audio devices... (this may take a few seconds)',
-  )
-
-  // Resolve scsynth path via shared resolver (strict mode: bundle / env / explicit のみ)。
-  // status bar / startEngine と同じ resolveScsynthForUI() を再利用。
-  const resolution = resolveScsynthForUI()
-  if (!resolution) {
-    vscode.window.showErrorMessage(
-      "⚠️ scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth.",
-    )
-    return
-  }
-  outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${resolution.path}`)
-
-  const devices = await detectAudioDevices(resolution.path)
-  if (devices.length === 0) {
-    vscode.window.showErrorMessage('⚠️ No audio devices detected')
-    outputChannel?.appendLine('⚠️ Failed to parse device list from SuperCollider')
-    return
-  }
-
-  // Show quick pick
-  const selected = await vscode.window.showQuickPick(devices, {
-    placeHolder: 'Select audio output device',
-    title: '🔊 Audio Device Selection',
-  })
-  if (!selected) return
-
-  writeAudioDeviceConfig(configPath, selected.label)
-  outputChannel?.appendLine(`✅ Audio device set to: ${selected.label} (ID: ${selected.id})`)
-  outputChannel?.appendLine(`✅ Config saved to: ${configPath}`)
-  vscode.window.showInformationMessage(
-    `✅ Audio device set to: ${selected.label}. Restart engine to apply.`,
-  )
-}
-
 // ── Register Claude Code MCP Server ─────────────────────────────────────────
 
 /** Registration scope for the orbitscore MCP server. */
@@ -2664,9 +2256,8 @@ async function performMcpRegistration(
   }
 
   // user scope — delegate to the claude CLI, which owns the user-level config
-  // (~/.claude.json). Destructured (not `child_process.execFile`) — same
-  // workaround as detectAudioDevices: the repo's security hook
-  // false-positives on the `child_process.exec*` member-access pattern.
+  // (~/.claude.json). Destructured (not `child_process.execFile`) — the repo's
+  // security hook false-positives on the `child_process.exec*` member-access pattern.
   // execFile runs without a shell, and the args are a fixed flag list + the
   // numeric-port URL, so there is no injection surface.
   const { execFile } = child_process
@@ -3140,6 +2731,12 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
     }
   }
 
+  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
+  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
+  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
+  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
+  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
+
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
     outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
@@ -3311,18 +2908,6 @@ function getEngineStateForAgent(): Promise<EngineState> {
   )
 }
 
-/**
- * Force-kill scsynth for the MCP `force_kill_scsynth` tool. `forceKillScsynth()`
- * itself is fire-and-forget (its outcome only ever reaches a VS Code
- * notification), so this mirrors `stopEngineForAgent`'s style: trigger the
- * same escape hatch and report immediately rather than awaiting the
- * asynchronous `killall` callback.
- */
-function forceKillScsynthForAgent(): CommandResult {
-  forceKillScsynth()
-  return { ok: true, message: 'kill signal sent' }
-}
-
 /** Read the plugin catalog for the MCP `list_plugins` tool (#463 PC.4). */
 function listPluginsForAgent(): ListPluginsResult {
   const catalog = loadPluginCatalog()
@@ -3358,81 +2943,58 @@ async function rescanPluginsForAgent(): Promise<RescanPluginsResult> {
   }
 }
 
-/** List audio devices for the MCP `list_audio_devices` tool. Mirrors `selectAudioDevice`'s guard/resolve steps but returns the list instead of prompting. */
+/**
+ * List audio devices for the MCP `list_audio_devices` tool. The Rust engine
+ * has no device-enumeration API today (tracked separately — doc 662 §6 /
+ * #660), so this always reports the gap rather than pretending to probe.
+ */
 async function listAudioDevicesForAgent(): Promise<AudioDevicesResult> {
-  if (getConfiguredEngineKind() === 'rust') {
-    return {
-      ok: false,
-      error:
-        'audio device selection is not supported with the Rust engine (orbitscore.engine: "rust"); the system default output device is used',
-    }
+  return {
+    ok: false,
+    error:
+      'audio device selection is not supported with the Rust engine; the system default output device is used',
   }
-  if (!vscode.workspace.workspaceFolders?.[0]) {
-    return { ok: false, error: 'no workspace folder open' }
-  }
-  const resolution = resolveScsynthForUI()
-  if (!resolution) {
-    return {
-      ok: false,
-      error:
-        "scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth.",
-    }
-  }
-  const devices = await detectAudioDevices(resolution.path)
-  if (devices.length === 0) {
-    return { ok: false, error: 'no audio devices detected' }
-  }
-  return { ok: true, devices }
 }
 
 /**
  * Write the selected device for the MCP `select_audio_device` tool. Mirrors
- * `selectAudioDevice`'s guard steps and reuses the same config-write helper.
- * Does not re-probe scsynth — pass a name obtained from `list_audio_devices`.
+ * the Engine view's device-click flow (D2.5 live bridge / next-start
+ * settings write).
  */
 async function selectAudioDeviceForAgent(device: string): Promise<CommandResult> {
-  if (getConfiguredEngineKind() === 'rust') {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-    const action = resolveDeviceClickAction(
-      device,
-      resolveAudioDeviceSetting(workspaceRoot),
-      isEngineRunning(),
-    )
-    if (action === 'deselect-stop') {
-      await writeAudioDeviceSetting('')
-      if (isEngineRunning() && !stopEngine()) {
-        return { ok: false, error: 'engine failed to stop — see the OrbitScore output channel' }
-      }
-      return { ok: true, message: 'audio device deselected and engine stopped' }
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+  const action = resolveDeviceClickAction(
+    device,
+    resolveAudioDeviceSetting(workspaceRoot),
+    isEngineRunning(),
+  )
+  if (action === 'deselect-stop') {
+    await writeAudioDeviceSetting('')
+    if (isEngineRunning() && !stopEngine()) {
+      return { ok: false, error: 'engine failed to stop — see the OrbitScore output channel' }
     }
-    if (action === 'start') {
-      await writeAudioDeviceSetting(device)
-      if (!(await startEngine())) {
-        return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
-      }
-      return { ok: true, message: `audio device selected: ${device}; engine starting` }
-    }
-    try {
-      const result = await sendSelectAudioDeviceMeta(device)
-      if (result.ok) {
-        await writeAudioDeviceSetting(result.device ?? device)
-        return {
-          ok: true,
-          message: `audio device switched to: ${result.device ?? device} (persisted for next start)`,
-        }
-      }
-      return { ok: false, error: translateSelectAudioDeviceError(result.error) }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
+    return { ok: true, message: 'audio device deselected and engine stopped' }
   }
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
-  if (!workspaceFolder) {
-    return { ok: false, error: 'no workspace folder open' }
+  if (action === 'start') {
+    await writeAudioDeviceSetting(device)
+    if (!(await startEngine())) {
+      return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
+    }
+    return { ok: true, message: `audio device selected: ${device}; engine starting` }
   }
-  const configPath = path.join(workspaceFolder.uri.fsPath, '.orbitscore.json')
-  writeAudioDeviceConfig(configPath, device)
-  return { ok: true, message: `audio device set to: ${device}. Restart engine to apply.` }
+  try {
+    const result = await sendSelectAudioDeviceMeta(device)
+    if (result.ok) {
+      await writeAudioDeviceSetting(result.device ?? device)
+      return {
+        ok: true,
+        message: `audio device switched to: ${result.device ?? device} (persisted for next start)`,
+      }
+    }
+    return { ok: false, error: translateSelectAudioDeviceError(result.error) }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /**

@@ -271,7 +271,7 @@ as chord or rack (design doc §4 decision 13: `[m7]` and `[glue]` cannot be told
 syntactically).
 
 ```typescript
-// packages/engine/src/parser/types.ts:151-159
+// packages/engine/src/parser/types.ts:152-160
 /**
  * Context-neutral `[ ... ]` value. The interpreter classifies it as a chord or rack after
  * resolving identifier bindings; nested arrays remain arrays until that classification.
@@ -286,7 +286,7 @@ export type ValueArray = {
 The interpreter-side branch looks like this.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:333-343
+// packages/engine/src/interpreter/process-statement.ts:351-361
 /** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
 function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
@@ -322,7 +322,7 @@ A value classified as a rack goes to `Global.defineRack` and is stored via `stru
 enforced by the data layout.
 
 ```typescript
-// packages/engine/src/core/global.ts:352-366
+// packages/engine/src/core/global.ts:357-371
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
@@ -346,7 +346,7 @@ An `effect()` call is intercepted in `process-statement.ts`, its arguments are c
 recipe, and only then is the receiver's method invoked.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:263-266
+// packages/engine/src/interpreter/process-statement.ts:281-284
     if (method === 'effect') {
       if (!valueGlobal) throw new Error('effect() rack resolution requires an initialized global.')
       return callMethod(receiver, method, [effectArgumentsToRack(args, valueGlobal)])
@@ -682,7 +682,7 @@ routes it to a rebuild (design doc §2.3, the resolution of #626). On failure,
 The request type TS sends to the daemon is as follows.
 
 ```typescript
-// packages/engine/src/audio/types.ts:22-52
+// packages/engine/src/audio/types.ts:41-71
 export type EffectChainStageConfig =
   | {
       kind: 'catalog'
@@ -719,7 +719,7 @@ export interface EffectChainApplyResult {
 The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` and `save_dropped`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:560-567
+// packages/engine/src/audio/rust-engine/daemon-client.ts:550-557
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -734,7 +734,7 @@ The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` an
 respawn re-issues a plan that loads every stage with `mode: 'rebuild'`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1380-1390
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1410-1420
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -839,7 +839,7 @@ pub struct EffectChainPlan {
 the mode.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6026-6034
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -852,7 +852,7 @@ the mode.
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6097-6119
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6322-6344
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
@@ -1323,7 +1323,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 `.vsix`.
 
 ```yaml
-# .github/workflows/release.yml:92-98
+# .github/workflows/release.yml:94-100
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
@@ -1334,7 +1334,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 ```
 
 ```yaml
-# .github/workflows/release.yml:191-200
+# .github/workflows/release.yml:184-193
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
@@ -1515,7 +1515,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4730-4737
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4866-4873
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

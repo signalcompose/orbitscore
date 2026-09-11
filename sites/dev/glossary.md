@@ -89,11 +89,11 @@ CLI (`playFile`) では `.orbs` ファイルパスから自動導出されます
 
 ### AudioEngineBackend（backend seam）
 
-`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面で、`SuperColliderPlayer` と `RustEnginePlayer` の両方がこれを満たします。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
+`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面です。本番の実装は `RustEnginePlayer` だけで（#502 で第 2 実装は削除）、ほかに検証用の `RecordingScheduler` と MIDI 実行の no-op エンジンがこの面を実装します。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
 
 ### ORBITSCORE_ENGINE
 
-バックエンド選択の環境変数。`sc` または `supercollider` で SuperCollider 経路に opt-out、未設定・それ以外は Rust daemon（`create-audio-engine.ts` の `resolveEngineKind()`）。VS Code 設定 `orbitscore.engine` が対応します。
+🔴 **#502（2026-09-10）で撤去された**環境変数。かつてバックエンドを選ぶために使い、`sc` / `supercollider` で SuperCollider 経路へ opt-out できました。第 2 バックエンドが無くなったので `resolveEngineKind()` ごと削除し、`createAudioEngine()` は常に `RustEnginePlayer` を返します。VS Code 設定 `orbitscore.engine` も同時に削除されました。**歴史的な記述としてのみ残しています。**
 
 ### RustEnginePlayer / DaemonClient
 
@@ -189,9 +189,9 @@ daemon 側で UI イベントを汲む pump。#633 で per-index / per-window �
 
 ---
 
-## オーディオ / SuperCollider 用語（opt-out 経路）
+## オーディオ / SuperCollider 用語（削除決定 #502・歴史的読解）
 
-> 以下は `ORBITSCORE_ENGINE=sc` で opt-out したときにだけ通る SuperCollider 経路の用語です。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
+> 以下は SuperCollider 経路（`ORBITSCORE_ENGINE=sc` での opt-out 経路）の用語です。この経路は **2026-09-10 の裁定（#827 / #502）でリポジトリからの削除が決まっています**。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
 
 ### Buffer (SC)
 
@@ -207,7 +207,7 @@ OrbitScore が SuperCollider に登録する専用 SynthDef の名前。`PlayBuf
 
 ### scsynth
 
-SuperCollider のオーディオサーバーバイナリ。OSC/UDP で制御を受け付け、SynthDef を実行してオーディオを出力します。v1.0 からは `.vsix` に bundle として同梱されます。
+SuperCollider のオーディオサーバーバイナリ。OSC/UDP で制御を受け付け、SynthDef を実行してオーディオを出力します。v1.0 から `.vsix` に bundle として同梱されていましたが、**[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）で同梱をやめました**。抽出スクリプト (`scripts/extract-scsynth-bundle.sh`)・検証スクリプト (`scripts/verify-bundle.sh`)・`.vscodeignore` の `!engine/scsynth/**` keep 指定・`release.yml` の `brew install --cask supercollider` ステップがすべて削除されています。
 
 ### SynthDef (SC)
 
@@ -268,6 +268,8 @@ VS Code の信頼モデル。未信頼のワークスペースでは拡張が既
 ### bundle (scsynth source)
 
 `ScsynthSource` の一つ。`.vsix` に同梱された scsynth バイナリを使う場合の source 識別子。`<engine root>/scsynth/Contents/Resources/scsynth` を指します。
+
+🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、この候補が当たることはありません。** `packages/engine/scripts/sync-dist.js` が engine を拡張へ同期するたびに `engine/scsynth` を削除するようになり、`.vscodeignore` の keep 指定も外れたためです。型と分岐そのものは `packages/engine/src/audio/supercollider/scsynth-resolver.ts` に残っています（SC の TS 実装の撤去は #836 の本文いわく「次の PR」）。
 
 ### explicit (scsynth source)
 

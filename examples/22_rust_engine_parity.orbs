@@ -1,12 +1,12 @@
 // Rust engine parity dog-food (#304) — pan / chop 領域再生 / per-slice gain
 //
 // 使い方:
-//   - 既定 (native Rust エンジン): そのまま再生（cutover #108）
-//   - SuperCollider: ORBITSCORE_ENGINE=sc を付けて再生し、Rust と聴き比べる
+//   - Rust エンジンのみで再生する（cutover #108 で既定化・
+//     SuperCollider opt-out 経路と ORBITSCORE_ENGINE は #502（2026-09-10）で削除された）
 //
 // 注: rate≠1.0（slice 尺をイベントスロット尺へ詰める varispeed = time-stretch）は本増分
 //     対象外。下の chop は grid 一致（sliceDur=eventDur → rate=1.0）にしてあるので、
-//     native でも warn なしで SC と同等に鳴るはず。
+//     warn なしで鳴るはず（かつて SC と Rust の聴き比べに使っていた名残。現在は Rust のみ）。
 
 var global = init GLOBAL
 global.tempo(120)

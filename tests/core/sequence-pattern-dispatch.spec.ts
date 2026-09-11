@@ -13,7 +13,7 @@ import { createMixerRuntimeRegistry } from '../../packages/engine/src/signal-cha
  * Phase R (#227) — pattern variables end to end (§6.5): namespace splice, `*n` on a
  * pattern ref, `.root()` over a pattern, chord/pattern coexistence, value-pass
  * (resolution at play() time), and the interpreter routing. Direct Global+Sequence
- * MIDI harness (the full interpreter path needs SuperCollider and is skipped).
+ * MIDI harness (the full interpreter path needs the audio engine and is skipped).
  */
 
 const T0 = 1_000_000
