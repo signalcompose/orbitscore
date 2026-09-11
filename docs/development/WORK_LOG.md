@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(sites): follow PR #861 — record the mirror-image consequence of line-wise ERROR prefixing (Sep 11, 2026)
+
+PR [#861](https://github.com/signalcompose/orbitscore/pull/861)（#860・merge `5ed3ce5`）の追従。
+
+IV-3 章（`sites/dev/editor/mcp-and-gated-e2e.md`）は #756 の「`ERROR:` 前置が chunk 単位
+だったので ERROR 件数が**構造的に過小**だった」までを書いていたが、**その裏返し**を
+書いていなかった。行単位になったということは「engine の stderr に出た行はすべて `ERROR:`」
+であり、**正常系の `warn!` 1 行で件数テストが巻き添えになる**。#861 はまさにそれで、
+`query_note_port_index` の warn が `default-baseline cycle must add no ERROR: lines`
+（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）を落としていた。
+
+ja / en の両方に節を追加（STYLE_GUIDE のバイリンガル必須）。ERROR 会計という 1 本の
+計測系に**測定器の側**（前置の粒度）と**被測定側**（engine のログレベル）の 2 つの入口が
+あり、**直す場所が正反対**であることを本文に残した。
+
+`verified-against` は据え置き。1 節の追記であって章本文の書き直しではなく、STYLE_GUIDE
+§4「小規模 cross-link / 体裁修正のみは更新しない」と「実質的に書き直したとき」の中間に
+あたるため、章冒頭の Note（この章が従来から追従履歴を書いている場所）に #861 を追記する
+方式を採った。
+
+検証: `npm run docs:build`（user / dev）緑 / `npm run docs:check` 緑。
+
 ### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
 
 束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。

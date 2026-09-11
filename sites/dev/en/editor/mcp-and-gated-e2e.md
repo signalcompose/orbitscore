@@ -6,7 +6,7 @@ verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -457,6 +457,31 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 Why so much care? The E2E frequently "compares the ERROR count before and after an operation". With a fixed-width window, an old ERROR scrolling out at the same moment a new ERROR scrolls in leaves the count unchanged — a **false green**. `#567` raised the cap from 500 to the actual capacity of 1000 and made truncation part of the response for this reason. The window is still finite, though, so CLAUDE.md rules that "ERROR counts must not be compared with strict equality (use `<=`)". That rule is mechanised by the hygiene test described below.
 
 There was a second false green hiding in this count, unrelated to the window. The `ERROR:` prefix is applied by `setupStderrHandler` on the extension side, and before [#756](https://github.com/signalcompose/orbitscore/issues/756) it was applied **per chunk**, so when a single chunk held several lines the second line onwards got no `ERROR:` at all. In other words the ERROR count was **structurally low** before the window ever entered the picture. Measured in practice: a device-switch failure was recorded separately by the daemon and by the engine, yet only one of the two carried an `ERROR:`. #756 changed the prefixing to be **line-wise**, via `createLinePrefixer` (see the "Turning stderr back into lines" section of [IV-1](/en/editor/vscode-architecture)). The general lesson worth keeping is the one about the instrument itself: **a broken measuring instrument can hide every judgement downstream of it**.
+
+### Line-wise prefixing has a mirror-image consequence — stop noise at the source
+
+Prefixing per line also means that **every line the engine writes to stderr becomes an `ERROR:` line**. So a single `warn!` raised by the engine on a perfectly normal path is enough to drag down any test that counts ERROR lines. [#860](https://github.com/signalcompose/orbitscore/issues/860) (PR [#861](https://github.com/signalcompose/orbitscore/pull/861)) is exactly that case.
+
+`query_note_port_index`, which runs on every CLAP plugin load, raised a `warn!` whenever it met a plugin without a `NotePortsExtension`. But **an effect having no note ports is normal**, and the fallback to port 0 works just as the CLAP convention expects. The alarm was firing on the normal path. What got dragged down was an unrelated test watching automatic plugin-state snapshots, which failed as `default-baseline cycle must add no ERROR: lines ... expected 10 to be less than or equal to 9` (`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`). The one extra line was this warn.
+
+Two responses were available: **loosen the classifier** (exempt some stderr from the `ERROR:` prefix) or **stop the noise at the source**. #861 took the latter and lowered the `warn!` to a `debug!`, because the former walks back toward the very "real errors get dropped" direction that #756 had just closed off.
+
+```rust
+// rust/crates/orbit-clap-host/src/controller.rs:398-420
+/// note 入力ポートインデックスを取得する（CLAP / MIDI dialect を優先）。
+/// plugin が NotePortsExtension を持たない場合は 0 を返す。
+fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
+    let mut handle = instance.plugin_handle();
+    let Some(note_ports) = handle.get_extension::<PluginNotePorts>() else {
+// ...
+        tracing::debug!("[orbit-clap-host] NotePortsExtension なし; port 0 を使用");
+        return 0;
+    };
+```
+
+Something is lost, too. An instrument without note ports now also reports at `debug!`, so it no longer shows up in the default log level. The judgement was that since the port 0 fallback genuinely works, this is a report of "a default was used" rather than "this does not work", and `debug!` is the right level for that.
+
+Reading this section alongside the #756 one, a single measurement — the ERROR count — turns out to have two entrances: **the instrument side** (whether the prefix is applied per line or per chunk) and **the measured side** (which log level the engine speaks at). Break the first and the count goes structurally low; loosen the second and the count rises on the normal path. Both distort the same number, yet the place to fix them lies in opposite directions.
 
 ---
 
@@ -1400,6 +1425,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
 - `packages/vscode-extension/src/extension.ts:1567-1657` — `createLinePrefixer` / `setupStderrHandler`, which moved the `ERROR:` prefix from per-chunk to per-line (#756, PR [#776](https://github.com/signalcompose/orbitscore/pull/776))
+- `rust/crates/orbit-clap-host/src/controller.rs:398-420` — `query_note_port_index`, whose normal-path `warn!` was lowered to `debug!` (#860, PR [#861](https://github.com/signalcompose/orbitscore/pull/861))
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
 - `tests/e2e/helpers/capture-windows.ts:1-489` — the capture clock, sound detection, segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
