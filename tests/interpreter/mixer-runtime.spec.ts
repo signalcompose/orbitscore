@@ -76,18 +76,19 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     expect(aux).toHaveBeenCalledTimes(1)
   })
 
-  it('resolves implicit master lazily across incremental evaluations', async () => {
+  it('resolves master at every stage of an incremental evaluation', async () => {
+    // 🔴 最後の行がこの訂正の要点。旧実装は aux を 1 つ宣言した時点で master を
+    // 解決しなくなり、`kick.master` が壊れた（宣言順に依存する振る舞い）。
+    // master はトラックであって、他のノードの有無とは無関係（owner 2026-09-11）。
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
 
-    expect(resolveMixerNode(state.mixers, 'master', global)).toMatchObject({
-      kind: 'output',
-      channels: [1, 2],
-    })
+    const asMasterTrack = { kind: 'master', global }
+    expect(resolveMixerNode(state.mixers, 'master', global)).toMatchObject(asMasterTrack)
     await run('var mix = init global.mixer', state)
-    expect(resolveMixerNode(state.mixers, 'master', global)).toBeDefined()
+    expect(resolveMixerNode(state.mixers, 'master', global)).toMatchObject(asMasterTrack)
     await run('var verb = mix.aux', state)
-    expect(resolveMixerNode(state.mixers, 'master', global)).toBeUndefined()
+    expect(resolveMixerNode(state.mixers, 'master', global)).toMatchObject(asMasterTrack)
   })
 
   it('dispatches a declared bus receiver and throws for unknown receivers', async () => {
@@ -243,42 +244,51 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     )
   })
 
-  it('resolves a declared master output instead of the implicit fallback', async () => {
+  it('resolves master to the master TRACK, never to a device node', async () => {
+    // 🔴 owner 2026-09-11: 「トラック」と「デバイス」は別の概念。master は sum/aux と同じ
+    // トラックで、その出口がデバイス 1,2 に固定されているだけ。以前はここで
+    // `var master = mix.output(3, 4)` を宣言して「宣言が暗黙 master に勝つ」ことを
+    // 固定していたが、その形は master をデバイスノードとして扱う旧モデルの産物だった。
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
-    await run('var mix = init global.mixer\nvar master = mix.output(3, 4)', state)
+    await run('var mix = init global.mixer\nvar mainOut = mix.output(3, 4)', state)
 
-    expect(resolveMixerNode(state.mixers, 'master', global)).toBe(state.mixers.nodes.get('master'))
     expect(resolveMixerNode(state.mixers, 'master', global)).toMatchObject({
+      kind: 'master',
+      global,
+    })
+    // 宣言したデバイスノードは、あくまでデバイス。
+    expect(resolveMixerNode(state.mixers, 'mainOut', global)).toMatchObject({
       kind: 'output',
       channels: [3, 4],
     })
   })
 
-  it('rejects declaring a sum/aux node named "master" while keeping an output named "master" legal (#523 IMPORTANT 6)', async () => {
-    // `.master` is reserved (reset to hardware/master); an output endpoint
-    // named `master` IS the master, so that form must keep working.
-    const sumState = stateWith(new Global(new RecordingScheduler()))
-    await run('var mix = init global.mixer', sumState)
-    await expect(run('var master = mix.sum', sumState)).rejects.toThrow(
-      /master.*reserved|reserved.*master/i,
-    )
-
-    const auxState = stateWith(new Global(new RecordingScheduler()))
-    await run('var mix = init global.mixer', auxState)
-    await expect(run('var master = mix.aux', auxState)).rejects.toThrow(
-      /master.*reserved|reserved.*master/i,
-    )
+  it('rejects declaring ANY mixer node named "master" — sum, aux, and output alike', async () => {
+    // 🔴 owner 2026-09-11 で訂正。#523 IMPORTANT 6 は sum/aux だけを拒否し、
+    // 「output named master IS the master」として output 形を合法にしていた。これは
+    // **master トラックの出口がたまたま 1,2 であることと、デバイスの 1,2 の混同**だった。
+    // 同じ名前が「トラック」と「ユーザーが宣言した別物」の両方を意味すると、
+    // `kick.master` がどちらを指すかが宣言順で決まってしまう。
+    for (const decl of ['var master = mix.sum', 'var master = mix.aux']) {
+      const state = stateWith(new Global(new RecordingScheduler()))
+      await run('var mix = init global.mixer', state)
+      await expect(run(decl, state)).rejects.toThrow(/master.*reserved|reserved.*master/i)
+    }
 
     const outputState = stateWith(new Global(new RecordingScheduler()))
-    await run('var mix = init global.mixer\nvar master = mix.output(1, 2)', outputState)
-    expect(outputState.mixers.nodes.get('master')).toMatchObject({
-      kind: 'output',
-      channels: [1, 2],
-    })
+    await run('var mix = init global.mixer', outputState)
+    await expect(run('var master = mix.output(1, 2)', outputState)).rejects.toThrow(
+      /"master" names the master track/,
+    )
+    expect(outputState.mixers.nodes.get('master')).toBeUndefined()
   })
 
-  it('keeps implicit master fallback independent across Globals', async () => {
+  it('resolves master per Global, and does so even after other nodes are declared', async () => {
+    // 旧実装は「この Global に明示ノードが 1 つでもあれば master を解決しない」という
+    // ガードを持っており、g1 で sum を 1 つ宣言した瞬間に `kick.master` が壊れた。
+    // それは master がデバイスノードだった時代の名前衝突対策で、master を予約語にした今は
+    // 宣言順に依存する理由が無い。
     const g1 = new Global(new RecordingScheduler())
     const g2 = new Global(new RecordingScheduler())
     const state = stateWith(g1)
@@ -286,11 +296,13 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     state.globals.set('g2', g2)
     await run('var mix = init g1.mixer\nvar drums = mix.sum', state)
 
-    expect(resolveMixerNode(state.mixers, 'master', g1)).toBeUndefined()
+    expect(resolveMixerNode(state.mixers, 'master', g1)).toMatchObject({
+      kind: 'master',
+      global: g1,
+    })
     expect(resolveMixerNode(state.mixers, 'master', g2)).toMatchObject({
-      kind: 'output',
+      kind: 'master',
       global: g2,
-      channels: [1, 2],
     })
   })
 
@@ -479,16 +491,16 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
 
     const after = new Global(new RecordingScheduler())
     const state = stateWith(after)
-    await run('var mix = init global.mixer\nvar master = mix.output(1, 2)', state)
+    await run('var mix = init global.mixer\nvar mainOut = mix.output(1, 2)', state)
     expect(() => after.linkAudio()).toThrow(/plugin hosting/)
   })
 
   it('includes mixer handles and nodes in import declaration contracts', () => {
     const names = declaredNames(
       parseAudioDSL(
-        'var global = init GLOBAL\nvar mix = init global.mixer\nvar master = mix.output(1, 2)',
+        'var global = init GLOBAL\nvar mix = init global.mixer\nvar mainOut = mix.output(1, 2)',
       ),
     )
-    expect(names).toEqual(new Set(['global', 'mix', 'master']))
+    expect(names).toEqual(new Set(['global', 'mix', 'mainOut']))
   })
 })

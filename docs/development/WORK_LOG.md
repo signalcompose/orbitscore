@@ -17,6 +17,81 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(dsl): separate the master track from the device it outputs to (#611) (Sep 11, 2026)
+
+🔴 **owner の訂正（2026-09-11）**。私が「1,2 ch は master の領分だから `mix.output(1,2)` は
+master として扱う」と裁定を仰ぎ、owner が「master であり、それはつまりデバイスの 1,2 に
+なるのでは」と応じた後、**その実装が概念を取り違えている**ことを owner が指摘した。
+
+> マスタートラックとデバイスっていう概念を、トラックなのかデバイスなのかっていうのを
+> ちゃんと分けた方がいいんじゃないですか。
+>
+> マスターっていうのは要するにシーケンスのトラックやサミング、オグジュアリーのトラックとかと
+> 同じように、マスターのトラックですよね。
+
+## 正しいモデル
+
+```
+kick ──┐
+snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
+hat  ──┘                    ↑ ここに合流する
+
+pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
+```
+
+- `output(master)` は **master トラックの頭に合流**する。その後 master のラックと
+  `global.gain()` を通り、master が自分の出口として持っているデバイスへ出る
+- `mix.output(1, 2)` は **デバイスの 1,2 ch を名指す**。トラックではない
+
+**実装も元からそうだった**（`default_master_line_program()` は bus と同じ形の
+`[Rack, Gain, Output]`）。混同していたのは **DSL の側**だった。
+
+## 何が焼き付いていたか（直した順）
+
+| 場所 | 旧 | 新 |
+|---|---|---|
+| `process-statement.ts` の糖衣 | `(1,2)` を `{kind:'master'}` に読み替え | `physicalOutputDest()` で**常にデバイス** |
+| 同・引数経路 | `(1,2)` の特例が**無い**（糖衣と食い違い） | 同じヘルパを通す |
+| `MixerRuntimeNode` | master = `{kind:'output', channels:[1,2]}` = **デバイスノード** | **`{kind:'master'}` = 第 3 の種類** |
+| `registerMixerNode` | `var master = mix.output(...)` は**合法**（#523 IMPORTANT 6） | **拒否**（sum/aux と同じ理由） |
+| `resolveMixerNode` | 明示ノードが 1 つでもあれば master を解決**しない** | 常に解決する |
+
+🔴 **最後の行が一番効いている。** 旧実装には「この Global に明示ノードが 1 つでもあれば
+`master` を解決しない」というガードがあった。これは master が**デバイスノードだった時代の
+名前衝突対策**で、`var master = mix.output(...)` が宣言されうる前提だった。
+`master` を予約語にした今は衝突が起きず、ガードは
+**「sum を 1 つ宣言した瞬間に `kick.master` が壊れる」という宣言順依存**だけを残していた。
+
+## master の出口は 1,2 固定のまま（owner 2026-09-11）
+
+> マスターが1、2固定にしておかないと、一般的な DAW の操作とか設定で 1、2 じゃなくなって
+> しまっているみたいなことが起こると、デバイスの変更で困ってしまうので
+
+**固定であることと、「1,2 という名前が master を意味する」ことは別**。
+master トラックの DSL ハンドル（`master.output(...)` / `master.effect(...)`）は
+凍結線に入れない — 下の配線（daemon の `SetBusLine("master", ...)`）は既に通っているので、
+新ラインで表面だけ足せる。
+
+## 旧モデルを固定していたテスト 9 件を書き直した
+
+`signal-chain-dispatch.spec.ts` 5 件 + `mixer-runtime.spec.ts` 4 件。
+うち 1 件はテスト名自体が混同を記録していた:
+「sum/aux を master と名付けるのは拒否するが、**output を master と名付けるのは合法に保つ**」。
+
+## 変異検証
+
+| 変異 | 結果 |
+|---|---|
+| `master` の予約を外す | 1 failed |
+| `master` を解決しない（旧ガード相当） | **6 failed** |
+| `(1,2)` の特例を復活させる | 1 failed |
+| restore | 32 passed・baseline とバイト一致 |
+
+`npm test` **2,325 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
+引用 936 / 0 failed。
+
+Part of #611
+
 ### fix(dsl): keep the instrument reschedule off the push-success path (#611) (Sep 11, 2026)
 
 束 B の fix ラウンド（Codex）を **sandbox 外で回し直して**出た赤 1 件。

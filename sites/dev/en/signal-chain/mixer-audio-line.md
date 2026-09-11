@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:518-547
+// packages/engine/src/core/sequence.ts:534-563
 
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
@@ -286,7 +286,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:627-640
+// packages/engine/src/core/sequence.ts:643-656
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -1075,7 +1075,7 @@ sequence holds an insert bus. Whether the order is `instrument()` → `effect()`
 passes through here.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:937-964
+// packages/engine/src/core/sequence.ts:960-987
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus

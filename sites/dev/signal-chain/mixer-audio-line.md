@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:518-547
+// packages/engine/src/core/sequence.ts:534-563
 
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
@@ -276,7 +276,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:627-640
+// packages/engine/src/core/sequence.ts:643-656
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -1048,7 +1048,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:937-964
+// packages/engine/src/core/sequence.ts:960-987
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus

@@ -17,6 +17,7 @@ import {
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
+import { physicalOutputDest } from '../core/sequence/audio-line'
 import type { OutputDest } from '../core/sequence/audio-line'
 import { resolveChainDispatch } from '../signal-chain/dispatch'
 import {
@@ -244,18 +245,16 @@ async function applyMethodChain(
       if (invocation !== 'bare') {
         throw new Error(`Mixer ${dispatch.node.kind} "${method}" is an output, not a send.`)
       }
-      // #611 §2.2/§3.8: the (1, 2)-only restriction is lifted — any declared physical output
-      // node is now routable, resolved structurally to `{ kind: 'device', channels }`. The
-      // one exception is the (1, 2) master-equivalent node, which keeps resolving to the
-      // `"master"` reserved word so it shares the SAME wire destination as `output(master)`
-      // (bit-identical to today's compat routing) instead of a channel-pair device the daemon
-      // would treat as a distinct destination.
+      // #611 §2.2/§3.8（owner 2026-09-11）: 宛先は 3 種類ある。
+      //   master トラック / 宣言済み sum・aux トラック / 物理デバイス
+      // `mix.output(n, m)` は**常にデバイス**で、`(1, 2)` に特例は無い — それは
+      // master トラックの出口がたまたま 1,2 であることと、デバイスの 1,2 の混同だった。
       const dest: OutputDest =
-        dispatch.node.kind === 'output'
-          ? dispatch.node.channels[0] === 1 && dispatch.node.channels[1] === 2
-            ? { kind: 'master' }
-            : { kind: 'device', channels: dispatch.node.channels }
-          : { kind: 'bus', bus: dispatch.node.handle.bus }
+        dispatch.node.kind === 'master'
+          ? { kind: 'master' }
+          : dispatch.node.kind === 'output'
+            ? physicalOutputDest(dispatch.node.channels)
+            : { kind: 'bus', bus: dispatch.node.handle.bus }
       return receiver instanceof Sequence
         ? receiver.routeOutputFromDsl(dest)
         : receiver.output(dest)
@@ -270,8 +269,7 @@ async function applyMethodChain(
       // `resolveMixerBus()` looks up, so no interception is needed for them.
       const node = typeof args[0] === 'string' ? state.mixers.nodes.get(args[0]) : undefined
       if (node?.kind === 'output') {
-        const dest: OutputDest = { kind: 'device', channels: node.channels }
-        args = [dest, ...args.slice(1)]
+        args = [physicalOutputDest(node.channels), ...args.slice(1)]
       }
     }
     const valueGlobal =

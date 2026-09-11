@@ -243,7 +243,7 @@ For new creation, `Sequence` is generated via the `global.seq` factory method, a
 Once initialization is complete, each element of `statements` is passed to `processStatement()`. In [I-1](/en/pipeline/text-to-ast) we explained "the parser outputs all `<id>.method()` as `type: 'sequence'`." Resolving that decision correctly here is the role of the `'sequence'` case in `processStatement()`.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:62-116
+// packages/engine/src/interpreter/process-statement.ts:63-117
 export async function processStatement(
   statement: Statement,
   state: InterpreterState,
@@ -338,7 +338,7 @@ flowchart TD
 Both `processGlobalStatement()` and `processSequenceStatement()`, once they have fetched the receiver, delegate to `applyMethodChain()`. Taking `processGlobalStatement()` as an example:
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:414-431
+// packages/engine/src/interpreter/process-statement.ts:412-429
 export async function processGlobalStatement(
   statement: GlobalStatement,
   state: InterpreterState,
@@ -362,7 +362,7 @@ export async function processGlobalStatement(
 `applyMethodChain()` is the single place holding the loop "call the main method, then call each element of `chain` in turn." Every receiver kind (Global / Sequence / bus reference / mixer node) goes through the same loop, so chain semantics are defined in exactly one place.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:118-142
+// packages/engine/src/interpreter/process-statement.ts:119-143
 /**
  * Apply a statement's main call and then its chained calls to `receiver`,
  * threading each call's return value into the next (methods return `this` to
@@ -393,7 +393,7 @@ async function applyMethodChain(
 At each hop, `resolveChainDispatch()` decides "is this name a DSL method, a plugin call, or mixer routing?" A point to note is that the `invocation` recorded by the parser takes on meaning at this stage. Writing a DSL method on a Global without parentheses triggers the following guard.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:149-168
+// packages/engine/src/interpreter/process-statement.ts:150-169
     const dispatch = resolveChainDispatch(receiver, method, state, invocation)
     if (
       dispatch.kind === 'dsl-method' &&
@@ -497,7 +497,7 @@ The leading `named_arg` branch exists for the named arguments of the Signal Chai
 `RUN()`, `LOOP()`, and `MUTE()` are processed by `processTransportStatement()`. Their distinguishing design is that they are not toggles but **unidirectional overwrites**.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:527-570
+// packages/engine/src/interpreter/process-statement.ts:525-568
 export async function processTransportStatement(
   statement: TransportStatement,
   state: InterpreterState,

@@ -372,12 +372,20 @@ export class Sequence {
   gain(valueDb: number | RandomValue): this {
     const isRandom = typeof valueDb === 'object' && valueDb !== null && 'type' in valueDb
     if (isRandom) {
-      const fixedElementOnBus =
-        this._insertBus !== undefined &&
-        this._line.snapshot().some((element) => element.kind === 'gain' && element.db !== 0)
-      if (fixedElementOnBus) this.upsertLine({ kind: 'gain', db: 0 })
+      // 規則 2: 発音側とラインの両方が非中立値を持ってはいけない。ランダムは発音側に住むので、
+      // ラインに残っていた固定値は**この呼び出しの中で**中立へ落とす。
+      //
+      // 🔴 バスの有無で条件を付けない。`_insertBus` が無い時に落とし損ねると、旧固定値が
+      // `_line` に残ったまま、後から `output()`/`send()`/`effect()` がバスを確保した瞬間に
+      // daemon へ push され、発音側のランダムと二重に掛かる（C4 と同じ欠陥が、別の順序で
+      // 再発する。fix 差分の再点検で発見・2026-09-11）。
+      const staleFixedOnLine = this._line
+        .snapshot()
+        .some((element) => element.kind === 'gain' && element.db !== 0)
+      if (staleFixedOnLine) this.upsertLine({ kind: 'gain', db: 0 })
       this.gainManager.setGain({ valueDb })
-      if (fixedElementOnBus) this.syncBusLine()
+      // push はバスがある時だけ意味を持つ（`syncBusLine()` は `_insertBus` 無しで早期 return）。
+      if (staleFixedOnLine) this.syncBusLine()
       this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
       return this
     }
@@ -417,12 +425,20 @@ export class Sequence {
   pan(value: number | RandomValue): this {
     const isRandom = typeof value === 'object' && value !== null && 'type' in value
     if (isRandom) {
-      const fixedElementOnBus =
-        this._insertBus !== undefined &&
-        this._line.snapshot().some((element) => element.kind === 'pan' && element.pan !== 0)
-      if (fixedElementOnBus) this.upsertLine({ kind: 'pan', pan: 0 })
+      // 規則 2: 発音側とラインの両方が非中立値を持ってはいけない。ランダムは発音側に住むので、
+      // ラインに残っていた固定値は**この呼び出しの中で**中立へ落とす。
+      //
+      // 🔴 バスの有無で条件を付けない。`_insertBus` が無い時に落とし損ねると、旧固定値が
+      // `_line` に残ったまま、後から `output()`/`send()`/`effect()` がバスを確保した瞬間に
+      // daemon へ push され、発音側のランダムと二重に掛かる（C4 と同じ欠陥が、別の順序で
+      // 再発する。fix 差分の再点検で発見・2026-09-11）。
+      const staleFixedOnLine = this._line
+        .snapshot()
+        .some((element) => element.kind === 'pan' && element.pan !== 0)
+      if (staleFixedOnLine) this.upsertLine({ kind: 'pan', pan: 0 })
       this.panManager.setPan({ value })
-      if (fixedElementOnBus) this.syncBusLine()
+      // push はバスがある時だけ意味を持つ（`syncBusLine()` は `_insertBus` 無しで早期 return）。
+      if (staleFixedOnLine) this.syncBusLine()
       this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
       return this
     }
@@ -924,7 +940,14 @@ export class Sequence {
       // Immediate reschedule (skipReschedule=false) — the line the daemon now also applies
       // this on would otherwise double up with the still-applying event-side value for the
       // rest of the current bar.
-      this.seamlessParameterUpdate('gain', 'bus adopted the fixed gain/pan')
+      // 🔴 `skipReschedule` は `gain()`/`pan()` の同期側と**相補**になっている。
+      //   instrument: 同期側が reschedule 済み（`clearOwner` 目的）→ ここでは skip
+      //   audio:      同期側は skip（ライン側の ramp が継ぐ）→ 発音側を中立化した
+      //               ここで一度だけ reschedule する（既にスケジュール済みのイベントが
+      //               古い値のままラインと二重に掛かるのを断つ）
+      // 片方でも条件を外すと、ループ中の instrument で `clearOwner` が 2 回走り、
+      // 1 回目の再スケジュールで鳴り始めたノートを 2 回目が打ち切る（音の欠け）。
+      this.seamlessParameterUpdate('gain', 'bus adopted the fixed gain/pan', this.isInstrument())
     }
   }
 

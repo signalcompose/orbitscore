@@ -296,7 +296,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run(
-      'var kick = init global.seq\nvar mix = init global.mixer\nvar master = mix.output(1, 2)\nvar drums = mix.sum\nvar verb = mix.aux',
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar drums = mix.sum\nvar verb = mix.aux',
       state,
     )
     const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
@@ -314,6 +314,57 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), busOutput('sum-bus-0', false)]],
       ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
     ])
+  })
+
+  // 🔴 「トラック」と「デバイス」は別の概念（owner 2026-09-11）。
+  //
+  //   kick ──┐
+  //   snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
+  //   hat  ──┘                    ↑ ここに合流する
+  //   pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
+  //
+  // 以前は `mix.output(1, 2)` を master に読み替える特例があったが、それは master トラックの
+  // 出口がたまたま 1,2 であることと、デバイスの 1,2 を混同していた。
+  it('keeps mix.output(1, 2) a DEVICE — it does not become the master track', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run(
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar mainOut = mix.output(1, 2)',
+      state,
+    )
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
+
+    await run('kick.mainOut', state)
+
+    // デバイス宛て。master ラックも global.gain() も通らない経路。
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { op: 'output', dest: { kind: 'device', channels: [1, 2] }, thru: false, gain: 1 },
+    ])
+  })
+
+  it('resolves master to the master TRACK even when other mixer nodes are declared', async () => {
+    // 旧実装は「明示ノードが 1 つでもあれば master を解決しない」というガードを持っており、
+    // sum を 1 つ宣言した瞬間に `kick.master` が壊れた。master が予約語になった今、
+    // 宣言順に依存する理由は無い。
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq\nvar mix = init global.mixer\nvar drums = mix.sum', state)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
+
+    await run('kick.master', state)
+
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(false)])
+  })
+
+  it('rejects declaring a mixer node named master', async () => {
+    // 同じ名前が「トラック」と「ユーザーが宣言した別物」の両方を意味すると、`kick.master` が
+    // どちらを指すかが宣言順で決まってしまう。`global.sum("master")` は既に同じ理由で拒否済み。
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await expect(
+      run('var mix = init global.mixer\nvar master = mix.output(1, 2)', state),
+    ).rejects.toThrow(/"master" names the master track/)
   })
 
   it('rejects routing to a declared non-master output instead of silently rerouting to master', async () => {
@@ -340,7 +391,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
 
     // The (1, 2) node keeps resolving to the "master" reserved word (bit-identical to
     // today's compat routing) instead of becoming a distinct device destination.
-    await run('var master = mix.output(1, 2)\nkick.master', state)
+    await run('kick.master', state)
     expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(false)])
   })
 
@@ -417,7 +468,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(scheduler)
     const state = makeState(global)
     await run(
-      'var kick = init global.seq\nvar mix = init global.mixer\nvar master = mix.output(1, 2)\nvar drums = mix.sum\nvar verb = mix.aux',
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar drums = mix.sum\nvar verb = mix.aux',
       state,
     )
     await run('kick.verb(db: 0.8, enabled: false)\nverb.effect("TAL Reverb 4").master', state)
@@ -503,10 +554,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
     const global = new Global(scheduler)
     const state = makeState(global)
-    await run(
-      'var mix = init global.mixer\nvar master = mix.output(1, 2)\nvar verb = mix.aux',
-      state,
-    )
+    await run('var mix = init global.mixer\nvar verb = mix.aux', state)
 
     await run('verb.master', state)
     expect(scheduler.setBusLine).toHaveBeenCalledWith('aux-bus-0', [rack, masterOutput(false)])

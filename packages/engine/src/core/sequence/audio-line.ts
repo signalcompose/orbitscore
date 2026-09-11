@@ -98,6 +98,40 @@ export function resolveSendLevel(
  * `MixerManager` が自分の `resolveNode` を使うため — 正規表現と分岐の順序は仕様（§3.3）
  * そのものなので、2 箇所に写すと片方だけ直る。
  */
+/**
+ * #611 §2.2/§3.8: 宣言済みの物理アウトノード（`mix.output(n, m)` / `mix.output(n)`）が
+ * 指す宛先。**常にデバイス。`(1, 2)` に特例は無い。**
+ *
+ * 🔴 **「トラック」と「デバイス」は別の概念**（owner 2026-09-11）:
+ *
+ * ```
+ * kick ──┐
+ * snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
+ * hat  ──┘                    ↑ ここに合流する
+ *
+ * pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
+ * ```
+ *
+ * - `output(master)` は **master トラックの頭に合流**する。その後 master のラックと
+ *   `global.gain()` を通り、**master トラックが自分の出口として持っているデバイス**へ出る
+ * - `mix.output(1, 2)` は **デバイスの 1,2 ch を名指す**。トラックではない
+ *
+ * 以前ここには「`(1, 2)` は master と同じ wire 宛先にする」特例があった。これは
+ * **master トラックの出口がたまたま 1,2 であることと、デバイスの 1,2 を混同**していた —
+ * master の出口を 3,4 に変えたら、`mix.output(1, 2)` が master を指すのは意味を成さない。
+ *
+ * デバイスへ直接向けた音が master の出力と同じ線で加算されるのは**仕様どおり**であって
+ * 防ぐべき事故ではない（DAW でトラックを出力 1-2 に直接向けたときと同じ）。
+ *
+ * なお、シーケンス（やバス）自身のラック・gain・pan は**宛先が master でも 3,4 でも同じように
+ * かかる** — RT は同じ加工済みバッファを読み、違うのは master という段を通るかどうかだけ。
+ */
+export function physicalOutputDest(channels: readonly number[]): OutputDest {
+  return channels.length === 1
+    ? { kind: 'device', channels: [channels[0]] }
+    : { kind: 'device', channels: [channels[0], channels[1]] }
+}
+
 export function resolveNamedOutputDest(
   value: string,
   lookupBus: (name: string) => { bus: string } | undefined,

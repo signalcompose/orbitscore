@@ -1157,7 +1157,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1601-1611
+// packages/engine/src/core/sequence.ts:1624-1634
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

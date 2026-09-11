@@ -286,7 +286,7 @@ export type ValueArray = {
 The interpreter-side branch looks like this.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:353-363
+// packages/engine/src/interpreter/process-statement.ts:351-361
 /** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
 function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
@@ -346,7 +346,7 @@ An `effect()` call is intercepted in `process-statement.ts`, its arguments are c
 recipe, and only then is the receiver's method invoked.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:283-286
+// packages/engine/src/interpreter/process-statement.ts:281-284
     if (method === 'effect') {
       if (!valueGlobal) throw new Error('effect() rack resolution requires an initialized global.')
       return callMethod(receiver, method, [effectArgumentsToRack(args, valueGlobal)])
