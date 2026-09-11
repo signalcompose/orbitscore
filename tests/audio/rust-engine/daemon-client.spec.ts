@@ -17,6 +17,7 @@ import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn
 import {
   DaemonClient,
   createDaemonStderrLineRouter,
+  daemonEnv,
   isDaemonNonErrorTracingLine,
   resolveDaemonBinaryPath,
 } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
@@ -1149,5 +1150,31 @@ describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)
     // ISO timestamp 直後のみ）。緩めると本物のエラーが log から消える側に倒れる。
     expect(isDaemonNonErrorTracingLine('plugin said: INFO is my name')).toBe(false)
     expect(isDaemonNonErrorTracingLine('loaded INFO panel for plugin')).toBe(false)
+  })
+})
+
+describe('daemonEnv (#878)', () => {
+  it('drops ELECTRON_RUN_AS_NODE so the daemon and its plugin children never inherit it', () => {
+    const result = daemonEnv({
+      PATH: '/usr/bin',
+      ELECTRON_RUN_AS_NODE: '1',
+      ORBIT_CAPTURE_WAV: '/x.wav',
+    })
+
+    expect(result.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    // 🔴 「消したこと」だけを見ると、env ごと空にする実装でも通ってしまう。
+    // **他の変数が残っている**ことまで見る（daemon は audio device 名や capture の seam を env で受ける）。
+    expect(result).toEqual({ PATH: '/usr/bin', ORBIT_CAPTURE_WAV: '/x.wav' })
+  })
+
+  it('does not mutate the source env', () => {
+    const source = { ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' }
+    daemonEnv(source)
+    // engine 自身の `process.env` を壊すと、以後の子プロセスの env が呼び出し順に依存する。
+    expect(source.ELECTRON_RUN_AS_NODE).toBe('1')
+  })
+
+  it('passes through an env that never had the variable', () => {
+    expect(daemonEnv({ PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin' })
   })
 })

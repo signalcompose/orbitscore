@@ -25,9 +25,14 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 
 import { createGatedSession, type GatedCatalog } from './helpers/gated-session'
+import {
+  IPC_SOCKET_SUFFIX_ALLOWANCE,
+  UNIX_SOCKET_PATH_MAX,
+  userDataDirExceedsSocketLimit,
+} from './helpers/harness-processes'
 import { pollInitialize } from './helpers/mcp-client'
 import { runScore } from './helpers/run-score'
 
@@ -61,17 +66,6 @@ function locateVsix(): string {
   return hits[0]
 }
 
-const cleanup: Array<() => void> = []
-afterAll(() => {
-  for (const fn of cleanup.reverse()) {
-    try {
-      fn()
-    } catch {
-      /* best effort */
-    }
-  }
-})
-
 interface ColdInstall {
   readonly tmpRoot: string
   readonly port: number
@@ -92,9 +86,27 @@ async function coldInstallAndLaunch(
   const userDataDir = fs.mkdtempSync(`/tmp/orbcold-u-${slug}-`)
   const extensionsDir = fs.mkdtempSync(`/tmp/orbcold-e-${slug}-`)
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), `orbcold-ws-${slug}-`))
-  cleanup.push(() => fs.rmSync(userDataDir, { recursive: true, force: true }))
-  cleanup.push(() => fs.rmSync(extensionsDir, { recursive: true, force: true }))
-  cleanup.push(() => fs.rmSync(tmpRoot, { recursive: true, force: true }))
+  // 🔴 後片付けは**テスト境界**で行う（`afterAll` にまとめない）。この spec はテストごとに
+  // VS Code を新規に立てるので、まとめると test 1 のホストと daemon が test 2 の実行中も
+  // 生き続け、2 つの daemon が同じオーディオデバイスを奪い合う
+  // （memory `orphan-daemon-pins-coreaudio-context` の型）。
+  onTestFinished(() => {
+    for (const dir of [userDataDir, extensionsDir, tmpRoot]) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // 🔴 既存ガードを継承する。ここは #830（macOS の Unix ソケット 103 文字上限）に
+  // 当たる場所で、`orbitstudio-mcp-gated.spec.ts` は同じ検査を持っている。
+  // 引っかかると VS Code は `listen EINVAL` で**ウィンドウを開かずに死ぬ**ので、
+  // 60 秒の MCP タイムアウトではなくここで理由ごと落とす。
+  if (userDataDirExceedsSocketLimit(userDataDir)) {
+    throw new Error(
+      `--user-data-dir is too long for a macOS unix socket (${userDataDir.length} chars + ` +
+        `~${IPC_SOCKET_SUFFIX_ALLOWANCE} for the socket name > ${UNIX_SOCKET_PATH_MAX}): ` +
+        `${userDataDir}. Shorten the per-test prefix.`,
+    )
+  }
 
   // 譜面が参照する音素材を workspace 配下へ（相対 audioPath を保つ・#528）。
   fs.mkdirSync(path.join(tmpRoot, 'test-assets'), { recursive: true })
@@ -131,8 +143,10 @@ async function coldInstallAndLaunch(
     ],
     { env: { ...env, ORBITSCORE_MCP_PORT: String(port) }, stdio: 'ignore', detached: false },
   )
-  cleanup.push(() => {
+  onTestFinished(() => {
     if (!child.killed) child.kill()
+    // `userDataDir` は mkdtemp で一意なので、この blanket pkill が利用者の生きた
+    // ウィンドウに当たることはない（共有 prefix で当てて事故った過去があるため明記する）。
     spawnSync('pkill', ['-f', `user-data-dir=${userDataDir}`])
   })
 
@@ -191,7 +205,7 @@ async function expectSoundFromColdInstall(slug: string, install: ColdInstall): P
 
 describe.skipIf(!enabled)('cold install of the packaged .vsix', () => {
   it('makes sound when node is absent from PATH and the shell env is never resolved (#878)', async () => {
-    const install = await coldInstallAndLaunch('strict', CODE_CLI, {
+    const install = await coldInstallAndLaunch('cold-strict', CODE_CLI, {
       HOME: process.env.HOME ?? '',
       PATH: NODE_LESS_PATH,
       // SHELL を渡さない = VS Code がログインシェルの環境を解決できない。
@@ -201,7 +215,7 @@ describe.skipIf(!enabled)('cold install of the packaged .vsix', () => {
   }, 600_000)
 
   it('makes sound through the ordinary Finder-equivalent launch (#873)', async () => {
-    const install = await coldInstallAndLaunch('finder', CODE_APP_BIN, {
+    const install = await coldInstallAndLaunch('cold-finder', CODE_APP_BIN, {
       HOME: process.env.HOME ?? '',
       PATH: NODE_LESS_PATH,
       SHELL: process.env.SHELL ?? '/bin/zsh',

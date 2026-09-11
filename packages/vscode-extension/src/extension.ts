@@ -2007,12 +2007,11 @@ async function startEngine(
   // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
   // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
   // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
-  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: engineRuntimeEnv,
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
     })
   } catch (err) {
     // spawn threw before engineProcess was assigned, so no engine state was dirtied.

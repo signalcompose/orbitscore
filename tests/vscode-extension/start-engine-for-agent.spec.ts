@@ -34,6 +34,10 @@ import {
   resolveDaemonBinaryForExtension,
 } from '../../packages/vscode-extension/src/engine-startup-runtime'
 import * as ext from '../../packages/vscode-extension/src/extension'
+import {
+  fakeSpawnedProcess,
+  resetExtensionEngineTestState,
+} from '../helpers/extension-engine-mocks'
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
@@ -51,41 +55,13 @@ vi.mock('../../packages/vscode-extension/src/engine-startup-runtime', () => ({
   })),
 }))
 
-interface FakeSpawnedProcess {
-  proc: child_process.ChildProcess
-  fireError: (err: Error) => void
-}
-
-function fakeSpawnedProcess(): FakeSpawnedProcess {
-  const errorListeners: Array<(err: Error) => void> = []
-  const proc: Partial<child_process.ChildProcess> = {
-    killed: false,
-    on: ((event: string, cb: (...args: unknown[]) => void) => {
-      if (event === 'error') errorListeners.push(cb as (err: Error) => void)
-      return proc
-    }) as child_process.ChildProcess['on'],
-    stdout: { on: () => {} } as unknown as child_process.ChildProcess['stdout'],
-    stderr: { on: () => {} } as unknown as child_process.ChildProcess['stderr'],
-    stdin: { on: () => {} } as unknown as child_process.ChildProcess['stdin'],
-  }
-  return {
-    proc: proc as child_process.ChildProcess,
-    fireError: (err) => {
-      process.nextTick(() => errorListeners.forEach((cb) => cb(err)))
-    },
-  }
-}
-
 describe('startEngineForAgent post-spawn detection (#533)', () => {
   let showInformationMessage: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
     vi.mocked(extensionEngineFileExists).mockClear()
     vi.mocked(resolveDaemonBinaryForExtension).mockClear()
-    ext.__setEngineProcessForTest(null)
-    ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
-    ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
-    ext.__setEngineViewProviderForTest({ refresh: () => {} })
+    resetExtensionEngineTestState(ext)
     showInformationMessage = vi
       .spyOn(vscode.window, 'showInformationMessage')
       .mockResolvedValue(undefined)

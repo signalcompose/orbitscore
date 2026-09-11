@@ -54,6 +54,23 @@ import {
   StartupReadyLine,
 } from './protocol-types'
 
+/**
+ * daemon へ渡す環境変数。**Node からネイティブ側への唯一の受け渡し地点**なので、
+ * Node 実行のためだけの変数はここで落とす。
+ *
+ * 🔴 `ELECTRON_RUN_AS_NODE` は、拡張が VS Code 同梱の Node で engine を起動するために立てる
+ * もの（#878）。Electron がプロセス初期化時に読んだ時点で役目は終わっており、**engine の子に
+ * 引き継ぐ意味が無い**。落とさないと Rust の daemon がそのまま継承し、daemon は
+ * out-of-process のプラグイン子プロセスを `Command::new` で起動する際に `env_clear` /
+ * `env_remove` を一切呼んでいない（実測 0 件）ので、**第三者のプラグインホストまで Electron
+ * 由来の変数が届く**。今日それを読むコードは無いが、`ps eww` やクラッシュレポートに説明の
+ * 付かない変数が乗り続けるのは、意図した受け渡しではない。
+ */
+export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source
+  return rest
+}
+
 export interface DaemonClientOptions {
   /** 明示的な daemon バイナリパス。未指定時は環境変数 → 既定パスの順で探索。 */
   daemonPath?: string
@@ -892,7 +909,10 @@ export class DaemonClient extends EventEmitter {
     // `--audio-device <name>` は daemon 起動時のみ honor される（#484 D1・ランタイム切替は D2）。
     // 名前が不一致でも daemon は起動を落とさず stderr に警告して host 既定へ縮退する。
     const args = audioDevice ? ['--audio-device', audioDevice] : []
-    const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(binary, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: daemonEnv(process.env),
+    })
     this.child = child
 
     const stderrChunks: string[] = []

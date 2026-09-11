@@ -1,19 +1,13 @@
 /**
  * engine を起動する Node ランタイムの決め方（#878）。
  *
- * 🔴 **`node` を PATH から引いてはいけない。** 拡張が Finder / launchd から起動された VS Code の
- * 中で動く時、PATH は `/etc/paths` の最小構成になる。`nodenv` / Homebrew で node を入れている
- * （珍しくない）環境ではそこに node は無く、engine は `spawn node ENOENT` で起動しない。
- * 症状は「エンジンが起動しない」だけで、原因が PATH だと利用者にはまず分からない。
+ * 🔴 **判断の根拠は `extension.ts` の `startEngine()` にある**コメントが正本
+ * （なぜ PATH の `node` を引かないか・`ELECTRON_RUN_AS_NODE` がなぜ要るか・実測した
+ * Node 版とネイティブアドオンの結果）。**ここに写さない** — 実測値が 2 箇所に増えると、
+ * 片方だけ古くなっても誰も気づかない。
  *
- * VS Code 自身がログインシェルの環境を解決して拡張ホストへ渡すので**運が良ければ通る**が、
- * それは VS Code の実装詳細への暗黙の依存であり、2026-09-12 に実際に通らない条件を特定した
- * （cold install した `.vsix` を CLI ラッパ経由 + 最小 PATH で起動すると確定で `ENOENT`）。
- *
- * 代わりに **VS Code 同梱の Node**（`process.execPath` を `ELECTRON_RUN_AS_NODE=1` で起動）を使う。
- * 実測（2026-09-12・この機械）: Node **24.18.1**（リポジトリの要求は `>=22.0.0`）で、
- * `@julusian/midi` のネイティブアドオン（N-API v7 prebuild）も素の node と同じく読める
- * （port count 14 で一致）。PATH には一切依存しない。
+ * 本 spec が追加で見るのは「**何を spawn したか**」だけである。ランタイムが実際に動くことは
+ * `tests/e2e/vsix-cold-install-gated.spec.ts`（cold install）が見る。
  */
 import * as child_process from 'child_process'
 import * as path from 'path'
@@ -26,6 +20,10 @@ import {
   resolveDaemonBinaryForExtension,
 } from '../../packages/vscode-extension/src/engine-startup-runtime'
 import * as ext from '../../packages/vscode-extension/src/extension'
+import {
+  fakeSpawnedProcess,
+  resetExtensionEngineTestState,
+} from '../helpers/extension-engine-mocks'
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
@@ -40,25 +38,11 @@ vi.mock('../../packages/vscode-extension/src/engine-startup-runtime', () => ({
   })),
 }))
 
-function fakeSpawnedProcess(): child_process.ChildProcess {
-  const proc: Partial<child_process.ChildProcess> = {
-    killed: false,
-    on: (() => proc) as child_process.ChildProcess['on'],
-    stdout: { on: () => {} } as unknown as child_process.ChildProcess['stdout'],
-    stderr: { on: () => {} } as unknown as child_process.ChildProcess['stderr'],
-    stdin: { on: () => {} } as unknown as child_process.ChildProcess['stdin'],
-  }
-  return proc as child_process.ChildProcess
-}
-
 describe('engine spawn runtime (#878)', () => {
   beforeEach(() => {
     vi.mocked(extensionEngineFileExists).mockClear()
     vi.mocked(resolveDaemonBinaryForExtension).mockClear()
-    ext.__setEngineProcessForTest(null)
-    ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
-    ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
-    ext.__setEngineViewProviderForTest({ refresh: () => {} })
+    resetExtensionEngineTestState(ext)
     vi.spyOn(vscode.window, 'showInformationMessage').mockResolvedValue(undefined)
   })
 
@@ -69,7 +53,7 @@ describe('engine spawn runtime (#878)', () => {
   })
 
   it('spawns an absolute Node runtime instead of resolving "node" through PATH', async () => {
-    vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess())
+    vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess().proc)
 
     const result = await ext.startEngineForAgent()
     expect(result).toEqual({ ok: true, message: 'engine starting' })
@@ -84,7 +68,7 @@ describe('engine spawn runtime (#878)', () => {
   })
 
   it('runs that runtime as Node by setting ELECTRON_RUN_AS_NODE in the child env', async () => {
-    vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess())
+    vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess().proc)
 
     await ext.startEngineForAgent()
 
@@ -96,7 +80,7 @@ describe('engine spawn runtime (#878)', () => {
   })
 
   it('still passes the engine entry point as the first argument', async () => {
-    vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess())
+    vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess().proc)
 
     await ext.startEngineForAgent()
 
