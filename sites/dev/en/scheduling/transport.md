@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2079-2107
+// packages/engine/src/core/sequence.ts:2075-2103
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

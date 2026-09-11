@@ -37,6 +37,7 @@ import {
   assertOutputOptions,
   AudioLine,
   isOutputDest,
+  assertSendDestination,
   resolveSendLevel,
   toWire,
   type LineElement,
@@ -675,12 +676,7 @@ export class Sequence {
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
-    if (typeof aux !== 'string' && !isOutputDest(aux)) {
-      throw new Error(
-        `Sequence '${name}': send(aux, db) requires a destination; ` +
-          `null and undefined are not valid send destinations.`,
-      )
-    }
+    assertSendDestination(aux, `Sequence '${name}': send`)
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }

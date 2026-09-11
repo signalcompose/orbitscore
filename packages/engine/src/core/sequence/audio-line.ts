@@ -20,6 +20,27 @@ export function isOutputDest(value: unknown): value is OutputDest {
   return typeof value === 'object' && value !== null && 'kind' in value
 }
 
+/**
+ * 🔴 `send()` の宛先は**必須**（`output()` と違い省略できない — どこにも送らない send は無い）。
+ *
+ * **この 1 関数が両方の `send()` の契約**（`Sequence.send()` と `MixerBusHandle.send()`）。
+ * 片方にだけガードを書くと、パーサが名前付き引数だけの `send(db: -6)` を
+ * `[undefined, {db:-6}]` に整形した時、ガードの無い側が `undefined` を master に解決して
+ * **master への thru 出力を黙って 1 本増やす**（既存の直結と二重に鳴る）。
+ * 実際にレビューで再現した（PR #884 ラウンド 2）。
+ *
+ * 文言は**実際に来た型を出す** — 常に "null" と決め打ちすると、数値や真偽値を渡した人に
+ * 嘘の情報を与えることになる。
+ */
+export function assertSendDestination(value: unknown, call: string): void {
+  if (typeof value === 'string' || isOutputDest(value)) return
+  const actual = value === null ? 'null' : typeof value
+  throw new Error(
+    `${call}(aux, db) requires a destination; received ${actual}. ` +
+      `Unlike output(), send() has no default — name an aux/sum bus or pass a resolved destination.`,
+  )
+}
+
 export function destKey(dest: OutputDest): string {
   switch (dest.kind) {
     case 'master':

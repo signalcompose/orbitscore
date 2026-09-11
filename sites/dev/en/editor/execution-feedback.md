@@ -648,7 +648,7 @@ The runtime side of this changed in #645 (PR-D0). It used to throw for a soundin
 So the return value became a tagged union and the throw was removed. Here is the new contract:
 
 ```typescript
-// packages/engine/src/core/sequence.ts:108-111
+// packages/engine/src/core/sequence.ts:109-112
 export type DispatchTarget =
   | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
   | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set

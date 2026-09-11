@@ -648,7 +648,7 @@ runtime 側の扱いは #645 (PR-D0) で変わりました。以前は `.output(
 そこで戻り値を tagged union にして、throw をやめました。以下が新しい契約の型です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:108-111
+// packages/engine/src/core/sequence.ts:109-112
 export type DispatchTarget =
   | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
   | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set

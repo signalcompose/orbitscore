@@ -100,7 +100,7 @@ TS 側の司令塔は `packages/engine/src/core/global/mixer-manager.ts` の `Mi
 並びます。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:293-313
+// packages/engine/src/core/global/mixer-manager.ts:294-314
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -141,7 +141,7 @@ prefix と上限は TS 側の定数として置かれていて、コメントが
 明言しています。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:32-45
+// packages/engine/src/core/global/mixer-manager.ts:33-46
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:543-588
+// packages/engine/src/core/sequence.ts:544-589
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -292,7 +292,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:668-684
+// packages/engine/src/core/sequence.ts:669-690
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -303,13 +303,18 @@ fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線�
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
-    if (typeof aux !== 'string' && !isOutputDest(aux)) {
-      throw new Error(
-        `Sequence '${name}': send(aux, db) requires a destination; ` +
-          `null and undefined are not valid send destinations.`,
-      )
-    }
+    assertSendDestination(aux, `Sequence '${name}': send`)
     if (typeof aux === 'string' && !aux.trim()) {
+      throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
+    }
+    const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
+    const dest = isOutputDest(aux)
+      ? aux
+      : (this.resolveLineDest(aux) ??
+        (() => {
+          throw new Error(
+            `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+              `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
 ```
 
 `_line`（`AudioLine`）が要素をキー（宛先 + 出現序数）で管理する点は覚えておいてください。
@@ -1103,7 +1108,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:990-1017
+// packages/engine/src/core/sequence.ts:986-1013
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus

@@ -5,6 +5,7 @@ import {
   assertOutputOptions,
   AudioLine,
   isOutputDest,
+  assertSendDestination,
   resolveNamedOutputDest,
   resolveSendLevel,
   toWire,
@@ -365,6 +366,7 @@ export class MixerManager {
         dbOrOptions?: number | MixerSendOptions,
         opts: MixerSendOptions = {},
       ) => {
+        assertSendDestination(aux, `Mixer bus '${formatReceiverId(kind, name)}': send`)
         const level = resolveSendLevel(
           dbOrOptions,
           opts,
@@ -399,9 +401,12 @@ export class MixerManager {
     if (value === undefined) return { kind: 'master' }
     if (isOutputDest(value)) return value
     if (typeof value !== 'string') {
+      // 🔴 実際に来た型を出す。常に "null" と決め打ちすると、数値や真偽値を渡した人に
+      // 嘘の情報を与える（PR #884 ラウンド 2）。
       throw new Error(
-        `Mixer bus routing received null. Only undefined omits the destination; ` +
-          `null is not a valid destination.`,
+        `Mixer bus routing received ${value === null ? 'null' : typeof value}. ` +
+          `Only undefined omits the destination (= master); otherwise pass "master", ` +
+          `a declared sum/aux name, an "L,R" pair, or a resolved destination.`,
       )
     }
     const resolved = resolveNamedOutputDest(value, (name) => this.resolveNode(name))

@@ -103,7 +103,7 @@ empty-name check, three steps line up: reserving the bus name, the LinkAudio exc
 acquisition from the pool.
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:293-313
+// packages/engine/src/core/global/mixer-manager.ts:294-314
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -144,7 +144,7 @@ prefix and the cap are constants on the TS side, and the comment states explicit
 must match the Rust side.
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:32-45
+// packages/engine/src/core/global/mixer-manager.ts:33-46
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:543-588
+// packages/engine/src/core/sequence.ts:544-589
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -302,7 +302,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:668-684
+// packages/engine/src/core/sequence.ts:669-690
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -313,13 +313,18 @@ dB in #611 PR-B2.**
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
-    if (typeof aux !== 'string' && !isOutputDest(aux)) {
-      throw new Error(
-        `Sequence '${name}': send(aux, db) requires a destination; ` +
-          `null and undefined are not valid send destinations.`,
-      )
-    }
+    assertSendDestination(aux, `Sequence '${name}': send`)
     if (typeof aux === 'string' && !aux.trim()) {
+      throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
+    }
+    const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
+    const dest = isOutputDest(aux)
+      ? aux
+      : (this.resolveLineDest(aux) ??
+        (() => {
+          throw new Error(
+            `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+              `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
 ```
 
 Keep in mind that `_line` (an `AudioLine`) tracks elements by a key (destination + occurrence
@@ -1133,7 +1138,7 @@ sequence holds an insert bus. Whether the order is `instrument()` → `effect()`
 passes through here.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:990-1017
+// packages/engine/src/core/sequence.ts:986-1013
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus

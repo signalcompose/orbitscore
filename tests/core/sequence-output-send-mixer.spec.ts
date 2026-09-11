@@ -167,10 +167,13 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     const handle = global.sum('drum')
 
     expect(() => seq.output(null as any)).toThrow(/received null.*Only undefined omits/s)
-    expect(() => seq.send(null as any, -6)).toThrow(/null and undefined are not valid/)
+    expect(() => seq.send(null as any, -6)).toThrow(/requires a destination; received null/)
     await expect(handle.output(null as any)).rejects.toThrow(/received null.*Only undefined omits/s)
+    // 🔴 `send()` は `output()` と文言が違う — 宛先が**必須**で既定が無いため（共有ガード
+    // `assertSendDestination`）。両 `send()` が同じ文言で落ちることが、片翼だけにガードが
+    // 付いていた PR #884 ラウンド 2 の Critical への回帰検査になる。
     await expect(handle.send(null as any, -6)).rejects.toThrow(
-      /received null.*Only undefined omits/s,
+      /requires a destination; received null/,
     )
   })
 

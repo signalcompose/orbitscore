@@ -9004,3 +9004,97 @@ Setup Node.js より後にしたのは、runner イメージ同梱の Node で�
 `mutation-backup-must-use-tmpdir` の「コミット済みなら `git checkout --` が確実」は
 **裏を返すと未コミットなら確実に壊す**。未コミットの作業に変異をかけるなら
 `$TMPDIR` へコピーしてから。
+
+### test(daemon): add the three bundle-A tests the design listed but never got (#611) (Sep 10, 2026)
+
+Fable の受け入れ監査（束 A / PR #834）が **Important #1** として「設計 §11 が PR-A1 / PR-A2 の
+検証として列挙したテストのうち 3 件が実在しない」ことを一次ソースで確認した。うち 2 件は
+**「1 層だけ追従しない」退行の検出器そのもの**だった。
+
+| 追加 | 何を数値で見るか |
+|---|---|
+| `output.rs` `master_line_pan_op_positions_the_master_buffer` | master line を `execute_master_line` へ直接流し、`Pan(-1.0)` 後の hw が `(√2, 0)` になること。buffer を全て 1.0 に揃えているのでゲインがそのまま出る |
+| `session.rs` `set_bus_line_wire_pan_op_is_parsed_with_its_own_value` | `{"op":"pan","pan":0.25}` が受理され、`BusLineOp::Pan` の**中身が 0.25 と一致する**こと |
+| `engine_wrap.rs` `set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity` | 旧に Gain が無い republish で、新 Gain の seed が既定 1.0 になること（0.5 でも 0.0 でもない） |
+
+**なぜ必要だったか**: `LineOp` を match する実行器は master（`execute_master_line`）と
+bus post-loop の **2 箇所**あり、既存テストは `render_tagged_line` 経由で **bus しか通って
+いなかった**。master アームを `LineOp::Pan(_) => {}` に戻しても全件緑になる。wire 側も
+形の不正（MALFORMED）しか見ておらず、`item.get("pan")` を `item.get("value")` に
+取り違えても全件緑だった。
+
+**変異検算**（3 件とも壊して赤・戻して緑を実走）:
+
+| テスト | 変異 | 赤の実出力 |
+|---|---|---|
+| T1 | master 側 Pan アームを `LineOp::Pan(_) => {}` | `hard-left L=1` |
+| T2 | `item.get("pan")` → `item.get("value")` | `'line[].pan' must be a number`（MALFORMED） |
+| T3 | 対応無しの既定値 `1.0` → `0.0` | `left: [0.0, 0.0] / right: [1.0, 1.0]` |
+
+production コードは **0 行**（変異は都度復元・`git diff --stat` で確認）。
+
+**設計文書側も直した**: §4.1 に「√2 の合成が成り立つのは scheduler が鳴らす audio event に
+限る」という**適用範囲**を書き足した（Fable Important #2）。`collect_source_feeds` が集める
+instrument の feed は schedule 時の pan を通らないので、ライン上の Pan は
+`√2 · equal_power_pan(p)` がそのまま出て、**両端で +3.01 dB** になる。中央比では
+どちらも同じ等パワー則だが、絶対レベルが違う（audio event は中央が既に −3 dB）。
+フルスケールの instrument を端まで振ると 0 dBFS を超えるので、**束 B の締めまでに
+owner 裁定**とした（束 A では TS が `SetBusLine` を送らないので到達不能）。
+§11 には欠落の経緯と「設計の検証欄を実装後にチェックリストとして突き合わせる」教訓を残した。
+### feat(dsl): output(dest, thru, db), send in dB, pan as a line element (#611) (Sep 10, 2026)
+
+`Sequence.output(dest, { thru, db })` / `send(aux, db, { enabled })` / `gain(db)` / `pan(v)` を
+doc 611 §2-§3 の凍結表面へ切り替えた。解決順は `OutputDest` 解決済み → `"master"` 予約語 →
+宣言済み sum/aux 名（aux も `output()` で指せるよう拡張）→ `"L,R"` 物理アウト対 → LinkAudio
+channel 名（今日どおり）。数値 render bus の分岐は #611 §14 (1) のとおり解決順の外に残した
+（撤回は別 PR-R 系のスコープ）。`mix.output(n)` の mono 宣言をパーサ・`MixerRuntimeNode` に足し、
+`output(cue)`（`cue = mix.output(3,4)` のようなノード変数）は interpreter が
+`state.mixers.nodes` を引いて `{kind:'device', channels}` へ解決してから `output()`/`send()` に
+渡す。`MixerBusHandle`（sum/aux）にも同じ `output`/`send`/`gain`/`pan` を実装し、
+`BUS_DSL_METHODS` へ追加した。
+
+🔴 **`send` の dB 化で既存譜面の意味が変わる。** `kick.send("rev", 0.3)` は今日まで線形
+0.3（30%）だったが、**+0.3 dB**（`10 ** (0.3/20) ≈ 1.0351` 倍・ほぼ素通し）と読まれる。名前付き
+引数 `amount:` は改名されたとして loud に throw する（`db:` を使う）。golden `send`
+（`tests/e2e/output-line-expectations.ts`）は `legacyTotalOverDry`（`1 + 0.3 = 1.3`）から
+`dbTotalOverDry`（`1 + 10 ** (0.3/20) ≈ 2.0351`）へ切り替えた。
+
+🔴 **`pan`/`gain`（固定値）は8本しかない insert bus プールを守るため無条件にライン要素へしない。**
+`_insertBus` を持たない audio シーケンス（`effect()`/`output()`/`send()` 未宣言）では今日どおり
+発音側に適用し、`_line` には要素として記録するだけに留める。バスが後から確保された瞬間
+（`adoptLineOnFirstBus()`）に発音側をリセットし、`seamlessParameterUpdate` を即時再スケジュール
+して二重適用を防ぐ。instrument は発音側の適用経路が無いため常にバスを確保する。
+`examples/07_audio_control.orbs`（17 シーケンス・`gain()` 28 回）はこの分岐がないと 9 本目で
+`pool exhausted` する。
+
+`//#evalBegin` / `//#evalEnd` メタ行を `extension.ts`（`writeCodeToEngine`）と `repl-mode.ts`
+（`AudioLine.beginBatchAll()`/`endBatchAll()`）に追加し、評価単位全体を 1 つのカーソルバッチに
+した。フレーム外（生 stdin・単体テストの直接呼び出し）では各 DSL 呼び出しが自分だけの
+1 要素バッチを開閉する（`Sequence.upsertLine()`）ので、`output("drums")` → `output("cue")` の
+ような再宣言が今日どおり置換として効く。ガードは 2 つ: `beginBatch()` は開いたままのバッチを
+暗黙に閉じてから開く。フレーム途中で拡張が落ちても、次の `//#evalBegin` が自己修復する
+（統計評価文の内部エラーは `executeCurrentBuffer` の try/catch に吸収され `//#evalEnd` まで
+届くので、`finally` の追加は不要だった）。ユニットで両系列を固定した
+（`tests/cli/repl-eval-frame-meta.spec.ts`）。
+
+goldens の分類（`tests/e2e/output-line-expectations.ts`）:
+- `noBus` / `sumOutput` / `sequenceGainWithEffect` / `globalGainInstrument`: **不動**。
+  バス無し audio は発音側適用のまま（音は同値）・`global.gain()` は atomic のまま（F2 裁定「写さない」）。
+- `send`: **動く**（上記の式）。
+
+`MixerBusHandle.output()`/`.send()`（旧 `routeOutput`/`routeSend`）は、拒否された push を
+ロールバックせず「TS 側の宣言が真実・次呼び出しで全量再送」する自己修復方式へ揃えた
+（`Sequence` が B1 で既に持っていた `_busLineStale` と同じ規律）。
+
+判断を保留した点・設計との食い違い:
+- `send(aux, ...)` の文字列解決は aux/sum バス名限定にし、`"master"`/`"3,4"`/LinkAudio へは
+  広げなかった（設計は `OutputDest | string` としか書いておらず、aux 専用に狭めた）。
+- E2E-4/E2E-5（4ch 以上のデバイス要）は `it.skip` + `console.warn` のプレースホルダのみ
+  追加し、本体は書いていない（本機に該当デバイスが無く実装しても検証できない）。
+- E2E-6（チェーン順序）・E2E-7（seed のポップ回避）・E2E-10（daemon respawn）・E2E-11（master
+  gain の残響窓）は時間の制約で見送った。追加したのは E2E-2 / E2E-3 / E2E-S / E2E-S0 / E2E-G /
+  E2E-P（実機は main が回す・未検証）。
+- dev 学習サイト（`sites/dev/signal-chain/mixer-audio-line.md` 他）は多数の引用が本 PR で
+  ずれたため `--fix` の機械的な再アンカーに加え、コード引用そのものを新しい実装へ差し替えた。
+  ただし `SetBusRouting` 節と「Try it」節の周辺散文は歴史的経路の記録として残し、全面書き直しは
+  行っていない（更新コールアウトで明示）。
