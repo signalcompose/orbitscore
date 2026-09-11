@@ -400,7 +400,22 @@ impl ClapHost {
 fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
     let mut handle = instance.plugin_handle();
     let Some(note_ports) = handle.get_extension::<PluginNotePorts>() else {
-        tracing::warn!("[orbit-clap-host] NotePortsExtension なし; port 0 を使用");
+        // 🔴 `debug!` であって `warn!` ではない（#860・2026-09-11）。
+        //
+        // この関数は**すべての CLAP ロードで無条件に**呼ばれる（`controller.rs:246`）。
+        // エフェクトが note ポートを持たないのは**正常**なので、`warn!` は正常系で鳴る警報
+        // だった。しかも port 0 というフォールバックは実際に機能する（CLAP の慣習）。
+        //
+        // 実害: 拡張は engine の stderr を**全行 `ERROR:` として**出力する
+        // （`extension.ts:1453`。実エラーを取りこぼさないための意図的な設計・#756）。
+        // したがってこの warn は gated E2E の ERROR 件数に乗り、件数を数えるテストを
+        // 巻き添えにする。実測 2026-09-11:
+        // 「default-baseline cycle must add no ERROR: lines ... expected 10 to be less
+        // than or equal to 9」— 増えた 1 行がこの warn だった。
+        //
+        // 分類側（stderr → ERROR）を緩めるのは筋が悪い（実エラーを取りこぼす方向）。
+        // ノイズは**源で止める**。
+        tracing::debug!("[orbit-clap-host] NotePortsExtension なし; port 0 を使用");
         return 0;
     };
 

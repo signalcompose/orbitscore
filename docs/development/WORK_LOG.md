@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
+
+束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
+
+```
+AssertionError: default-baseline cycle must add no ERROR: lines
+  → expected 10 to be less than or equal to 9
+
+[daemon] WARN orbit_clap_host::controller: [orbit-clap-host] NotePortsExtension なし; port 0 を使用
+```
+
+## 正常系で警報が鳴っていた
+
+`query_note_port_index`（`controller.rs:400`）は **すべての CLAP ロードで無条件に**
+呼ばれる（`:246`）。**エフェクトが note ポートを持たないのは正常**で、port 0 という
+フォールバックも CLAP の慣習どおり機能する。それを `warn!` で報せていた。
+
+## なぜ ERROR 件数に乗るか
+
+拡張は engine の stderr を**全行 `ERROR:` として**出力する（`extension.ts:1453`）。
+これは**意図的な設計**で、#756 の記録が理由を書いている:
+
+> `outputChannel.append('ERROR: ' + chunk)` と chunk 単位で前置していた。1 つの chunk に
+> 複数行入ると 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が**構造的に
+> 過小カウント**する（= 偽緑）
+
+つまり「実エラーを取りこぼさない」ために全行前置している。**分類側を緩めるのは筋が悪い**
+（取りこぼす方向へ戻る）。
+
+🔴 したがって**ノイズは源で止める**。`warn!` → `debug!`。
+memory `stderr-is-classified-as-error` は「engine の warn は全部 ERROR 行」を
+**4 回目の再発**として記録しているが、これまでの対処はテスト側だった。今回は発生源を直した。
+
+## 失う情報
+
+instrument が note ポートを持たない場合も debug になる。ただし port 0 のフォールバックは
+機能するので、これは「動かない」ではなく「既定を使った」の報告であり、debug が妥当。
+
+検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
+`cargo test -p orbit-clap-host --lib` **29 passed**。
+
 ### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
 
 束 A のレビューラウンドを閉じる前の **fix 差分再点検**（1 レビュアー・問いは
