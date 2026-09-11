@@ -1,0 +1,24 @@
+// #883 X4: a declared sum without its own output must not leak to master.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.sum("x4sum883")
+global.start()
+
+var ref883 = init global.seq
+ref883.beat(4 by 4).length(1)
+ref883.audio("kick.wav").chop(1)
+ref883.output()
+ref883.play(1, 1, 1, 1)
+
+var busMember883 = init global.seq
+busMember883.beat(4 by 4).length(1)
+busMember883.audio("kick.wav").chop(1)
+busMember883.output("x4sum883")
+busMember883.play(1, 1, 1, 1)
+
+// Keep the audible reference in the same replacement-style LOOP group as the
+// deliberately silent bus member.
+LOOP(ref883, busMember883)

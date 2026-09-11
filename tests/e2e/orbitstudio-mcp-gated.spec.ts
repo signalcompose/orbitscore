@@ -59,6 +59,7 @@ import {
   countLogMarker,
   newLogLines,
   errorBaseline,
+  expectLogMarkerAtLeast,
   expectNoNewErrors,
   newErrorLines,
 } from './helpers/engine-log'
@@ -3117,6 +3118,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         `global.audioPath(${JSON.stringify(audioSearchPath)})`,
         `global.sum("drum").effect(${JSON.stringify(catalog.clapEffectName)})`,
         `global.aux("wet").effect(${JSON.stringify(catalog.clapEffectName)})`,
+        // #883: a declared sum has no implicit master terminal. This test's audio oracle
+        // measures the sum insert, so the fixture must route that bus explicitly.
+        'sum("drum").output()',
         'var busStateSource = init global.seq',
         'busStateSource.audio("kick.wav").chop(1).output("drum")',
         'busStateSource.play(1, 1, 1, 1)',
@@ -5524,6 +5528,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
+    '#883 X1 keeps an output-less audio sequence silent beside an explicit reference',
+    async () => {
+      const session = requireOutputLineSession()
+      const result = await runScore(
+        session,
+        {
+          slug: '883-x1-output-less-audio',
+          fixturePath: 'tests/fixtures/mcp-e2e/explicit_output_orphan.orbs',
+        },
+        async (ctx) => captureSteady(ctx, 'steady'),
+        { capture: true },
+      )
+      expect(result, 'X1 must return captured windows').toBeDefined()
+      if (!result) throw new Error('X1 did not return captured windows')
+      const rms = steadyRms(result, 'steady', STEADY_CAPTURE)
+      // eslint-disable-next-line no-console
+      console.log('[#883 X1] explicit-reference + orphan RMS:', rms)
+      expect(
+        relativeDelta(rms, OUTPUT_LINE_GOLDENS.noBus.rms),
+        `X1 must contain only the reference (not an implicit second copy); actual=${rms}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectLogMarkerAtLeast(
+        session.client,
+        /orphan883.*has no output destination/,
+        1,
+        '#883 X1 must explain why orphan883 was skipped',
+      )
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
     '#883 X2 makes output() and output("master") audibly equivalent to the no-bus path',
     async () => {
       const session = requireOutputLineSession()
@@ -5563,6 +5599,199 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await expectNoNewErrors(session.client, errorsBefore, '#883 X2')
     },
     TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#883 X3 routes a sum-only send without leaking an implicit dry copy to master',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const captureFixture = async (slug: string, fixturePath: string) => {
+        const result = await runScore(
+          session,
+          { slug, fixturePath },
+          async (ctx) => captureSteady(ctx, 'steady'),
+          { capture: true },
+        )
+        expect(result, `${slug} must return captured windows`).toBeDefined()
+        if (!result) throw new Error(`${slug} did not return captured windows`)
+        return steadyRms(result, 'steady', STEADY_CAPTURE)
+      }
+      const sendRms = await captureFixture(
+        '883-x3-sum-send-only',
+        'tests/fixtures/mcp-e2e/explicit_output_sum_send_only.orbs',
+      )
+      const plainRms = await captureFixture(
+        '883-x3-plain-reference',
+        'tests/fixtures/mcp-e2e/kick_loop.orbs',
+      )
+      const ratio = sendRms / plainRms
+      const expected = Math.pow(10, -6 / 20)
+      // eslint-disable-next-line no-console
+      console.log('[#883 X3] sum-send/plain RMS:', JSON.stringify({ sendRms, plainRms, ratio }))
+      expect(
+        relativeDelta(ratio, expected),
+        `X3 send/plain must be ${expected}; an implicit dry copy would make it ${1 + expected}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#883 X3')
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#883 X4 does not publish a declared sum whose own output is absent',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '883-x4-unterminated-sum',
+          fixturePath: 'tests/fixtures/mcp-e2e/explicit_output_unterminated_bus.orbs',
+        },
+        async (ctx) => captureSteady(ctx, 'steady'),
+        { capture: true },
+      )
+      expect(result, 'X4 must return captured windows').toBeDefined()
+      if (!result) throw new Error('X4 did not return captured windows')
+      const rms = steadyRms(result, 'steady', STEADY_CAPTURE)
+      // eslint-disable-next-line no-console
+      console.log('[#883 X4] reference + unterminated-sum member RMS:', rms)
+      expect(
+        relativeDelta(rms, OUTPUT_LINE_GOLDENS.noBus.rms),
+        `X4 must contain only the reference; a default bus output would double it. actual=${rms}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#883 X4')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#883 X5 makes explicit-output instruments audible and output-less instruments silent',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const explicit = await captureInstrumentScenario(
+        '883-x5-explicit-output',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.start()',
+          'var explicit883 = init global.seq',
+          `explicit883.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'explicit883.output()',
+          'explicit883.gate(1)',
+          'explicit883.play(1, 1, 1, 1)',
+          'LOOP(explicit883)',
+        ],
+        async ({ captureSegment }) => captureSegment('explicit'),
+      )
+      expectSegmentsSounding(explicit, ['explicit'])
+
+      const referenceOnly = await captureInstrumentScenario(
+        '883-x5-output-less',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          `global.audioPath(${JSON.stringify(path.join(REPO_ROOT, 'test-assets/audio'))})`,
+          'global.start()',
+          'var ref883 = init global.seq',
+          'ref883.audio("kick.wav").chop(1)',
+          'ref883.output()',
+          'ref883.play(1, 1, 1, 1)',
+          'var silentInst883 = init global.seq',
+          `silentInst883.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'silentInst883.gate(1)',
+          'silentInst883.play(1, 1, 1, 1)',
+          // LOOP() replaces the complete group; one combined call keeps the audible reference
+          // running while the output-less instrument is measured as an additional silent source.
+          'LOOP(ref883, silentInst883)',
+        ],
+        async ({ captureSegment, evaluate }) => {
+          await captureSteady({ captureSegment }, 'withSilentInstrument')
+          await evaluate('silentInst883.stop()')
+          await captureSteady({ captureSegment }, 'referenceOnly')
+        },
+      )
+      const withSilentInstrument = steadyRms(referenceOnly, 'withSilentInstrument', STEADY_CAPTURE)
+      const refRms = steadyRms(referenceOnly, 'referenceOnly', STEADY_CAPTURE)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#883 X5] reference RMS with/without output-less instrument:',
+        JSON.stringify({ withSilentInstrument, refRms }),
+      )
+      expect(
+        relativeDelta(withSilentInstrument, refRms),
+        'X5 output-less instrument must add no source contribution',
+      ).toBeLessThanOrEqual(0.12)
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#883 X6 reports only the two intended output-routing diagnostics on open',
+    async () => {
+      const session = requireOutputLineSession()
+      const fixture = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/output_missing_case.orbs')
+      const workPath = path.join(session.tmpRoot, '883-x6-output-missing-case.orbs')
+      fs.copyFileSync(fixture, workPath)
+      const opened = await session.client.call('open_file', { path: workPath })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(1500)
+      const response = await session.client.call('get_diagnostics', { path: workPath })
+      expect(response.isError, response.text).toBe(false)
+      const files = JSON.parse(response.text) as Array<{
+        path: string
+        diagnostics: Array<{
+          line: number
+          character: number
+          severity: string
+          code?: string | number
+          message: string
+        }>
+      }>
+      const routing = files
+        .flatMap((file) => file.diagnostics)
+        .filter(
+          (diagnostic) =>
+            diagnostic.code === 'output-missing' || diagnostic.code === 'dry-not-routed',
+        )
+      expect(routing).toEqual([
+        expect.objectContaining({ line: 9, severity: 'warning', code: 'output-missing' }),
+        expect.objectContaining({ line: 19, severity: 'info', code: 'dry-not-routed' }),
+      ])
+      for (const quietLine of [14, 24, 29]) {
+        expect(
+          routing.filter((diagnostic) => diagnostic.line === quietLine),
+          `X6 line ${quietLine} must not receive an output-routing diagnostic`,
+        ).toHaveLength(0)
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#883 X8 keeps an output-less MIDI sequence on the hardware dispatch path',
+    async () => {
+      const session = requireOutputLineSession()
+      const before = (await session.client.call('get_log', { lines: 500 })).text
+      await runScore(session, {
+        slug: '883-x8-midi-output-exemption',
+        fixturePath: 'tests/fixtures/mcp-e2e/explicit_output_midi_exemption.orbs',
+      })
+      const after = (await session.client.call('get_log', { lines: 500 })).text
+      const midiSkipErrors = newErrorLines(before, after).filter(
+        (line) => line.includes('melody883') && line.includes('has no output destination'),
+      )
+      expect(
+        midiSkipErrors,
+        `X8 MIDI must not enter the audio-output skip path: ${midiSkipErrors.join('\n')}`,
+      ).toHaveLength(0)
+    },
+    TEST_TIMEOUT_MS,
   )
 
   it.skipIf(!appAvailable)(

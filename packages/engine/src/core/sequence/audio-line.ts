@@ -384,15 +384,6 @@ export class AudioLine {
   /** Return the complete program without mutating the declared elements. */
   program(): readonly LineElement[] {
     const program = [...this.elements]
-    if (!program.some((element) => element.kind === 'output' && !element.thru)) {
-      program.push({
-        kind: 'output',
-        dest: { kind: 'master' },
-        thru: false,
-        db: 0,
-        sugar: 'output',
-      })
-    }
     if (!program.some((element) => element.kind === 'rack')) {
       program.unshift({ kind: 'rack' })
     }
@@ -412,6 +403,11 @@ export class AudioLine {
    */
   needsBus(): boolean {
     return lineNeedsBus(this.elements)
+  }
+
+  /** Whether score text declared any output/send/bare-bus destination on this line. */
+  hasOutputDestination(): boolean {
+    return this.elements.some((element) => element.kind === 'output')
   }
 
   private nextOrdinal(element: LineElement): number {

@@ -10,6 +10,9 @@
  * ここでは gated spec 自身のソースを検査して、**弱いアサーションの型を機械的に**探す。
  * 完全ではないが、「書いた本人が気づかなかった」を CI が拾える位置に置く価値はある。
  */
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 import * as ts from 'typescript'
 
@@ -19,6 +22,7 @@ import { readGatedSourceEntries } from './gated-sources'
 // シナリオを別ファイルへ出した時に**検査が新ファイルを見ず、黙って弱くなる**。
 const entries = readGatedSourceEntries()
 const source = entries.map(({ source: text }) => text).join('\n')
+const repoRoot = path.resolve(__dirname, '../..')
 
 type SourceEntry = (typeof entries)[number]
 
@@ -550,6 +554,26 @@ const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntr
   })
 
 describe('gated E2E assertion hygiene', () => {
+  it('keeps each #883 audible oracle in the same replacement-style LOOP group as its silent subject', () => {
+    const fixtureLoopCommands = (relativePath: string): string[] =>
+      fs
+        .readFileSync(path.join(repoRoot, relativePath), 'utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('LOOP('))
+
+    expect(fixtureLoopCommands('tests/fixtures/mcp-e2e/explicit_output_orphan.orbs')).toEqual([
+      'LOOP(ref883, orphan883)',
+    ])
+    expect(
+      fixtureLoopCommands('tests/fixtures/mcp-e2e/explicit_output_unterminated_bus.orbs'),
+    ).toEqual(['LOOP(ref883, busMember883)'])
+    expect(
+      fixtureLoopCommands('tests/fixtures/mcp-e2e/explicit_output_midi_exemption.orbs'),
+    ).toEqual(['LOOP(melody883, ref883)'])
+    expect(source).toContain("'LOOP(ref883, silentInst883)'")
+  })
+
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。

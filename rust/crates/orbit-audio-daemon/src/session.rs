@@ -21,6 +21,8 @@ use tracing::{error, warn};
 use crate::engine_wrap::ClapPluginRole;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use crate::engine_wrap::PluginStateTarget;
+#[cfg(any(test, all(feature = "outproc-effect", feature = "outproc-instrument")))]
+use crate::engine_wrap::SourceRoutingTarget;
 #[cfg(feature = "outproc-effect")]
 use crate::engine_wrap::{BusLineDest, BusLineOp};
 use crate::engine_wrap::{EngineWrap, PluginUiEvent, WrapError};
@@ -490,11 +492,11 @@ fn validate_set_bus_line_device_channels(
 }
 
 /// `SetSourceRouting` の wire shape を検証する。`source` は内容を解釈せず、そのまま opaque key
-/// として返す。`target: null` は Master、文字列は named insert bus を表す。
+/// として返す。`target` は none / master / named insert bus の明示 3 値だけを受理する。
 #[cfg(any(test, all(feature = "outproc-effect", feature = "outproc-instrument")))]
 fn parse_set_source_routing_params(
     params: &Value,
-) -> Result<(String, u32, Option<String>), &'static str> {
+) -> Result<(String, u32, SourceRoutingTarget), &'static str> {
     let source = match params.get("source") {
         Some(Value::String(source)) if !source.trim().is_empty() => source.clone(),
         _ => return Err("'source' must be a non-empty string"),
@@ -504,10 +506,19 @@ fn parse_set_source_routing_params(
         .and_then(Value::as_u64)
         .and_then(|unit| u32::try_from(unit).ok())
         .ok_or("'unit' must be an unsigned 32-bit integer")?;
-    let target = match params.get("target") {
-        Some(Value::Null) => None,
-        Some(Value::String(target)) if !target.trim().is_empty() => Some(target.clone()),
-        _ => return Err("'target' must be a non-empty string or null"),
+    let target = match params.get("target").and_then(Value::as_object) {
+        Some(target) => match target.get("kind").and_then(Value::as_str) {
+            Some("none") if target.len() == 1 => SourceRoutingTarget::None,
+            Some("master") if target.len() == 1 => SourceRoutingTarget::Master,
+            Some("bus") if target.len() == 2 => match target.get("name") {
+                Some(Value::String(name)) if !name.trim().is_empty() => {
+                    SourceRoutingTarget::Bus(name.clone())
+                }
+                _ => return Err("'target.name' must be a non-empty string for kind 'bus'"),
+            },
+            _ => return Err("'target' must be exactly {kind:'none'}, {kind:'master'}, or {kind:'bus',name:string}"),
+        },
+        None => return Err("'target' must be an object with an explicit routing kind"),
     };
     Ok((source, unit, target))
 }
@@ -2682,12 +2693,10 @@ async fn handle_command(
         ),
         #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
         "SetSourceRouting" => match parse_set_source_routing_params(&params) {
-            Ok((source, unit, target)) => {
-                match engine.set_source_routing(&source, unit, target.as_deref()) {
-                    Ok(()) => ok(&id, json!({"status": "accepted"})),
-                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
-                }
-            }
+            Ok((source, unit, target)) => match engine.set_source_routing(&source, unit, target) {
+                Ok(()) => ok(&id, json!({"status": "accepted"})),
+                Err(e) => err(&id, wrap_err_to_protocol(&e)),
+            },
             Err(message) => err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
         },
         #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
@@ -3159,26 +3168,38 @@ mod tests {
     }
 
     #[test]
-    fn set_source_routing_parses_opaque_source_unit_and_nullable_target() {
+    fn set_source_routing_parses_all_three_explicit_targets() {
         assert_eq!(
             parse_set_source_routing_params(&json!({
                 "source": "opaque:source/key",
                 "unit": 7,
-                "target": "seq-bus-3"
+                "target": {"kind": "bus", "name": "seq-bus-3"}
             })),
             Ok((
                 "opaque:source/key".to_owned(),
                 7,
-                Some("seq-bus-3".to_owned())
+                SourceRoutingTarget::Bus("seq-bus-3".to_owned())
             ))
         );
         assert_eq!(
             parse_set_source_routing_params(&json!({
                 "source": "opaque:source/key",
                 "unit": 0,
-                "target": null
+                "target": {"kind": "none"}
             })),
-            Ok(("opaque:source/key".to_owned(), 0, None))
+            Ok(("opaque:source/key".to_owned(), 0, SourceRoutingTarget::None))
+        );
+        assert_eq!(
+            parse_set_source_routing_params(&json!({
+                "source": "opaque:source/key",
+                "unit": 1,
+                "target": {"kind": "master"}
+            })),
+            Ok((
+                "opaque:source/key".to_owned(),
+                1,
+                SourceRoutingTarget::Master
+            ))
         );
     }
 
@@ -3193,6 +3214,10 @@ mod tests {
             json!({"source": "source", "unit": 4294967296_u64, "target": null}),
             json!({"source": "source", "unit": 0}),
             json!({"source": "source", "unit": 0, "target": " "}),
+            json!({"source": "source", "unit": 0, "target": "seq-bus-0"}),
+            json!({"source": "source", "unit": 0, "target": {"kind": "bus", "name": " "}}),
+            json!({"source": "source", "unit": 0, "target": {"kind": "none", "name": "extra"}}),
+            json!({"source": "source", "unit": 0, "target": {"kind": "unknown"}}),
         ] {
             assert!(
                 parse_set_source_routing_params(&params).is_err(),
@@ -3234,7 +3259,7 @@ mod tests {
                 params: json!({
                     "source": "opaque:source/key",
                     "unit": 0,
-                    "target": null
+                    "target": {"kind": "none"}
                 }),
             },
             &engine,

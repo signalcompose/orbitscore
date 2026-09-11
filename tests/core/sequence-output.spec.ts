@@ -280,7 +280,22 @@ describe('Sequence.resolveDispatchChannel() — MIDI exemption under linkAudio (
     expect(seq.resolveDispatchChannel()).toEqual({ kind: 'hardware' })
   })
 
-  it('still resolves to skip for an AUDIO sequence with linkAudio on and no .output() (strict mode preserved, no longer a throw)', () => {
+  it('returns hardware for an instrument with no output; source routing owns its silence', async () => {
+    const player = mockPlayer as any
+    player.loadPlugin = vi.fn().mockResolvedValue({})
+    player.setSourceRouting = vi.fn().mockResolvedValue(undefined)
+    const seq = new Sequence(global, mockPlayer)
+    seq.setName('synth')
+
+    await seq.instrument('/abs/synth.clap')
+
+    expect(seq.resolveDispatchChannel()).toEqual({ kind: 'hardware' })
+    expect(player.setSourceRouting).toHaveBeenCalledWith('plugin:synth', 0, {
+      kind: 'none',
+    })
+  })
+
+  it('resolves to skip for an audio sequence with no output', () => {
     global.linkAudio()
     const seq = new Sequence(global, mockPlayer)
     // Absolute path → no document-directory resolution needed at construction.
@@ -289,7 +304,7 @@ describe('Sequence.resolveDispatchChannel() — MIDI exemption under linkAudio (
     expect(() => seq.resolveDispatchChannel()).not.toThrow()
     const target = seq.resolveDispatchChannel()
     expect(target.kind).toBe('skip')
-    expect(target.kind === 'skip' && target.reason).toMatch(/no .output\(\) channel set/)
+    expect(target.kind === 'skip' && target.reason).toMatch(/has no output destination/)
   })
 
   it('returns the channel name (kind: link) for an AUDIO sequence that declares .output()', () => {

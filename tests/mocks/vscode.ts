@@ -78,9 +78,57 @@ export class Position {
 }
 
 export class Range {
+  start: Position
+  end: Position
+
   constructor(
-    public start: Position,
-    public end: Position,
+    start: Position | number,
+    startCharacter: Position | number,
+    endLine?: number,
+    endCharacter?: number,
+  ) {
+    if (start instanceof Position && startCharacter instanceof Position) {
+      this.start = start
+      this.end = startCharacter
+    } else {
+      this.start = new Position(start as number, startCharacter as number)
+      this.end = new Position(endLine as number, endCharacter as number)
+    }
+  }
+}
+
+export const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 } as const
+export const DiagnosticTag = { Unnecessary: 1, Deprecated: 2 } as const
+
+export class Diagnostic {
+  code?: string
+  source?: string
+  tags?: number[]
+
+  constructor(
+    public range: Range,
+    public message: string,
+    public severity: number,
+  ) {}
+}
+
+export const CodeActionKind = { QuickFix: 'quickfix' } as const
+
+export class WorkspaceEdit {
+  readonly inserts: Array<{ uri: Uri; position: Position; text: string }> = []
+  insert(uri: Uri, position: Position, text: string): void {
+    this.inserts.push({ uri, position, text })
+  }
+}
+
+export class CodeAction {
+  diagnostics?: Diagnostic[]
+  isPreferred?: boolean
+  edit?: WorkspaceEdit
+
+  constructor(
+    public title: string,
+    public kind?: string,
   ) {}
 }
 
@@ -201,6 +249,16 @@ export function resetRegisteredCompletionProviders(): void {
   registeredCompletionProviders.length = 0
 }
 
+export const registeredCodeActionProviders: Array<{
+  selector: unknown
+  provider: { provideCodeActions: (...args: any[]) => unknown }
+  metadata: unknown
+}> = []
+
+export function resetRegisteredCodeActionProviders(): void {
+  registeredCodeActionProviders.length = 0
+}
+
 export const languages = {
   registerCompletionItemProvider: (
     selector: unknown,
@@ -211,6 +269,14 @@ export const languages = {
     return fakeDisposable()
   },
   registerHoverProvider: () => fakeDisposable(),
+  registerCodeActionsProvider: (
+    selector: unknown,
+    provider: { provideCodeActions: (...args: any[]) => unknown },
+    metadata: unknown,
+  ) => {
+    registeredCodeActionProviders.push({ selector, provider, metadata })
+    return fakeDisposable()
+  },
   createDiagnosticCollection: () => ({
     set: () => {},
     delete: () => {},

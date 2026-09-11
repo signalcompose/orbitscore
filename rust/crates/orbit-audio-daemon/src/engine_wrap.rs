@@ -23,8 +23,9 @@ use std::time::Duration;
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 #[cfg(feature = "outproc-effect")]
 use orbit_audio_native::{
-    decode_bus_routing_sentinel, default_master_line_ops, legacy_line_ops, BusSend, BusTarget,
-    LegacyLineInstaller, LineOp, LineOutput, LineProgram, LineProgramInstaller, OutputDest,
+    decode_bus_routing_sentinel, default_bus_line_ops, default_master_line_ops, legacy_line_ops,
+    BusSend, BusTarget, LegacyLineInstaller, LineOp, LineOutput, LineProgram, LineProgramInstaller,
+    OutputDest,
 };
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
@@ -2108,6 +2109,15 @@ pub enum BusLineOp {
     },
 }
 
+/// Explicit control-plane destination for one instrument source unit (#883 wire contract).
+#[cfg(any(test, all(feature = "outproc-effect", feature = "outproc-instrument")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceRoutingTarget {
+    None,
+    Master,
+    Bus(String),
+}
+
 /// master ラインの shadow 初期値。
 ///
 /// 🔴 **`MasterLine::new` が RT へ install する program と同じ 1 関数から作る**
@@ -2123,14 +2133,14 @@ fn default_master_line_program(output_channels: u16) -> Vec<LineOp> {
 /// バスが実際に走らせている初期 program。
 ///
 /// 🔴 **手で同じ列を書き直さない**（`/simplify` の reuse / altitude が独立に同じ指摘・2026-09-11）。
-/// RT へ渡る初期値は `InsertBusStage` が `LineProgram::legacy(BusTarget::Master, &[])` 経由で
-/// 作る `legacy_line_ops` そのもの。ここでリテラルを写すと、`legacy_line_ops` 側だけが変わった
+/// RT へ渡る初期値は `InsertBusStage` が共有する `default_bus_line_ops()` の `[Rack]` そのもの。
+/// ここでリテラルを写すと、native 側の既定だけが変わった
 /// 時に **shadow だけが旧い形のまま残り、未設定バスへの最初の `SetBusLine` が誤った seed から
 /// republish する** — 下の `initial_bus_line_shadows` のコメントが「exactly one place」と
 /// 約束しているのは、まさにこれを防ぐため。
 #[cfg(feature = "outproc-effect")]
 fn default_bus_line_program() -> Vec<LineOp> {
-    legacy_line_ops(BusTarget::Master, &[])
+    default_bus_line_ops()
 }
 
 /// Every bus starts at the default program, so its republish shadow starts there too.
@@ -3213,6 +3223,16 @@ mod set_bus_line_tests {
     }
 
     #[test]
+    fn set_bus_line_accepts_a_rack_only_program_with_no_destination() {
+        let (wrap, installs) = wrap_and_installs();
+
+        wrap.set_bus_line("seq-bus-0", &[BusLineOp::Rack])
+            .expect("an explicit line with no output must be accepted");
+
+        assert_eq!(installs.lock().unwrap().as_slice(), &[vec![LineOp::Rack]]);
+    }
+
+    #[test]
     fn set_bus_line_activates_source_and_referenced_destination_buses() {
         let (wrap, calls) = wrap_and_install_calls();
         let (source_active, destination_active) = {
@@ -3559,7 +3579,7 @@ pub(crate) fn test_wrap_with_three_stage_topology() -> Arc<EngineWrap> {
 
 #[cfg(all(test, feature = "outproc-effect", feature = "outproc-instrument"))]
 mod set_source_routing_tests {
-    use super::{test_instrument_control, EngineWrap, InstrumentSlotEntry};
+    use super::{test_instrument_control, EngineWrap, InstrumentSlotEntry, SourceRoutingTarget};
     use orbit_audio_native::{SourceDest, SourceDestCell, MAX_SOURCE_UNITS};
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -3598,7 +3618,7 @@ mod set_source_routing_tests {
     fn insert_target_activates_bus_and_stores_the_absolute_bus_index() {
         let (wrap, source_dests) = wrap_with_source();
 
-        wrap.set_source_routing(SOURCE, 3, Some("seq-bus-0"))
+        wrap.set_source_routing(SOURCE, 3, SourceRoutingTarget::Bus("seq-bus-0".into()))
             .expect("insert target must be accepted");
 
         assert_eq!(source_dests[3].load(), SourceDest::Bus(0));
@@ -3611,13 +3631,16 @@ mod set_source_routing_tests {
     }
 
     #[test]
-    fn null_target_routes_the_selected_unit_back_to_master() {
+    fn none_and_master_targets_store_distinct_destinations() {
         let (wrap, source_dests) = wrap_with_source();
         source_dests[2].store(SourceDest::Bus(0));
 
-        wrap.set_source_routing(SOURCE, 2, None)
-            .expect("null target must select Master");
+        wrap.set_source_routing(SOURCE, 2, SourceRoutingTarget::None)
+            .expect("none target must be accepted");
+        assert_eq!(source_dests[2].load(), SourceDest::None);
 
+        wrap.set_source_routing(SOURCE, 2, SourceRoutingTarget::Master)
+            .expect("master target must be accepted");
         assert_eq!(source_dests[2].load(), SourceDest::Master);
     }
 
@@ -3626,11 +3649,11 @@ mod set_source_routing_tests {
         let (wrap, source_dests) = wrap_with_source();
 
         let error = wrap
-            .set_source_routing("source/key", 0, None)
+            .set_source_routing("source/key", 0, SourceRoutingTarget::None)
             .expect_err("partial source match must be rejected");
 
         assert!(format!("{error:?}").contains("unknown source"));
-        assert_eq!(source_dests[0].load(), SourceDest::Master);
+        assert_eq!(source_dests[0].load(), SourceDest::None);
     }
 
     #[test]
@@ -3641,14 +3664,14 @@ mod set_source_routing_tests {
             .set_source_routing(
                 SOURCE,
                 u32::try_from(MAX_SOURCE_UNITS).expect("unit capacity fits u32"),
-                None,
+                SourceRoutingTarget::Master,
             )
             .expect_err("out-of-range unit must be rejected");
 
         assert!(format!("{error:?}").contains("unit"));
         assert!(source_dests
             .iter()
-            .all(|cell| cell.load() == SourceDest::Master));
+            .all(|cell| cell.load() == SourceDest::None));
     }
 
     #[test]
@@ -3656,11 +3679,11 @@ mod set_source_routing_tests {
         let (wrap, source_dests) = wrap_with_source();
 
         let error = wrap
-            .set_source_routing(SOURCE, 0, Some("not-a-bus"))
+            .set_source_routing(SOURCE, 0, SourceRoutingTarget::Bus("not-a-bus".into()))
             .expect_err("unknown target bus must be rejected");
 
         assert!(format!("{error:?}").contains("unknown bus"));
-        assert_eq!(source_dests[0].load(), SourceDest::Master);
+        assert_eq!(source_dests[0].load(), SourceDest::None);
     }
 
     #[test]
@@ -3669,11 +3692,11 @@ mod set_source_routing_tests {
 
         for target in ["sum-bus-0", "aux-bus-0"] {
             let error = wrap
-                .set_source_routing(SOURCE, 0, Some(target))
+                .set_source_routing(SOURCE, 0, SourceRoutingTarget::Bus(target.into()))
                 .expect_err("non-insert target must be rejected");
             assert!(format!("{error:?}").contains("must be an insert bus"));
         }
-        assert_eq!(source_dests[0].load(), SourceDest::Master);
+        assert_eq!(source_dests[0].load(), SourceDest::None);
     }
 }
 
@@ -7350,18 +7373,19 @@ impl EngineWrap {
         Ok(())
     }
 
-    /// Route one preallocated output unit of an opaque source to Master or a named insert bus.
+    /// Route one preallocated output unit of an opaque source to an explicit destination.
     /// All name/kind/range validation happens before either shared atomic is changed.
     #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
     pub fn set_source_routing(
         &self,
         source: &str,
         unit: u32,
-        target: Option<&str>,
+        target: SourceRoutingTarget,
     ) -> Result<(), WrapError> {
         let (resolved, active) = match target {
-            None => (orbit_audio_native::SourceDest::Master, None),
-            Some(name) => {
+            SourceRoutingTarget::None => (orbit_audio_native::SourceDest::None, None),
+            SourceRoutingTarget::Master => (orbit_audio_native::SourceDest::Master, None),
+            SourceRoutingTarget::Bus(name) => {
                 let guard = self
                     .outproc
                     .lock()
@@ -7371,17 +7395,17 @@ impl EngineWrap {
                         "outproc effect not initialized (test backend has no outproc path)".into(),
                     )
                 })?;
-                let bus_index = *control.bus_index.get(name).ok_or_else(|| {
+                let bus_index = *control.bus_index.get(&name).ok_or_else(|| {
                     WrapError::OutProcEffect(format!(
                         "SetSourceRouting target: unknown bus '{name}'"
                     ))
                 })?;
-                if control.bus_kinds.get(name) != Some(&BusKind::Insert) {
+                if control.bus_kinds.get(&name) != Some(&BusKind::Insert) {
                     return Err(WrapError::OutProcEffect(format!(
                         "SetSourceRouting target '{name}' must be an insert bus"
                     )));
                 }
-                let active = control.bus_actives.get(name).cloned().ok_or_else(|| {
+                let active = control.bus_actives.get(&name).cloned().ok_or_else(|| {
                     WrapError::OutProcEffect(format!(
                         "SetSourceRouting target bus '{name}' has no activation handle"
                     ))
@@ -7639,7 +7663,7 @@ impl EngineWrap {
                     old_units,
                     new_units,
                     "instrument replacement: source destination arrays differ in length; \
-                     units beyond the shorter array are not migrated and stay at Master \
+                     units beyond the shorter array are not migrated and stay at None \
                      on the new slot (wiring bug)"
                 );
             }
@@ -7654,7 +7678,7 @@ impl EngineWrap {
                 .zip(&control.slots[spare_index].source_dests)
             {
                 new_dest.store(old_dest.load());
-                old_dest.store(orbit_audio_native::SourceDest::Master);
+                old_dest.store(orbit_audio_native::SourceDest::None);
             }
             control.instance_index.insert(name.clone(), spare_index);
         }
@@ -7852,7 +7876,7 @@ impl EngineWrap {
 
         if drain_acked && reset_error.is_none() {
             for dest in &source_dests {
-                dest.store(orbit_audio_native::SourceDest::Master);
+                dest.store(orbit_audio_native::SourceDest::None);
             }
             drain_requested.store(false, Ordering::Release);
             drain_done.store(false, Ordering::Release);
@@ -14639,8 +14663,8 @@ mod outproc_instrument_replace_tests {
         assert!(
             old.source_dests
                 .iter()
-                .all(|cell| cell.load() == orbit_audio_native::SourceDest::Master),
-            "a successfully freed slot must reset every source unit to Master"
+                .all(|cell| cell.load() == orbit_audio_native::SourceDest::None),
+            "a successfully freed slot must reset every source unit to None"
         );
     }
 
@@ -14721,7 +14745,7 @@ mod outproc_instrument_replace_tests {
             fixture
                 .source_dests
                 .iter()
-                .all(|cell| cell.load() == orbit_audio_native::SourceDest::Master),
+                .all(|cell| cell.load() == orbit_audio_native::SourceDest::None),
             "teardown must reset all source units before the slot can be reused"
         );
         assert!(!process_exists(child_pid), "teardown must reap the child");

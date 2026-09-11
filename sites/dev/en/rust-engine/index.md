@@ -208,7 +208,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:994-1021
+// rust/crates/orbit-audio-daemon/src/session.rs:1005-1032
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -245,7 +245,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1610-1637
+// rust/crates/orbit-audio-daemon/src/session.rs:1621-1648
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -356,7 +356,7 @@ stay silent (the registration path is treated as the single authority). The spec
 The gated E2E suite records the opposite measurement.
 
 ```ts
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5415-5421
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5419-5425
   // **A comment is not evidence of implementation behavior** — main's real run found
   // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
   // get_log at all, meaning the assumed fallback does not actually happen (or does not
@@ -490,7 +490,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1761-1798
+// rust/crates/orbit-audio-native/src/output.rs:1777-1814
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -546,7 +546,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1846-1932
+// rust/crates/orbit-audio-native/src/output.rs:1862-1948
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -646,7 +646,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2312-2316
+// rust/crates/orbit-audio-native/src/output.rs:2331-2335
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -687,7 +687,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2002-2026
+// rust/crates/orbit-audio-native/src/output.rs:2018-2042
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -777,7 +777,7 @@ satisfy the serialization contract named in the doc comment on `LineControl::cur
 (`rust/crates/orbit-audio-native/src/output.rs:1254-1293`).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9765-9774
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -818,7 +818,7 @@ indices** (does the bus exist, is the reference forward-only) is checked by
 the actual output width, so the dispatch sits in between and passes `engine.output_channels()`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2659-2674
+// rust/crates/orbit-audio-daemon/src/session.rs:2670-2685
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -892,7 +892,7 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1935-1952
+// rust/crates/orbit-audio-native/src/output.rs:1951-1968
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -933,7 +933,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2030-2071
+// rust/crates/orbit-audio-native/src/output.rs:2046-2087
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -984,7 +984,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3224-3241
+// rust/crates/orbit-audio-native/src/output.rs:3243-3260
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

@@ -17,6 +17,96 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: 実装・実機検証完了（レビュー前）
+**版**: 🔴 **4.0.0 / `DSL_VERSION` 2.0**（破壊的変更）
+**担当**: 実装 = Codex（`gpt-5.6-sol` / effort **xhigh**）/ 裁定と検証 = main
+
+#883 の**振る舞いを変える**半分。束 0+C（PR #884）の上に載る。
+
+#### 閉じた 4 実体（§0.1）— **1 箇所ではない**
+
+| 実体 | 変更 |
+|---|---|
+| **A** `program()` の暗黙終端 | 合成を削除（`[rack]` の前置は残す） |
+| **B** バス無し audio の直接描画 | `resolveDispatchChannel()` に skip。🔴 **`isNoteSequence()` の早期 return より後ろ**（前だと MIDI が無音・#282 の再発） |
+| **C** daemon のバス既定ライン | `legacy(Master, [])` → **`[Rack]`（無音）** |
+| **D** instrument の source routing | `SetSourceRouting.target` を**明示 3 値**（`none` / `master` / `bus`）へ。🔴 **一方通行の wire 変更** |
+
+#### 🔴 横断規則を 6 箇所へ適用（main の審査で要求したもの）
+
+> routing 状態が「書かれていない」「表現できない」「失われた」いずれかの時、その信号はどこにも加算されない。
+> **master へ倒すことは最下層に暗黙 master を作り直すこと**である。
+
+| 箇所 | 実装 |
+|---|---|
+| `SourceDestCell::encode` | `Bus(_) \| Link(_) => Self::NONE` ← **Fable の監査も見ていなかった箇所** |
+| `SourceDestCell::decode` | `_ => SourceDest::None` |
+| `SourceDest::default()` | `#[default] None` |
+| `FeedDest` 変換 ×2 | `None => Discard` / `Link(_) => Discard` |
+| slot 解放時 | `store(SourceDest::None)` ×2 |
+
+**除外は master トラック自身の device 出口のみ**（owner 裁定で 1,2 固定＝定数なので規則の定義域外）。
+
+#### 🔴 実機 gated が 4 件落ちた — **すべて譜面・harness の誤り**（実装は無変更）
+
+| 失敗 | 原因 |
+|---|---|
+| 既存 `sum-bus insert across restart` | **移行漏れ** — 束 S で「出口を書かない sum は無音」になったので `sum("drum").output()` が要る |
+| X1 / X4 / X5 | 🔴 **`LOOP()` は追加ではなく置換** — `LOOP(a)` の次の `LOOP(b)` が a を止める。根拠は `calculateLoopDiff()`（`process-statement.ts:679`）→ `stopSequences(toStop)`（`:777`） |
+
+**main が先に潰した仮説**（unit で実測）: `ref883.output()` は skip されず（`{kind:'hardware'}`）、
+4 イベントをスケジュールし、`loop()` も throw しない。**TS 層は正しい**。
+崩れたのは「では実機の無音は実装のせい」という推論の方で、**`LOOP` の意味論**が抜けていた
+（個別に `loop()` を呼ぶ unit では原理的に再現しない形）。
+
+Codex は同じ誤用があった **X8 も落ちる前に先回りで修正**し、**静的回帰テストも追加**した
+（`gated-assertion-hygiene.spec.ts:557`）。
+
+⚠️ **ただしその検査は名指しの 4 ファイルしか守らない。** 3 本の新 fixture が揃って踏んだ性質なので、
+**一般化する価値がある**（例: gated fixture 内に `LOOP(` が 2 回以上現れたら red）。別途扱う。
+
+#### 実機 gated の実測（main が sandbox 外で）
+
+```
+Tests  45 passed | 1 skipped (46) | 0 failed
+
+[#883 X1] explicit-reference + orphan RMS: 0.08701663328815765      ← 漏れれば 2 倍
+[#883 X2] omitted=0.0870166332954772  explicit=0.08701663328808863
+[#883 X3] sendRms=0.0436116233054862  plainRms=0.0870166332927243
+          ratio=0.5011872058848396                                   ← 期待 10^(-6/20)=0.5012
+[#883 X4] reference + unterminated-sum member RMS: 0.087016633295434
+[#883 X5] withSilentInstrument=0.08701663329662541  refRms=0.08701663329662539
+```
+
+🔴 **X3 が #883 の実害そのもの**（`send(sum)` の dry が master へ二重に届く）**を実測で塞いだ証拠**。
+🔴 **X5 は小数点以下 16 桁が一致** — 出口を書かない instrument は基準の音に **1 bit も足していない**。
+
+#### ゴールの収束条件
+
+1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
+
+---
+
+### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: ✅ 束 S 実装
+
+出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
+未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
+`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
+確定するため、#282 の挙動を維持する。
+
+編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
+(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
+実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
+
+この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
+`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
+
 ### fix: make send() require a destination in both implementations (#883 round 2) (Sep 12, 2026)
 
 **Date**: 2026-09-12
@@ -1858,66 +1948,6 @@ E2E-7 の `waitForSound` が落ちた時に **`get_log` の末尾を例外に添
   **音が出るのを待つ**形へ。gated スイートで `RUN(` を使う譜面はこれ 1 本だけで、他は全部
   音を追いかけていた。`sine_440.wav` はちょうど 1.000 s（実測）なので、1.0 s 間隔の
   `play(1, 0, 1, 0)` なら隙間なく連なり、440 Hz は 1 s でちょうど 440 周期でつなぎ目の位相も連続する
-
-### test(e2e): add the three O-surface E2E the freeze line requires (#611) (Sep 10, 2026)
-
-凍結線の収束条件「O-surface E2E-2〜7 + E2E-10 が緑」の未達部分。B2 本体は時間制約で
-この 3 本を落としていた。
-
-| # | 何を固定するか | 判定式 |
-|---|---|---|
-| **E2E-6** | **位置が意味を持つこと**。`output(verb, thru: true)` を `effect([Gain(db: -12)])` の**前に**書くか**後に**書くかで混合が変わる | `g = 10^(-12/20)` として `total_A / total_B = (1 + g) / (2g)` ≈ 2.49。許容 `relativeDelta <= 0.12` |
-| **E2E-7** | **再 publish の seed**。`gain(-40)` で鳴らしている最中に `gain(0)` へ切り替えてもクリックが出ない | 切替窓（±50 ms）の `max\|x[n]−x[n−1]\|` <= 定常窓の同 × 4 |
-| **E2E-10** | daemon を `SIGKILL` しても音が戻り、**台数が 1 に収まる** | `relativeDelta(after, before) <= 0.05` かつ respawn 後の daemon PID が 1 個 |
-
-**E2E-6 がなぜ `(1+g)/(2g)` か**（テストにも導出を書いた）: A は `output(verb, thru:true)` が
-先なので **verb へ分岐した後に** Gain が掛かり、dry 側だけが減衰する → `total = g + 1`。
-B は Gain が先なので**両方に**掛かる → `total = 2g`。これは評価フレームがあって初めて成立する
-（選択範囲全体が 1 つのバッチになり、行の並び順が信号順になる）。
-
-**E2E-7 が raw PCM を読む理由**: -40 dB → 0 dB の跳びは 1 サンプルの不連続なので、
-20 ms の RMS / peak 窓では解像できない。`readCaptureForAnalysis` の float32 を直接読み、
-**信号から切替点を特定する**（peak 0.01 の -40 dB は閾値 0.1 を跨がないので、envelope crossing が
-そのまま `gain(0)` のランプ位置になる）。MCP 往復の壁時計に依存しない。
-
-**E2E-10 の判断**: `expectNoNewErrors` を**呼ばない**。`SIGKILL` は意図的な fault injection で、
-daemon の死そのものが ERROR に分類されるログを出す（既存の D-2 / D-3 も同じ扱い）。
-`runScore()` は毎回 engine を止め直すため使えず、E2E-K3 と同じ手動 open/select/run で
-1 セッションに収めた。capture は daemon 側のタップなので respawn で作り直される —
-**before の RMS は kill の前に読み切る**（設計 §8.1 の注記どおり、1 本の `CaptureWindows` に
-しない）。
-
-🔴 **main が直した点**: 台数の待ちと判定が**同語反復**になっていた。`waitUntil` が
-`currentPids.length === 1` を待ち、その後に `toHaveLength(1)` を assert していたので、
-2 台で落ち着いた場合は waitUntil の timeout になり「respawn しなかった」という**誤った診断**が
-出る。待つ条件を `>= 1` に緩め、**台数が 1 であることは assert 側で見る**ようにした。
-
-**検算**（main が sandbox 外で実行）: `npm test` **2362 passed / 67 skipped / 2429**
-（skip が 64 → 67 = 新規 3 本）・`lint` 緑・`typecheck:e2e` 緑・引用 1034 件 / 0 失敗・
-gated env 未設定で spec の 39 件すべて skip。
-
-### test(e2e): follow the dB send unit in the #643 E2E-4 golden (#611) (Sep 10, 2026)
-
-**main が実機で回して見つけた**（委譲先の緑は実機の緑ではない）。束 B2 の実機 gated:
-**33 passed / 2 failed / 1 skipped (36)**。
-
-| 赤 | 判定 |
-|---|---|
-| `#643 E2E-4 preserves instrument contributions through output(sum) plus send(aux, gain)` | 🔴 **本束が動かした。追従漏れ** |
-| `steps the live playhead through an instrument() sequence, rests included` | 既知の baseline 赤（設計 §8.4 の台帳。束 A の実機でも同じ 1 本だけが赤だった）。原因は fixture が `instrument()` + degree を書きながら `global.key()` を宣言していないこと＝**オラクル側の欠陥**で、本束の退行ではない |
-
-**追従漏れの中身**: PR-O4 で `send` の第 2 引数が**線形係数から dB へ**変わった。
-`#643 E2E-4` の譜面は `routeWet643.send("aux643", 0.5)` と書いており、旧解釈では 50%、
-新解釈では **+0.5 dB（≈ ×1.06）**。したがって `total/dry` が 1.5 から **2.06** へ上がり、
-`toBeLessThan(1.65)` で落ちた。
-
-**直し方**: 同じ比を dB で書き直した（`send("aux643", -6)` → `10^(-6/20) = 0.501` →
-`total/dry = 1.501`）。判定は式で書き、許容 ±0.15 は据え置き。**値を変えずに単位を変えた**ので、
-このテストが守っていた「sum と aux の寄与が両方生きている」という性質は変わらない。
-
-`send` を経路張りにだけ使っている 3 箇所（`fx625` / `fx628`）は送出量を判定していない
-（oracle は ERROR 件数と child プロセスの有無）ので値は変えず、**dB として読むこと**を
-先頭の 1 箇所に注記した。
 
 ## Archived sections
 

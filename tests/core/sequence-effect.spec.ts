@@ -165,12 +165,16 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     )
   })
 
-  it('allows instrument() then effect() and routes unit 0 exactly once', async () => {
+  it('allows instrument() then effect() and updates unit 0 from none to its bus', async () => {
     const { seq, setSourceRouting } = harness()
     await seq.instrument('synth.clap')
     await expect(seq.effect('./reverb.clap')).resolves.toBe(seq)
-    expect(setSourceRouting).toHaveBeenCalledTimes(1)
-    expect(setSourceRouting).toHaveBeenCalledWith('plugin:drum', 0, 'seq-bus-0')
+    expect(setSourceRouting).toHaveBeenCalledTimes(2)
+    expect(setSourceRouting).toHaveBeenNthCalledWith(1, 'plugin:drum', 0, { kind: 'none' })
+    expect(setSourceRouting).toHaveBeenNthCalledWith(2, 'plugin:drum', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
   })
 
   it('allows effect() then instrument() and routes unit 0 exactly once', async () => {
@@ -178,7 +182,10 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     await seq.effect('./reverb.clap')
     await seq.instrument('synth.clap')
     expect(setSourceRouting).toHaveBeenCalledTimes(1)
-    expect(setSourceRouting).toHaveBeenCalledWith('plugin:drum', 0, 'seq-bus-0')
+    expect(setSourceRouting).toHaveBeenCalledWith('plugin:drum', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
   })
 
   it('rejects while LinkAudio is enabled', async () => {
@@ -251,6 +258,7 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     const { audio, global, seq } = harness()
     vi.spyOn(global, 'resolveAudioSpec').mockReturnValue('/songs/kick.wav')
     await seq.effect('./reverb.clap')
+    seq.output()
     seq.audio('kick.wav')
     global.start()
     seq.play(1)

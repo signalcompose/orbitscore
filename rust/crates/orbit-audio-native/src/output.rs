@@ -906,7 +906,9 @@ pub trait BlockSource: Send {
 /// Destination of one source output unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceDest {
+    /// Explicit silent sink: the source renders, but no output receives its signal.
     #[default]
+    None,
     Master,
     Bus(usize),
     Link(usize),
@@ -921,6 +923,8 @@ impl SourceDestCell {
     const BUS_BASE: usize = 1;
     const LINK_BASE: usize = Self::BUS_BASE + MAX_INSERT_BUS_STAGES;
     const END: usize = Self::LINK_BASE + MAX_LINK_CHANNELS;
+    // #883 §2.6: the previously-unused END code is the one atomic representation of silence.
+    const NONE: usize = Self::END;
 
     pub fn new(dest: SourceDest) -> Self {
         Self(Arc::new(AtomicUsize::new(Self::encode(dest))))
@@ -938,26 +942,32 @@ impl SourceDestCell {
 
     fn encode(dest: SourceDest) -> usize {
         match dest {
+            SourceDest::None => Self::NONE,
             SourceDest::Master => Self::MASTER,
             SourceDest::Bus(index) if index < MAX_INSERT_BUS_STAGES => Self::BUS_BASE + index,
             SourceDest::Link(index) if index < MAX_LINK_CHANNELS => Self::LINK_BASE + index,
-            SourceDest::Bus(_) | SourceDest::Link(_) => Self::MASTER,
+            SourceDest::Bus(_) | SourceDest::Link(_) => {
+                #[cfg(not(test))]
+                debug_assert!(false, "source destination was not validated");
+                Self::NONE
+            }
         }
     }
 
     fn decode(value: usize) -> SourceDest {
         match value {
+            Self::NONE => SourceDest::None,
             Self::MASTER => SourceDest::Master,
             value if value < Self::LINK_BASE => SourceDest::Bus(value - Self::BUS_BASE),
             value if value < Self::END => SourceDest::Link(value - Self::LINK_BASE),
-            _ => SourceDest::Master,
+            _ => SourceDest::None,
         }
     }
 }
 
 impl Default for SourceDestCell {
     fn default() -> Self {
-        Self::new(SourceDest::Master)
+        Self::new(SourceDest::default())
     }
 }
 
@@ -1137,6 +1147,12 @@ pub fn legacy_line_ops(output_target: BusTarget, sends: &[BusSend]) -> Vec<LineO
         }));
     }
     ops
+}
+
+/// The one initial program used by both the RT bus and the daemon republish shadow.
+/// An unconfigured bus has a rack position marker but no destination (#883 §2.6).
+pub fn default_bus_line_ops() -> Vec<LineOp> {
+    vec![LineOp::Rack]
 }
 
 impl LineProgram {
@@ -1570,7 +1586,7 @@ impl InsertBusStage {
             processor,
             buffer: vec![0.0; buffer_len],
             active,
-            line: LineSlot::new(LineProgram::legacy(BusTarget::Master, &[])),
+            line: LineSlot::new(LineProgram::settled(default_bus_line_ops())),
         }
     }
 
@@ -1579,8 +1595,8 @@ impl InsertBusStage {
         Self::new(name, None, 0)
     }
 
-    /// この stage の出力先を指定する（既定 `Master`）。sum の member や sum→master 以外の合流に
-    /// 使う（MX.1）。target index の妥当性（自分より後ろ）は構築 API 側で検証する。
+    /// この stage の明示済み primary output を差し替える。sum の member 等に使う（MX.1）。
+    /// target index の妥当性（自分より後ろ）は構築 API 側で検証する。
     pub fn with_output_target(self, target: BusTarget) -> Self {
         let mut ops = self.line.ops_snapshot_during_construction();
         if let Some(LineOp::Output(output)) =
@@ -1596,7 +1612,7 @@ impl InsertBusStage {
         self
     }
 
-    /// 複数の send（aux/return への post-fader copy・MX.3）を指定する（既定空）。
+    /// 明示済み primary output に複数の send（aux/return への post-fader copy・MX.3）を足す。
     pub fn with_sends(self, sends: Vec<BusSend>) -> Self {
         let mut ops = self.line.ops_snapshot_during_construction();
         let primary = ops
@@ -2138,16 +2154,19 @@ fn collect_source_feeds<'a>(
                 continue;
             };
             let dest = match slot.dests[unit].load() {
+                SourceDest::None => FeedDest::Discard,
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
                     .get(index)
                     .copied()
                     .flatten()
-                    .map_or(FeedDest::Hardware, FeedDest::Channel),
-                // Link source routing is wired in PR-3. Until then it is a total hardware fallback.
-                SourceDest::Link(_) => FeedDest::Hardware,
+                    .map_or(FeedDest::Discard, FeedDest::Channel),
+                // Link source routing is not wired yet. Missing wiring is silence, never Master.
+                SourceDest::Link(_) => FeedDest::Discard,
             };
-            feeds.push((output, dest));
+            if dest != FeedDest::Discard {
+                feeds.push((output, dest));
+            }
         }
     }
     feeds
@@ -3358,10 +3377,12 @@ mod source_feed_tests {
 
     #[test]
     fn source_dest_cell_roundtrips_every_destination_and_defaults_invalid_values() {
-        let cell = SourceDestCell::new(SourceDest::Master);
-        assert_eq!(cell.load(), SourceDest::Master);
+        let cell = SourceDestCell::default();
+        assert_eq!(cell.load(), SourceDest::None);
 
         for dest in [
+            SourceDest::None,
+            SourceDest::Master,
             SourceDest::Bus(0),
             SourceDest::Bus(MAX_INSERT_BUS_STAGES - 1),
             SourceDest::Link(0),
@@ -3372,12 +3393,12 @@ mod source_feed_tests {
         }
 
         cell.store(SourceDest::Bus(MAX_INSERT_BUS_STAGES));
-        assert_eq!(cell.load(), SourceDest::Master);
+        assert_eq!(cell.load(), SourceDest::None);
         cell.store(SourceDest::Link(MAX_LINK_CHANNELS));
-        assert_eq!(cell.load(), SourceDest::Master);
+        assert_eq!(cell.load(), SourceDest::None);
 
         let invalid = SourceDestCell(Arc::new(AtomicUsize::new(usize::MAX)));
-        assert_eq!(invalid.load(), SourceDest::Master);
+        assert_eq!(invalid.load(), SourceDest::None);
     }
 
     /// source が **毎ブロック受け取る transport** を記録する fixture。`render_engine_with_sources` が
@@ -3474,6 +3495,27 @@ mod source_feed_tests {
         }
     }
 
+    #[test]
+    fn none_source_is_rendered_but_does_not_publish_a_feed() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut sources = [transport_recording_source(log.clone(), 1)];
+        sources[0].dests[0].store(SourceDest::None);
+        let transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+
+        let rendered = render_sources(&mut sources, 4, &transport);
+        let feeds = collect_source_feeds(&sources, &rendered, &[], 8);
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![0],
+            "silent sources still advance"
+        );
+        assert!(feeds.is_empty());
+    }
+
     fn fixed_source(output: Vec<f32>, dest: SourceDest) -> SourceSlot {
         struct FixedSource {
             output: Vec<f32>,
@@ -3542,7 +3584,7 @@ mod source_feed_tests {
     }
 
     #[test]
-    fn unregistered_source_bus_falls_back_to_hardware_for_the_whole_block() {
+    fn unregistered_source_bus_is_silent_for_the_whole_block() {
         let source_output = vec![0.25, -0.5, 0.75, -1.0];
         let mut sources = vec![fixed_source(source_output.clone(), SourceDest::Bus(7))];
         let mut transport = BlockTransport {
@@ -3561,16 +3603,30 @@ mod source_feed_tests {
             &mut actual,
         );
 
-        assert_eq!(
-            actual
-                .iter()
-                .map(|sample| sample.to_bits())
-                .collect::<Vec<_>>(),
-            source_output
-                .iter()
-                .map(|sample| sample.to_bits())
-                .collect::<Vec<_>>()
+        assert!(actual.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn unwired_link_source_is_silent_for_the_whole_block() {
+        let source_output = vec![0.25, -0.5, 0.75, -1.0];
+        let mut sources = vec![fixed_source(source_output.clone(), SourceDest::Link(0))];
+        let mut transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let engine = Engine::new(48_000, 2);
+        let mut actual = vec![0.0; source_output.len()];
+        render_engine_with_sources(
+            &engine,
+            &mut None,
+            &mut [],
+            &mut sources,
+            &mut transport,
+            2,
+            &mut actual,
         );
+
+        assert!(actual.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
@@ -3586,7 +3642,8 @@ mod source_feed_tests {
         }
 
         let mut sources = vec![fixed_source(vec![1.0; 4], SourceDest::Bus(0))];
-        let mut buses = vec![InsertBusStage::new("instrument", Some(Box::new(Half)), 4)];
+        let mut buses = vec![InsertBusStage::new("instrument", Some(Box::new(Half)), 4)
+            .with_line(LineProgram::legacy(BusTarget::Master, &[]))];
         let mut transport = BlockTransport {
             cursor_frames: 0,
             sample_rate: 48_000,
@@ -3617,6 +3674,10 @@ mod source_feed_tests {
 mod tests {
     use super::*;
     use cpal::BackendSpecificError;
+
+    fn with_explicit_master(stage: InsertBusStage) -> InsertBusStage {
+        stage.with_line(LineProgram::legacy(BusTarget::Master, &[]))
+    }
 
     #[test]
     fn resolve_requested_device_name_none_when_not_requested() {
@@ -3833,12 +3894,12 @@ mod tests {
                 tagged,
             )
             .expect("schedule");
-        let mut buses = vec![InsertBusStage::with_activation(
+        let mut buses = vec![with_explicit_master(InsertBusStage::with_activation(
             "fx",
             Some(Box::new(Half)),
             4,
             active.clone(),
-        )];
+        ))];
         // inactive の間、tagged event は render 対象外（消費されない）で hw は無音。
         let mut hw = vec![0.0; 4];
         let mut link = None;
@@ -3881,7 +3942,11 @@ mod tests {
             .expect("schedule");
         let plain = orbit_audio_core::Sample::new(vec![3.0; 4], 48_000, 2);
         engine.schedule(0.0, plain).expect("schedule");
-        let mut buses = vec![InsertBusStage::new("fx", Some(Box::new(Half)), 4)];
+        let mut buses = vec![with_explicit_master(InsertBusStage::new(
+            "fx",
+            Some(Box::new(Half)),
+            4,
+        ))];
         let mut hw = vec![0.0; 4];
         let mut link = None;
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
@@ -3893,7 +3958,7 @@ mod tests {
     }
 
     #[test]
-    fn tagged_event_with_unattached_bus_still_drops() {
+    fn tagged_event_with_unattached_bus_is_consumed_without_reaching_hardware() {
         let engine = Engine::new(48_000, 2);
         let sample = orbit_audio_core::Sample::new(vec![1.0; 4], 48_000, 2);
         engine
@@ -3913,20 +3978,18 @@ mod tests {
         let mut hw = vec![0.0; 4];
         let mut link = None;
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        assert!(hw
-            .iter()
-            .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
+        assert!(hw.iter().all(|&sample| sample == 0.0));
         assert_eq!(engine.active_count(), Some(0));
     }
 
     // #459/#453 M1: mixer graph (sum/aux) 拡張の必須テスト群。既存の per-seq insert のみの構成
-    // （output_target=Master・sends 空）が上の既存テスト群でそのまま green であることをもって
-    // 「既定構成の挙動不変」を担保する（明示的な回帰確認）。
+    // （明示 output_target=Master・sends 空）は #883 後もテスト fixture に明記し、
+    // mixer graph 自体の挙動を既定ラインの無音化から分離して回帰確認する。
 
     #[test]
     fn sum_bus_chains_member_output_before_master() {
         // stage0 "kick"（processor None・output_target=Bus(1) = drum sum へ）
-        // stage1 "drum"（sum・0.5×gain processor・output_target 既定 Master）
+        // stage1 "drum"（sum・0.5×gain processor・output_target 明示 Master）
         struct Half;
         impl PostProcessor for Half {
             fn process(&mut self, data: &mut [f32]) {
@@ -3951,8 +4014,9 @@ mod tests {
             )
             .expect("schedule");
         let mut buses = vec![
-            InsertBusStage::new("kick", None, 4).with_output_target(BusTarget::Bus(1)),
-            InsertBusStage::new("drum", Some(Box::new(Half)), 4),
+            with_explicit_master(InsertBusStage::new("kick", None, 4))
+                .with_output_target(BusTarget::Bus(1)),
+            with_explicit_master(InsertBusStage::new("drum", Some(Box::new(Half)), 4)),
         ];
         let mut hw = vec![0.0; 4];
         let mut link = None;
@@ -3991,11 +4055,13 @@ mod tests {
             )
             .expect("schedule");
         let mut buses = vec![
-            InsertBusStage::new("a", Some(Box::new(Half)), 4).with_sends(vec![BusSend {
-                target: 1,
-                gain: 0.5,
-            }]),
-            InsertBusStage::unattached("aux"),
+            with_explicit_master(InsertBusStage::new("a", Some(Box::new(Half)), 4)).with_sends(
+                vec![BusSend {
+                    target: 1,
+                    gain: 0.5,
+                }],
+            ),
+            with_explicit_master(InsertBusStage::unattached("aux")),
         ];
         buses[1].ensure_buffer_len(4);
         let mut hw = vec![0.0; 4];
@@ -4440,7 +4506,7 @@ mod tests {
                 }),
             ]))
         } else {
-            InsertBusStage::new("source", None, 8)
+            with_explicit_master(InsertBusStage::new("source", None, 8))
                 .with_output_target(BusTarget::Bus(1))
                 .with_sends(vec![BusSend {
                     target: 2,
@@ -4449,8 +4515,8 @@ mod tests {
         };
         let mut buses = vec![
             source,
-            InsertBusStage::new("sum", Some(Box::new(Half)), 8),
-            InsertBusStage::unattached("aux"),
+            with_explicit_master(InsertBusStage::new("sum", Some(Box::new(Half)), 8)),
+            with_explicit_master(InsertBusStage::unattached("aux")),
         ];
         buses[2].ensure_buffer_len(8);
         let mut hw = vec![0.0; 8];
@@ -4518,9 +4584,9 @@ mod tests {
             let legacy_sends = (0..3)
                 .map(|_| Arc::new(AtomicU32::new(0)))
                 .collect::<Vec<_>>();
-            let legacy_source = InsertBusStage::new("source", None, 8)
+            let legacy_source = with_explicit_master(InsertBusStage::new("source", None, 8))
                 .with_routing_overrides(legacy_output.clone(), legacy_sends.clone());
-            let program_source = InsertBusStage::new("source", None, 8);
+            let program_source = with_explicit_master(InsertBusStage::new("source", None, 8));
             let install_line = program_source.legacy_line_installer();
 
             Self {
@@ -4528,15 +4594,15 @@ mod tests {
                 program_engine: Engine::new(48_000, 2),
                 legacy_buses: vec![
                     legacy_source,
-                    InsertBusStage::new("sum", Some(Box::new(Half)), 8),
-                    InsertBusStage::new("aux-a", None, 8),
-                    InsertBusStage::new("aux-b", None, 8),
+                    with_explicit_master(InsertBusStage::new("sum", Some(Box::new(Half)), 8)),
+                    with_explicit_master(InsertBusStage::new("aux-a", None, 8)),
+                    with_explicit_master(InsertBusStage::new("aux-b", None, 8)),
                 ],
                 program_buses: vec![
                     program_source,
-                    InsertBusStage::new("sum", Some(Box::new(Half)), 8),
-                    InsertBusStage::new("aux-a", None, 8),
-                    InsertBusStage::new("aux-b", None, 8),
+                    with_explicit_master(InsertBusStage::new("sum", Some(Box::new(Half)), 8)),
+                    with_explicit_master(InsertBusStage::new("aux-a", None, 8)),
+                    with_explicit_master(InsertBusStage::new("aux-b", None, 8)),
                 ],
                 legacy_output,
                 legacy_sends,
@@ -4848,16 +4914,16 @@ mod tests {
 
         let routing_override = Arc::new(AtomicUsize::new(0));
         let mut buses = vec![
-            InsertBusStage::new("a", None, 4).with_routing_overrides(
+            with_explicit_master(InsertBusStage::new("a", None, 4)).with_routing_overrides(
                 routing_override.clone(),
                 vec![Arc::new(AtomicU32::new(0))],
             ),
-            InsertBusStage::new("drum", Some(Box::new(Half)), 4),
+            with_explicit_master(InsertBusStage::new("drum", Some(Box::new(Half)), 4)),
         ];
         let mut hw = vec![0.0; 4];
         let mut link = None;
 
-        // override 前: 既定 static Master へ直接加算される（drum の 0.5×gain を経ない）。
+        // override 前: 明示 static Master へ直接加算される（drum の 0.5×gain を経ない）。
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
         let raw = 2.0_f32 * 0.5_f32.sqrt();
         assert!(hw.iter().all(|&sample| (sample - raw).abs() < 1e-6));
@@ -4907,9 +4973,9 @@ mod tests {
 
         let send_slot = Arc::new(AtomicU32::new(0));
         let mut buses = vec![
-            InsertBusStage::new("a", None, 4)
+            with_explicit_master(InsertBusStage::new("a", None, 4))
                 .with_routing_overrides(Arc::new(AtomicUsize::new(0)), vec![send_slot.clone()]),
-            InsertBusStage::unattached("aux"),
+            with_explicit_master(InsertBusStage::unattached("aux")),
         ];
         buses[1].ensure_buffer_len(4);
         let mut hw = vec![0.0; 4];
@@ -4946,24 +5012,28 @@ mod tests {
     fn invalid_forward_reference_rejected() {
         // target/send が自分以下の index を指す構成は構築 API で拒否する（sum のネスト・循環を
         // 構造的に排除する MX.4 の不変条件）。
-        let self_ref =
-            vec![InsertBusStage::new("a", None, 4).with_output_target(BusTarget::Bus(0))];
+        let self_ref = vec![with_explicit_master(InsertBusStage::new("a", None, 4))
+            .with_output_target(BusTarget::Bus(0))];
         assert!(validate_bus_topology(&self_ref).is_err());
 
         let backward_ref = vec![
-            InsertBusStage::new("a", None, 4).with_output_target(BusTarget::Bus(0)),
+            with_explicit_master(InsertBusStage::new("a", None, 4))
+                .with_output_target(BusTarget::Bus(0)),
             InsertBusStage::new("b", None, 4),
         ];
         assert!(validate_bus_topology(&backward_ref).is_err());
 
-        let bad_send = vec![InsertBusStage::new("a", None, 4).with_sends(vec![BusSend {
-            target: 0,
-            gain: 0.5,
-        }])];
+        let bad_send = vec![
+            with_explicit_master(InsertBusStage::new("a", None, 4)).with_sends(vec![BusSend {
+                target: 0,
+                gain: 0.5,
+            }]),
+        ];
         assert!(validate_bus_topology(&bad_send).is_err());
 
         let ok = vec![
-            InsertBusStage::new("a", None, 4).with_output_target(BusTarget::Bus(1)),
+            with_explicit_master(InsertBusStage::new("a", None, 4))
+                .with_output_target(BusTarget::Bus(1)),
             InsertBusStage::new("b", None, 4),
         ];
         assert!(validate_bus_topology(&ok).is_ok());
@@ -4972,7 +5042,7 @@ mod tests {
     #[test]
     fn inactive_sum_target_still_receives_member_output() {
         // stage0 "kick"（active・processor None・output_target=Bus(1)）
-        // stage1 "drum"（inactive = 未 declare・processor None・output_target 既定 Master）でも、
+        // stage1 "drum"（inactive = 未 declare・processor None・output_target 明示 Master）でも、
         // active な member から参照される is_render_target として buffer が生き、
         // hw まで合成が届くこと。
         let engine = Engine::new(48_000, 2);
@@ -4991,8 +5061,14 @@ mod tests {
             )
             .expect("schedule");
         let mut buses = vec![
-            InsertBusStage::new("kick", None, 4).with_output_target(BusTarget::Bus(1)),
-            InsertBusStage::with_activation("drum", None, 4, Arc::new(AtomicBool::new(false))),
+            with_explicit_master(InsertBusStage::new("kick", None, 4))
+                .with_output_target(BusTarget::Bus(1)),
+            with_explicit_master(InsertBusStage::with_activation(
+                "drum",
+                None,
+                4,
+                Arc::new(AtomicBool::new(false)),
+            )),
         ];
         let mut hw = vec![0.0; 4];
         let mut link = None;

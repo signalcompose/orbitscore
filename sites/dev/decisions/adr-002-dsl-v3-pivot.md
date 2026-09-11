@@ -6,7 +6,7 @@ verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 / `DSL_VERSION` 1.2 へのバンプ）まで**バージョンに触れた箇所だけ**追従しました。v0.1 → v3.0 の pivot 本論は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョンに触れた箇所だけ**追従しました。v0.1 → v3.0 の pivot 本論は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
@@ -14,14 +14,14 @@ OrbitScore DSL は 3 回のメジャーバージョンを経て v3.0 に至り�
 
 **重要**: ADR のタイトルが "v1 → v3 pivot" と書かれていますが、実際には 3 段階の変化です。**v1 → v2 が最大の pivot (MIDI → Audio)** であり、v2 → v3 は DSL 構文の洗練です。この章では 3 つすべての変化を扱います。
 
-ちなみに現在 (56c34c3) も、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL (MIDI 出力) が **別軸** で積まれています。`DSL_VERSION` は audio line の v3.0 ではなく Pitch DSL の版を指し、いまは **1.2** です (#843・PR [#871](https://github.com/signalcompose/orbitscore/pull/871))。同じ PR で拡張 (`.vsix` と git タグが名乗る版) は **3.0.0** になりましたが、`ENGINE_VERSION` は **2.0.0** のままです — 3 つは同期しない別軸です (`docs/design/656-release-design.md` §4.4)。本 ADR は audio line の話です。
+ちなみに現在も、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL (MIDI 出力) が **別軸** で積まれています。`DSL_VERSION` は audio line の v3.0 ではなく DSL spec の版を指し、#883 の暗黙終端廃止で **2.0** になりました。拡張 (`.vsix` と git タグが名乗る版) は **4.0.0**、`ENGINE_VERSION` は **2.0.0** のままです — 3 つは同期しない別軸です (`docs/design/656-release-design.md` §4.4)。本 ADR は audio line の話です。
 
 ```typescript
-// packages/engine/src/version.ts:14-17
+// packages/engine/src/version.ts:15-18
 export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
-export const DSL_VERSION = '1.2'
+export const DSL_VERSION = '2.0'
 ```
 
 ---
@@ -182,7 +182,7 @@ v1.0 → v2.0 の pivot で消えた機能があります:
 また、`updateDiagnostics()` には v1.0 MIDI 構文の残滓への警告が実装されています。`sequence ` キーワードを含む行は `DiagnosticTag.Deprecated` でハイライトされます:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3746-3755
+// packages/vscode-extension/src/extension.ts:3789-3798
     // Check for deprecated syntax (old MIDI DSL)
     if (line.includes('sequence ') && !line.includes('//')) {
       const diagnostic = new vscode.Diagnostic(
@@ -275,7 +275,7 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 
 ## Sources
 
-- `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '1.2'` (audio line v3.0 とは別軸)
+- `packages/engine/src/version.ts:15-18` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '2.0'` (audio line v3.0 とは別軸)
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1983-2035` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:496-631` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:365-462` — §5 片記号方式 (unidirectional toggle) の仕様

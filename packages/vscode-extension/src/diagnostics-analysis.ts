@@ -5,6 +5,8 @@
  * `extension.ts` の `updateDiagnostics()` がこれらを呼び出して `vscode.Diagnostic` に変換する。
  */
 
+import { extractDeclaredBusNames } from './dsl-completion-context'
+
 /**
  * Diagnostic 用の位置情報 (0-indexed)。
  */
@@ -317,113 +319,127 @@ export function analyzeEmptyOutputArg(text: string): DiagnosticIssue[] {
   return issues
 }
 
+export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
+  code: 'output-missing' | 'dry-not-routed'
+  sequenceName: string
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /**
- * Detection: any `init global.seq` chain that has `.play(...)` (i.e. produces
- * audio) but never calls `.output(...)`, when the file declares
- * `global.linkAudio()`. Per DSL spec §8.1.2 strict-mode contract, every
- * sequence in a LinkAudio file must declare a destination channel — silent
- * fallback to hardware is forbidden because hardware/LinkAudio cannot mix
- * within a single file. This is the edit-time counterpart to
- * `Sequence.resolveDispatchChannel()`'s runtime throw.
- *
- * Note: detection is name-scoped — we look at each `var X = init global.seq`
- * declaration and check whether the file contains any `X.output(` reference.
- * Chained-on-declaration calls (`var X = init global.seq.audio(...).output(...)`)
- * are not in current example style but are also covered because the regex
- * matches `<name>.output(` anywhere downstream.
- *
- * @param text ドキュメント全体のテキスト
- * @returns LinkAudio mode 宣言下で `.output()` を持たない sequence の `.play(` 呼出位置
+ * Find sounding sequence lines whose text declares no destination, plus the narrower aux-only
+ * send case where the wet signal is routed but the dry signal probably was meant to remain.
  */
-export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
-  const issues: DiagnosticIssue[] = []
+export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue[] {
   const lines = text.split('\n')
-
-  // Bail early if the file does not declare LinkAudio — the strict-mode
-  // requirement does not apply.
-  if (findFirstMatchingLine(lines, LINK_AUDIO_PATTERN) === -1) return issues
-
-  // Collect sequence variable names. Both `init global.seq` (current) and
-  // `init GLOBAL.seq` (legacy, still supported by the parser) are matched.
-  const seqDeclPattern = /\bvar\s+(\w+)\s*=\s*init\s+(?:global|GLOBAL)\s*\.\s*seq\b/
+  const codeLines = lines.map((line) => stripLineComment(line))
+  const sumNames = new Set(extractDeclaredBusNames(text, 'sum'))
+  const auxNames = new Set(extractDeclaredBusNames(text, 'aux'))
   const sequenceNames = new Set<string>()
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw || raw.trim().startsWith('//')) continue
-    const m = stripLineComment(raw).match(seqDeclPattern)
-    if (m) sequenceNames.add(m[1])
+  const seqDeclPattern = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*init\s+(?:global|GLOBAL)\s*\.\s*seq\b/
+  for (const line of codeLines) {
+    const match = seqDeclPattern.exec(line)
+    if (match?.[1]) sequenceNames.add(match[1])
   }
-  if (sequenceNames.size === 0) return issues
 
-  // Precompile per-sequence patterns once. Without this, the inner regex
-  // would be compiled on every line × every name on every keystroke, since
-  // updateDiagnostics fires on `onDidChangeTextDocument`. Word-boundary
-  // anchored to avoid `kicker.output()` matching `kick`.
-  // `.output()` (SC audio bus binding) と `.midi()` (MIDI bus — strict-mode の
-  // .output() 要件は適用外。decision #14: MIDI と SC オーディオは併走可; spec
-  // §8.1.2 は "発音 sequences" に限定。Sequence.resolveDispatchChannel() の
-  // runtime exemption をミラー、#282) を、ドキュメント1パスで同時に分類する。
-  const outputPatterns = new Map<string, RegExp>()
-  const midiPatterns = new Map<string, RegExp>()
-  const instrumentPatterns = new Map<string, RegExp>()
+  const issues: OutputRoutingDiagnosticIssue[] = []
   for (const name of sequenceNames) {
-    outputPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.output\\s*\\(`))
-    midiPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.midi\\s*\\(`))
-    instrumentPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.instrument\\s*\\(`))
-  }
+    const escapedName = escapeRegExp(name)
+    const receiver = `\\b${escapedName}\\s*\\.\\s*`
+    const chainReceiver = `\\b${escapedName}\\b[^\\n]*\\.\\s*`
+    const hasMidi = codeLines.some((line) => new RegExp(`${receiver}midi\\s*\\(`).test(line))
+    if (hasMidi) continue
 
-  const namesWithOutput = new Set<string>()
-  const namesWithMidi = new Set<string>()
-  const namesWithInstrument = new Set<string>()
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw || raw.trim().startsWith('//')) continue
-    const line = stripLineComment(raw)
-    for (const [name, pattern] of outputPatterns) {
-      if (pattern.test(line)) namesWithOutput.add(name)
-    }
-    for (const [name, pattern] of midiPatterns) {
-      if (pattern.test(line)) namesWithMidi.add(name)
-    }
-    for (const [name, pattern] of instrumentPatterns) {
-      if (pattern.test(line)) namesWithInstrument.add(name)
-    }
-  }
+    let hasDestination = false
+    let hasDryTerminal = false
+    let hasUnknownSend = false
+    const auxTargets = new Set<string>()
+    const sumTargets = new Set<string>()
 
-  const orphans = new Set<string>()
-  for (const name of sequenceNames) {
-    if (!namesWithOutput.has(name) && !namesWithMidi.has(name) && !namesWithInstrument.has(name)) {
-      orphans.add(name)
+    for (const line of codeLines) {
+      if (new RegExp(`${chainReceiver}output\\s*\\(`).test(line)) {
+        hasDestination = true
+        hasDryTerminal = true
+      }
+      if (new RegExp(`${receiver}master\\b`).test(line)) {
+        hasDestination = true
+        hasDryTerminal = true
+      }
+
+      const sendPattern = new RegExp(
+        `${receiver}send\\s*\\(\\s*(?:["']([^"']+)["']|([A-Za-z_$][\\w$]*))`,
+        'g',
+      )
+      for (const match of line.matchAll(sendPattern)) {
+        hasDestination = true
+        const target = match[1] ?? match[2]
+        if (sumNames.has(target)) sumTargets.add(target)
+        else if (auxNames.has(target)) auxTargets.add(target)
+        else hasUnknownSend = true
+      }
+
+      for (const target of sumNames) {
+        if (new RegExp(`${receiver}${escapeRegExp(target)}\\b`).test(line)) {
+          hasDestination = true
+          hasDryTerminal = true
+          sumTargets.add(target)
+        }
+      }
+      for (const target of auxNames) {
+        if (new RegExp(`${receiver}${escapeRegExp(target)}\\b`).test(line)) {
+          hasDestination = true
+          hasDryTerminal = true
+          auxTargets.add(target)
+        }
+      }
     }
-  }
-  if (orphans.size === 0) return issues
 
-  const playPatterns = new Map<string, RegExp>()
-  for (const name of orphans) {
-    playPatterns.set(name, new RegExp(`\\b${name}\\s*\\.\\s*play\\s*\\(`, 'g'))
-  }
+    const code = !hasDestination
+      ? 'output-missing'
+      : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
+        ? 'dry-not-routed'
+        : undefined
+    if (!code) continue
 
-  // Flag each `<orphan>.play(` call so the issue surfaces where audio is
-  // actually produced. play() is the trigger for runtime dispatch resolution.
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw || raw.trim().startsWith('//')) continue
-    const line = stripLineComment(raw)
-    for (const [name, pattern] of playPatterns) {
-      for (const m of line.matchAll(pattern)) {
-        const startCol = m.index ?? 0
+    const playPattern = new RegExp(`${receiver}play\\s*\\(`, 'g')
+    for (let lineIndex = 0; lineIndex < codeLines.length; lineIndex += 1) {
+      for (const match of codeLines[lineIndex].matchAll(playPattern)) {
+        const startCol = match.index ?? 0
+        const aux = [...auxTargets][0]
         issues.push({
-          line: i,
+          code,
+          sequenceName: name,
+          line: lineIndex,
           startCol,
-          endCol: startCol + m[0].length,
+          endCol: startCol + match[0].length,
           message:
-            `Sequence '${name}' has no .output() channel set, but global.linkAudio() is enabled. ` +
-            `Add .output("name") to the sequence chain — hardware/LinkAudio mixing is forbidden ` +
-            `within a LinkAudio file.`,
+            code === 'output-missing'
+              ? `Sequence '${name}' has no output — it will be silent. Add .output() to route it to master, or .output("<bus>") / .send("<aux>", db).`
+              : `Sequence '${name}' only sends to aux '${aux}' — its dry signal is not routed. Add .output() after the send to keep the dry signal, or ignore if this is intended.`,
         })
       }
     }
   }
-
   return issues
+}
+
+/** Compatibility name for callers that only want LinkAudio-file missing-output issues. */
+export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
+  const lines = text.split('\n')
+  if (findFirstMatchingLine(lines, LINK_AUDIO_PATTERN) === -1) return []
+  return analyzeMissingOutput(text).filter((issue) => issue.code === 'output-missing')
+}
+
+export function missingOutputQuickFixEdit(
+  text: string,
+  issue: OutputRoutingDiagnosticIssue,
+): { line: number; insertText: string } {
+  const sourceLine = text.split('\n')[issue.line] ?? ''
+  const indent = /^\s*/.exec(sourceLine)?.[0] ?? ''
+  return {
+    line: issue.line,
+    insertText: `\n${indent}${issue.sequenceName}.output()`,
+  }
 }

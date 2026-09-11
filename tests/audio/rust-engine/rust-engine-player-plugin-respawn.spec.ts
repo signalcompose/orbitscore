@@ -895,58 +895,70 @@ describe('RustEnginePlayer source routing recovery after daemon respawn (#643)',
   it('replays the last intended SetSourceRouting per source and unit after respawn', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
-    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
-    await player.setSourceRouting('plugin:bass', 0, 'seq-bus-1')
+    await player.setSourceRouting('plugin:lead', 0, { kind: 'bus', name: 'seq-bus-0' })
+    await player.setSourceRouting('plugin:bass', 0, { kind: 'bus', name: 'seq-bus-1' })
     daemon.setSourceRouting.mockClear()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await (player as any).respawnLoop()
 
     expect(daemon.setSourceRouting).toHaveBeenCalledTimes(2)
-    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
-    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:bass', 0, 'seq-bus-1')
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:bass', 0, {
+      kind: 'bus',
+      name: 'seq-bus-1',
+    })
   })
 
   it('keeps source-routing intent after a transport failure for respawn replay', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
     daemon.setSourceRouting.mockRejectedValueOnce(new Error('socket closed'))
-    await expect(player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')).rejects.toThrow(
-      'socket closed',
-    )
+    await expect(
+      player.setSourceRouting('plugin:lead', 0, { kind: 'bus', name: 'seq-bus-0' }),
+    ).rejects.toThrow('socket closed')
     daemon.setSourceRouting.mockClear()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await (player as any).respawnLoop()
 
     expect(daemon.setSourceRouting).toHaveBeenCalledTimes(1)
-    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
   })
 
   it('reverts a definitively rejected source-routing intent before respawn replay', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
-    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    await player.setSourceRouting('plugin:lead', 0, { kind: 'bus', name: 'seq-bus-0' })
     daemon.setSourceRouting.mockRejectedValueOnce(
       new DaemonProtocolError('MALFORMED_REQUEST', 'target must name an insert bus'),
     )
-    await expect(player.setSourceRouting('plugin:lead', 0, 'aux-bus-0')).rejects.toThrow(
-      'target must name an insert bus',
-    )
+    await expect(
+      player.setSourceRouting('plugin:lead', 0, { kind: 'bus', name: 'aux-bus-0' }),
+    ).rejects.toThrow('target must name an insert bus')
     daemon.setSourceRouting.mockClear()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await (player as any).respawnLoop()
 
     expect(daemon.setSourceRouting).toHaveBeenCalledTimes(1)
-    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
   })
 
   it('isolates source-routing replay failures and keeps respawn successful', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
-    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
-    await player.setSourceRouting('plugin:bass', 0, 'seq-bus-1')
+    await player.setSourceRouting('plugin:lead', 0, { kind: 'bus', name: 'seq-bus-0' })
+    await player.setSourceRouting('plugin:bass', 0, { kind: 'bus', name: 'seq-bus-1' })
     daemon.setSourceRouting.mockClear()
     daemon.setSourceRouting
       .mockRejectedValueOnce(new Error('replay failed'))

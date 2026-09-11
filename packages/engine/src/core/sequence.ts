@@ -6,7 +6,7 @@
 
 import * as path from 'path'
 
-import { AudioEngine } from '../audio/types'
+import { AudioEngine, type SourceRoutingTarget } from '../audio/types'
 import { DaemonProtocolError } from '../audio/rust-engine/errors'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
@@ -158,12 +158,8 @@ export class Sequence {
   private _midiPort?: string // resolved actual port name
   private _midiChannel?: number // 1..16
   private _instrumentDeclared = false
-  /**
-   * Source-routing choke point の冪等キー。bus 名は sequence lifetime 中は安定だが、宣言順
-   * (`instrument()` before/after insert allocation) は両方あるため、成功/進行中 intent をここで
-   * 共有して二重発行を防ぐ。
-   */
-  private _instrumentSourceRoutingBus?: string
+  /** Last successful/in-flight explicit source-routing intent (`none` / `master` / `bus`). */
+  private _instrumentSourceRoutingKey?: string
   private _instrumentSourceRoutingPromise?: Promise<void>
   private _instrumentDetuneWarned = false
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
@@ -977,16 +973,44 @@ export class Sequence {
     }
   }
 
+  private instrumentSourceRoutingTarget(): SourceRoutingTarget {
+    // Use the same realization predicate as audio routing. A missing bus for a line that needs
+    // one is an inconsistent/lost route, so §2.6 makes it `none`, never implicit master.
+    if (this._line.needsBus()) {
+      return this._insertBus ? { kind: 'bus', name: this._insertBus } : { kind: 'none' }
+    }
+    // Fixed instrument gain/pan is the one design-stated exception to lineNeedsBus: it has no
+    // event-side realization and `ensureInsertBusForInstrument()` (kept unchanged) allocates the
+    // bus. Once allocated it remains the source route for that control path.
+    if (this._insertBus) return { kind: 'bus', name: this._insertBus }
+    const hasPlainMasterOutput = this._line
+      .snapshot()
+      .some(
+        (element) =>
+          element.kind === 'output' &&
+          element.dest.kind === 'master' &&
+          !element.thru &&
+          element.db === 0,
+      )
+    return hasPlainMasterOutput ? { kind: 'master' } : { kind: 'none' }
+  }
+
+  private static sourceRoutingKey(target: SourceRoutingTarget): string {
+    return target.kind === 'bus' ? `bus:${target.name}` : target.kind
+  }
+
   /**
-   * The sole instrument → insert routing choke point (#643). Both declaration orders call
-   * here; the marker is installed before the async send so concurrent calls share one request.
+   * The sole instrument source-routing choke point (#643/#883). Every instrument has an
+   * explicit destination, including `none`; changes are serialized so an older async request
+   * can never arrive after a newer score intent and restore stale routing.
    * `unit` is deliberately fixed at 0: the current 1-sequence/1-instrument model renders only
    * the main plugin output.
    */
   private ensureInstrumentSourceRouting(): Promise<void> {
-    if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
-    const bus = this._insertBus
-    if (this._instrumentSourceRoutingBus === bus) {
+    if (!this.isInstrument()) return Promise.resolve()
+    const target = this.instrumentSourceRoutingTarget()
+    const key = Sequence.sourceRoutingKey(target)
+    if (this._instrumentSourceRoutingKey === key) {
       return this._instrumentSourceRoutingPromise ?? Promise.resolve()
     }
     if (!this.audioEngine.setSourceRouting) {
@@ -994,12 +1018,18 @@ export class Sequence {
     }
 
     const name = this.stateManager.getName() || 'sequence'
-    this._instrumentSourceRoutingBus = bus
-    const pending = this.audioEngine
-      .setSourceRouting(`plugin:${name}`, 0, bus)
+    const previous = this._instrumentSourceRoutingPromise
+    this._instrumentSourceRoutingKey = key
+    const pending = (previous ? previous.catch(() => undefined) : Promise.resolve())
+      .then(() => {
+        // A newer declaration superseded this one before it reached the wire. Its queued request
+        // is the only one that should be sent; resolving this stale waiter is intentional.
+        if (this._instrumentSourceRoutingKey !== key) return
+        return this.audioEngine.setSourceRouting?.(`plugin:${name}`, 0, target)
+      })
       .catch((error) => {
-        if (this._instrumentSourceRoutingBus === bus) {
-          this._instrumentSourceRoutingBus = undefined
+        if (this._instrumentSourceRoutingKey === key) {
+          this._instrumentSourceRoutingKey = undefined
         }
         throw error
       })
@@ -1890,6 +1920,17 @@ export class Sequence {
     // rejected a `.midi()` sequence in a `global.linkAudio()` file (#282).
     if (this.isNoteSequence()) {
       return { kind: 'hardware' }
+    }
+    // #883 D2/D2b: this gate must remain after the note-sequence exemption above. MIDI and
+    // instrument dispatch stay on the hardware scheduler; an instrument is silenced by its
+    // explicit SourceRoutingTarget instead of skipping note scheduling here.
+    if (!this._line.hasOutputDestination() && !this._outputChannel) {
+      return {
+        kind: 'skip',
+        reason:
+          `has no output destination. Add .output() to route it to master, ` +
+          `.output("<bus>") / .send("<aux>", db) for a mixer route, or leave it silent.`,
+      }
     }
     if (!this.global.isLinkAudioEnabled()) {
       return { kind: 'hardware' }

@@ -656,7 +656,7 @@ fresh catalog.
 MCP's `list_plugins` / `rescan_plugins` share the same `loadPluginCatalog()` / `runPluginScan()`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1029-1039
+// packages/vscode-extension/src/mcp-server.ts:1030-1040
   server.registerTool(
     'list_plugins',
     {
@@ -773,7 +773,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3422-3432
+// packages/vscode-extension/src/extension.ts:3425-3435
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -876,7 +876,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3813-3829
+// packages/vscode-extension/src/extension.ts:3856-3872
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7478-7490
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7502-7514
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1027,7 +1027,7 @@ RMS is nearly identical and "RMS differs significantly" would be a false asserti
 Instead the VST3 side carries a +7 semitone state and the two are told apart by frequency.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4190-4198
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4194-4202
       const e4Hz = estimateFundamentalHz(capture, segments.e4!)
       const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1056,7 +1056,7 @@ by bus name**, and the render side's `InsertBusStage` holds the processor direct
 rebuild of the same ChildSlot**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6685-6693
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6708-6716
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1144,7 +1144,7 @@ mechanism was unified onto `ApplyEffectChain`, and the protocol doc marks
 `superseded by ApplyEffectChain (#628)`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6274-6282
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -1266,7 +1266,7 @@ applied (the `engaged` wiring is cut)" can be distinguished numerically.
 Removal is `effect([])`.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4503-4509
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4507-4513
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1284,7 +1284,7 @@ PID appeared" at the time of #625; with the rack, **the PID not changing** is th
 of "no respawn = the dry window is gone".
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4361-4374
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4365-4378
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1305,7 +1305,7 @@ R-E3 (replacement with a nonexistent path) asserted "dry — neither A nor B" un
 is prepare-commit, it pins by audio that **B keeps playing even after the failure**.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4716-4731
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4720-4735
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //

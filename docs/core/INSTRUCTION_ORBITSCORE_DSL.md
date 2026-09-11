@@ -3,8 +3,8 @@
 ## OrbitScore 2.0.0 — DSL Specification
 
 > **Product version**: OrbitScore **2.0.0**
-> `ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.2`（拡張は 3.0.0 — 3 つは別軸・§4.4）
-> (audio engine line v3.0 + Pitch DSL v1.1)
+> `ENGINE_VERSION 2.0.0` / `DSL_VERSION 2.0`（拡張は 4.0.0 — 3 つは別軸・§4.4）
+> (audio engine line v3.0 + Pitch DSL v2.0)
 
 This document defines the **OrbitScore DSL**.
 It is the **single source of truth** for the project.
@@ -2260,7 +2260,7 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 > (2026, Epic #224) layered *on top of* the v3.0 audio engine — it is not a predecessor of
 > v3.0 despite the lower number. Read the two as parallel tracks, not a single sequence.
 
-**Current Version**: 拡張 **3.0.0** — audio engine + **v1.2** Pitch DSL (MIDI) — Phases 1/2/3/R/4
+**Current Version**: 拡張 **4.0.0** — audio engine + **v2.0** Pitch DSL (MIDI) — Phases 1/2/3/R/4
 
 - v1.1 Pitch DSL / MIDI (2026, Epic #224): **MIDI output path + symbolic pitch language**,
   layered on the v3.0 audio engine. See "Pitch DSL (v1.1 — MIDI Output)".

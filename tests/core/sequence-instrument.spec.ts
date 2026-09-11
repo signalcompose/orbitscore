@@ -28,6 +28,7 @@ function harness() {
   audio.loadPlugin = vi.fn().mockResolvedValue({})
   audio.pluginNoteOn = vi.fn().mockResolvedValue(undefined)
   audio.pluginNoteOff = vi.fn().mockResolvedValue(undefined)
+  audio.setSourceRouting = vi.fn().mockResolvedValue(undefined)
   const midiOutput: MidiOutput = {
     ensurePort: vi.fn(() => 'IAC'),
     noteOn: vi.fn(),

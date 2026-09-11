@@ -67,7 +67,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:236-288
+// packages/vscode-extension/src/mcp-server.ts:237-289
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -132,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:432-443
+// packages/vscode-extension/src/extension.ts:434-445
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -152,7 +152,7 @@ export interface OrbitScoreToolHandlers {
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1177-1182
+// packages/vscode-extension/src/mcp-server.ts:1178-1183
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -166,7 +166,7 @@ HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を 
 ローカル bind だけでは足りない、という判断も入っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1196-1203
+// packages/vscode-extension/src/mcp-server.ts:1197-1204
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -229,7 +229,7 @@ export function buildMcpServerUrl(port: number): string {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:544-561
+// packages/vscode-extension/src/mcp-server.ts:545-562
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -253,7 +253,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2755-2792
+// packages/vscode-extension/src/extension.ts:2757-2794
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -312,7 +312,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1293-1301
+// packages/vscode-extension/src/extension.ts:1295-1303
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -379,7 +379,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2885-2896
+// packages/vscode-extension/src/extension.ts:2887-2898
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -403,7 +403,7 @@ const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
 拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:143-153
+// packages/vscode-extension/src/extension.ts:144-154
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -418,7 +418,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:306-317
+// packages/vscode-extension/src/extension.ts:307-318
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -547,7 +547,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:103-127
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:104-128
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
 // ...
@@ -563,7 +563,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:226-236
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:227-237
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -582,7 +582,7 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 **何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:215-217
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:216-218
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -603,7 +603,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — stock VS Code と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:713-744
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:714-745
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -645,7 +645,7 @@ teardown は「安全性」の注意書きが繰り返されています。以�
 対処は「プロセスツリーの根だけに signal する」ことです。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:369-402
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:370-403
 async function killHarnessInstances(): Promise<void> {
   const pids = harnessPids()
   if (pids.length === 0) return
@@ -691,7 +691,7 @@ async function killHarnessInstances(): Promise<void> {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1441-1446
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1442-1447
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -864,7 +864,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2051-2065
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2066
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1026,7 +1026,7 @@ export function readGatedSourceEntries(): readonly {
 読み方は 2 通り用意されています。ラチェットは「どのファイルの何行目か」を問わないので、全ソースを連結した文字列を返す `readGatedSources()` を使います。行番号つきで違反を名指ししたい衛生検査のほうは、ファイルごとに「相対パス + 中身」を返す `readGatedSourceEntries()` を使い、`ファイル名:行番号` の形で報告します。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:38-43
+// tests/e2e/gated-assertion-hygiene.spec.ts:42-47
 const offendingLines = (sourceEntries: readonly SourceEntry[], pattern: RegExp): string[] => {
   const isComment = (line: string): boolean => {
     const trimmed = line.trim()
@@ -1076,7 +1076,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 ### アサーション衛生
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:553-562
+// tests/e2e/gated-assertion-hygiene.spec.ts:577-586
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1098,7 +1098,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 stale ガードの 2 本（`keeps the stale guard off cargo targets it can never rebuild` と `still lets the stale guard see the sources the daemon is built from`）は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:681-685
+// tests/e2e/gated-assertion-hygiene.spec.ts:705-709
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1109,7 +1109,7 @@ stale ガードの 2 本（`keeps the stale guard off cargo targets it can never
 9 本目は、ラチェットそのものが**黙って空振りしていないか**を見る生存確認です。`resolveLogCountHelperNames` はヘルパの import を `moduleSpecifier.text.includes('engine-log')` という**ファイル名の文字列一致**で判定しているので、`helpers/engine-log.ts` が rename / 移動されると例外も投げずに解決結果が空になり、provenance 検出器は構造的に無力化されます。そこで「実際の gated corpus から log-count ヘルパが 1 つ以上解決できること」自体を assert しています。`gated-sources.ts` が空リストで throw するのと同じ発想で、**検出器が見えなくなったことを検出器の外側から留める**わけです。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:694-701
+// tests/e2e/gated-assertion-hygiene.spec.ts:718-725
     const resolved = resolvedLogCountHelperNamesAcrossCorpus(entries)
     expect(
       [...resolved].sort(),
@@ -1186,7 +1186,7 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1652-1658
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1659
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1209,7 +1209,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1650-1660
+// packages/engine/src/core/sequence.ts:1680-1690
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1259,7 +1259,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 `handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:240-251
+// packages/vscode-extension/src/extension.ts:241-252
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1277,7 +1277,7 @@ function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:253-272
+// packages/vscode-extension/src/extension.ts:254-273
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1305,7 +1305,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:954-978
+// packages/vscode-extension/src/extension.ts:956-980
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1336,7 +1336,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2730-2741
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2731-2742
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1352,13 +1352,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2749-2750
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2750-2751
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2806-2808
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2807-2809
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

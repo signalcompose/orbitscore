@@ -179,6 +179,7 @@ export interface DiagnosticEntry {
   character: number
   severity: DiagnosticSeverityLabel
   message: string
+  code?: string | number
 }
 export interface FileDiagnostics {
   path: string
