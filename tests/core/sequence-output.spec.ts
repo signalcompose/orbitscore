@@ -295,6 +295,19 @@ describe('Sequence.resolveDispatchChannel() — MIDI exemption under linkAudio (
     })
   })
 
+  // 🔴 上の skip 判定は `global.linkAudio()` を先に呼んでいるので、LinkAudio 経路の
+  // 既存ゲートと区別が付かない。#883 の skip は **LinkAudio と無関係**（`resolveDispatchChannel`
+  // の LinkAudio 分岐より手前）なので、素の設定でも同じ理由で skip することを別に押さえる。
+  it('resolves to skip for an audio sequence with no output even when LinkAudio is off', () => {
+    const seq = new Sequence(global, mockPlayer)
+    seq.audio('/abs/kick.wav')
+
+    const target = seq.resolveDispatchChannel()
+    expect(global.isLinkAudioEnabled()).toBe(false)
+    expect(target.kind).toBe('skip')
+    expect(target.kind === 'skip' && target.reason).toMatch(/has no output destination/)
+  })
+
   it('resolves to skip for an audio sequence with no output', () => {
     global.linkAudio()
     const seq = new Sequence(global, mockPlayer)

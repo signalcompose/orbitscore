@@ -190,6 +190,17 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 | (e) | 同 `Link(_) => FeedDest::Hardware`（`:2147-2148`） | 「PR-3 まで total hardware fallback」 | → `Discard`。instrument → LinkAudio は TS で拒否済み（`sequence.ts:592-597`）なので到達しないが、**到達したら鳴るのではなく黙る**向きに揃える | 未配線 |
 | (f) | instrument スロット解放時の `dest.store(Master)`（`engine_wrap.rs:7657,7855`） | 解放済みスロットが Master を指す | → `store(None)` | 解放済みなので音源は無いが、「失われた routing = Master」の形を残さない |
 
+🔴 **(a)〜(f) の外にもう 1 箇所ある — legacy `SetBusRouting`**（束 S のレビュー round 1 で
+Fable 監査が発見・2026-09-12）。daemon は今も `SetBusRouting` を受理し、`output` 省略かつ
+override 未設定（sentinel 0）の時に `decode_bus_routing_sentinel(0).unwrap_or(BusTarget::Master)`
+で `[Rack, Output(Master), sends]` を install する。**#852 以降 DSL のどの経路からも送られない**
+（TS 側の `busRoutings` は空のまま）ので実害はゼロだが、**この規則に反する唯一の残り**である。
+
+本 PR では触らない: 正しい翻訳が「拒否」と「出口なしの line」の 2 通りあり、DSL から到達しない
+legacy 契約の意味論を、振る舞いを変える束の締めで決めるのは検算の機会に合わない。
+**コマンドごと撤去すれば両方とも不要**になるので [#886](https://github.com/signalcompose/orbitscore/issues/886)
+へ切り出した。
+
 **(c) の依存の列挙（「依存がある」と書く前に grep した結果）**:
 
 | 種別 | 実際 |

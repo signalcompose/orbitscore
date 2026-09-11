@@ -119,11 +119,11 @@ fn start_engine_with_device_switch(
 `Command` を TS 側から受け、`{id, result}` の `OkResponse` か `{id, error}` の `ErrorResponse`
 を返す request/response モデルです。加えて、`id` を持たない一方向の `Event`（`PlayStarted` /
 `PlayEnded` / `StreamStats` / `DaemonError` に加え、#474 で入った `PluginUiClosed` 系）を
-daemon から能動的に push できます。`PROTOCOL_VERSION` は `"0.2"` です。
+daemon から能動的に push できます。`PROTOCOL_VERSION` は `"0.3"` です。
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/protocol.rs:8-61
-pub const PROTOCOL_VERSION: &str = "0.2";
+pub const PROTOCOL_VERSION: &str = "0.3";
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // ...
 /// Handshake フレーム（接続後に daemon が最初に送る）。
@@ -473,7 +473,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1777-1814
+// rust/crates/orbit-audio-native/src/output.rs:1801-1838
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -528,7 +528,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1862-1948
+// rust/crates/orbit-audio-native/src/output.rs:1886-1972
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -628,7 +628,7 @@ master.buffer は常に 2ch なので、デバイス幅のバッファをもう 
 というのがこのバッファの理由です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2331-2335
+// rust/crates/orbit-audio-native/src/output.rs:2355-2359
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -669,7 +669,7 @@ pub const ENGINE_CHANNELS: usize = 2;
 `master.buffer` をデバイス幅の `hw` へ写します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2018-2042
+// rust/crates/orbit-audio-native/src/output.rs:2042-2066
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -865,7 +865,7 @@ publish 先は `MasterLine` が持つ専用の `LineSlot` です。ここで気�
 `true` になって初めて `execute_master_line` が呼ばれ、publish された op 列を順に実行します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1951-1968
+// rust/crates/orbit-audio-native/src/output.rs:1975-1992
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -903,7 +903,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2046-2087
+// rust/crates/orbit-audio-native/src/output.rs:2070-2111
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -954,7 +954,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3243-3260
+// rust/crates/orbit-audio-native/src/output.rs:3267-3284
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

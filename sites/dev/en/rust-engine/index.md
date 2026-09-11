@@ -124,11 +124,11 @@ follows a request/response model: it receives a `Command` of shape `{id, method,
 the TS side and returns either an `OkResponse` (`{id, result}`) or an `ErrorResponse`
 (`{id, error}`). In addition, it can proactively push one-way `Event`s that have no `id`
 (`PlayStarted` / `PlayEnded` / `StreamStats` / `DaemonError`, plus the `PluginUiClosed` family
-introduced by #474). `PROTOCOL_VERSION` is `"0.2"`.
+introduced by #474). `PROTOCOL_VERSION` is `"0.3"`.
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/protocol.rs:8-61
-pub const PROTOCOL_VERSION: &str = "0.2";
+pub const PROTOCOL_VERSION: &str = "0.3";
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // ...
 /// Handshake フレーム（接続後に daemon が最初に送る）。
@@ -490,7 +490,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1777-1814
+// rust/crates/orbit-audio-native/src/output.rs:1801-1838
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -546,7 +546,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1862-1948
+// rust/crates/orbit-audio-native/src/output.rs:1886-1972
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -646,7 +646,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2331-2335
+// rust/crates/orbit-audio-native/src/output.rs:2355-2359
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -687,7 +687,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2018-2042
+// rust/crates/orbit-audio-native/src/output.rs:2042-2066
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -892,7 +892,7 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1951-1968
+// rust/crates/orbit-audio-native/src/output.rs:1975-1992
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -933,7 +933,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2046-2087
+// rust/crates/orbit-audio-native/src/output.rs:2070-2111
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -984,7 +984,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3243-3260
+// rust/crates/orbit-audio-native/src/output.rs:3267-3284
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

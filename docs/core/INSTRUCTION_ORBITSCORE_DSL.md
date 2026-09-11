@@ -1810,10 +1810,11 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 **出口を 1 つも書かないラインは無音になる。** 暗黙の `output(master)` は**付かない** —
 sequence も sum / aux バスも instrument も同じ規則である。
 
-> ⏳ **エディタの診断は束 S で入る**（#883 設計 D7）: 出口の無い発音シーケンスに
-> Warning（`output-missing`）+ quick fix、aux 宛て `send` だけのラインに
-> Information（`dry-not-routed`）。**まだ実装されていない** — 本節の規則（spec 先行・
-> 運用規則 6）が先に確定し、診断とセマンティクスは同じリリースで出る。
+✅ **実装済み**（束 S・PR #885・#883 設計 D7）: エディタは出口の無い発音シーケンスに
+**Warning（`output-missing`）+ quick fix**、aux 宛て `send` だけのラインに
+**Information（`dry-not-routed`）** を出す（`packages/vscode-extension/src/diagnostics-analysis.ts` の
+`analyzeMissingOutput()`・quick fix は `extension.ts` の CodeActionProvider）。
+**書き忘れは評価する前に分かる。**
 
 ```js
 kick.audio("k.wav").play()             // 🔴 無音（出口が無い）

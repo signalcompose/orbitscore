@@ -329,6 +329,17 @@ function escapeRegExp(value: string): string {
 }
 
 /**
+ * 出口とみなすメソッドのパターン。**レシーバを含まない** — 行がどのシーケンスのものかは
+ * 呼び出し側が別に判定するので、ここはチェーンのどの位置に来ても等しくマッチする。
+ */
+const MIDI_CALL = /\.\s*midi\s*\(/
+const OUTPUT_CALL = /\.\s*output\s*\(/
+const MASTER_ACCESS = /\.\s*master\b/
+const SEND_CALL = /\.\s*send\s*\(\s*(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))/g
+/** 診断の発火点。`replay(` を拾わないよう語境界を前に置く。 */
+const PLAY_CALL = /\bplay\s*\(/g
+
+/**
  * Find sounding sequence lines whose text declares no destination, plus the narrower aux-only
  * send case where the wet signal is routed but the dry signal probably was meant to remain.
  */
@@ -345,32 +356,31 @@ export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue
   }
 
   const issues: OutputRoutingDiagnosticIssue[] = []
-  // 🔴 パターンは**シーケンスごとに 1 度だけ**組み立てる。行ループの内側で `new RegExp` を
-  // 呼ぶと、1 打鍵あたり `シーケンス数 × 行数 × (3 + バス数)` 回のコンパイルになる
-  // （診断は `onDidChangeTextDocument` で打鍵ごとに走る）。この規律は以前この関数に
-  // 明記されていたが PR #885 で一度失われた — 同じ PR の `dsl-completion-context.ts` が
-  // `VAR_NODE_PATTERNS` で正しい形を実践しているので、そちらと揃える。
-  const escapedSumNames = [...sumNames].map((target) => [target, escapeRegExp(target)] as const)
-  const escapedAuxNames = [...auxNames].map((target) => [target, escapeRegExp(target)] as const)
+  // 🔴 レシーバの判定は **「行がこのシーケンスのものか」と「どのメソッドか」の 2 つ**に分ける。
+  // 1 本の正規表現で兼ねると「名前の直後」しか見えず、`kick.audio("k.wav").send("verb", -6)`
+  // の宛先が消えて、同じ意味の `kick.send("verb", -6)` と違う診断が出る。チェーン上の位置は
+  // MX.3 の意味（プリ / ポスト）を持つが、**出口として数えるかどうかは位置に依らない**。
+  // 実際に `.output(` だけがチェーン対応で、`send` / `master` / 裸形バス / `play` は直後だけを
+  // 見ており、チェーン形の譜面に偽の `output-missing` を出していた（PR #885 のレビューで
+  // code-reviewer と Fable 監査が独立に到達）。
+  //
+  // メソッド側のパターンはシーケンス名に依存しないのでモジュール定数に置く。バス名のパターンも
+  // **文書ごとに 1 度だけ**組み立てる — 行ループの内側で `new RegExp` を呼ぶと、1 打鍵あたり
+  // `シーケンス数 × 行数 × バス数` 回のコンパイルになる（診断は `onDidChangeTextDocument` で
+  // 打鍵ごとに走る）。
+  const sumPatterns = [...sumNames].map(
+    (target) => [target, new RegExp(`\\.\\s*${escapeRegExp(target)}\\b`)] as const,
+  )
+  const auxPatterns = [...auxNames].map(
+    (target) => [target, new RegExp(`\\.\\s*${escapeRegExp(target)}\\b`)] as const,
+  )
   for (const name of sequenceNames) {
-    const escapedName = escapeRegExp(name)
-    const receiver = `\\b${escapedName}\\s*\\.\\s*`
-    const chainReceiver = `\\b${escapedName}\\b[^\\n]*\\.\\s*`
-    const midiPattern = new RegExp(`${receiver}midi\\s*\\(`)
-    const outputPattern = new RegExp(`${chainReceiver}output\\s*\\(`)
-    const masterPattern = new RegExp(`${receiver}master\\b`)
-    const sendPattern = new RegExp(
-      `${receiver}send\\s*\\(\\s*(?:["']([^"']+)["']|([A-Za-z_$][\\w$]*))`,
-      'g',
-    )
-    const sumPatterns = escapedSumNames.map(
-      ([target, escaped]) => [target, new RegExp(`${receiver}${escaped}\\b`)] as const,
-    )
-    const auxPatterns = escapedAuxNames.map(
-      ([target, escaped]) => [target, new RegExp(`${receiver}${escaped}\\b`)] as const,
-    )
-    const hasMidi = codeLines.some((line) => midiPattern.test(line))
-    if (hasMidi) continue
+    const ownsLine = new RegExp(`\\b${escapeRegExp(name)}\\b`)
+    const ownLines: Array<{ index: number; text: string }> = []
+    for (let index = 0; index < codeLines.length; index += 1) {
+      if (ownsLine.test(codeLines[index])) ownLines.push({ index, text: codeLines[index] })
+    }
+    if (ownLines.some(({ text }) => MIDI_CALL.test(text))) continue
 
     let hasDestination = false
     let hasDryTerminal = false
@@ -378,19 +388,15 @@ export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue
     const auxTargets = new Set<string>()
     const sumTargets = new Set<string>()
 
-    for (const line of codeLines) {
-      if (outputPattern.test(line)) {
-        hasDestination = true
-        hasDryTerminal = true
-      }
-      if (masterPattern.test(line)) {
+    for (const { text: line } of ownLines) {
+      if (OUTPUT_CALL.test(line) || MASTER_ACCESS.test(line)) {
         hasDestination = true
         hasDryTerminal = true
       }
 
       // `matchAll` は species で regex を複製して複製側の lastIndex だけを進めるので、
       // `g` 付きの共有パターンを使い回しても状態は汚れない。
-      for (const match of line.matchAll(sendPattern)) {
+      for (const match of line.matchAll(SEND_CALL)) {
         hasDestination = true
         const target = match[1] ?? match[2]
         if (sumNames.has(target)) sumTargets.add(target)
@@ -421,9 +427,8 @@ export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue
         : undefined
     if (!code) continue
 
-    const playPattern = new RegExp(`${receiver}play\\s*\\(`, 'g')
-    for (let lineIndex = 0; lineIndex < codeLines.length; lineIndex += 1) {
-      for (const match of codeLines[lineIndex].matchAll(playPattern)) {
+    for (const { index: lineIndex, text } of ownLines) {
+      for (const match of text.matchAll(PLAY_CALL)) {
         const startCol = match.index ?? 0
         const aux = [...auxTargets][0]
         issues.push({

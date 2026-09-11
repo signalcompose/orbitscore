@@ -502,7 +502,7 @@ stateDiagram-v2
 `clearRunTimer()` が先に走るようになっています。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2102-2130
+// packages/engine/src/core/sequence.ts:2110-2138
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

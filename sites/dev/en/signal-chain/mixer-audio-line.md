@@ -70,7 +70,7 @@ bus carries its own output target and send targets).
 The DSL samples from the spec, quoted verbatim from its Markdown:
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1841-1845
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1842-1846
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -79,7 +79,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1932-1934
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1933-1935
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -430,7 +430,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2550-2576
+// rust/crates/orbit-audio-native/src/output.rs:2574-2600
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -490,7 +490,7 @@ place", it now "executes a per-stage sequence of operations from the top". The o
 these three.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1062-1087
+// rust/crates/orbit-audio-native/src/output.rs:1077-1102
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,7 +530,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2585-2611
+// rust/crates/orbit-audio-native/src/output.rs:2609-2635
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -566,7 +566,7 @@ as an `Output`. `Render` / `Link` are still **rejected at install time** (`Pan` 
 it directly into RT. Details in the next heading).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1483-1495
+// rust/crates/orbit-audio-native/src/output.rs:1498-1510
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -595,7 +595,7 @@ both master-line execution (`execute_master_line`) and the post-loop with code t
 L/R.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2265-2284
+// rust/crates/orbit-audio-native/src/output.rs:2289-2308
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
     if ramp.is_settled() {
@@ -623,7 +623,7 @@ Turning a position into L/R coefficients was factored out into `line_pan_coeffic
 **at the ramp's start and end positions**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2246-2262
+// rust/crates/orbit-audio-native/src/output.rs:2270-2286
 #[inline]
 fn line_pan_coefficients(pan: f32) -> (f32, f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
@@ -676,7 +676,7 @@ devices are in place to preserve the semantics of the old API.
 The first is `effective_line_output_dest`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1525-1536
+// rust/crates/orbit-audio-native/src/output.rs:1540-1551
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -708,7 +708,7 @@ replacement becomes a question. `LineExchange`'s answer is "RT does one Acquire 
 belongs to control".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1240-1245
+// rust/crates/orbit-audio-native/src/output.rs:1255-1260
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -727,7 +727,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2478-2495
+// rust/crates/orbit-audio-native/src/output.rs:2502-2519
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -1051,7 +1051,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:2141-2173`), which
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2156-2169
+// rust/crates/orbit-audio-native/src/output.rs:2180-2193
             let dest = match slot.dests[unit].load() {
                 SourceDest::None => FeedDest::Discard,
                 SourceDest::Master => FeedDest::Hardware,
@@ -1136,7 +1136,7 @@ expanded the target to the explicit three values `none / master / bus`. Regardle
 order, only the newest destination derived from the score crosses the wire.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:995-1029
+// packages/engine/src/core/sequence.ts:1003-1037
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()
@@ -1375,7 +1375,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5297-5302
+// rust/crates/orbit-audio-native/src/output.rs:5321-5326
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

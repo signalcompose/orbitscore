@@ -947,13 +947,28 @@ impl SourceDestCell {
             SourceDest::Bus(index) if index < MAX_INSERT_BUS_STAGES => Self::BUS_BASE + index,
             SourceDest::Link(index) if index < MAX_LINK_CHANNELS => Self::LINK_BASE + index,
             SourceDest::Bus(_) | SourceDest::Link(_) => {
+                // 🔴 §2.6 は「表現できない routing は無音」だが、**仕様上の無音と不変条件違反は
+                // 区別が付かなければならない**。`[profile.release]` は `debug-assertions` を
+                // 上書きしていない（既定 false）ので、`debug_assert!` は出荷ビルドから消える。
+                // それだけだと「原因不明の無音」になり、ライブ中に書き忘れとの区別が付かない。
+                // `encode` は制御プレーン（`set_source_routing` の JSON-RPC ハンドラと
+                // instrument の差し替え / 解放）からしか呼ばれないので stderr に書いてよい。
+                // 🔴 RT から `store()` を呼ぶ経路を足すなら、この行を先に畳むこと。
                 #[cfg(not(test))]
-                debug_assert!(false, "source destination was not validated");
+                {
+                    eprintln!(
+                        "[output] source destination was not validated: {dest:?} — routing to silence"
+                    );
+                    debug_assert!(false, "source destination was not validated");
+                }
                 Self::NONE
             }
         }
     }
 
+    /// 🔴 `decode` は RT コールバック（`collect_source_feeds`）から呼ばれるので、不正値でも
+    /// **ログを出さない**。唯一の書き手である `encode` が制御プレーン側で痕跡を残すため、
+    /// ここが黙って `None` に倒れても原因を追える。
     fn decode(value: usize) -> SourceDest {
         match value {
             Self::NONE => SourceDest::None,
@@ -1597,6 +1612,11 @@ impl InsertBusStage {
 
     /// この stage の明示済み primary output を差し替える。sum の member 等に使う（MX.1）。
     /// target index の妥当性（自分より後ろ）は構築 API 側で検証する。
+    ///
+    /// 🔴 **前提: line が既に Output op を持っていること。** #883 で `default_bus_line_ops()` が
+    /// `[Rack]`（出口なし）になったので、`new()` 直後の stage には Output op が無く、その状態で
+    /// 呼ぶと **target は黙って捨てられる**。明示 master から始めたいなら
+    /// `with_explicit_master()` を先に通すこと。
     pub fn with_output_target(self, target: BusTarget) -> Self {
         let mut ops = self.line.ops_snapshot_during_construction();
         if let Some(LineOp::Output(output)) =
@@ -1613,6 +1633,10 @@ impl InsertBusStage {
     }
 
     /// 明示済み primary output に複数の send（aux/return への post-fader copy・MX.3）を足す。
+    ///
+    /// 🔴 **前提: line が既に Output op を持っていること**（`with_output_target` と同じ）。
+    /// `[Rack]` 既定の stage に対して呼ぶと `expect` で panic する。送り先だけを足す API なので
+    /// 「出口が無い line」は表現できない — 出口なしのまま残したいなら呼ばない。
     pub fn with_sends(self, sends: Vec<BusSend>) -> Self {
         let mut ops = self.line.ops_snapshot_during_construction();
         let primary = ops

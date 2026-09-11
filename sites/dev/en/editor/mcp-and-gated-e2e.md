@@ -1219,7 +1219,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1666-1676
+// packages/engine/src/core/sequence.ts:1674-1684
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

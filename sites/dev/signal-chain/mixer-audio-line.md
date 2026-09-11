@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1841-1845
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1842-1846
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1932-1934
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1933-1935
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -418,7 +418,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2550-2576
+// rust/crates/orbit-audio-native/src/output.rs:2574-2600
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -473,7 +473,7 @@ post-loop の中身が「`effective_targets[i]` を見て 1 箇所に足す」�
 「stage ごとの命令列を頭から実行する」へ置き換わりました。命令の型はこの 3 つです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1062-1087
+// rust/crates/orbit-audio-native/src/output.rs:1077-1102
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -512,7 +512,7 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2585-2611
+// rust/crates/orbit-audio-native/src/output.rs:2609-2635
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -548,7 +548,7 @@ pub enum LineOp {
 詳しくは次の見出し）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1483-1495
+// rust/crates/orbit-audio-native/src/output.rs:1498-1510
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -575,7 +575,7 @@ pub enum LineOp {
 両方にある `LineOp::Pan(_)` 腕を、実際に L/R を掛ける処理へ置き換えます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2265-2284
+// rust/crates/orbit-audio-native/src/output.rs:2289-2308
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
     if ramp.is_settled() {
@@ -602,7 +602,7 @@ fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
 `apply_line_pan` はもうここを直接計算せず、**ランプの始点と終点でこの関数を呼ぶだけ**です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2246-2262
+// rust/crates/orbit-audio-native/src/output.rs:2270-2286
 #[inline]
 fn line_pan_coefficients(pan: f32) -> (f32, f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
@@ -653,7 +653,7 @@ golden は丸め誤差以外動かず**、動くのは「rack を挟んでから
 1 つめが `effective_line_output_dest` です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1525-1536
+// rust/crates/orbit-audio-native/src/output.rs:1540-1551
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -685,7 +685,7 @@ line program は control スレッドが作って RT スレッドが読むので
 回収は control 側」です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1240-1245
+// rust/crates/orbit-audio-native/src/output.rs:1255-1260
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -704,7 +704,7 @@ callback の最後に `finish_generation()` で世代を進めます。**alloc /
 共有している**点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2478-2495
+// rust/crates/orbit-audio-native/src/output.rs:2502-2519
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -1024,7 +1024,7 @@ feed の収集は `collect_source_feeds`（`output.rs:2141-2173`）が行い、u
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2156-2169
+// rust/crates/orbit-audio-native/src/output.rs:2180-2193
             let dest = match slot.dests[unit].load() {
                 SourceDest::None => FeedDest::Discard,
                 SourceDest::Master => FeedDest::Hardware,
@@ -1107,7 +1107,7 @@ PR-2（TS 側）は instrument の `SetSourceRouting` 発行を 1 箇所に集�
 wire を通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:995-1029
+// packages/engine/src/core/sequence.ts:1003-1037
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()
@@ -1335,7 +1335,7 @@ master gain の**手前**に来ます。
 ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5297-5302
+// rust/crates/orbit-audio-native/src/output.rs:5321-5326
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

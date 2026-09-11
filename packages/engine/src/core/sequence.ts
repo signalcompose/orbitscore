@@ -970,7 +970,15 @@ export class Sequence {
     // Use the same realization predicate as audio routing. A missing bus for a line that needs
     // one is an inconsistent/lost route, so §2.6 makes it `none`, never implicit master.
     if (this._line.needsBus()) {
-      return this._insertBus ? { kind: 'bus', name: this._insertBus } : { kind: 'none' }
+      if (this._insertBus) return { kind: 'bus', name: this._insertBus }
+      // 🔴 ここは「書かれていない無音」ではなく**不変条件違反**である。§2.6 どおり無音へ倒すが、
+      // 痕跡を残さないと「書き忘れ」と区別が付かない。今日は `needsBus()` を立てる全経路
+      // （`effect()` / `gain()` / `pan()` / `applyOutputElement()`）が同じ呼び出しの中で
+      // 同期的に `_insertBus` を確保するので到達しない — 到達したらその不変条件が壊れている。
+      this.logSkipOnce(
+        'needs an insert bus but has none — the route was lost. Routing the instrument to silence.',
+      )
+      return { kind: 'none' }
     }
     // Fixed instrument gain/pan is the one design-stated exception to lineNeedsBus: it has no
     // event-side realization and `ensureInsertBusForInstrument()` (kept unchanged) allocates the
