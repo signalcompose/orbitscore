@@ -10,11 +10,11 @@ daemon (`orbit-audio-daemon`), the plugin hosts, and the standard plugins all sh
 OrbitScore is distributed as a `.vsix` on **[GitHub Releases](https://github.com/signalcompose/orbitscore/releases)**.
 It is not published on the VS Code Marketplace or Open VSX.
 
-1. Download `orbitscore-<version>.vsix` from the latest release
+1. Download `orbitscore-darwin-arm64-<version>.vsix` from the latest release
 2. In VS Code: **Extensions** → `…` menu → **Install from VSIX…**, or from a terminal:
 
 ```bash
-code --install-extension orbitscore-<version>.vsix
+code --install-extension orbitscore-darwin-arm64-<version>.vsix
 ```
 
 Updating works the same way — install the newer `.vsix` over the old one.

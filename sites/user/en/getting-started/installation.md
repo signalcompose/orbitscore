@@ -27,7 +27,11 @@ the binaries that host plugins. There is nothing else you need to install.
 
 ### Step 1: Download the .vsix File
 
-Open [GitHub Releases](https://github.com/signalcompose/orbitscore/releases) and download the latest `orbitscore-*.vsix` file.
+Open [GitHub Releases](https://github.com/signalcompose/orbitscore/releases) and download the latest `orbitscore-darwin-arm64-*.vsix` file. It is under **Assets** at the bottom of the release.
+
+::: tip Straight to the newest one
+[The latest release](https://github.com/signalcompose/orbitscore/releases/latest) carries the install steps on the page itself.
+:::
 
 ### Step 2: Install the Extension in VS Code
 
@@ -46,10 +50,10 @@ Double-click the downloaded `.vsix` file. VS Code opens automatically and the in
 
 #### Method C: From the Command Line (Terminal)
 
-Open a terminal and run the following command. Replace the `orbitscore-*.vsix` part with the actual file name.
+Open a terminal and run the following command. Replace the `orbitscore-darwin-arm64-*.vsix` part with the actual file name.
 
 ```text
-code --install-extension orbitscore-*.vsix
+code --install-extension orbitscore-darwin-arm64-*.vsix
 ```
 
 If you are using Cursor, type `cursor` instead of `code`.
