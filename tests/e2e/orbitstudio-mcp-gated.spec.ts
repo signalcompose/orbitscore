@@ -2729,6 +2729,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // otherwise the highlight hops between notes instead of keeping time.
       const dslLines = [
         'var global = init GLOBAL',
+        // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
+        // 全部 `global.key("C")` を持っているが、ここだけ欠けており、**共有アプリに残った key を
+        // 継承して偶然通っていた**（#883 束 C で先行譜面を変えたら露見した）。譜面が自分の前提を
+        // 書いていない状態そのものが #883 が消そうとしているものなので、ここで自足させる。
+        'global.key("C")',
         'global.tempo(120)',
         'var ph654 = init global.seq',
         'ph654.beat(4 by 4).length(1)',

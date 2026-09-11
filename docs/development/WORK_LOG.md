@@ -85,6 +85,47 @@ Test Files  160 passed | 4 skipped (164)
 - 実現の省略の述語が `sequence.ts` に inline。設計 §2.3 は `audio-line.ts` の純関数を指定しており、
   束 S で同じ述語が要る（main のブリーフが `audio-line.ts` を範囲外にしたため。Codex の落ち度ではない）
 
+#### 🔴 実機 gated が退行を 1 件捕まえた（`ph654`）— 束 C が**露見させた**既存の潜在欠陥
+
+1 回目の gated: **1 failed / 38 passed**。
+
+```
+ERROR: Sequence 'ph654': MIDI degrees need a root. Declare global.key("C") (or set seq.root()).
+```
+
+ユニット 2352 件・lint・docs:check が全部緑で、**golden も 1 つも動いていない**状態で、実機だけが落ちた。
+
+**原因**: `ph654` の譜面は `play(1, 0, 3, 0)` で**度数**を使うのに `global.key("C")` を持っていない。
+他の instrument 譜面は **10 本すべてが持っている**（`:2078 :2117 :2160 :2216 :2272 :2316 :2367 :2865 :2967 :3336`）。
+gated suite は **1 つの VS Code / エンジンを共有**するので、`ph654` は**先行譜面が設定した key を
+継承して偶然通っていた**。束 C が先行譜面に `.output()` を足したことでその漏れが起きなくなり露見した。
+
+🔴 **これは #883 の grand truth そのもの** — 譜面が他ファイルの残留状態に依存していた。
+修正は「譜面に自分の前提を書かせる」（`global.key("C")` を追加）であって、テストを通すための
+書き換えではない。**なぜ今まで通っていたか**をコメントに残した。
+
+#### 実機 gated（2 回目・main が sandbox 外で）
+
+```
+Test Files  1 passed (1)
+     Tests  39 passed | 1 skipped (40)
+  Duration  685.13s
+```
+
+skip 1 件は E2E-4/E2E-5（>=4ch デバイス不在・既知）。
+
+🔴 **X2 が実測で通った** — 設計が確度「中」としていた「実現の省略は bit 同一クラス」が裏づけられた:
+
+```
+[#883 X2] default-master RMS: {"omittedRms":0.08701663329273443,
+                               "explicitRms":0.08701663329503133}
+```
+
+| 判定 | 実測 | 閾値 |
+|---|---|---|
+| `output()` ≡ `output("master")` | 相対差 **2.6e-11**（11 桁一致） | ≤ 0.02 |
+| `output()` ≈ `noBus` golden（0.0846173） | 約 **2.8%** | ≤ 12% |
+
 #### 関連
 
 #883 / 設計 §2.3 §4 §5.3 §7.1 §7.2 / 完了条件 D3・D9・D10
