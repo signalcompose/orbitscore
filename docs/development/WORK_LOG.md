@@ -51,6 +51,19 @@ PR #895 は `// FILE:START-END` の**コードブロック引用**（`docs:check
 置換は 40 件の行番号付き引用と 18 件の散文言及で、**ja / en の件数一致を assert して**適用した
 （片方だけ直る事故を機械で防いだ）。
 
+### DSL 正本（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）も 5 箇所直した
+
+MX.4 の「今日の現在地」表が `SetBusRouting` の kind 拒否と forward-only 拒否を
+`engine_wrap.rs:7212-7216` / `:7237-7241` / `:5802-5806` / `:7207-7211` で引いていた。
+実体は `engine_wrap/bus_lines.rs` の `set_bus_routing` にある:
+
+| 規則 | 現在地 |
+|---|---|
+| `output '<name>' must be a sum bus` | `engine_wrap/bus_lines.rs:299-303` |
+| `send '<name>' must be an aux bus` | `engine_wrap/bus_lines.rs:325-329` |
+| forward-only（output） | `engine_wrap/bus_lines.rs:292-296` |
+| forward-only（send） | `engine_wrap/bus_lines.rs:318-322` |
+
 ### frontmatter は触っていない（意図的）
 
 `verified-against` を新しい SHA へ上げると「章全体を再検証した」と主張することになる。
