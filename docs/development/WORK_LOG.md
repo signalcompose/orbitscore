@@ -17,6 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): move view, docs and flash out of extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 C**。純粋な移動。
+
+| 新設 | コード行 |
+|---|---|
+| `engine-view-provider.ts` | **243** |
+| `flash-config.ts` | **222** |
+| `docs-panels.ts` | **104** |
+
+`extension.ts` は 1,991 → **1,461** コード行（開始時 2,779 の **53%**）。
+
+🔴 既存の `engine-view.ts` へは入れていない。あれは header で「vscode 非依存」を宣言した
+純モジュールで、vscode に触る配線は**対になる新ファイル**へ置く（設計 §4.1 / D4）。
+
+### 🔴 引用が緑でも散文は検査されない（3 回目）
+
+`vscode-architecture.md` が「`engine-view.ts` の純関数がノードを組み立て、**`extension.ts` の**
+`EngineViewProvider` がそれを `vscode.TreeItem` に写します」と書いていた。ja/en とも直した。
+
+**3 束連続で同じ形の腐りが出ている**（束 A: 行数と状態の置き場所 / 束 B: stdout ルータの帰属 /
+束 C: `EngineViewProvider` の帰属）。`docs:check` は**行が合っているか**しか見ないので、
+**移した関数名で散文を横断検索する**のを各束の手順に入れている。
+
+### 🔴 委譲先と同じツリーで作業して衝突させた（main の運用ミス）
+
+束 B の Codex が正直に報告した: 検証中に main（私）が `npm test` を並走させ、さらに
+コミットまでしたため、**Codex は一度も全テストを完走できなかった**（exit 130 で停止）。
+Codex は「2,488 passed は自分の出力ではない」と明記して報告を拒んでいる。**正しい態度である。**
+
+memory `delegate-work-needs-its-own-worktree` がそのまま当たっている。
+検証は main の仕事なので結果に影響は無いが、**委譲先の時間を無駄にした**。
+以後の束では、ブリーフから「全テストを回す」を外し、**focused な spec だけを求める**。
+
+なお Codex は **AST 比較で 26 関数すべての本文が IDENTICAL** であることを確認しており、
+これは main の residual 分類より強い証拠である。
+
+### 検証
+
+`npm test` **2,488 passed**（4 束連続で不変・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`engine-command-awaits.spec` 10 passed（設計 §7.4 の追加 done）/ `public-surface.spec` 38 passed。
+
 ### refactor(extension): move the engine wiring out of extension.ts (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
@@ -1841,138 +1886,6 @@ skip 1 件は E2E-4/E2E-5（>=4ch デバイス不在・既知）。
 #### 関連
 
 #883 / 設計 §2.3 §4 §5.3 §7.1 §7.2 / 完了条件 D3・D9・D10
-
----
-
-### docs(spec): land the #883 rulings in the normative specs (bundle 0) (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: ✅ 束 0 完了（spec 先行・運用規則 6）。実装（束 C / S）は未着手
-
-#883 の裁定 6 件を正本へ落とした。**実装より先に spec を直す**（運用規則 6）。
-
-| 文書 | 改訂 |
-|---|---|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 | 暗黙終端の段落を「**出口は書かれたものがすべて。書かないラインは無音**」へ置換。旧規則は撤回理由（`send(aux)` と `send(sum)` で正しい振る舞いが逆）付きで引用ブロックに残した。`destination` を省略可（既定 `"master"`）に |
-| `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.2 規範 (4) | 🔴 **裁定 6 と逆を向いていた**（「マスターもレシーバである」「master も宛先を持てる 1 レシーバ」）→「**master トラックは `global` が所有する**。`master.<...>` のレシーバ表面は設けない。device 出口 1,2 は定数なので『未設定は無音』の**適用対象外**」へ |
-| 同 SC.2 規範 (6) | 「暗黙 master(1,2) を持つ」を **(i) ノードの存在**だけに限定。(ii) 自動ルーティングの廃止を明記。決定 #75 は `.output()` を書いても import / マニフェスト不要なので引き続き満たされる |
-| `docs/design/611-output-line-design.md` §2.1 | 撤回の追記。**却下判断が aux しか見ていなかった**こと、§9 の互換要件も制約でなくなったこと |
-| `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` | 決定 **#78**（暗黙終端の廃止・P2 却下理由 = 不連続）と **#79**（master は global が所有）を追加。決定 #75 に「#78 で意味を (i) に限定」の注記 |
-| `docs/planning/DEVELOPMENT_MAP.md` §3 | 🔴 **凍結線の前提が崩れた**ことを事実が変わった瞬間に記録（§5.1b）。凍結線は 4.0.0 へ |
-
-#### ゲート
-
-- `npm run docs:check`: **948 引用 / 0 failed**。spec の行ずれで 4 件落ちたので `--fix` を実行し、
-  🔴 **着地先の内容を目視で照合**（`global.sum("drum") // group bus 宣言（冪等）` /
-  `global.aux("rev") // return bus 宣言` が期待スニペットと一致）。
-  memory `citation-fix-can-land-on-the-wrong-function`「緑は『行が合った』証明」に従う
-- `tests/docs/`: 5 passed（`planning-issue-state` のラチェット含む）
-
-#### 関連
-
-#883 / #611 / 決定 #75 #78 #79
-
----
-
-### design: explicit output routing — drop the implicit master terminal (#883) (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: 設計完了・裁定 6 件すべて確定（実装未着手）
-**成果物**: `docs/design/883-explicit-output-routing-design.md`（493 行）
-
-#### 発端
-
-LinkAudio の標準プラグイン化を検討する中で、`thru:` の意味論を追ったところ
-**暗黙 master 終端の欠陥**が出た。owner 裁定で LinkAudio より先にこちらを片付けることにした。
-
-🔴 **実測した欠陥**: `send()` は sum バスも受け取る（`sequence.ts:661-665`）。
-`send` は `output(dest, thru: true)` の糖衣で**終端ではない**ので暗黙 master が付く。結果、
-
-```js
-global.sum("drums")
-kick.send(drums, -6)
-snare.send(drums, -6)
-```
-
-で master が受け取るのは **kick の dry + snare の dry + (kick+snare の合算)** =
-**各素材が 2 回**。`drums` に挿したグルーコンプを **dry が迂回する**。
-
-#### owner 裁定（grand truth）
-
-> 音楽記述言語としての OrbitScore DSL は「**テキストが完全な真実**」であるべき
-
-暗黙終端を**完全に廃止**する（P3）。「出口を 1 つも書かなければ暗黙」案（P2）も却下
-— `kick.play()` は鳴るのに `.send(verb,-12)` を 1 つ足した瞬間に master への dry が消える
-**不連続**が残るため。譜面の下位互換は担保しない（owner「そっちを直せばいい」）。
-
-#### 設計が覆した #883 の前提
-
-| # | 訂正 |
-|---|---|
-| 1 | 暗黙 master の実体は **1 箇所ではなく 4 箇所**（`program()` の合成 / バス無し audio の直接描画 / daemon のバス既定ライン / instrument の `target:null`）。A だけ消しても `kick.play()` は鳴り続ける |
-| 2 | `.output()` 必須化は **9 本目で throw**（`SEQUENCE_EFFECT_BUS_POOL_SIZE = 8`）。出荷 example の **4 本**が 8 を超える（17 / 16 / 13 / 12） |
-| 3 | `program()` は `elements` に完全には畳まない（`[rack]` の位置マーカーは routing ではない） |
-
-#### main の審査で出た指摘（4 件・すべて反映）
-
-1. 🔴 **固定上限は「避けるもの」ではなく「撤廃が裁定済みのもの」**（owner「実害ではない。正しく治すだけ」）。
-   Q-598-5「マシンの上限まで使える」/ doc 662 §10「上限を決めない対象に**トラック / インスト**を含む」/ #663。
-   → instrument の常時バス確保を撤回し、`SetSourceRouting.target` を明示 3 値へ（固定上限への依存が 1 行も増えない形）
-2. skip は `resolveDispatchChannel()` の **`isNoteSequence()` 早期 return より後ろ**に置く。
-   前に置くと **MIDI が無音**（同じ箇所のコメントが #282 で一度踏んだと記録）
-3. `send(aux)` と `send(sum)` で**正しい振る舞いが逆**（aux は dry が残るのが正しい / sum は誤り）。
-   611 §2.1 が P2 を却下した時に見落としていた場合分け
-4. 🔴 **失敗時の向きが「鳴る」になっている** — 横断規則を 1 つ置いた:
-   「routing 状態が未設定・表現不能・失われた時、その信号はどこにも加算されない」。
-   適用 6 箇所（`encode` / `decode` / daemon 既定ライン / `FeedDest` 変換 2 / スロット解放）。
-   副産物として **F2（TS の push 順序が狂うと鳴る）が消滅**した — 最悪の状態が無音になったため
-
-#### 裁定 6 件（owner 2026-09-11）
-
-`[rack]` 前置は残す / `output-missing` = Warning / `dry-not-routed` = Information /
-`SetSourceRouting.target` を明示 3 値へ（一方通行）/ 実現の省略を採る /
-🔴 **master トラックは `global` が所有する**。
-
-最後の 1 件は owner 逐語「マスタートラックは global が持っている、でいいのでは？」。
-`master.output(...)` / `master.effect(...)` という表面は**作らない**。マスタリングは
-`global.effect(["Comp", Gain(db: -3), "Limiter"])` で今日すでに書ける（`global.ts:445`・PH.2）。
-違う出力を使いたければ aux を作ってそちらへ集める（owner 同日）。
-
-🔴 **この裁定は `SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.2 規範 (4) と逆を向いている**
-（今日は「マスターもレシーバである」と書いてある）。**束 0 で書き換える**。
-
-#### 版
-
-**4.0.0 / `DSL_VERSION` 2.0**。3.0.0 を major にした理由（`send()` の dB 化で譜面の意味が変わる）と
-同じクラス — `kick.play()` が「鳴る」→「鳴らない」に変わる。
-
-#### 束
-
-**0**（spec 先行・main 直行）→ **C**（振る舞いを変えない）→ **S**（振る舞いを変える）。
-C を先に置くのは「**golden が 1 つも動かない**」ことでしか C を検算できないため。
-
-#### 関連
-
-#883 / #663（プール上限の撤廃）/ #611（出力ライン設計・§2.1 に撤回追記）/ #282（MIDI の skip 誤爆）
-
----
-
-### docs: follow the dev site to the .vsix dependency bundling fix (PR #874) (Sep 11, 2026)
-
-マージ済み PR [#874](https://github.com/signalcompose/orbitscore/pull/874)（merge commit `a2ac724`）へのドキュメント追従。**コード・テストは一切変更していない。**
-
-`sites/dev/editor/vscode-architecture.md` と `sites/dev/en/editor/vscode-architecture.md`（日英バイリンガル）に節を 1 つ追加した。置き場所は `activate()` の章の末尾で、理由は**この不具合が `activate()` の中ではなくモジュール読み込みで起きていた**から。同章は activate の中身だけを説明していて、「そもそも activate に到達しない」経路が抜けていた。
-
-書いた内容:
-
-- `packages/vscode-extension/src/mcp-server.ts:52-58` のトップレベル `require` が、MCP の port 設定や開いているファイルに関係なく activation を落とす構造であること
-- 原因の npm workspaces hoisting と、`install-engine-deps.sh` / `install-extension-deps.sh` が共有する `scripts/install-bundle-deps.sh` の「ワークスペース root の無い一時ディレクトリで入れる」手口
-- 同梱先が `dist/node_modules` である 2 つの理由と、`vsce package --no-dependencies`（`.github/workflows/release.yml:118`）
-- post-package ゲートが `check-vsix-bundled-deps.mjs` に替わり、**宣言を数えるのではなく出荷物の実ファイルから解決する**ようになったこと。保証が depth 1 と depth > 1 で一様でないことも script の明示どおりに書いた
-
-あわせて drift 表に 1 行、Sources に 7 行、frontmatter の `verified-against` を `a2ac724` へ。
-
-🔴 **未追従として PR 本文に書き出したもの（この PR では直していない）**: cold install 経路は gated E2E から構造的に踏めない（`tests/e2e/orbitstudio-mcp-gated.spec.ts:728` が `--extensionDevelopmentPath` で起動するため、同梱が空でも緑になる）。#874 の cold install 検証は手動で、資産として積まれていない。
 
 ---
 

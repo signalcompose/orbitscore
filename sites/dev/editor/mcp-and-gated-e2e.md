@@ -68,21 +68,25 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:362-376
+// packages/vscode-extension/src/extension.ts:444-462
 /**
- * Canonical local URL of the dev learning site, or null (with the shared error
- * message shown) when the MCP server is not running. Single source for every
- * entry point (browser command, webview panel) — the site is served at the
- * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
- * is only a redirect kept for muscle memory).
+ * "OrbitScore: Browse Plugins" command (#638) — palette entry that lists the
+ * catalog and writes the chosen name at the cursor.
+ *
+ * Completion covers "I remember part of the name"; this covers "what do I even
+ * have". With 274 effects and 74 instruments installed, the second question is
+ * the common one and had no entry point at all.
+ *
+ * When the cursor already sits inside an `effect(` / `instrument(` string the
+ * verb comes from there and the typed fragment is replaced, so picking from the
+ * list and completing produce the same edit. Outside that context the command
+ * asks which kind to browse and inserts a quoted name.
  */
-function resolveDevDocsUrl(): string | null {
-  const port = mcpServerHandle?.port ?? 0
-  if (!port) {
-    void vscode.window.showErrorMessage(
-      'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
-    )
-    return null
+async function browsePlugins(): Promise<void> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    vscode.window.showInformationMessage('OrbitScore: open an .orbs file to insert a plugin name.')
+    return
   }
 ```
 
@@ -95,7 +99,7 @@ function resolveDevDocsUrl(): string | null {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:283-294
+// packages/vscode-extension/src/extension.ts:275-286
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -233,7 +237,7 @@ export interface DiagnosticEntry {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1499-1536
+// packages/vscode-extension/src/extension.ts:927-964
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -359,7 +363,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1629-1640
+// packages/vscode-extension/src/extension.ts:1057-1068
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -397,7 +401,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:153-164
+// packages/vscode-extension/src/extension.ts:145-156
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)

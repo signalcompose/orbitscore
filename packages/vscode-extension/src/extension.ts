@@ -37,8 +37,6 @@ import {
   type EngineState,
   type EvaluateResult,
   type FileDiagnostics,
-  type FlashConfigInput,
-  type FlashConfigResult,
   type ListPluginsResult,
   type PluginUiResult,
   type RegisterMcpServerInput,
@@ -46,26 +44,19 @@ import {
   type SelectionInput,
   type SavePluginStateResult,
 } from './mcp-server'
+import { resolveDeviceClickAction, translateSelectAudioDeviceError } from './engine-view'
 import {
-  buildRootNodes,
-  deviceNameFromNodeId,
-  deviceSectionChildren,
-  hasTranslatedSelectAudioDeviceError,
-  liveSwitchFailureNeedsRestart,
-  recoveryCommandFromNodeId,
-  recoverySectionChildren,
-  resolveDeviceClickAction,
-  translateSelectAudioDeviceError,
-  type DeviceFetchState,
-  type EngineViewNode,
-} from './engine-view'
+  EngineViewProvider,
+  engineViewSelectDevice,
+  engineViewToggleDebug,
+  engineViewToggleEngine,
+  writeAudioDeviceSetting,
+} from './engine-view-provider'
 import type { PluginUiAction } from './plugin-ui-bridge'
 import { resolveEngineState } from './engine-state-bridge'
 import { decideStartEngineForAgent } from './engine-lifecycle'
-import { logHandlerFailure } from './engine-handlers'
 import {
   autoStartConfiguredRustEngine,
-  fetchAudioDevicesForView,
   resolveAudioDeviceSetting,
   sendEngineStateMeta,
   sendPluginStateMeta,
@@ -78,6 +69,8 @@ import {
   updateBundleStatus,
   writeCodeToEngine,
 } from './engine-process'
+import { openDevDocs, openDevDocsPanel, openUserDocs, openWalkthrough } from './docs-panels'
+import { configureFlash, configureFlashForAgent } from './flash-config'
 import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
@@ -104,7 +97,6 @@ import {
   bundleStatusItem,
   devDocsPanel,
   engineProcess,
-  engineViewProvider,
   evalMarkBridge,
   isEngineRunning,
   isLiveCodingMode,
@@ -359,126 +351,6 @@ export function deactivate() {
   setDevDocsPanel(null)
 }
 
-/**
- * Canonical local URL of the dev learning site, or null (with the shared error
- * message shown) when the MCP server is not running. Single source for every
- * entry point (browser command, webview panel) — the site is served at the
- * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
- * is only a redirect kept for muscle memory).
- */
-function resolveDevDocsUrl(): string | null {
-  const port = mcpServerHandle?.port ?? 0
-  if (!port) {
-    void vscode.window.showErrorMessage(
-      'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
-    )
-    return null
-  }
-  return `http://127.0.0.1:${port}/orbitscore/dev/`
-}
-
-/**
- * Canonical local URL of the END-USER learning site (sites/user — served at
- * `/orbitscore/` by the MCP server; the dev site lives under `/orbitscore/dev/`).
- */
-function resolveUserDocsUrl(): string | null {
-  const port = mcpServerHandle?.port ?? 0
-  if (!port) {
-    void vscode.window.showErrorMessage(
-      'OrbitScore docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
-    )
-    return null
-  }
-  return `http://127.0.0.1:${port}/orbitscore/`
-}
-
-async function openUserDocs(): Promise<void> {
-  const url = resolveUserDocsUrl()
-  if (!url) return
-  const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
-  if (!opened) {
-    outputChannel?.appendLine(`❌ Failed to open the learning site at ${url}`)
-  }
-}
-
-async function openDevDocs(): Promise<void> {
-  const url = resolveDevDocsUrl()
-  if (!url) return
-  const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
-  if (!opened) {
-    outputChannel?.appendLine(`❌ Failed to open development docs at ${url}`)
-    void vscode.window.showErrorMessage('Could not open the development docs in your browser.')
-  }
-}
-
-/**
- * Open the development docs inside an editor tab via an iframe-wrapped
- * webview panel, so the site can be read side-by-side with `.orbs` files
- * without leaving VS Code. Singleton: a second invocation reveals the
- * existing panel instead of creating a duplicate.
- */
-function openDevDocsPanel(context: vscode.ExtensionContext): void {
-  const url = resolveDevDocsUrl()
-  if (!url) return
-
-  if (devDocsPanel) {
-    devDocsPanel.reveal(vscode.ViewColumn.Active)
-    return
-  }
-
-  const panel = vscode.window.createWebviewPanel(
-    'orbitscore.devDocsPanel',
-    'OrbitScore Docs',
-    vscode.ViewColumn.Active,
-    {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-    },
-  )
-  setDevDocsPanel(panel)
-  panel.webview.html = buildDevDocsPanelHtml(url)
-  panel.onDidDispose(
-    () => {
-      setDevDocsPanel(null)
-    },
-    null,
-    context.subscriptions,
-  )
-}
-
-function buildDevDocsPanelHtml(url: string): string {
-  const escapedUrl = url.replace(/"/g, '&quot;')
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta
-    http-equiv="Content-Security-Policy"
-    content="default-src 'none'; frame-src http://127.0.0.1:*; style-src 'unsafe-inline';"
-  />
-  <style>
-    html, body { height: 100%; margin: 0; padding: 0; }
-    iframe { width: 100%; height: 100%; border: none; }
-  </style>
-</head>
-<body>
-  <iframe src="${escapedUrl}" title="OrbitScore development docs"></iframe>
-</body>
-</html>`
-}
-
-async function openWalkthrough(): Promise<void> {
-  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')) as {
-    publisher: string
-    name: string
-  }
-  const extensionId = `${pkg.publisher}.${pkg.name}`
-  await vscode.commands.executeCommand(
-    'workbench.action.openWalkthrough',
-    `${extensionId}#orbitscore.learnOrbitScore`,
-  )
-}
-
 function showCommands() {
   vscode.commands.executeCommand('orbitscore.engineView.focus')
 }
@@ -496,192 +368,6 @@ async function restartEngine(): Promise<void> {
 
 function reloadWindow(): void {
   void vscode.commands.executeCommand('workbench.action.reloadWindow')
-}
-
-async function configureFlash() {
-  const config = vscode.workspace.getConfiguration('orbitscore')
-
-  // Get current values
-  const currentCount = config.get<number>('flashCount', 3)
-  const currentDuration = config.get<number>('flashDuration', 150)
-  const currentColor = config.get<string>('flashColor', 'selection')
-  const currentCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')
-
-  // Show configuration options
-  const options = [
-    {
-      label: `🔢 Flash Count: ${currentCount}`,
-      description: 'Number of flashes (1-5)',
-      detail: 'Current: ' + currentCount,
-      action: 'count',
-    },
-    {
-      label: `⏱️ Flash Duration: ${currentDuration}ms`,
-      description: 'Duration of each flash (50-500ms)',
-      detail: 'Current: ' + currentDuration + 'ms',
-      action: 'duration',
-    },
-    {
-      label: `🎨 Flash Color: ${currentColor}`,
-      description: 'Color theme for flash',
-      detail: 'Current: ' + currentColor,
-      action: 'color',
-    },
-    {
-      label: `🎯 Custom Color: ${currentCustomColor}`,
-      description: 'Custom color (hex format)',
-      detail: 'Current: ' + currentCustomColor,
-      action: 'customColor',
-    },
-    {
-      label: '🧪 Test Flash',
-      description: 'Test current flash settings',
-      detail: 'Preview the flash effect',
-      action: 'test',
-    },
-  ]
-
-  const selected = await vscode.window.showQuickPick(options, {
-    placeHolder: 'Configure flash settings',
-    title: '⚡ Flash Configuration',
-  })
-
-  if (!selected) return
-
-  switch (selected.action) {
-    case 'count': {
-      const newCount = await vscode.window.showInputBox({
-        prompt: 'Enter flash count (1-5)',
-        value: currentCount.toString(),
-        validateInput: (value) => {
-          const num = parseInt(value)
-          if (isNaN(num) || num < 1 || num > 5) {
-            return 'Please enter a number between 1 and 5'
-          }
-          return null
-        },
-      })
-      if (newCount) {
-        await config.update('flashCount', parseInt(newCount), vscode.ConfigurationTarget.Global)
-        vscode.window.showInformationMessage(`✅ Flash count set to ${newCount}`)
-      }
-      break
-    }
-
-    case 'duration': {
-      const newDuration = await vscode.window.showInputBox({
-        prompt: 'Enter flash duration in milliseconds (50-500)',
-        value: currentDuration.toString(),
-        validateInput: (value) => {
-          const num = parseInt(value)
-          if (isNaN(num) || num < 50 || num > 500) {
-            return 'Please enter a number between 50 and 500'
-          }
-          return null
-        },
-      })
-      if (newDuration) {
-        await config.update(
-          'flashDuration',
-          parseInt(newDuration),
-          vscode.ConfigurationTarget.Global,
-        )
-        vscode.window.showInformationMessage(`✅ Flash duration set to ${newDuration}ms`)
-      }
-      break
-    }
-
-    case 'color': {
-      const colorOptions = [
-        { label: 'selection', description: 'Editor selection color' },
-        { label: 'error', description: 'Error color (red)' },
-        { label: 'warning', description: 'Warning color (yellow)' },
-        { label: 'info', description: 'Info color (blue)' },
-        { label: 'custom', description: 'Custom color' },
-      ]
-      const selectedColor = await vscode.window.showQuickPick(colorOptions, {
-        placeHolder: 'Select flash color theme',
-      })
-      if (selectedColor) {
-        await config.update('flashColor', selectedColor.label, vscode.ConfigurationTarget.Global)
-        vscode.window.showInformationMessage(`✅ Flash color set to ${selectedColor.label}`)
-      }
-      break
-    }
-
-    case 'customColor': {
-      const newCustomColor = await vscode.window.showInputBox({
-        prompt: 'Enter custom color (hex format, e.g., #ff6b6b)',
-        value: currentCustomColor,
-        validateInput: (value) => {
-          if (!/^#[0-9A-Fa-f]{6}$/.test(value)) {
-            return 'Please enter a valid hex color (e.g., #ff6b6b)'
-          }
-          return null
-        },
-      })
-      if (newCustomColor) {
-        await config.update('flashCustomColor', newCustomColor, vscode.ConfigurationTarget.Global)
-        vscode.window.showInformationMessage(`✅ Custom color set to ${newCustomColor}`)
-      }
-      break
-    }
-
-    case 'test': {
-      // Test flash by simulating a runSelection call
-      const editor = vscode.window.activeTextEditor
-      if (editor) {
-        const line = editor.document.lineAt(editor.selection.active.line)
-        const range = new vscode.Range(line.range.start, line.range.end)
-
-        // Use the same flash logic as runSelection
-        const flashCount = config.get<number>('flashCount', 3)
-        const flashDuration = config.get<number>('flashDuration', 150)
-        const flashColor = config.get<string>('flashColor', 'selection')
-        const flashCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')
-
-        let backgroundColor: string | vscode.ThemeColor
-        switch (flashColor) {
-          case 'error':
-            backgroundColor = new vscode.ThemeColor('editorError.foreground')
-            break
-          case 'warning':
-            backgroundColor = new vscode.ThemeColor('editorWarning.foreground')
-            break
-          case 'info':
-            backgroundColor = new vscode.ThemeColor('editorInfo.foreground')
-            break
-          case 'custom':
-            backgroundColor = flashCustomColor
-            break
-          default:
-            backgroundColor = new vscode.ThemeColor('editor.selectionBackground')
-            break
-        }
-
-        const createFlash = (flashIndex: number) => {
-          const decoration = vscode.window.createTextEditorDecorationType({
-            backgroundColor: backgroundColor,
-            isWholeLine: true,
-          })
-          editor.setDecorations(decoration, [range])
-
-          setTimeout(() => {
-            decoration.dispose()
-            if (flashIndex < flashCount - 1) {
-              setTimeout(() => createFlash(flashIndex + 1), 100)
-            }
-          }, flashDuration)
-        }
-
-        createFlash(0)
-        vscode.window.showInformationMessage('🧪 Flash test completed!')
-      } else {
-        vscode.window.showWarningMessage('⚠️ Please open a file to test flash')
-      }
-      break
-    }
-  }
 }
 
 // ---- Test-only seams (#527 review Critical #3) -------------------------
@@ -752,266 +438,8 @@ export {
   setupStdoutHandler,
 } from './engine-handlers'
 export { stopEngine, toggleEngine } from './engine-process'
-/**
- * TreeDataProvider for the "Audio Engine Settings" view (#484 D3). Wraps the
- * vscode-free data shaping in `engine-view.ts`: `getChildren`/`getTreeItem`
- * translate `EngineViewNode`s to real `vscode.TreeItem`s and own the only
- * bit of state vscode needs — a per-expansion device-list cache, invalidated
- * on `refresh()` (called from `startEngine`/`stopEngine`/exit handler and the
- * device-select command) so a stale list never lingers across an engine
- * restart or device change. Devices are fetched lazily when the "Output
- * Device" node is expanded, not polled (per task spec — the daemon spawn for
- * enumeration is cheap but not free).
- */
-class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
-  private readonly emitter = new vscode.EventEmitter<EngineViewNode | undefined>()
-  readonly onDidChangeTreeData = this.emitter.event
-  private deviceFetchState: DeviceFetchState | null = null
-
-  refresh(): void {
-    this.deviceFetchState = null
-    this.emitter.fire(undefined)
-  }
-
-  getTreeItem(node: EngineViewNode): vscode.TreeItem {
-    const item = new vscode.TreeItem(
-      node.label,
-      node.collapsible
-        ? node.collapsibleState === 'collapsed'
-          ? vscode.TreeItemCollapsibleState.Collapsed
-          : vscode.TreeItemCollapsibleState.Expanded
-        : vscode.TreeItemCollapsibleState.None,
-    )
-    item.id = node.id
-    item.description = node.description
-    switch (node.kind) {
-      case 'engine-status':
-        item.iconPath = new vscode.ThemeIcon(isEngineRunning() ? 'debug-stop' : 'play')
-        item.command = { command: 'orbitscore.engineViewToggleEngine', title: 'Toggle Engine' }
-        break
-      case 'debug-toggle':
-        item.iconPath = new vscode.ThemeIcon(node.selected ? 'check' : 'circle-large-outline')
-        item.command = { command: 'orbitscore.engineViewToggleDebug', title: 'Toggle Debug Mode' }
-        break
-      case 'device-section':
-        item.iconPath = new vscode.ThemeIcon('list-selection')
-        break
-      case 'recovery-section':
-        item.iconPath = new vscode.ThemeIcon('tools')
-        break
-      case 'recovery-action': {
-        const command = recoveryCommandFromNodeId(node.id)
-        if (command) item.command = { command, title: node.label }
-        break
-      }
-      case 'device':
-        item.iconPath = new vscode.ThemeIcon(node.selected ? 'check' : 'circle-large-outline')
-        item.command = {
-          command: 'orbitscore.engineViewSelectDevice',
-          title: 'Select Audio Device',
-          arguments: [node],
-        }
-        break
-      case 'device-error':
-        item.iconPath = new vscode.ThemeIcon('warning')
-        break
-      default:
-        break
-    }
-    return item
-  }
-
-  getChildren(node?: EngineViewNode): EngineViewNode[] | Thenable<EngineViewNode[]> {
-    if (!node) {
-      // viewsWelcome (Start/Debug/Stop buttons) covers the stopped state —
-      // only populate the tree once the engine is actually running.
-      return buildRootNodes(isEngineRunning()).map((node) =>
-        node.kind === 'debug-toggle'
-          ? {
-              ...node,
-              selected: vscode.workspace
-                .getConfiguration('orbitscore')
-                .get<boolean>('engineDebug', false),
-              description: vscode.workspace
-                .getConfiguration('orbitscore')
-                .get<boolean>('engineDebug', false)
-                ? 'On (restart engine to apply)'
-                : 'Off',
-            }
-          : node,
-      )
-    }
-    if (node.kind === 'device-section') {
-      return this.getDeviceChildren()
-    }
-    if (node.kind === 'recovery-section') return recoverySectionChildren()
-    return []
-  }
-
-  private async getDeviceChildren(): Promise<EngineViewNode[]> {
-    if (!this.deviceFetchState) {
-      try {
-        const devices = await fetchAudioDevicesForView()
-        this.deviceFetchState = { status: 'loaded', devices }
-      } catch (err) {
-        this.deviceFetchState = {
-          status: 'error',
-          message: err instanceof Error ? err.message : String(err),
-        }
-      }
-    }
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-    const selectedDevice = resolveAudioDeviceSetting(workspaceRoot)
-    return deviceSectionChildren(this.deviceFetchState, selectedDevice)
-  }
-}
 
 export type { EngineViewProvider }
-
-async function engineViewToggleEngine(): Promise<void> {
-  if (isEngineRunning()) {
-    stopEngine()
-    return
-  }
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-  if (!resolveAudioDeviceSetting(workspaceRoot)) {
-    vscode.window.showInformationMessage('Select an output device below first')
-    return
-  }
-  await startEngine()
-}
-
-/**
- * Write `orbitscore.audioDevice` (Workspace scope when a workspace is open,
- * Global otherwise). Shared by the Engine view's device-click command and the
- * MCP `select_audio_device` tool's live-switch path (#501 review Important #6 —
- * the live bridge only affects the running process, so the setting must also
- * be written for the choice to survive an engine restart).
- */
-async function writeAudioDeviceSetting(deviceName: string | undefined): Promise<void> {
-  const target = vscode.workspace.workspaceFolders?.[0]
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global
-  try {
-    await vscode.workspace.getConfiguration('orbitscore').update('audioDevice', deviceName, target)
-    outputChannel?.appendLine(`🔊 orbitscore.audioDevice set to: ${deviceName ?? '(cleared)'}`)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(`❌ failed to update orbitscore.audioDevice: ${message}`)
-    vscode.window.showErrorMessage(`Failed to save audio device setting: ${message}`)
-  }
-}
-
-/**
- * "Select Audio Device" command wired to a device `TreeItem` click in the
- * Engine view (#484 D3). Writes `orbitscore.audioDevice` (Workspace scope
- * when a workspace is open, Global otherwise). For a running rust-engine
- * instance, D2.5's live `//#selectAudioDevice` bridge applies the change
- * immediately; otherwise (or on live-switch failure) this tells the user the
- * setting takes effect on the *next* engine start and offers an immediate
- * restart.
- */
-async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
-  const deviceName = deviceNameFromNodeId(node.id)
-  if (!deviceName) return
-
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-  const selectedDevice = resolveAudioDeviceSetting(workspaceRoot)
-  const action = resolveDeviceClickAction(deviceName, selectedDevice, isEngineRunning())
-  if (action === 'deselect-stop') {
-    await writeAudioDeviceSetting('')
-    if (isEngineRunning()) stopEngine()
-    engineViewProvider?.refresh()
-    return
-  }
-
-  await writeAudioDeviceSetting(deviceName)
-  engineViewProvider?.refresh()
-
-  if (!isEngineRunning()) {
-    await startEngine()
-    return
-  }
-
-  // D2.5 (#484): try the live `//#selectAudioDevice` bridge before falling back to the
-  // restart prompt.
-  try {
-    const result = await sendSelectAudioDeviceMeta(deviceName)
-    if (result.ok) {
-      engineViewProvider?.refresh()
-      vscode.window.showInformationMessage(`🔊 switched to "${result.device ?? deviceName}"`)
-      return
-    }
-    // #501 review Important #4: surface the specific failure rather than
-    // silently falling through to the generic "applies on next start" prompt.
-    outputChannel?.appendLine(`⚠️ live device switch failed: ${result.error}`)
-    // 既知のコードは翻訳文だけで何が起きたか分かる。未知のエラーにだけ何の失敗かを前置する。
-    const failureMessage = hasTranslatedSelectAudioDeviceError(result.error)
-      ? translateSelectAudioDeviceError(result.error)
-      : `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`
-    // 🔴 音が鳴り続けている失敗に「Restart Engine」を出さない（#661 F4・engine-view.ts の
-    // `SELECT_AUDIO_DEVICE_ERRORS` 参照）。再起動すると起動経路のポリシーで host 既定へ移り、
-    // 「演奏中のタイプミスで音が移らない」という裁定を UI が自分で壊す。
-    if (!liveSwitchFailureNeedsRestart(result.error)) {
-      void vscode.window.showWarningMessage(failureMessage)
-      return
-    }
-    const choice = await vscode.window.showWarningMessage(failureMessage, 'Restart Engine')
-    if (choice === 'Restart Engine') {
-      stopEngine()
-      setTimeout(
-        () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
-        2200,
-      )
-    }
-    return
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(`⚠️ live device switch bridge error: ${message}`)
-    const choice = await vscode.window.showWarningMessage(
-      `🔊 live device switch bridge error: ${message}`,
-      'Restart Engine',
-    )
-    if (choice === 'Restart Engine') {
-      stopEngine()
-      setTimeout(
-        () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
-        2200,
-      )
-    }
-    return
-  }
-}
-
-async function engineViewToggleDebug(): Promise<void> {
-  const config = vscode.workspace.getConfiguration('orbitscore')
-  const next = !config.get<boolean>('engineDebug', false)
-  const target = vscode.workspace.workspaceFolders?.[0]
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global
-  try {
-    await config.update('engineDebug', next, target)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(`❌ failed to update orbitscore.engineDebug: ${message}`)
-    vscode.window.showErrorMessage(`Failed to save debug mode setting: ${message}`)
-    return
-  }
-  engineViewProvider?.refresh()
-  if (isEngineRunning()) {
-    const choice = await vscode.window.showInformationMessage(
-      'Restart engine to apply?',
-      'Restart Engine',
-    )
-    if (choice === 'Restart Engine') {
-      stopEngine()
-      setTimeout(
-        () => void startEngine().catch((err) => logHandlerFailure('engineViewToggleDebug', err)),
-        2200,
-      )
-    }
-  }
-}
 
 /**
  * "OrbitScore: Browse Plugins" command (#638) — palette entry that lists the
@@ -1739,69 +1167,6 @@ async function selectAudioDeviceForAgent(device: string): Promise<CommandResult>
     return { ok: false, error: translateSelectAudioDeviceError(result.error) }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
-}
-
-/**
- * Apply flash settings for the MCP `configure_flash` tool. Value constraints
- * mirror `contributes.configuration` in package.json (orbitscore.flash*).
- * Workspace-scoped (`ConfigurationTarget.Workspace`) rather than Global (as
- * the "Configure Flash" command's QuickPick flow writes) — agent-driven
- * config changes should stay local to the workspace, not leak into the
- * user's global settings.
- */
-async function configureFlashForAgent(options: FlashConfigInput): Promise<FlashConfigResult> {
-  if (
-    options.count !== undefined &&
-    (!Number.isInteger(options.count) || options.count < 1 || options.count > 5)
-  ) {
-    return { ok: false, error: 'count must be an integer between 1 and 5' }
-  }
-  if (
-    options.duration !== undefined &&
-    (!Number.isInteger(options.duration) || options.duration < 50 || options.duration > 500)
-  ) {
-    return { ok: false, error: 'duration must be an integer between 50 and 500' }
-  }
-  const validColors = ['selection', 'error', 'warning', 'info', 'custom']
-  if (options.color !== undefined && !validColors.includes(options.color)) {
-    return { ok: false, error: `color must be one of: ${validColors.join(', ')}` }
-  }
-  if (options.customColor !== undefined && !/^#[0-9A-Fa-f]{6}$/.test(options.customColor)) {
-    return { ok: false, error: 'custom_color must be a hex color, e.g. #ff6b6b' }
-  }
-
-  try {
-    const config = vscode.workspace.getConfiguration('orbitscore')
-    if (options.count !== undefined) {
-      await config.update('flashCount', options.count, vscode.ConfigurationTarget.Workspace)
-    }
-    if (options.duration !== undefined) {
-      await config.update('flashDuration', options.duration, vscode.ConfigurationTarget.Workspace)
-    }
-    if (options.color !== undefined) {
-      await config.update('flashColor', options.color, vscode.ConfigurationTarget.Workspace)
-    }
-    if (options.customColor !== undefined) {
-      await config.update(
-        'flashCustomColor',
-        options.customColor,
-        vscode.ConfigurationTarget.Workspace,
-      )
-    }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
-
-  const updated = vscode.workspace.getConfiguration('orbitscore')
-  return {
-    ok: true,
-    config: {
-      count: updated.get<number>('flashCount', 3),
-      duration: updated.get<number>('flashDuration', 150),
-      color: updated.get<string>('flashColor', 'selection'),
-      customColor: updated.get<string>('flashCustomColor', '#ff6b6b'),
-    },
   }
 }
 

@@ -121,7 +121,7 @@ After this come four **bridges** that wait for JSON lines coming back on the eng
 The entry point is `activate()` in `extension.ts`. It is called once immediately after VS Code loads the extension. Let's look at the first half.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:137-193
+// packages/vscode-extension/src/extension.ts:129-185
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -194,7 +194,7 @@ The rest of `activate()` is roughly five jobs:
 The last two are written like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:283-337 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:275-329 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -336,7 +336,7 @@ When the daemon is found (= the normal state), the indicator is **hidden**. It i
 Let's organize the commands `activate()` registers. There are 15 listed in `contributes.commands` (down from 17 — `forceKillScsynth` / `selectAudioDevice` were removed in #502), plus 2 internal commands invoked only from TreeView nodes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:205-240
+// packages/vscode-extension/src/extension.ts:197-232
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -407,7 +407,7 @@ A keybinding for `orbitscore.runSelection` is set in `package.json`:
 
 Because `editorLangId == orbitscore` is specified in the `when` clause, it is only effective when an `.orbs` file has focus.
 
-Two containers have grown on the Activity Bar (`orbitscore` = the Learning view, `orbitscore-engine` = the Audio Engine Settings view). The Learning view is an empty TreeView, an entry point that only shows the `viewsWelcome` buttons (Open Learning Site / Start the Walkthrough). For the Engine view, the pure functions in `engine-view.ts` assemble the nodes and `EngineViewProvider` in `extension.ts` maps them to `vscode.TreeItem`.
+Two containers have grown on the Activity Bar (`orbitscore` = the Learning view, `orbitscore-engine` = the Audio Engine Settings view). The Learning view is an empty TreeView, an entry point that only shows the `viewsWelcome` buttons (Open Learning Site / Start the Walkthrough). For the Engine view, the pure functions in `engine-view.ts` assemble the nodes and `EngineViewProvider` in `engine-view-provider.ts` maps them to `vscode.TreeItem`.
 
 ```typescript
 // packages/vscode-extension/src/engine-view.ts:47-54
@@ -461,7 +461,7 @@ position.
 Assembling the candidates happens on the `extension.ts` side.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2339-2352
+// packages/vscode-extension/src/extension.ts:1704-1717
       case 'output-string':
         return makeItems(
           [
@@ -486,7 +486,7 @@ One trigger character was added too. Without `(`, nothing appears right after `.
 completion is invoked explicitly.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2209-2219
+// packages/vscode-extension/src/extension.ts:1574-1584
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,
@@ -522,20 +522,19 @@ interface MethodChainContext {
 The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test enforces that it matches the engine's `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` / `BUS_DSL_METHODS` character for character. Because the extension process is designed not to import engine modules, duplication is unavoidable; the trade-off is to make drift red via the test instead.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:362-368
+// packages/vscode-extension/src/extension.ts:1-6
 /**
- * Canonical local URL of the dev learning site, or null (with the shared error
- * message shown) when the MCP server is not running. Single source for every
- * entry point (browser command, webview panel) — the site is served at the
- * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
- * is only a redirect kept for muscle memory).
+ * OrbitScore VS Code extension root and public re-export surface.
+ *
+ * Engine wiring function bodies were moved unchanged to the engine modules;
+ * formerly private helpers are imported only where this root still wires them.
  */
 ```
 
 Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` as of 2026-05, but #384 extended them to "when opened," "when closed," and "documents already open at activation."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:252-281
+// packages/vscode-extension/src/extension.ts:244-273
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -573,7 +572,7 @@ There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For
 #883 added one more line next to the diagnostic registration: **the quick fix**. `registerOutputCodeActionProvider(context)` returns an "add `<name>.output()`" CodeAction for the two diagnostic codes `output-missing` and `dry-not-routed`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:243-246
+// packages/vscode-extension/src/extension.ts:235-238
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)

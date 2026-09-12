@@ -121,7 +121,7 @@ export let mcpServerHandle: McpServerHandle | null = null
 エントリポイントは `extension.ts` の `activate()` です。VS Code が extension を読み込んだ直後に一度だけ呼ばれます。前半を見てみましょう。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:137-193
+// packages/vscode-extension/src/extension.ts:129-185
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -194,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:283-337 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:275-329 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -336,7 +336,7 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
 `activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 15 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります（`forceKillScsynth` / `selectAudioDevice` は #502 で削除）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:205-240
+// packages/vscode-extension/src/extension.ts:197-232
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -407,7 +407,7 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
 
 `when` 条件で `editorLangId == orbitscore` が指定されているため、`.orbs` ファイルにフォーカスがある時のみ有効です。
 
-Activity Bar には 2 つのコンテナ (`orbitscore` = Learning view、`orbitscore-engine` = Audio Engine Settings view) が生えています。Learning view は空の TreeView で、`viewsWelcome` のボタン (Open Learning Site / Start the Walkthrough) だけを出す入口です。Engine ビューの方は `engine-view.ts` の純関数がノードを組み立て、`extension.ts` の `EngineViewProvider` がそれを `vscode.TreeItem` に写します。
+Activity Bar には 2 つのコンテナ (`orbitscore` = Learning view、`orbitscore-engine` = Audio Engine Settings view) が生えています。Learning view は空の TreeView で、`viewsWelcome` のボタン (Open Learning Site / Start the Walkthrough) だけを出す入口です。Engine ビューの方は `engine-view.ts` の純関数がノードを組み立て、`engine-view-provider.ts` の `EngineViewProvider` がそれを `vscode.TreeItem` に写します。
 
 ```typescript
 // packages/vscode-extension/src/engine-view.ts:47-54
@@ -461,7 +461,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補の組み立ては `extension.ts` 側です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2339-2352
+// packages/vscode-extension/src/extension.ts:1704-1717
       case 'output-string':
         return makeItems(
           [
@@ -486,7 +486,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補が出てきません。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2209-2219
+// packages/vscode-extension/src/extension.ts:1574-1584
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,
@@ -522,20 +522,19 @@ interface MethodChainContext {
 補完候補の語彙は `dsl-method-catalog.ts` に複製されていて、engine 側の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` / `BUS_DSL_METHODS` と一字一句一致することをテストが強制します。拡張プロセスは engine のモジュールを import しない設計なので、複製は避けられず、代わりにテストで乖離を赤にする、という割り切りです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:362-368
+// packages/vscode-extension/src/extension.ts:1-6
 /**
- * Canonical local URL of the dev learning site, or null (with the shared error
- * message shown) when the MCP server is not running. Single source for every
- * entry point (browser command, webview panel) — the site is served at the
- * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
- * is only a redirect kept for muscle memory).
+ * OrbitScore VS Code extension root and public re-export surface.
+ *
+ * Engine wiring function bodies were moved unchanged to the engine modules;
+ * formerly private helpers are imported only where this root still wires them.
  */
 ```
 
 診断 (`updateDiagnostics`) は、2026-05 時点では `onDidChangeTextDocument` だけで駆動していましたが、#384 で「開いたとき」「閉じたとき」「activation 時に既に開いていたもの」にも広がりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:252-281
+// packages/vscode-extension/src/extension.ts:244-273
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -573,7 +572,7 @@ interface MethodChainContext {
 診断を出すだけの登録に、#883 で **quick fix の登録**が 1 行足されました。`registerOutputCodeActionProvider(context)` が `output-missing` / `dry-not-routed` の 2 つの診断 code に対して「`<名前>.output()` を足す」CodeAction を返します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:243-246
+// packages/vscode-extension/src/extension.ts:235-238
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)

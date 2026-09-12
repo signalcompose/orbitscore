@@ -158,7 +158,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 選択テキストが空でなければシンプルにその内容を使います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1344-1347
+// packages/vscode-extension/src/extension.ts:772-775
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -172,7 +172,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 subject を判定する関数が `getLineSubject()` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1311-1324
+// packages/vscode-extension/src/extension.ts:739-752
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -226,7 +226,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 `runSelection()` は `writeCodeToEngine()` の戻り値を見て、送れたときだけ視覚フィードバックを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1483-1490
+// packages/vscode-extension/src/extension.ts:911-918
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

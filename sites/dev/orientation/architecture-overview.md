@@ -222,7 +222,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:289-294
+// packages/vscode-extension/src/extension.ts:281-286
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0

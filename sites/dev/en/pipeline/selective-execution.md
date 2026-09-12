@@ -158,7 +158,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1344-1347
+// packages/vscode-extension/src/extension.ts:772-775
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -172,7 +172,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1311-1324
+// packages/vscode-extension/src/extension.ts:739-752
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -226,7 +226,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1483-1490
+// packages/vscode-extension/src/extension.ts:911-918
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

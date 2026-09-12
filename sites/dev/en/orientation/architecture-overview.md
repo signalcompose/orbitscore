@@ -222,7 +222,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:289-294
+// packages/vscode-extension/src/extension.ts:281-286
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
