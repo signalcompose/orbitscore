@@ -15,6 +15,13 @@
 use super::*;
 
 impl EngineWrap {
+    /// OOP feature の初回 `LoadPlugin` で child + watchdog を attach する。
+    ///
+    /// blocking API: child の readiness を poll するため、session handler は `spawn_blocking` から
+    /// 呼ぶこと。同一 path の再送は冪等、別 path への差し替えは v1 では拒否する。
+    ///
+    /// **契約（precondition）**: `StreamGuard`（`_child_guard` の唯一の強参照保持者）は in-flight
+    /// の本呼び出しより必ず長生きすること。破ると: 成功パスで `Ok` を返した直後、本関数ローカルの
     /// `Arc` drop が最後の強参照となり、attach 直後の child が同期的に teardown（QUIT/reap/unlink）
     /// されうる（「成功応答=生きた plugin」が崩れる）。現行の全配線（main.rs のプロセス寿命
     /// `_stream_guard`・gated テストの関数スコープ `_guard`）はこれを満たす。

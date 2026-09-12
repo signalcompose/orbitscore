@@ -908,7 +908,7 @@ spec PH.4 は同一シーケンスへの再宣言についてこう定めてい�
 機構を一文で言い切っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6206-6218
+// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_instrument.rs:66-78
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1119,7 +1119,7 @@ Stage A では Codex の変異 8 種（すべて「削除」型）が全部 red 
 の明示エラーを返す」と記しています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:136-144
+// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:143-151
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]

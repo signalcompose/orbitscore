@@ -17,6 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the instrument slots and plugin UI into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-instrument`
+
+#888 子 1 の**第 5 束**。out-of-process インストゥルメントとプラグイン UI（839 行）を 2 ファイルへ。
+`engine_wrap.rs` は **4,409 → 3,655** コード行（`outproc_instrument.rs` 455 / `plugin_ui.rs` 307）。
+
+### 🔴 第 4 束の欠陥を見つけて直した — doc コメントを途中で切っていた
+
+第 4 束で `load_outproc_plugin` の doc コメントを**分断**しており、頭 7 行が
+`engine_wrap.rs` に item を持たない孤児として残っていた。第 5 束の `cargo fmt --check` が
+その位置の重複空行を指摘して発覚した。
+
+**原因**: 抽出範囲の開始を「doc コメントの途中の行」に取っていた。設計 E1 が
+「属性と doc コメントを置き去りにするな」と警告していたのは**属性の付き替え**の話だったが、
+**コメント自体の分断**も同じ型の失敗である。孤児コメントは**コンパイルエラーにならない**ので、
+cfg 4 象限も `cargo test` も通ってしまった。
+
+**検出したもの**: `cargo fmt --check`（重複空行）。**振る舞いを変えない欠陥は fmt しか捕まえない。**
+
+### 可視性の変更 2 行（E3′ の適用）
+
+- `teardown_outproc_instrument_resources` — 親のインラインテスト 2 箇所から呼ばれる
+- `resolve_outproc_slot` — 兄弟 `plugin_ui.rs` から呼ばれる
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
+
+
 ### refactor(daemon): move the out-of-process effect slot lifecycle into child modules (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-effect`（base = `888-split-engine-wrap`）
