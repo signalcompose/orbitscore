@@ -16,5 +16,5 @@
     "resolveJsonModule": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["tests/e2e/**/*.ts"]
+  "include": ["tests/e2e/**/*.ts", "tests/vscode-extension/public-surface.spec.ts"]
 }

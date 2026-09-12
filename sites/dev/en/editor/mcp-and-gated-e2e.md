@@ -42,17 +42,17 @@ They look like three independent features, but a single line — the engine's st
 The comment at the top of the file explains where it comes from.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:9-18
+// packages/vscode-extension/src/mcp-server.ts:28-37
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
  * Hosts an MCP server (Streamable HTTP) inside the extension host so an external
- * agent (e.g. Claude Code via `.mcp.json`) can drive OrbitScore operations for
- * E2E testing. The same tool surface is intended for reuse by the WCTM
- * performance runtime (pi harness — spec §4.2 "Bridge は harness-neutral").
+ * agent can drive OrbitScore operations for E2E testing. The same tool surface
+ * is intended for reuse by the WCTM performance runtime.
  *
- * Only started when `orbitscore.mcpServer.port` is a nonzero port (see
- * extension.ts activate()). Binds 127.0.0.1 only.
+ * Only started when `orbitscore.mcpServer.port` is a nonzero port. Binds
+ * 127.0.0.1 only.
+ */
 ```
 
 The starting point is §3 of the WCTM (concert system) spec, "Agent Bridge — an MCP server without a brain". The Bridge is defined as "plumbing only; it has no thinking subject (runtime)", and its job was to hand tools such as `evaluate_orbitscore(code)` and `get_session_tail(n)` to an LLM runtime. This file is that plumbing, **placed inside the VS Code extension**.
@@ -68,59 +68,25 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:237-289
+// packages/vscode-extension/src/playhead-decorations.ts:89-107
 /**
- * VSCode-agnostic handler seam. Keeping the tool implementations behind this
- * interface (rather than reaching into the extension directly) means the same
- * handlers can be re-hosted later by the WCTM pi harness (spec §3/§4.2).
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
  */
-export interface OrbitScoreToolHandlers {
-  evaluate(code: string): Promise<EvaluateResult> | EvaluateResult
-  startEngine(options?: {
-    captureWav?: string
-    debug?: boolean
-  }): Promise<CommandResult> | CommandResult
-  stopEngine(): Promise<CommandResult> | CommandResult
-  getEngineState(): Promise<EngineState> | EngineState
-  listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
-  selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
-  configureFlash(options: FlashConfigInput): Promise<FlashConfigResult> | FlashConfigResult
-  openFile(path: string): Promise<CommandResult> | CommandResult
-  setSelection(range: SelectionInput): CommandResult
-  runSelection(): Promise<CommandResult> | CommandResult
-  editReplace(args: EditReplaceInput): Promise<CommandResult> | CommandResult
-  getEditorState(): EditorState
-  saveFile(): Promise<CommandResult> | CommandResult
-  getDocumentText(): DocumentText
-  getDiagnostics(path?: string): FileDiagnostics[]
-  getLog(lines?: number): string[]
-  analyzeAudio(
-    wavPath: string,
-    windowMs?: number,
-    perChannel?: boolean,
-  ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
-  /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
-  listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
-  /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
-  rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
-  /** 明示plugin state保存。互換フィールド `sequence` で UIH.5 の `(receiver,index)` を受ける。 */
-  savePluginState?(
-    sequence: string,
-    index: number,
-  ): Promise<SavePluginStateResult> | SavePluginStateResult
-  openPluginUi?(
-    receiver: string,
-    index: number,
-    expectedName?: string,
-  ): Promise<PluginUiResult> | PluginUiResult
-  closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
-  /**
-   * Optional (unlike the members above): only hosts that can register
-   * themselves into Claude Code expose the register_mcp_server tool — the
-   * tool is skipped when this handler is absent, so existing stub suites and
-   * alternative hosts (WCTM pi harness) stay valid without changes.
-   */
-  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
+export function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
 }
 ```
 
@@ -133,7 +99,7 @@ export interface OrbitScoreToolHandlers {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:434-445
+// packages/vscode-extension/src/extension.ts:237-248
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -153,7 +119,7 @@ The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1178-1183
+// packages/vscode-extension/src/mcp-server.ts:121-126
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -167,7 +133,7 @@ A `McpServer` instance is created per session, but the handlers are shared. Whic
 There is also a judgement that a loopback bind alone is not enough.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1197-1204
+// packages/vscode-extension/src/mcp-server.ts:140-147
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -228,7 +194,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 One entry from `get_diagnostics` has this shape. `code` is the optional field #883 added; it is present only when `vscode.Diagnostic.code` is a string or a number.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:177-183
+// packages/vscode-extension/src/mcp-types.ts:98-104
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -247,7 +213,7 @@ What this buys is that **an agent can branch on an identifier instead of on word
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:545-562
+// packages/vscode-extension/src/mcp-tools-engine.ts:16-33
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -271,45 +237,11 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2784-2821
+// packages/vscode-extension/src/agent-handlers.ts:72-75
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
-  const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  if (!writeCodeToEngine(code, documentDir)) {
-    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
-  }
-  // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は
-  // 「**stdin へ届いた**」までしか意味せず、パース/実行エラーは engine が stderr へ
-  // 非同期に出すだけだった。LLM は ok を成功と解釈するので、実機で
-  // `Variable not found: global` が出ていても先へ進んでしまう（実測）。
-  //
-  // REPL は行を FIFO で処理するので、コードの直後にマーカーを送れば
-  // **マーカーに到達した時点で評価は完了している**。時間で待つ必要はない。
-  const stdin = engineProcess.stdin
-  if (!stdin || !stdin.writable) {
-    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
-  }
-  const result = await evalMarkBridge.send((line, onError) => {
-    // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
-    stdin.write(line, (error) => {
-      if (error) {
-        outputChannel?.appendLine(`⚠️ failed to write //#evalMark to stdin: ${error.message}`)
-        onError(error)
-      }
-    })
-  }, randomUUID())
-  if (result.ok) return { ok: true }
-  const detail = result.diagnostics.length
-    ? result.diagnostics.map((d) => `[${d.kind}] ${d.message}`).join('; ')
-    : (result.error ?? 'engine reported an evaluation failure')
-  return {
-    ok: false,
-    error: `evaluation failed: ${detail}`,
-    ...(result.diagnostics.length ? { diagnostics: result.diagnostics } : {}),
-  }
-}
 ```
 
 Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes lines FIFO, so if a meta line `//#evalMark {"requestId": ...}` is sent immediately after the code, the preceding code has finished evaluating by the time the marker's response comes back. Rather than "waiting for a settle time" it "waits for the marker to arrive", so even an evaluation that attaches six instruments and takes 30 seconds does not produce a false result.
@@ -330,7 +262,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1295-1303
+// packages/vscode-extension/src/engine-handlers.ts:248-256
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -357,7 +289,7 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:106-113
+// packages/vscode-extension/src/mcp-types.ts:27-34
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -397,7 +329,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2914-2925
+// packages/vscode-extension/src/agent-handlers.ts:202-213
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -421,29 +353,28 @@ So `statusError` does not necessarily mean "the daemon is broken" — it can equ
 The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` to push the same lines into a ring buffer.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:144-154
+// packages/vscode-extension/src/extension-state.ts:60-69
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
-const outputLogRing: string[] = []
+export const outputLogRing: string[] = []
 
-function pushLogRing(line: string): void {
+export function pushLogRing(line: string): void {
   outputLogRing.push(line)
   if (outputLogRing.length > OUTPUT_LOG_RING_MAX) {
     outputLogRing.shift()
   }
-}
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:307-318
-  const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
-  outputChannel.appendLine = (value: string) => {
+// packages/vscode-extension/src/extension.ts:107-118
+  const rawAppendLine = channel.appendLine.bind(channel)
+  channel.appendLine = (value: string) => {
     pushLogRing(value)
     rawAppendLine(value)
   }
-  const rawAppend = outputChannel.append.bind(outputChannel)
-  outputChannel.append = (value: string) => {
+  const rawAppend = channel.append.bind(channel)
+  channel.append = (value: string) => {
     for (const line of value.split('\n')) {
       if (line) pushLogRing(line)
     }
@@ -1337,8 +1268,8 @@ State mutations are guarded by `isCurrent` (whether the process that produced th
 The real `handleStep` is in `extension.ts`, and it **waits until the grid time** before moving the highlight.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
-function handleStepLine(step: StepEvent): void {
+// packages/vscode-extension/src/playhead-decorations.ts:96-107
+export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
   const timeout = setTimeout(
@@ -1355,7 +1286,7 @@ function handleStepLine(step: StepEvent): void {
 Dispatch runs a lookahead early, so lighting the highlight the moment the line arrives would move it ahead of the sound. Lines more than one second late (replayed buffered output, for example) are dropped.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:254-273
+// packages/vscode-extension/src/playhead-decorations.ts:109-128
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1383,31 +1314,14 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` is invisible in normal mode
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:956-980
-function shouldFilterLine(line: string): boolean {
+// packages/vscode-extension/src/engine-handlers.ts:43-50
+export function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
   // Machine-readable playhead markers (#390): parsed by setupStdoutHandler
   // from the raw stream BEFORE this filter runs; pure noise for humans
   // (~pattern-length lines per bar per seq), so keep them out of the channel.
   if (line.includes('[STEP]')) {
-    return true
-  }
-
-  // Correlated REPL bridge envelopes are consumed above before human-log
-  // transcription. Keep successful/error payloads (which may contain project
-  // paths) out of the output channel; malformed envelopes get their own loud warning.
-  //
-  // 🔴 `{"evalMark"` を落とすのは見た目の問題ではない: envelope は失敗診断の本文
-  // （例: `[OUTPROC_ATTACH_FAILED] ...`）を丸ごと含むので、transcribe されると
-  // 同じ失敗が log に**二重に**現れ、get_log を数える側（E2E・LLM の自己検証）の
-  // 前後比較が全部ずれる（#614 の導入時にこの除外が漏れていた実害）。
-  if (
-    trimmed.startsWith('{"savePluginState"') ||
-    trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"') ||
-    trimmed.startsWith('{"engineState"')
-  ) {
     return true
 ```
 
@@ -1490,7 +1404,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 
 ## Next exploration candidates
 
-- The docs-serving part of `mcp-server.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
+- The docs-serving part, now `mcp-docs.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
 - The `EvalMarkBridge` timeout (120 seconds) and its coordination with the `#608` stall reporter — how a blocked queue gets its "blocking line" named
 - Nested resolution in `findPlayArgRangeForPath()` (the descend condition for `"1.0"` and the handling of group runs), and the seam for the planned `seq.color()` in `#391` (`PlayheadColorConfig.seqColors`)
 - What happens to the hand-written rows of ledger 2 (implementation ↔ test) in `tests/e2e/dsl-coverage-ledger.ts`, and to the ratchet, once #671 stage 3 turns that ledger into something a generator derives (`E2E_HARNESS_SPEC.md` §2.1)
@@ -1502,7 +1416,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — file header (Agent Bridge origin; why the SDK is loaded via `require`)
 - `packages/vscode-extension/src/mcp-server.ts:233-286` — the `OrbitScoreToolHandlers` seam
-- `packages/vscode-extension/src/mcp-server.ts:538-1147` — the `registerTool` calls in `buildServer()` (source of the tool catalogue)
+- `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — the `registerTool` calls (split out of `buildServer()` into three files in #887 bundle F) ()` (source of the tool catalogue)
 - `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing)
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` merge and URL construction
 - `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — output-channel ring buffer and monkey-patch

@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1976-2034 (env の組み立てを省略)
+// packages/vscode-extension/src/engine-process.ts:304-362 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -104,17 +104,17 @@ First, let's confirm how the engine boots. `startEngine()` spawns a Node process
   // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
   // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
   // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
-  try {
-    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
-      cwd: workspaceRoot,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
-      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
-      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
-      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
-      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
-    })
+  const spawnedProcess = (() => {
+    try {
+      return child_process.spawn(process.execPath, [enginePath, ...args], {
+        cwd: workspaceRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+        // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+        // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+        // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+        // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
 ```
 
 The point is `stdio: ['pipe', 'pipe', 'pipe']`. Because stdin, stdout, and stderr are all pipe-connected, the extension can pump code in via `engineProcess.stdin.write(...)`. The `env` assembled in the omitted part carries only the debug flag and the capture seam (#307); `ORBITSCORE_ENGINE`, which used to announce the backend kind, was removed in #502 (see [0-2](/en/orientation/architecture-overview)). On receiving the `repl` subcommand, the engine calls `startREPLMode()`.
@@ -158,7 +158,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2454-2457
+// packages/vscode-extension/src/run-selection.ts:60-63
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -172,7 +172,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2421-2434
+// packages/vscode-extension/src/run-selection.ts:27-40
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -200,46 +200,14 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2738-2776
-function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:592-598
+export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
     outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
     return false
   }
-  let codeToSend = rawCode
-  if (documentDir) {
-    // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
-    // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
-    // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
-    // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
-    codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      globalInitialized = true
-    } else if (globalInitialized) {
-      codeToSend = setDirCommand + '\n' + codeToSend
-    }
-  }
-
-  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
-  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
-  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
-  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
-  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
-
-  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
-  if (statusBarItem?.text.includes('🐛')) {
-    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
-  }
-  engineProcess.stdin.write(codeToSend + '\n')
-  return true
-}
 ```
 
 The two ways, summarized:
@@ -249,7 +217,7 @@ The two ways, summarized:
 
 Why are two needed? Because `import` is evaluated before statements. The DSL injection runs as a statement, so at the moment `import` runs in the first evaluation, the base directory is not yet set. Only the meta line can deliver it ahead of time. The DSL injection is kept so that the proven behavior of existing paths such as `audio()` stays unchanged.
 
-The `globalInitialized` flag is bound to the engine process lifecycle and is reset at boot, restart, and activate (extension.ts:110-112, 292, 2173).
+The `globalInitialized` flag is bound to the engine process lifecycle and is reset at boot, restart, and activate (extension.ts:95-97, 292, 2173).
 
 There is no fallback to `process.cwd()` on the engine side (Issue #168). If documentDirectory is unset and a relative path is specified, an explicit error is raised.
 
@@ -258,7 +226,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2593-2600
+// packages/vscode-extension/src/run-selection.ts:199-206
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

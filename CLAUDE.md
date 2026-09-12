@@ -621,6 +621,7 @@ E2E は「**振る舞いが正しいか**」を問う。**出荷するのは振�
 | capture は異常終了でも開ける | `capture.rs` の定期 header patch + unit | — |
 | 計画文書が閉じた issue を未完了として語らない | `tests/docs/planning-issue-state.spec.ts`（#814） | **矛盾する行が増えたら red**（ラチェット・`docs/planning/issue-states.json` のスナップショットと突合し、**GitHub API は叩かない**） |
 | ファイルは 500 コード行を超えない | `tests/repo/file-size-ratchet.spec.ts`（#888） | 超過が増えたら red（ラチェット） |
+| 分割で module doc をコピペしない | `tests/repo/module-doc-purity.spec.ts`（#887） | 同一 doc を持つファイル組が増えたら red（ラチェット） |
 
 **ラチェットの baseline（未カバー語の一覧）は減らす方向にしか編集してはいけない。**
 増やす編集は「DSL を足して E2E を書かなかった」ことなので、レビューで止める。

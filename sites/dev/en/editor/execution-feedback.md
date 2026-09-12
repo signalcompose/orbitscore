@@ -37,17 +37,11 @@ What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "inte
 When `Cmd+Enter` is pressed, the `orbitscore.runSelection` command fires and the `runSelection()` function is called. Two guard conditions are checked first:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2436-2447
+// packages/vscode-extension/src/run-selection.ts:42-47
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
     vscode.window.showErrorMessage('Please open an OrbitScore file')
-    return
-  }
-
-  // Check if engine is running
-  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
-    vscode.window.showWarningMessage('⚠️ Engine is not running. Click status bar to start engine.')
     return
   }
 ```
@@ -63,7 +57,7 @@ Incidentally, the MCP `run_selection` tool calls this same function (`runSelecti
 When there is a selection (`!selection.isEmpty`), it is simple. The text of the selected range is taken as is:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2454-2456
+// packages/vscode-extension/src/run-selection.ts:60-62
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -78,7 +72,7 @@ When there is a selection (`!selection.isEmpty`), it is simple. The text of the 
 The case with no selection is interesting. It investigates "to which variable (subject) does the line at the cursor belong" and gathers **lines from the entire file** related to that subject:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2457-2506 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/run-selection.ts:63-112 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -134,7 +128,7 @@ The case with no selection is interesting. It investigates "to which variable (s
 `getLineSubject()` is a function that looks at each line and returns "to which variable does this line belong." The first draft did not dive into it, but the implementation is a small one with just two regular expressions.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2421-2434
+// packages/vscode-extension/src/run-selection.ts:27-40
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -179,31 +173,10 @@ On the line `_kick.play(`, `parenBalance = 1`. On `1, 0, 1, 0,` there is no chan
 When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2506-2529
-    } else {
-      // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
-      let endLine = currentLine
-      const lineText = editor.document.lineAt(currentLine).text
-      let parenBalance = 0
-      for (const char of lineText) {
-        if (char === '(') parenBalance++
-        if (char === ')') parenBalance--
-      }
-      while (parenBalance > 0 && endLine + 1 < editor.document.lineCount) {
-        endLine++
-        const contLine = editor.document.lineAt(endLine).text
-        for (const char of contLine) {
-          if (char === '(') parenBalance++
-          if (char === ')') parenBalance--
-        }
-      }
-
-      executionRange = new vscode.Range(
-        editor.document.lineAt(currentLine).range.start,
-        editor.document.lineAt(endLine).range.end,
-      )
-      text = editor.document.getText(executionRange)
-    }
+// packages/vscode-extension/src/engine-handlers.ts:308-310
+          } else {
+            outputChannel?.append(output)
+          }
 ```
 
 ---
@@ -213,46 +186,14 @@ When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP
 The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2738-2776
-function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:592-598
+export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
     outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
     return false
   }
-  let codeToSend = rawCode
-  if (documentDir) {
-    // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
-    // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
-    // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
-    // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
-    codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      globalInitialized = true
-    } else if (globalInitialized) {
-      codeToSend = setDirCommand + '\n' + codeToSend
-    }
-  }
-
-  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
-  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
-  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
-  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
-  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
-
-  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
-  if (statusBarItem?.text.includes('🐛')) {
-    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
-  }
-  engineProcess.stdin.write(codeToSend + '\n')
-  return true
-}
 ```
 
 The two layers are:
@@ -273,7 +214,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 The tail of `runSelection()` looks like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2593-2600
+// packages/vscode-extension/src/run-selection.ts:199-206
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -293,7 +234,7 @@ A point to note here is the ordering: if sending fails, **no flash**. As of 2026
 What flashes the executed range in the editor is `flashLines()`. It is implemented using `createTextEditorDecorationType` (VS Code API):
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2534-2591
+// packages/vscode-extension/src/run-selection.ts:140-166
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -321,37 +262,6 @@ What flashes the executed range in the editor is `flashLines()`. It is implement
         backgroundColor = new vscode.ThemeColor('editor.selectionBackground')
         break
     }
-
-    // Always paint the whole line(s), never just the selected characters. When a
-    // non-empty selection was executed — which is every MCP-triggered run, since
-    // the Agent Bridge always targets a precise range via set_selection before
-    // calling run_selection (#388) — a character-bounded decoration exactly
-    // overlaps the editor's native selection highlight (same range, and with the
-    // default flashColor='selection' the same background color too), so toggling
-    // it on/off is visually imperceptible: the "off" state still shows the native
-    // selection underneath. Whole-line painting extends past the selected text and
-    // stays visible regardless of selection state, color config, or trigger source.
-
-    // Create flash function
-    const createFlash = (flashIndex: number) => {
-      const decoration = vscode.window.createTextEditorDecorationType({
-        backgroundColor: backgroundColor,
-        isWholeLine: true,
-      })
-      editor.setDecorations(decoration, [executionRange])
-
-      setTimeout(() => {
-        decoration.dispose()
-        // Schedule next flash if not the last one
-        if (flashIndex < flashCount - 1) {
-          setTimeout(() => createFlash(flashIndex + 1), 100)
-        }
-      }, flashDuration)
-    }
-
-    // Start flashing
-    createFlash(0)
-  }
 ```
 
 `createTextEditorDecorationType` creates a new decoration object each time and discards it with `decoration.dispose()` after `setTimeout`. That is one cycle of "flashing." By recursively calling `createFlash(flashIndex + 1)` until `flashCount - 1`, the flash is repeated the specified number of times.
@@ -402,8 +312,8 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` is an index into the argument tree of `play()`; `"1.0"` means "the first element inside the second argument." `atEpochMs` is the event's **grid time**; because the engine dispatches ahead with lookahead, the line arrives early. The extension delays the decoration until that time.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
-function handleStepLine(step: StepEvent): void {
+// packages/vscode-extension/src/playhead-decorations.ts:96-107
+export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
   const timeout = setTimeout(
@@ -428,7 +338,7 @@ For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stack
 A human user notices errors via the editor's red squiggles and the Output Channel, but an LLM going through MCP receives only the `ok` of `evaluate_orbitscore`. And the `true` of `writeCodeToEngine()` only means "it reached stdin." #614 added a mechanism that sends `//#evalMark {"requestId":...}` right after the code, and when the engine reaches it in FIFO order, returns the diagnostics accumulated during the preceding evaluation as JSON.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2803-2812
+// packages/vscode-extension/src/agent-handlers.ts:91-100
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -444,7 +354,7 @@ A human user notices errors via the editor's red squiggles and the Output Channe
 The reception on the stdout side is placed as an **independent branch** in `setupStdoutHandler()`. The comment records that at first it was piggybacked on the `{"pluginUi"` branch and never dispatched; all unit tests were green and only the real-device E2E caught it.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1295-1303
+// packages/vscode-extension/src/engine-handlers.ts:248-256
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -467,8 +377,8 @@ The editor's `Cmd+Enter` does not send this marker. For a human, the flash + dia
 Separately from `Cmd+Enter`, `updateDiagnostics()` runs on document open / change / activation (#384, [IV-1](/en/editor/vscode-architecture#intellisense-and-diagnostics-registration)). The first half is the same three per-line checks as of 2026-05.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3752-3826
-async function updateDiagnostics(
+// packages/vscode-extension/src/diagnostics-provider.ts:21-41
+export async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
 ) {
@@ -489,66 +399,12 @@ async function updateDiagnostics(
       if (!inMultilineStatement) {
         inMultilineStatement = true
       }
-      continue // Skip parenthesis check for multiline statements
-    }
-
-    // Detect multiline statement end: line with closing parenthesis
-    if (inMultilineStatement && trimmedLine.endsWith(')')) {
-      inMultilineStatement = false
-      continue // Skip parenthesis check for closing line
-    }
-
-    // Skip parenthesis check if we're inside a multiline statement
-    if (inMultilineStatement) {
-      continue
-    }
-
-    // Check for common syntax errors
-
-    // Missing closing parenthesis (only for single-line statements)
-    const openParens = (line.match(/\(/g) || []).length
-    const closeParens = (line.match(/\)/g) || []).length
-    if (openParens > closeParens) {
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, 0, i, line.length),
-        'Missing closing parenthesis',
-        vscode.DiagnosticSeverity.Error,
-      )
-      diagnostics.push(diagnostic)
-    }
-
-    // Invalid tempo range
-    const tempoMatch = line.match(/\.tempo\((\d+)\)/)
-    if (tempoMatch && tempoMatch[1]) {
-      const tempo = parseInt(tempoMatch[1])
-      if (tempo < 20 || tempo > 999) {
-        const start = line.indexOf(tempoMatch[1])
-        const diagnostic = new vscode.Diagnostic(
-          new vscode.Range(i, start, i, start + tempoMatch[1].length),
-          `Tempo must be between 20 and 999 (got ${tempo})`,
-          vscode.DiagnosticSeverity.Warning,
-        )
-        diagnostics.push(diagnostic)
-      }
-    }
-
-    // Check for deprecated syntax (old MIDI DSL)
-    if (line.includes('sequence ') && !line.includes('//')) {
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, 0, i, line.length),
-        'Deprecated: Use "var seq = init GLOBAL.seq" instead of "sequence"',
-        vscode.DiagnosticSeverity.Warning,
-      )
-      diagnostic.tags = [vscode.DiagnosticTag.Deprecated]
-      diagnostics.push(diagnostic)
-    }
-  }
 ```
 
 The second half consists of **cross-line analyses**, which merely map the `DiagnosticIssue`s returned by pure functions (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) to `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3828-3839
+// packages/vscode-extension/src/diagnostics-provider.ts:97-108
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -692,7 +548,7 @@ The decision itself is a three-way branch.
 The mapping to severity happens in `updateDiagnostics()`, which also puts the `code` straight onto the `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3858-3869
+// packages/vscode-extension/src/diagnostics-provider.ts:127-138
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -716,7 +572,7 @@ Putting the `code` on the `vscode.Diagnostic` has a side effect: MCP's `get_diag
 The diagnostic does not only report; it offers a way out. A CodeActionProvider registered by `activate()` offers an "add `<name>.output()`" action for both codes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3513-3530
+// packages/vscode-extension/src/dsl-providers.ts:180-197
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
@@ -735,7 +591,6 @@ The diagnostic does not only report; it offers a way out. A CodeActionProvider r
           )
           action.diagnostics = [diagnostic]
           action.isPreferred = diagnostic.code === 'output-missing'
-          // ...
 ```
 
 The point is that `isPreferred` is true only for `output-missing`. `dry-not-routed` is the "you may have meant this" side, so it is deliberately **not** the action Cmd+. picks by default. The insertion goes at the end of the line the diagnostic landed on, adding `\n<indent><name>.output()` with the original line's indentation (`missingOutputQuickFixEdit`).
@@ -761,7 +616,7 @@ The skip order mirrors the engine's own resolution order (`Sequence.resolveLineD
 A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3882-3899
+// packages/vscode-extension/src/diagnostics-provider.ts:151-168
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

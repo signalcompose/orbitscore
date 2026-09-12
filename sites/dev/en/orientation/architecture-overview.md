@@ -99,16 +99,15 @@ graph TD
 `startEngine()` is responsible for starting the engine. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch entirely**, leaving only the startup path for the sole remaining backend, the Rust daemon. The first thing it does is **have backend binary resolution precede spawning the engine**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1944-1953
+// packages/vscode-extension/src/engine-process.ts:76-84
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
-    outputChannel?.appendLine(
-      '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
-    )
-    vscode.window.showErrorMessage(
-      '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
-    )
-    return false
+    bundleStatusItem.show()
+    bundleStatusItem.text = '$(error) daemon: not found'
+    bundleStatusItem.tooltip =
+      'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
   }
 ```
 
@@ -132,7 +131,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 Only the debug flag and the capture seam (#307) go into this `env` variable (two more are added right before the spawn; they show up in a moment). **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1985-1999
+// packages/vscode-extension/src/engine-process.ts:313-327
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +152,7 @@ Only the debug flag and the capture seam (#307) go into this `env` variable (two
 The engine process itself is then started with `child_process.spawn` running Node.js. The question that matters here is **which** Node.js. On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) the extension **stopped looking up `node` on PATH and started borrowing the Node that VS Code itself bundles**. A VS Code launched from Finder or launchd has the minimal PATH from `/etc/paths`, and on machines where node is installed through nodenv or Homebrew there is no `node` there. The engine then fails to start with `spawn node ENOENT`, and because the only visible symptom is "the engine does not start", the user has no way to tell that PATH is the cause. The extension host is Electron, so `process.execPath` does not run as Node on its own; it becomes Node only once `ELECTRON_RUN_AS_NODE=1` is passed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2001-2034
+// packages/vscode-extension/src/engine-process.ts:329-362
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -177,17 +176,17 @@ The engine process itself is then started with `child_process.spawn` running Nod
   // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
   // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
   // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
-  try {
-    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
-      cwd: workspaceRoot,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
-      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
-      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
-      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
-      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
-    })
+  const spawnedProcess = (() => {
+    try {
+      return child_process.spawn(process.execPath, [enginePath, ...args], {
+        cwd: workspaceRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+        // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+        // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+        // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+        // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
 ```
 
 The two env vars added here enter the engine process. The process tree continues extension host → engine → daemon → plugin child, so **a variable added here flows all the way to the leaves unless something stops it**. That stopping point appears below, at the daemon spawn.
@@ -195,7 +194,7 @@ The two env vars added here enter the engine process. The process tree continues
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2774-2775
+// packages/vscode-extension/src/engine-process.ts:628-629
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -207,23 +206,23 @@ This is the first step of the "press `Cmd+Enter` and sound comes out" flow: **de
 Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Model Context Protocol) server inside the Extension Host. An external agent (Claude Code, for example) can drive OrbitScore with tools such as `evaluate_orbitscore` / `start_engine` / `get_log`, going through the same path as an editor user.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:9-18
+// packages/vscode-extension/src/mcp-server.ts:28-37
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
  * Hosts an MCP server (Streamable HTTP) inside the extension host so an external
- * agent (e.g. Claude Code via `.mcp.json`) can drive OrbitScore operations for
- * E2E testing. The same tool surface is intended for reuse by the WCTM
- * performance runtime (pi harness — spec §4.2 "Bridge は harness-neutral").
+ * agent can drive OrbitScore operations for E2E testing. The same tool surface
+ * is intended for reuse by the WCTM performance runtime.
  *
- * Only started when `orbitscore.mcpServer.port` is a nonzero port (see
- * extension.ts activate()). Binds 127.0.0.1 only.
+ * Only started when `orbitscore.mcpServer.port` is a nonzero port. Binds
+ * 127.0.0.1 only.
+ */
 ```
 
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:440-445
+// packages/vscode-extension/src/extension.ts:243-248
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -235,7 +234,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1351-1355
+// packages/vscode-extension/src/mcp-server.ts:294-298
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())

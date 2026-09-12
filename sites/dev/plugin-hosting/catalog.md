@@ -542,21 +542,12 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 別実装で持っています。冒頭コメントがその理由を説明しています。
 
 ```typescript
-// packages/vscode-extension/src/plugin-catalog-reader.ts:1-15
+// packages/vscode-extension/src/extension.ts:1-6
 /**
- * Plugin catalog reader for the VS Code extension (#463 C1b/C3).
+ * OrbitScore VS Code extension root and public re-export surface.
  *
- * Deliberately independent from `packages/engine/src/core/global/plugin-catalog.ts`
- * (same JSON shape, same mtime-cache idea) rather than a cross-package import:
- * the extension and engine are separate build targets (engine ships as compiled
- * JS copied into `engine/dist/`, see `scripts/copy-daemon-bin.sh` / build:engine),
- * so this module reads the on-disk cache file directly instead of reaching into
- * engine source.
- *
- * Catalog file: `~/.orbitscore/plugin-catalog.json`, written by the
- * `orbit-plugin-scan` binary (rust/crates/orbit-plugin-scan). Consumers here
- * only read it — the extension's job is completion (C3) + MCP tools (PC.4) +
- * spawning a rescan (C1b), never writing the catalog itself.
+ * Engine wiring function bodies were moved unchanged to the engine modules;
+ * formerly private helpers are imported only where this root still wires them.
  */
 ```
 
@@ -588,35 +579,25 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 **拡張がスキャナバイナリを直接 spawn** します。バイナリの探索順は daemon の探索と同じ流儀です。
 
 ```typescript
-// packages/vscode-extension/src/plugin-catalog-reader.ts:174-202
+// packages/vscode-extension/src/playhead-decorations.ts:89-107
 /**
- * Resolve the `orbit-plugin-scan` binary path. Candidate order mirrors
- * `resolveDaemonBinaryPath` in `packages/engine/src/audio/rust-engine/daemon-client.ts`:
- * explicit override → `ORBIT_PLUGIN_SCAN_PATH` env → monorepo release build
- * (dev workflow) → .vsix-bundled binary (scripts/copy-daemon-bin.sh).
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
  */
-export function resolvePluginScanBinaryPath(explicitPath?: string): string {
-  const searched: string[] = []
-  const candidates: string[] = []
-  if (explicitPath) candidates.push(explicitPath)
-  const envPath = process.env.ORBIT_PLUGIN_SCAN_PATH
-  if (envPath) candidates.push(envPath)
-
-  // This compiled file sits at `<extension>/dist/plugin-catalog-reader.js` once
-  // built (mirrors extension.ts's __dirname convention); monorepo root is 3
-  // levels up: dist -> vscode-extension -> packages -> root.
-  const monorepoRoot = path.resolve(__dirname, '../../../')
-  candidates.push(path.join(monorepoRoot, 'rust/target/release/orbit-plugin-scan'))
-  candidates.push(path.join(monorepoRoot, 'rust/target/debug/orbit-plugin-scan'))
-
-  const platform = `${process.platform}-${process.arch}`
-  candidates.push(path.join(__dirname, '../engine/bin', platform, 'orbit-plugin-scan'))
-
-  for (const candidate of candidates) {
-    searched.push(candidate)
-    if (isExecutableFile(candidate)) return candidate
-  }
-  throw new PluginScanBinaryNotFoundError(searched)
+export function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
 }
 ```
 
@@ -646,16 +627,22 @@ MCP の `list_plugins` / `rescan_plugins` も同じ `loadPluginCatalog()` / `run
 共有しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1030-1040
+// packages/vscode-extension/src/mcp-tools-engine.ts:64-80
   server.registerTool(
-    'list_plugins',
+    'stop_engine',
     {
-      title: 'List Plugins',
+      title: 'Stop Engine',
+      description: 'Stop the OrbitScore audio engine. Equivalent to the "Stop Engine" command.',
+    },
+    async () => toToolResult(await handlers.stopEngine()),
+  )
+
+  server.registerTool(
+    'get_engine_state',
+    {
+      title: 'Get Engine State',
       description:
-        'List the installed CLAP/VST3 plugin catalog (#463 PC.1) — name, vendor, format, ' +
-        'and roles (effect/instrument) for each entry — so an agent can pick real ' +
-        'plugin names when composing effect()/instrument() calls. Returns an error ' +
-        '(with a rescan hint) if the catalog has not been scanned yet.',
+        'Report engine process state plus the daemon GetStatus output and callback snapshots.',
     },
     async () => {
 ```
@@ -761,13 +748,13 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3452-3462
+// packages/vscode-extension/src/dsl-providers.ts:119-129
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
         if (!catalog) {
           if (!pluginCatalogHintShown) {
-            pluginCatalogHintShown = true
+            setPluginCatalogHintShown(true)
             vscode.window.showInformationMessage(
               'OrbitScore: no plugin catalog found. Run "OrbitScore: Rescan Plugin Catalog" to enable name completion.',
             )
@@ -861,7 +848,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3883-3899
+// packages/vscode-extension/src/diagnostics-provider.ts:152-168
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

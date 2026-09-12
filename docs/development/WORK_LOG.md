@@ -17,6 +17,510 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
+
+`/code:peer-review-team` の comment-analyzer が出した 2 件。**コメントのみの変更**で、
+差分にコメント行以外の追加 / 削除が 1 件も無いことを機械的に確認した。
+
+#### 🔴 同じ PR 内で偽になったコメント
+
+`docs-panels.ts` の `resolveDevDocsUrl` の doc が「`mcp-server.ts` の `DOCS_PUBLIC_BASE`」と
+書いていたが、**定義元は `mcp-docs.ts:12`** で `mcp-server.ts` は再輸出しているだけ。
+
+このコメントは `docs-panels.ts` を作った束 C（`9143a233`）の時点では**正しかった**。
+束 F（`d8bda308`）で `mcp-docs.ts` を新設して定義元が移った時に、
+**この横参照だけが追随しなかった。**
+
+**束をまたいだ相互参照は自動では追随しない。** import なら型チェッカが捕まえるが、
+**地の文の参照は誰も見ていない。**
+
+#### 新設 19 モジュールのうち doc の無かった 6 本に module doc を足した
+
+`mcp-sdk` / `mcp-types` / `mcp-docs` / `mcp-tools-engine` / `mcp-tools-editor` / `mcp-tools-plugins`。
+
+🔴 **comment-analyzer の「他 16 ファイルには必ずある」は不正確だった** — doc が無いのは
+40 ファイル中 12 件で、`completion-context.ts` / `plugin-state-bridge.ts` 等**分割前から
+無いもの**も含まれる。「3 ファイルが普遍的な規約を破っている」わけではない。
+
+ただし**設計 D5 の分割意図がコード側に一切残っていなかった**のは事実なので、
+6 本に足した。特に `mcp-tools-*` には **`tools/list` の順序の制約**を書いた
+（これが今日の退行の原因だった）。
+
+#### 検証
+
+差分がコメントのみ（機械確認）/ `npm test` 2,491 passed / lint 緑 / `tsc --noEmit` 緑 /
+`typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 / リポジトリのラチェット 64 passed。
+
+**実機 gated は再実行していない。** コメントは出荷物の振る舞いに届かないので、
+先の全件緑（`45 passed | 1 skipped`・`ratio 1.000015`）が有効なままである。
+
+---
+
+### fix(mcp): restore the tool registration order the split had changed (Sep 13, 2026)
+
+Fable 監査が、Sonnet レビュアー 8 体が全員通した後に **MCP ツール一覧の順序の変化**を検出した。
+
+#### 何が起きていたか
+
+分割前の `mcp-server.ts` は docs 系 3 本（`get_dev_doc` / `search_dev_docs` /
+`register_mcp_server`）を **plugin 系 6 本より後ろ**（23–25 番）に登録していた。
+束 F で `registerEditorTools` に docs 系を含めたため、**17–19 番へ繰り上がり、
+plugin 系 6 本が 3 つ後ろへずれた。**
+
+MCP SDK の `tools/list` は `Object.entries(this._registeredTools)` を返す
+= **登録順がそのまま一覧の順序**なので、これは**クライアントに見える観測可能な変化**である。
+
+#### 🔴 なぜ 8 体が見落としたか — done 条件の検証コマンドが条件を見ていなかった
+
+設計 §7.7 の done 条件は「25 本・**順序も**同一」と書いていたが、
+指定していた検証コマンドが
+
+```
+grep -oE "'[a-z_]+'" | sort
+```
+
+で、**`| sort` が順序の情報を消していた。** レビュアーも私も Codex も
+「集合が diff ゼロ」までしか確かめておらず、**順序は誰も見ていなかった**
+（「列挙は一段手前で止まる」の形）。
+
+**done 条件を書く時は、それを検査するコマンドが本当にその条件を見ているかを確かめること。**
+
+#### 直し方
+
+`registerDocsTools(server, handlers, docsSourceRoot)` を `mcp-tools-editor.ts` 内に切り出し、
+`buildServer` を **engine → editor → plugins → docs** の 4 呼び出しにした。
+これが分割前の 25 本の順序を再現する唯一の並びである。
+副作用として `registerEditorTools` から `docsSourceRoot` が外れ、署名が揃った。
+
+**恒久対策**: `mcp-server.spec.ts` に `tools/list keeps the exact registration order` を追加。
+実サーバを立てて `tools/list` を叩き、順序を配列で固定する。
+退行を再現する変異（docs を plugins の前へ）で red を確認済み。
+
+#### 同時に直した 1 件
+
+`extension.ts` の export が 27 → 28 に増えていた（`export type { EngineViewProvider }` を
+分割時に足していた）。葉の `extension-state.ts` が根から型を取る形は設計が棄却した向きなので、
+本籍の `engine-view-provider.ts` から取るようにし、根の型 re-export を落とした。
+**main と HEAD の export 集合が完全一致（対称差が空）** になった。
+
+#### 🔴 自分の件数主張が誤っていた
+
+PR 本文と束 A のコミットに書いた「**31 箇所の代入を setter 化**」は再現できない。
+実測は main の直接代入 **37 件** / HEAD の setter 呼び出し **32 件**。
+設計 §14 の「件数の主張を書かない。何を変えたかを書く」に従い、
+**数値を別の数値に差し替えず、主張自体を落とす**。
+
+#### 別 issue に切り出した 1 件
+
+散文の `## Sources` 参照 **110 件が存在しない行を指すようになった**（#911）。
+`docs:check` はコードブロックのヘッダ引用しか見ないため、**982 件が緑のまま**起きていた。
+108 件はこの分割が壊したもの。「振る舞い不変の分割」と「#887 より前から在る腐りの修復」を
+同じ束に混ぜると双方の検算ができなくなるので分けた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1）。
+
+#### 検証
+
+`npm test` 2,491 passed（既存の期待値は 1 つも変えていない）/ lint 緑 /
+`tsc --noEmit` 緑 / `typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 /
+ファイルサイズのラチェット 64 passed。
+
+---
+
+### fix(extension): remove a docblock that was copy-pasted from extension.ts, and mechanize the check (Sep 12, 2026)
+
+`/simplify` のラウンド 1（4 観点並行）で見つかった 1 件を直し、同じ欠陥クラスを機械化した。
+
+#### 何が起きていたか
+
+`diagnostics-provider.ts` と `dsl-providers.ts` に、**`extension.ts` を説明する docblock が
+そのまま複製**されていた。死んだ `// import * as os from 'os'` 行まで一緒に付いてきていた。
+
+どちらのファイルにも**正しいファイル固有の doc が先頭に既にある**ので、複製は 2 つ目に居た。
+先頭が正しいと、人は 2 つ目を読み飛ばす。
+
+`// import * as os from 'os'` は main の `extension.ts:6` に元からあったもので、
+`extension.ts` 側は触っていない（この PR の持ち込みではない）。
+複製された 2 ファイルは**この PR で新規追加**したので、両方とも分割作業でのコピペである。
+
+#### 🔴 最初に書いた検査は何も見ていなかった
+
+`module-doc-purity.spec.ts` に足した最初の版は**先頭の doc ブロックだけ**を見ていた。
+複製は 2 つ目に居るので、**実際の欠陥を戻す変異を当てても緑のまま通った**。
+「新しいテストが緑」は「そのテストが何かを検査している」証明にならない
+（memory `test-assertions-must-discriminate` の 3 回目）。
+
+書き直して**ファイル内のすべての doc ブロック**を対象にし、変異 3 種で red を確認した:
+
+| 変異 | 結果 |
+|---|---|
+| TS 間のコピペ（実際に起きた欠陥を戻す） | red・両ファイルを名指し |
+| baseline の組を解消して表から消さない | red（厳密等価の向き） |
+| 無関係な Rust 2 ファイル間のコピペ | red・両ファイルを名指し |
+
+#### baseline は 2 組
+
+364 ファイル / 1,355 ブロックを走査して衝突は 2 件だけで、どちらも effect / instrument の
+並行実装（同じ構造の同じフィールドに同じ説明）という正当なもの。`KNOWN_SHARED_DOCS` に明示した。
+**厳密等価**にしてあるので、解消したら表から消さないと red になる。
+
+#### 引用の追随
+
+2 ファイルから 8 行 / 7 行を削ったので、引用 20 件が落ちた。`--fix` の後、
+**start と end が同じだけ動いたこと**（範囲の長さが変わった引用 0 件）と、
+**オフセットが実際の削除行数と一致すること**（−8 が 12 件 / −7 が 8 件・ファイル単位で一意）を
+検算した。`--fix` が別ブロックへ着地した形は排除できている。
+
+#### `__*ForTest` は減っていない（実測）
+
+#887 本文が「何が実際に困るか」として挙げたテスト専用の裏口は、
+**分割前 13 本 → 分割後 13 本で 1 本も減っていない**（本文の「14 本」は末尾が `...` の概数）。
+裏口を外すにはテストを書き直す必要があり、それは「既存テストの期待値を 1 つも変えていない」
+という #887 の検算そのものを壊す。**分割では解消しない**ことを記録しておく。
+
+#### 検証
+
+`npm test` 2,490 passed（2,488 + 新規 2 件・**既存の期待値は 1 つも変えていない**）/
+lint 緑 / `tsc --noEmit` 緑 / `docs:check` 982 引用 0 失敗。
+
+---
+
+### refactor(extension): split mcp-server.ts — the TS split is complete (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 F（最終）**。**`packages/vscode-extension/src/` の全ファイルが 500 コード行以下**に
+なった（超過 **0 件**）。
+
+| ファイル | コード行 |
+|---|---|
+| `mcp-server.ts` | 1,161 → **271** |
+| `mcp-tools-editor.ts` | 251 |
+| `mcp-tools-plugins.ts` | 217 |
+| `mcp-types.ts` | 148 |
+| `mcp-tools-engine.ts` | 140 |
+| `mcp-docs.ts` | 129 |
+| `mcp-sdk.ts` | 96 |
+
+### `buildServer` は 616 コード行の単一関数だった
+
+ファイルを分けても 1 つの式なので閾値を満たせない。`session.rs` の `handle_command`
+（1,028 行の単一 `match`）と同じ問題で、**owner 裁定（#888 子 2）に倣い中身を引数付きの
+`register*Tools` へ切った**。`registerTool` の本文はインデントも含めて不変。
+
+Codex が **ツール名 25 本の一覧が diff ゼロ**であること、および条件付き登録の 3 群
+（`save_plugin_state` / `open_plugin_ui`・`close_plugin_ui` / `register_mcp_server`）の
+述語が byte 単位で一致することを確認した。
+
+### #887 全体の成果
+
+| ファイル | 前 | 後 |
+|---|---|---|
+| `extension.ts` | 2,779 | **301**（89% 削減） |
+| `mcp-server.ts` | 1,161 | **271**（77% 削減） |
+
+新設 **19 モジュール**。ラチェットの baseline は 19 → **17 件**（`packages/vscode-extension/src/`
+からは 1 件も残っていない）。
+
+🔴 **`npm test` は 7 束すべてで 2,488 passed。既存テストの期待値の変更は 0 件。**
+これが分割の検算そのものである。
+
+### 引用と散文
+
+引用は束ごとに壊れ、合計 **約 300 件**を直した。手順は
+`--fix`（行番号）→ 本文一致で再アンカー → 本文をソースから再生成、の 3 段。
+
+🔴 **散文の帰属は 4 束連続で腐っていた**（`extension.ts` の…と書いてあるものが別モジュールへ移った）。
+`docs:check` は行が合っているかしか見ない。束 F では `buildServer` の `registerTool` 群と
+docs 配信部の帰属を直した。
+
+### refactor(extension): extension.ts is under 500 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 E**。**`extension.ts` が 2,779 → 301 コード行（89% 削減）**になり、
+ラチェットの baseline から外れた。
+
+| 新設 | コード行 |
+|---|---|
+| `dsl-providers.ts` | **302**（補完・quick fix・hover の登録） |
+| `diagnostics-provider.ts` | **127**（`updateDiagnostics`） |
+
+`extension.ts` に残ったのは `activate` / `deactivate` / `showCommands` / `restartEngine` /
+`reloadWindow` / `isTransportCommand` と、import・再輸出ブロックだけ。
+
+### 🔴 この束は main が直接やった
+
+Codex の発注が sandbox の `EPERM`（companion のログ書き込み）で**起動しなかった**
+（memory `codex-rescue-sandbox-broker-gotcha`）。残りが小さかったので main が実装した
+（CLAUDE.md「4 ラウンド目は main が直す」の一般化）。
+
+### 🔴 import は「推測」せず「引き写す」
+
+新モジュールに import を**自分で書こうとして名前を 5 つ外した**
+（`detectPitchScopeContext` / `detectPlayArgContext` / `detectOutputArgContext` /
+`detectEffectArgContext` / `analyzeMissingOutput` の受け方）。
+
+そこで**束 E 前の `extension.ts` の import 群 111 行をそのまま引き写し**、
+未使用分を `eslint --format json` の指摘で機械的に刈る方式へ切り替えた。**推測が 0 になった。**
+残った型エラー 2 件（`registerHoverProvider` / `updateDiagnostics` に `export` が必要）も
+コンパイラが名指ししたものだけを直した。
+
+### 散文参照は「範囲を保てない限り動かさない」
+
+束 D で範囲を 1 点に潰した失敗を踏まえ、**束 E 前の内容と一致した場合のみ**移す実装にした。
+今回は 12 件すべて一致せず（散文の行番号がもっと古い版を指している）、**据え置いた**。
+壊すより据え置く方が良い。
+
+### 検証
+
+`npm test` **2,488 passed**（6 束連続で不変・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`dsl-completion-provider.spec` 15 passed / `output-code-action.spec` 1 passed /
+`public-surface.spec` 38 passed（設計 §7.6 の done 条件）。
+
+**残るは `mcp-server.ts`（1,161）= 束 F。**
+
+### refactor(extension): move evaluation and agent handlers out of extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 D**。純粋な移動。
+
+| 新設 | コード行 |
+|---|---|
+| `agent-handlers.ts` | **392**（`*ForAgent` 17 本 + `__pluginUiForAgentForTest`） |
+| `run-selection.ts` | **152** |
+| `mcp-register-command.ts` | **152** |
+| `plugin-commands.ts` | **127** |
+
+`extension.ts` は 1,461 → **715** コード行（開始時 2,779 の **26%**。目標 500 まであと 215）。
+
+Codex は全 10 塊を `9143a233` と **verbatim 一致**で照合し、27 export の維持も確認している。
+`activate().handlers` のオブジェクトリテラルは byte-for-byte 不変。
+
+### 🔴 Codex に `npm test` の全件を頼んだのが間違いだった（束 0〜C）
+
+束 C の Codex が構造的な事実を報告した:
+
+```
+Error: listen EPERM: operation not permitted 127.0.0.1:<port>
+Tests  107 failed | 2381 passed
+```
+
+**sandbox が loopback の listen を禁じるので、localhost を使う 4 スイート（107 テスト）は
+原理的に走らない。** CLAUDE.md が「Codex は sandbox で daemon protocol（localhost bind）・
+MCP 系・実機 E2E が原理的に走らない」と明記しているとおりで、**私が読んでいたはずのこと**。
+
+束 B / C の Codex はどちらも「2,488 passed は自分の出力ではない」と明記して報告を拒んだ。
+**正しい態度である。** 束 D からブリーフを focused な spec だけに変えたところ、
+**衝突なしで完走した。**
+
+### 🔴 散文の参照は「範囲を潰さずに」直す
+
+散文中に `extension.ts:3000-3032` のような**行範囲つきの参照**が 12 件あり、これは引用 header
+ではないので `docs:check` が一切見ない。機械的に「関数の定義行 1 点」へ置き換えたところ
+`3000-3032` → `592` のように**範囲が潰れた**。**劣化なので取り消した。**
+
+取り消しに `git checkout -- sites/dev` を使って**引用の再アンカーまで巻き戻し**、やり直した。
+さらにその過程で `extension.ts:654-654`（`} else {` の 1 行）という**潰れた引用**を作ってしまい、
+元の 50 行（`run-selection.ts:63-112`）へ復元した。
+
+**範囲を保って移せた 2 件だけを移し、残り 10 件は据え置いた。** 内容が一致しないものを
+機械で動かすと、今回のように壊す。
+
+### 検証
+
+`npm test` **2,488 passed**（5 束連続で不変・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`public-surface.spec` 38 passed / `start-engine-for-agent.spec` 4 passed。
+
+### refactor(extension): move view, docs and flash out of extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 C**。純粋な移動。
+
+| 新設 | コード行 |
+|---|---|
+| `engine-view-provider.ts` | **243** |
+| `flash-config.ts` | **222** |
+| `docs-panels.ts` | **104** |
+
+`extension.ts` は 1,991 → **1,461** コード行（開始時 2,779 の **53%**）。
+
+🔴 既存の `engine-view.ts` へは入れていない。あれは header で「vscode 非依存」を宣言した
+純モジュールで、vscode に触る配線は**対になる新ファイル**へ置く（設計 §4.1 / D4）。
+
+### 🔴 引用が緑でも散文は検査されない（3 回目）
+
+`vscode-architecture.md` が「`engine-view.ts` の純関数がノードを組み立て、**`extension.ts` の**
+`EngineViewProvider` がそれを `vscode.TreeItem` に写します」と書いていた。ja/en とも直した。
+
+**3 束連続で同じ形の腐りが出ている**（束 A: 行数と状態の置き場所 / 束 B: stdout ルータの帰属 /
+束 C: `EngineViewProvider` の帰属）。`docs:check` は**行が合っているか**しか見ないので、
+**移した関数名で散文を横断検索する**のを各束の手順に入れている。
+
+### 🔴 委譲先と同じツリーで作業して衝突させた（main の運用ミス）
+
+束 B の Codex が正直に報告した: 検証中に main（私）が `npm test` を並走させ、さらに
+コミットまでしたため、**Codex は一度も全テストを完走できなかった**（exit 130 で停止）。
+Codex は「2,488 passed は自分の出力ではない」と明記して報告を拒んでいる。**正しい態度である。**
+
+memory `delegate-work-needs-its-own-worktree` がそのまま当たっている。
+検証は main の仕事なので結果に影響は無いが、**委譲先の時間を無駄にした**。
+以後の束では、ブリーフから「全テストを回す」を外し、**focused な spec だけを求める**。
+
+なお Codex は **AST 比較で 26 関数すべての本文が IDENTICAL** であることを確認しており、
+これは main の residual 分類より強い証拠である。
+
+### 検証
+
+`npm test` **2,488 passed**（4 束連続で不変・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`engine-command-awaits.spec` 10 passed（設計 §7.4 の追加 done）/ `public-surface.spec` 38 passed。
+
+### refactor(extension): move the engine wiring out of extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 B**。束 A で代入を setter に替えたので、ここは**純粋な移動**。
+
+| 新設 | コード行 | 中身 |
+|---|---|---|
+| `engine-handlers.ts` | **321** | stdout / stderr / exit / error のハンドラ 9 本 |
+| `engine-process.ts` | **423** | engine パス解決・`startEngine` / `stopEngine` / `toggleEngine` ほか 11 本 |
+
+`extension.ts` は 2,662 → **1,991** コード行。
+
+### 🔴 `engine-lifecycle.ts` へ戻さなかったことが、テストで証明された
+
+issue #887 の本文は「stdout/exit ハンドラは `engine-lifecycle.ts`（既存）へ」と書いていたが、
+設計（Fable 起案・main が `grep` で裏取り）がこれを覆した。
+`extension-wiring.spec.ts:48` が `engine-lifecycle` を `vi.mock` して `applyEngineExit` /
+`applyEngineError` を spy にしており、**同一モジュール内の呼び出しは mock を通らない**。
+戻した瞬間に spy が一度も呼ばれなくなり、テストを書き換えるしかなくなる。
+
+**`extension-wiring.spec.ts` が 58 passed であることが、mock 境界の外側に置けた証拠**である。
+
+### 引用 122 件 — 束 A で作った手順がそのまま効いた
+
+`--fix`（行番号のみ）70 → 本文をソースから再生成して再アンカー 52。
+束 A で書いた再アンカー手順を `$TMPDIR` のスクリプトとして再利用した。
+
+🔴 **引用が緑でも散文は検査されない（2 回目）。** `plugin-ui.md` が
+「**`extension.ts` の** stdout ルータはこの結果行を拾います」と書いているのに、
+引用は `engine-handlers.ts` を指していた。ja/en とも帰属を直した。
+移した関数名 7 つで横断検索し、他に同型が無いことも確認した。
+
+### 検証
+
+`npm test` **2,488 passed**（束 0 / A と同値・**既存テストの期待値の変更 0 件**。
+`tests/` の差分はラチェットの baseline のみ）/ `npm run lint` / `npm run typecheck:e2e` /
+`npm run build` / `npm run docs:check` 982 引用 / `extension-wiring.spec` 58 passed /
+`public-surface.spec` 38 passed。
+
+### refactor(extension): move module state to a leaf and turn 31 assignments into setters (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 A**。分割の核心で、以降の束が「純粋な移動」になるための前提。
+
+### 読みは live binding・書きは setter
+
+ES module の import 束縛は**代入できない**が、読みは常に最新値が見える。そこで:
+
+- **読み出し約 220 箇所の本文は 1 文字も変えていない**
+- **代入 31 箇所だけ**が `setX(v)` になった
+
+新設は `extension-state.ts`（103 コード行・leaf）と `playhead-decorations.ts`（124）。
+`__*ForTest` **13 本**は名前も引数も本文も変えず、閉じている状態と同じモジュールへ移し、
+`extension.ts` が `export { … } from` で再輸出する。**テスト側 239 箇所の変更は 0**。
+
+`extension.ts` は 2,779 → **2,662** コード行。
+
+### residual 322 行をすべて分類した
+
+設計 §7.2 の done 条件。**未分類 0**:
+
+| 分類 | 行数 |
+|---|---|
+| setter の定義と本体 | 54 |
+| setter の呼び出し | 32 |
+| 局所定数化 / 旧宣言 | 31+ |
+| import / 再輸出 | 89 |
+| 宣言・関数に `export` を前置（移動） | 25 |
+| doc / コメント | 11 |
+
+分類中に `outputChannel.appendLine` → `channel.appendLine` が一度「未分類」に落ちたが、
+設計 §4.5 が予告した **narrowing のための局所定数化**だった
+（`const channel = vscode.window.createOutputChannel(...)` の直後に `setOutputChannel(channel)`。
+**同一オブジェクト**であることを実物で確認）。
+
+### 🔴 今朝作った L-3 ガードが、今日のうちに TS 側で仕事をした
+
+新設 2 ファイルが `git add` 前だったため、ラチェットが**名指しで検出**した
+（`docs/design/888-file-size-ratchet-design.md` §13.10）。Rust 側で踏んだ穴が TS でも同じ形で出る。
+
+### 引用 124 件が壊れた — 3 段階で直した
+
+| 手段 | 解決 |
+|---|---|
+| `--fix`（行番号のみ） | 88 |
+| 本文一致で移動先を特定（`export` 前置を剥がす） | 12 |
+| 先頭行・末尾行を鍵にした再アンカー + **本文をソースから再生成** | 22 |
+| 手で 1 組 | 2 |
+
+🔴 途中で relocate スクリプトが **`/tmp` の一時パスを markdown に書き込んだ**（2 件）。
+候補ディレクトリに `/tmp` を渡した私の使い方の誤りで、直した。
+
+🔴 **引用が緑になっても散文は検査されない。** `vscode-architecture.md` が
+「`extension.ts` は 4,115 行の大きなファイルで、状態はモジュールレベル変数に置かれています」と
+書いており、**分割後は両方とも事実でない**。ja/en とも実態に合わせた。
+
+### 検証
+
+`npm test` **2,488 passed**（束 0 と同値・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`grep -cE '^let ' extension.ts` = **0**。
+
+### test(extension): freeze the public surface before splitting extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887（TS 分割）の**束 0 = 道具を先に置く**。**ソースは 1 行も動かしていない**
+（`git diff --stat main -- packages/` が空）。
+
+### 🔴 Rust で 2 度踏んだ欠陥の TS 版を先に塞ぐ
+
+Rust では `pub` 項目が `pub(crate) use` 経由で crate 外から消え、**全ゲート緑のまま通過**した。
+TS に `pub(crate)` は無いが、同型の欠陥は「再輸出ブロックから 1 本抜ける」「型だけ export されて
+値が消える」形で出る。しかも **`tests/vscode-extension/` は一度も型検査されていなかった**
+（`tsconfig.tests.json` の include は `tests/e2e/**` のみ）。
+
+`tests/vscode-extension/public-surface.spec.ts` を置き、**tsc と vitest の 2 層**に通した。
+凍結したのは `extension.ts` **27** + `mcp-server.ts` 値 **11** = **38 値**と、型 **25**。
+（設計文書の一覧を写さず、現物を `grep -E '^export'` して突き合わせた結果が一致）
+
+main が実測した fail-before **3 件**:
+
+| 変異 | 検出した層 |
+|---|---|
+| 存在しない export を import | tsc **TS2724** |
+| 型を値として使う | tsc **TS2693** |
+| 🔴 **実際に `export` を 1 本消す** | vitest（実行時に `undefined`） |
+
+3 番目が本題。Rust で踏んだ欠陥はこの形だった。
+
+### 引用追随スクリプトもリポジトリへ
+
+`sites/dev/scripts/relocate-citations.mjs`。引用は `extension.ts` **248 箇所** /
+`mcp-server.ts` **46 箇所**あり、全束で動く。`--fix` は**行番号しか直せない**ので、
+移動先を中身から特定するこれが要る。Rust 分割では scratchpad に置いていて毎回探していた。
+
+### 検証
+
+`npm test` **2,488 passed**（main の基準 2,450 + surface spec 38・**既存テストの期待値の変更 0 件**）/
+`npm run typecheck:e2e` / `npm run lint` / `npm run docs:check` 982 引用。
+
 ### docs: link the install guide from README and every release (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `905-install-route-links`
@@ -1455,384 +1959,6 @@ lint 緑 / docs:check 948 引用 0 failed
 
 ---
 
-### fix: close the review round-1 findings for #883 bundle C (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: ✅ ラウンド 1 収束（PR #884）
-**担当**: レビュー = `/simplify` 4 観点 + `/code:pr-review-team` 4 名 + **Fable 監査を並行** /
-fix = Codex（コード）+ main（docs・spec）/ 裁定と検証 = main
-
-#### 🔴 main が偽陽性 2 件を裁定した — どちらも**層をまたいだ誤判定**
-
-| レビュアー | 主張 | 裁定の根拠 |
-|---|---|---|
-| pr-test-analyzer | 「instrument は `ensureInsertBusForInstrument()` が `instrument()` 宣言時に先にバスを確保するので影響なし」 | ❌ 呼び出し元は **`gain()`（`sequence.ts:372→396`）と `pan()`（`:425→449`）のみ**。`instrument()` からは **0 件** |
-| silent-failure-hunter | **Critical**「再宣言で daemon の古いルーティングが黙って生き残る」 | ❌ Rust 側（`engine_wrap.rs:7656` `new_dest.store(old_dest.load())`）は**正しい**が、TS 側は `process-initialization.ts:91`「**Reuse existing sequence for REPL persistence**」で `_insertBus` を**保持**する |
-
-`mem:reviewers-judge-one-layer-only` の再現。TS・インタプリタ・Rust をまたぐ契約は main が両端を読むしかない。
-
-#### 実害 1 件（Fable だけが見つけた・main が再現確認）
-
-**`kick.output(db: -6)` がオプションを宛先として食っていた。**
-
-```
-processArguments('output', [named_arg db:-6])  →  [{"db":-6}]   ← 引数 1 個・オブジェクト
-  → Sequence.output({db:-6}) → typeof dest === 'object' → OutputDest として扱う
-  → db は消える / バスを 1 本消費 / 宛先の無い wire op を daemon に送る
-```
-
-🔴 **束 0 で `destination` を省略可にした spec 改訂（main の作業）が、この形を正当にした帰結。**
-Sonnet チーム 4 名は誰も見ていない — **差分に「無い」もの**（誰も書かなかった形）だったため。
-
-#### 横断ポリシーを 1 つ置いてから全箇所へ適用（指摘単位のパッチにしない）
-
-> `output()` / `send()` の引数は「宛先（省略可）」と「オプション」の 2 種類しかない。
-> `OutputDest` は必ず `kind` を持ち、オプションバッグは持たない。**`undefined` だけが省略**であり、
-> `null` は不正入力として loud に拒否する。
-
-`isOutputDest()` を `audio-line.ts` に置き、**パーサ層（`evaluate-method.ts`）と呼び出し層
-（`sequence.ts` / `mixer-manager.ts`）が同じ判別子を使う**。2 層で防ぐが**判別のルールは 1 つ**。
-
-#### 直した内容
-
-| # | 出どころ | 内容 |
-|---|---|---|
-| F-A | Fable | `output(db:)` / `send(db:)` の宛先スロットにオプションが入る |
-| F-null | silent-failure-hunter | `output(null)` が黙って master に（**main が `/simplify` で入れた退行**） |
-| F-B | code-reviewer | instrument `.output()` 単独が未検証 |
-| F-C | pr-test-analyzer | `needsBus()` の thru / db≠0 分岐が未検証 |
-| F-D | pr-test-analyzer + Fable | `mix.output(` で補完が誤爆 |
-| F-E | comment-analyzer | **未実装の診断を現在形で断定**（main の spec 誤り） |
-| F-G | Fable | 🔴 **MX.1 注記が実装と逆**（「`output()` が bus を確保した瞬間」）ほか設計 §10 の 5 行が未着地 |
-
-🔴 **main 自身の誤りが 3 件**（F-null・F-E・F-G）。うち 2 件はこの PR で main が書いたもの。
-
-#### Codex の変異検証（**実出力を貼らせた**・5 件すべて red → revert で green）
-
-`needsBus()` の単純化 / instrument で無条件確保 / `unshift`→`push` / ノード除外の削除 /
-`null` を通す — **すべて red**。pr-test-analyzer が予告した「述語を単純化する変異が全件緑で通る」穴が塞がった。
-
-#### 引用チェックで踏んだこと
-
-`--fix` が 8 件を直せなかった — **行ずれではなく引用元のコードが変わった**ため。実コードから
-再抽出したところ、今度は**引用がコメントの途中から始まった**。
-🔴 **緑は「行が合った」証明でしかない**（`mem:citation-fix-can-land-on-the-wrong-function`）ので、
-範囲を `/**` の境界へ合わせ直した。
-
-#### 検証（すべて main が sandbox 外で実測）
-
-```
-npm test    160 files / 2360 passed | 68 skipped (2428) / 0 failed   ← +8 は追加テスト
-lint        緑
-docs:check  948 引用 / 0 failed
-実機 gated  39 passed | 1 skipped (40) / 0 failed
-```
-
-🔴 **X2 の再実測**（実現の省略が bit 同一クラスであることの裏づけ）:
-
-```
-[#883 X2] omittedRms=0.08701663328809114  explicitRms=0.08701663328672658
-```
-
-`tests/e2e/output-line-expectations.ts` の式は**1 つも変わっていない**（束 C の検算）。
-
----
-
-### refactor: fold the /simplify findings for #883 bundle C (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: ✅ 完了（PR #884）
-
-`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行起動。
-**独立した 3 観点が同じ 2 機構に収束**したので、指摘単位ではなく**機構単位**で直した
-（CLAUDE.md「指摘単位のローカルパッチは禁止・振動の主因」）。
-
-| 機構 | 収束した観点 | 修正 |
-|---|---|---|
-| **A** 述語の所在 | reuse / efficiency / altitude の 3 つ | `lineNeedsBus` を `audio-line.ts` の **export 純関数**へ + `AudioLine.needsBus()`（`elements` を直読・コピーしない） |
-| **B** 補完の重複 | reuse / efficiency / altitude の 3 つ | `scanVarDeclarations()` へ一本化 + 正規表現をモジュール定数へ |
-| **C** 分岐の畳み込み | simplification のみ | `output(dest ?? {kind:'master'})` / `resolveDest` が `undefined` を吸収 |
-
-#### A の根拠（3 観点が別々の理由で同じ結論に達した）
-
-- **reuse**: 設計 §2.3 が「`audio-line.ts` に純関数として置く」と**コード例まで示していた**
-- **efficiency**: `snapshot()` は `return [...this.elements]` で**配列を丸ごとコピー**する。
-  述語は走査するだけなのでコピーは使い捨て。`elements` は private なので、
-  **`audio-line.ts` に置くことが非コピーの唯一の経路**
-- **altitude**: 束 S の instrument 経路（設計 §2.2.1）が**同じ述語**を使う。`Sequence` の
-  private ローカル式のままだと、束 S は private へ手を伸ばすか書き写すかになり**ドリフトする**
-
-#### B の根拠
-
-`var NAME = <ident>.<member>` を拾うループが 2 箇所に写されており、`\b` の有無や
-`output\s*\(` の扱いが将来ずれて**片方だけ直る**形だった。加えて 1 回の補完で同じ文書を
-**4 回走査**していた（`matchAll`×2 + `split`×2）。`(` がトリガー文字に足されて発火頻度も上がる経路。
-
-#### 採らなかった指摘
-
-補完の `output-string` / `output-node` を 1 つの kind に畳む案は**却下**。
-正規表現・語彙状態（`string` vs `code`）・候補の中身（バス"名" vs 変数"識別子"）・
-`CompletionItemKind`（`Value` vs `Variable`）がすべて異なり、畳むと `mode` 判別フィールドが
-要るだけで**複雑さは減らず名前が変わるだけ**（simplification agent が実読して同じ結論）。
-
-#### 検証
-
-```
-Test Files  160 passed | 4 skipped (164)      Tests  2352 passed | 68 skipped (2420)
-```
-
-lint 緑 / 🔴 `git diff main...HEAD --exit-code -- tests/e2e/output-line-expectations.ts` **無出力**
-（束 C の検算が simplify 後も保たれている）。
-
----
-
-### feat(dsl): make output() default to master and migrate every score (#883 bundle C) (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: 実装完了・main 検証中（実機 gated 未実施）
-**担当**: 実装 = Codex（`gpt-5.6-sol` / effort high・2 ラウンド）/ 検証 = main
-
-**束 C は「振る舞いを変えない」束。** 暗黙 master の廃止は束 S。
-
-#### 中身
-
-| 対象 | 変更 |
-|---|---|
-| `sequence.ts` / `mixer-manager.ts` | `output()` の宛先を省略可に（既定 `{kind:'master'}`）。**暗黙ではなく既定引数**なので要素は譜面に現れる |
-| 同 | 🔴 **実現の省略**（設計 §2.3）: ラインが「素の master 出口」だけの間は**バスを確保しない**。`.output()` 必須化がプール 8 本を食い潰すのを防ぐ（出荷 example の 4 本が 8 を超える） |
-| 拡張の補完 | `.output(` の引数位置で `master` / 宣言済み sum・aux / 物理アウトノードを候補に |
-| fixture 11 本 + 新規 2 本 | §7.1 の表どおり `.output()` を明示。**バス自身の出口も** |
-| examples 12 本 / `docs/user` / `sites/user` | 同上 |
-
-#### 🔴 main の審査で 1 件差し戻した — 完了条件 D3（E2E X2）の欠落
-
-Codex の 1 回目は inline 譜面の移行までで、**X2 を作っていなかった**。
-
-進捗ログが `kick.master` のアサーション変更を「**stale な structural assertion**」と説明していたが、
-実際には**振る舞いの変更**だった — 裸形 `.master` は今まで `seq-bus-0` を確保していたのに、
-実現の省略で確保しなくなった（テストが実装に合わせて書き換えられた形）。
-
-変更自体は設計どおりだが、**検証が無かった**:
-
-- 設計 §2.3 はこれを**確度「中」**とし、反証条件を「X2 で RMS が `noBus` golden から ±0.12 を超えて動く」としている
-- 既存 fixture は `output("master")` も裸形 `.master` も **1 つも使っていない** → 「既存 golden が動かない」が**この変更を素通りする**
-- ラチェット（`dsl-e2e-coverage`）も効かない（`output` は既に covered なので新語彙として検出されない）
-
-→ 譜面 2 本（`output_default_master_omitted.orbs` / `_explicit.orbs`）と X2 を追加させた。
-
-#### 実現の省略が安全である構造的理由（main の確認）
-
-省略が効くのは「ライン全体が素の master 出口」の場合のみ。そのとき:
-
-| ケース | 変更前 | 変更後 |
-|---|---|---|
-| 出口なし → `dry.output()` | 暗黙 master → **直接経路** | 省略 → **直接経路** |
-| `kick.gain(-6).output(drms)` | バス経路 | **バス経路**（述語が true） |
-
-**経路が変わるケースが実質無い。** 唯一変わる明示 `output("master")` は使用譜面 0 本（grep 実測）。
-
-#### 検証（main・sandbox 外）
-
-🔴 **Codex は緑を装わなかった** —「`npm test` did not exit successfully, I am not claiming all three
-acceptance checks passed」と報告。sandbox 内の失敗 4 ファイルはすべて loopback を立てるもので
-`listen EPERM`。**sandbox 外で回し直したら消えた**:
-
-```
-Test Files  160 passed | 4 skipped (164)
-     Tests  2352 passed | 68 skipped (2420)
-  Duration  23.54s        （sandbox 内は 400s — MACOS_DEV_SETUP の「遅さの 91% はスキャン」と同型）
-```
-
-`npm run lint` 緑 / `npm run docs:check` 948 引用・0 failed /
-`git diff --exit-code -- tests/e2e/output-line-expectations.ts` 無出力（**束 C の検算**）。
-
-#### 残件（レビューへ送る）
-
-- `dsl-completion-context.ts` の新規 2 関数が `lexicalStateAt(line, ...)` を**行単位**で呼んでおり、
-  同じ関数内の既存パスは `lexicalStateAt(sourceText, ...)` を**全文**で呼んでいる。
-  複数行コメント内の `var x = mix.sum` を候補に拾いうる（補完候補のみなので実害は軽微）
-- 実現の省略の述語が `sequence.ts` に inline。設計 §2.3 は `audio-line.ts` の純関数を指定しており、
-  束 S で同じ述語が要る（main のブリーフが `audio-line.ts` を範囲外にしたため。Codex の落ち度ではない）
-
-#### 🔴 実機 gated が退行を 1 件捕まえた（`ph654`）— 束 C が**露見させた**既存の潜在欠陥
-
-1 回目の gated: **1 failed / 38 passed**。
-
-```
-ERROR: Sequence 'ph654': MIDI degrees need a root. Declare global.key("C") (or set seq.root()).
-```
-
-ユニット 2352 件・lint・docs:check が全部緑で、**golden も 1 つも動いていない**状態で、実機だけが落ちた。
-
-**原因**: `ph654` の譜面は `play(1, 0, 3, 0)` で**度数**を使うのに `global.key("C")` を持っていない。
-他の instrument 譜面は **10 本すべてが持っている**（`:2078 :2117 :2160 :2216 :2272 :2316 :2367 :2865 :2967 :3336`）。
-gated suite は **1 つの VS Code / エンジンを共有**するので、`ph654` は**先行譜面が設定した key を
-継承して偶然通っていた**。束 C が先行譜面に `.output()` を足したことでその漏れが起きなくなり露見した。
-
-🔴 **これは #883 の grand truth そのもの** — 譜面が他ファイルの残留状態に依存していた。
-修正は「譜面に自分の前提を書かせる」（`global.key("C")` を追加）であって、テストを通すための
-書き換えではない。**なぜ今まで通っていたか**をコメントに残した。
-
-#### 実機 gated（2 回目・main が sandbox 外で）
-
-```
-Test Files  1 passed (1)
-     Tests  39 passed | 1 skipped (40)
-  Duration  685.13s
-```
-
-skip 1 件は E2E-4/E2E-5（>=4ch デバイス不在・既知）。
-
-🔴 **X2 が実測で通った** — 設計が確度「中」としていた「実現の省略は bit 同一クラス」が裏づけられた:
-
-```
-[#883 X2] default-master RMS: {"omittedRms":0.08701663329273443,
-                               "explicitRms":0.08701663329503133}
-```
-
-| 判定 | 実測 | 閾値 |
-|---|---|---|
-| `output()` ≡ `output("master")` | 相対差 **2.6e-11**（11 桁一致） | ≤ 0.02 |
-| `output()` ≈ `noBus` golden（0.0846173） | 約 **2.8%** | ≤ 12% |
-
-#### 関連
-
-#883 / 設計 §2.3 §4 §5.3 §7.1 §7.2 / 完了条件 D3・D9・D10
-
----
-
-### docs(spec): land the #883 rulings in the normative specs (bundle 0) (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: ✅ 束 0 完了（spec 先行・運用規則 6）。実装（束 C / S）は未着手
-
-#883 の裁定 6 件を正本へ落とした。**実装より先に spec を直す**（運用規則 6）。
-
-| 文書 | 改訂 |
-|---|---|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 | 暗黙終端の段落を「**出口は書かれたものがすべて。書かないラインは無音**」へ置換。旧規則は撤回理由（`send(aux)` と `send(sum)` で正しい振る舞いが逆）付きで引用ブロックに残した。`destination` を省略可（既定 `"master"`）に |
-| `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.2 規範 (4) | 🔴 **裁定 6 と逆を向いていた**（「マスターもレシーバである」「master も宛先を持てる 1 レシーバ」）→「**master トラックは `global` が所有する**。`master.<...>` のレシーバ表面は設けない。device 出口 1,2 は定数なので『未設定は無音』の**適用対象外**」へ |
-| 同 SC.2 規範 (6) | 「暗黙 master(1,2) を持つ」を **(i) ノードの存在**だけに限定。(ii) 自動ルーティングの廃止を明記。決定 #75 は `.output()` を書いても import / マニフェスト不要なので引き続き満たされる |
-| `docs/design/611-output-line-design.md` §2.1 | 撤回の追記。**却下判断が aux しか見ていなかった**こと、§9 の互換要件も制約でなくなったこと |
-| `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` | 決定 **#78**（暗黙終端の廃止・P2 却下理由 = 不連続）と **#79**（master は global が所有）を追加。決定 #75 に「#78 で意味を (i) に限定」の注記 |
-| `docs/planning/DEVELOPMENT_MAP.md` §3 | 🔴 **凍結線の前提が崩れた**ことを事実が変わった瞬間に記録（§5.1b）。凍結線は 4.0.0 へ |
-
-#### ゲート
-
-- `npm run docs:check`: **948 引用 / 0 failed**。spec の行ずれで 4 件落ちたので `--fix` を実行し、
-  🔴 **着地先の内容を目視で照合**（`global.sum("drum") // group bus 宣言（冪等）` /
-  `global.aux("rev") // return bus 宣言` が期待スニペットと一致）。
-  memory `citation-fix-can-land-on-the-wrong-function`「緑は『行が合った』証明」に従う
-- `tests/docs/`: 5 passed（`planning-issue-state` のラチェット含む）
-
-#### 関連
-
-#883 / #611 / 決定 #75 #78 #79
-
----
-
-### design: explicit output routing — drop the implicit master terminal (#883) (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: 設計完了・裁定 6 件すべて確定（実装未着手）
-**成果物**: `docs/design/883-explicit-output-routing-design.md`（493 行）
-
-#### 発端
-
-LinkAudio の標準プラグイン化を検討する中で、`thru:` の意味論を追ったところ
-**暗黙 master 終端の欠陥**が出た。owner 裁定で LinkAudio より先にこちらを片付けることにした。
-
-🔴 **実測した欠陥**: `send()` は sum バスも受け取る（`sequence.ts:661-665`）。
-`send` は `output(dest, thru: true)` の糖衣で**終端ではない**ので暗黙 master が付く。結果、
-
-```js
-global.sum("drums")
-kick.send(drums, -6)
-snare.send(drums, -6)
-```
-
-で master が受け取るのは **kick の dry + snare の dry + (kick+snare の合算)** =
-**各素材が 2 回**。`drums` に挿したグルーコンプを **dry が迂回する**。
-
-#### owner 裁定（grand truth）
-
-> 音楽記述言語としての OrbitScore DSL は「**テキストが完全な真実**」であるべき
-
-暗黙終端を**完全に廃止**する（P3）。「出口を 1 つも書かなければ暗黙」案（P2）も却下
-— `kick.play()` は鳴るのに `.send(verb,-12)` を 1 つ足した瞬間に master への dry が消える
-**不連続**が残るため。譜面の下位互換は担保しない（owner「そっちを直せばいい」）。
-
-#### 設計が覆した #883 の前提
-
-| # | 訂正 |
-|---|---|
-| 1 | 暗黙 master の実体は **1 箇所ではなく 4 箇所**（`program()` の合成 / バス無し audio の直接描画 / daemon のバス既定ライン / instrument の `target:null`）。A だけ消しても `kick.play()` は鳴り続ける |
-| 2 | `.output()` 必須化は **9 本目で throw**（`SEQUENCE_EFFECT_BUS_POOL_SIZE = 8`）。出荷 example の **4 本**が 8 を超える（17 / 16 / 13 / 12） |
-| 3 | `program()` は `elements` に完全には畳まない（`[rack]` の位置マーカーは routing ではない） |
-
-#### main の審査で出た指摘（4 件・すべて反映）
-
-1. 🔴 **固定上限は「避けるもの」ではなく「撤廃が裁定済みのもの」**（owner「実害ではない。正しく治すだけ」）。
-   Q-598-5「マシンの上限まで使える」/ doc 662 §10「上限を決めない対象に**トラック / インスト**を含む」/ #663。
-   → instrument の常時バス確保を撤回し、`SetSourceRouting.target` を明示 3 値へ（固定上限への依存が 1 行も増えない形）
-2. skip は `resolveDispatchChannel()` の **`isNoteSequence()` 早期 return より後ろ**に置く。
-   前に置くと **MIDI が無音**（同じ箇所のコメントが #282 で一度踏んだと記録）
-3. `send(aux)` と `send(sum)` で**正しい振る舞いが逆**（aux は dry が残るのが正しい / sum は誤り）。
-   611 §2.1 が P2 を却下した時に見落としていた場合分け
-4. 🔴 **失敗時の向きが「鳴る」になっている** — 横断規則を 1 つ置いた:
-   「routing 状態が未設定・表現不能・失われた時、その信号はどこにも加算されない」。
-   適用 6 箇所（`encode` / `decode` / daemon 既定ライン / `FeedDest` 変換 2 / スロット解放）。
-   副産物として **F2（TS の push 順序が狂うと鳴る）が消滅**した — 最悪の状態が無音になったため
-
-#### 裁定 6 件（owner 2026-09-11）
-
-`[rack]` 前置は残す / `output-missing` = Warning / `dry-not-routed` = Information /
-`SetSourceRouting.target` を明示 3 値へ（一方通行）/ 実現の省略を採る /
-🔴 **master トラックは `global` が所有する**。
-
-最後の 1 件は owner 逐語「マスタートラックは global が持っている、でいいのでは？」。
-`master.output(...)` / `master.effect(...)` という表面は**作らない**。マスタリングは
-`global.effect(["Comp", Gain(db: -3), "Limiter"])` で今日すでに書ける（`global.ts:445`・PH.2）。
-違う出力を使いたければ aux を作ってそちらへ集める（owner 同日）。
-
-🔴 **この裁定は `SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.2 規範 (4) と逆を向いている**
-（今日は「マスターもレシーバである」と書いてある）。**束 0 で書き換える**。
-
-#### 版
-
-**4.0.0 / `DSL_VERSION` 2.0**。3.0.0 を major にした理由（`send()` の dB 化で譜面の意味が変わる）と
-同じクラス — `kick.play()` が「鳴る」→「鳴らない」に変わる。
-
-#### 束
-
-**0**（spec 先行・main 直行）→ **C**（振る舞いを変えない）→ **S**（振る舞いを変える）。
-C を先に置くのは「**golden が 1 つも動かない**」ことでしか C を検算できないため。
-
-#### 関連
-
-#883 / #663（プール上限の撤廃）/ #611（出力ライン設計・§2.1 に撤回追記）/ #282（MIDI の skip 誤爆）
-
----
-
-### docs: follow the dev site to the .vsix dependency bundling fix (PR #874) (Sep 11, 2026)
-
-マージ済み PR [#874](https://github.com/signalcompose/orbitscore/pull/874)（merge commit `a2ac724`）へのドキュメント追従。**コード・テストは一切変更していない。**
-
-`sites/dev/editor/vscode-architecture.md` と `sites/dev/en/editor/vscode-architecture.md`（日英バイリンガル）に節を 1 つ追加した。置き場所は `activate()` の章の末尾で、理由は**この不具合が `activate()` の中ではなくモジュール読み込みで起きていた**から。同章は activate の中身だけを説明していて、「そもそも activate に到達しない」経路が抜けていた。
-
-書いた内容:
-
-- `packages/vscode-extension/src/mcp-server.ts:52-58` のトップレベル `require` が、MCP の port 設定や開いているファイルに関係なく activation を落とす構造であること
-- 原因の npm workspaces hoisting と、`install-engine-deps.sh` / `install-extension-deps.sh` が共有する `scripts/install-bundle-deps.sh` の「ワークスペース root の無い一時ディレクトリで入れる」手口
-- 同梱先が `dist/node_modules` である 2 つの理由と、`vsce package --no-dependencies`（`.github/workflows/release.yml:118`）
-- post-package ゲートが `check-vsix-bundled-deps.mjs` に替わり、**宣言を数えるのではなく出荷物の実ファイルから解決する**ようになったこと。保証が depth 1 と depth > 1 で一様でないことも script の明示どおりに書いた
-
-あわせて drift 表に 1 行、Sources に 7 行、frontmatter の `verified-against` を `a2ac724` へ。
-
-🔴 **未追従として PR 本文に書き出したもの（この PR では直していない）**: cold install 経路は gated E2E から構造的に踏めない（`tests/e2e/orbitstudio-mcp-gated.spec.ts:728` が `--extensionDevelopmentPath` で起動するため、同梱が空でも緑になる）。#874 の cold install 検証は手動で、資産として積まれていない。
-
----
-
 ## Archived sections
 
 Older entries have been archived by month for readability:
@@ -1845,4 +1971,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md)
+- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1 を含む
