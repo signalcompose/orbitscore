@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the install-route change into the user site (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr906`
+
+PR [#906](https://github.com/signalcompose/orbitscore/pull/906)（マージコミット `85f29aa`）の追従。
+同 PR で**リリースページが持つ内容が変わった**ため、user site の記述を合わせた。
+
+### 何が食い違ったか
+
+`release.yml` の `--notes-file` が先頭に置くのは、**Assets からの入れ方の 1 行と、正本
+（`sites/user/getting-started/installation.md`）へのリンクと、動作環境の注意**である
+（`.github/workflows/release.yml:244-264`）。**手順そのものはリリースページに載らない。**
+
+一方 user site の installation 章は、`::: tip` の中で「リリースページを開くと、そのページに
+インストール手順も載っています」と書いていた。#906 以前から v4.0.0 で外れていた約束であり、
+#906 の後も**手順ではなくリンクが載る**ので、どちらの意味でも成り立たない。
+
+### やったこと
+
+| ファイル | 変更 |
+|---|---|
+| `sites/user/getting-started/installation.md:33` | tip を「Assets に直接行ける / 先頭に動作環境とこのページへのリンクが置かれる / 手順の正本はこのページ」に書き換え |
+| `sites/user/en/getting-started/installation.md:33` | 同内容の英語版（バイリンガル必須） |
+
+### やらなかったこと
+
+- **`docs/user/ja/USER_MANUAL.md:65`** に同じ文が残っているが、この文書は **DEPRECATED で
+  「履歴として保持」（#237）**。#906 でも同じ理由で意図的に触れていないため、追従対象から外した
+- **`sites/dev/`** — 差分はリリースノートの生成（配布面）であり、dev site の章立て
+  （内部構造・評価経路）に該当する節が無い
+- **実装・テスト** — 変更なし（本追従はドキュメントのみ）
+
 ### docs: link the install guide from README and every release (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `905-install-route-links`
