@@ -16,6 +16,8 @@ global.sum("drum")
 
 kick.output("drum")
 snare.output("drum")
+
+sum("drum").output()    // 🔴 バス自身の出口も要ります（#883 / DSL 2.0）
 ```
 
 グループバスにもエフェクトを挿せます。バスにまとめてから 1 基のコンプレッサーをかける、といった使い方ができます。
@@ -36,13 +38,13 @@ sum("bus").effect("GlueComp")
 
 ## aux / send — 別経路に音を送る
 
-`global.aux(name)` でリターンバスを宣言し、各シーケンスの `send(name, db)` でそのバスに音を送ります。`send` は元の音をコピーして送る仕組みなので、**元の音自体は消えず、そのまま master（または sum）へ流れ続けます**。
+`global.aux(name)` でリターンバスを宣言し、各シーケンスの `send(name, db)` でそのバスに音を送ります。`send` は元の音をコピーして送る仕組みで、**線はそこで終わらず先へ進みます**。ただし #883 / DSL 2.0 以降、その先に出口を書かなければ本流（dry）はどこにも届きません — `send()` だけの行は wet しか鳴らないので、dry も残したければ `output()` を足します（エディタは `dry-not-routed` で知らせます）。
 
 ```text
 global.aux("rev")
 aux("rev").effect("TAL Reverb 4")
 
-kick.send("rev", -12)
+kick.send("rev", -12).output()    // wet を rev へ、dry は master へ
 ```
 
 リターンバス（`aux`）には、リバーブのようなエフェクトを挿すのが典型的な使い方です。`send()` の第 2 引数は**どれだけの量を送るかを dB（デシベル）で書く値**です。`0` が原音と同じ大きさ、`-12` なら約 4 分の 1 の振幅になります。
@@ -66,6 +68,7 @@ kick.send("rev", -12, enabled: false)   // 送らない（位置は保持）
 ```text
 kick.send("rev", -12)
 kick.send("delay", -6)
+kick.output()                     // dry も残す場合（無ければ wet だけが鳴ります）
 ```
 
 ::: warning send() が使えないのは MIDI シーケンスです
@@ -94,7 +97,14 @@ kickB.effect([Gain(db: -12)]).output("rev", thru: true)   // rev へは音量を
 kick.output("rev", thru: true, db: -12).output("master")
 ```
 
-どこにも `output()` を書かなかった場合は、線の最後に `output("master")` が書かれているものとして扱われます。これは今までどおりの動きです。
+🔴 **どこにも `output()` を書かなかった線は無音になります。** 暗黙の `output("master")` は付きません（#883 / DSL 2.0）。出口はテキストに書かれたものがすべてです。
+
+```text
+kick.audio("k.wav").play()             // 🔴 無音（出口が無い）
+kick.audio("k.wav").play().output()    // master へ
+```
+
+出口を書き忘れた発音シーケンスには、エディタが評価前に警告を出します（この章の最後にある「出口を書き忘れたとき」を参照してください）。
 
 ### output() に書ける宛先
 
@@ -122,6 +132,32 @@ kick.output("rev", thru: true, db: -12).output("master")
 sum("drum").gain(-3).output("master")
 sum("drum").send("rev", -18)
 ```
+
+## 出口を書き忘れたとき
+
+出口が 1 つも無い線は無音になるので、「書き忘れ」と「意図した無音」は音では区別が付きません。そこでエディタが評価前に教えてくれます。
+
+| 出るもの | 条件 | 重さ |
+|---|---|---|
+| `output-missing` | 発音するシーケンスに `output()` / `send()` / バス名の参照が 1 つも無い | Warning |
+| `dry-not-routed` | `send()` の宛先が aux だけで、本流（dry）の出口が無い | Information |
+
+どちらにも「`<名前>.output()` を足す」クイックフィックス（電球アイコン）が付きます。`output-missing` の方が既定で選ばれます。
+
+`midi()` を書いたシーケンスは対象外です。MIDI は外部機器へ送るのでミキサーの出口を持たないからです。
+
+::: warning sum / aux バスにも出口が要ります
+同じ規則がバスにも掛かります。`global.sum("drum")` を宣言してシーケンスを集めただけでは、**そのバスの音はどこにも出ません**。
+
+```text
+global.sum("drum")
+
+kick.output("drum")
+snare.output("drum")
+
+sum("drum").output()        // 🔴 これが無いと drum バスは無音
+```
+:::
 
 ## v1 の正直な制約
 

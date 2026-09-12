@@ -645,8 +645,10 @@ synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
   シーケンスで宣言しても音色は共有されません）。第 2/第 3 引数に `.vstpreset`/`.state` で
   終わるパスを渡すと、保存済みの音色を復元できます（CLAP / VST3）
 - `seq.effect()` / ミキサーの宛先を取る `output()` / `send()`（master・sum・aux・物理アウト）は **audio と instrument** で使えます（`midi()` は不可）。`send()` の第 2 引数の単位は **dB** です（#611・2026-09-10 に線形から変更）。
-  制限）。instrument の音は master へ直接ミックスされますが、`global.effect()`（master
-  chain）は適用されます
+- 🔴 **instrument も出口を書かなければ無音です**（#883 / DSL 2.0・暗黙の master 終端は廃止）。
+  `synth.output()` を書くと master へ直接ミックスされ、`global.effect()`（master chain）が
+  適用されます。`seq.effect()` を挿すか `output("<バス名>")` を書いた場合は insert バス経由に
+  なります
 
 ### プラグイン UI: `seq.ui()`
 
@@ -742,18 +744,27 @@ seq.play(1, 0, 0, 0)  // 数値で指定
 
 **原因と解決策:**
 
-1. **スケジューラーが起動していない**
+1. **出口（`output()`）を書いていない**（#883 / DSL 2.0）
+   ```orbitscore
+   kick.audio("kick.wav").play(1, 0, 1, 0)             // 🔴 無音（出口が無い）
+   kick.audio("kick.wav").play(1, 0, 1, 0).output()    // master へ
+   ```
+   出口を 1 つも書かない線は無音になります。暗黙の `output("master")` は付きません。
+   同じ規則が `sum` / `aux` バス（`sum("drum").output()` が必要）と instrument にも掛かります。
+   エディタは出口の無い発音シーケンスに `output-missing` の警告とクイックフィックスを出します。
+
+2. **スケジューラーが起動していない**
    ```orbitscore
    global.start()  // これを追加
    kick.run()
    ```
 
-2. **音声ファイルが見つからない**
+3. **音声ファイルが見つからない**
    - パスが正しいか確認
    - `global.audioPath()`を設定
    - 絶対パスを試す
 
-3. **オーディオデバイスの音量を確認**
+4. **オーディオデバイスの音量を確認**
    - システムの音量設定を確認
    - 正しいオーディオデバイスが選択されているか確認
 

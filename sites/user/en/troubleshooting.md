@@ -9,6 +9,19 @@ This page is the one to consult when something does not work. Please look for th
 
 ## No Sound
 
+### Have You Written `output()`?
+
+A line with no output at all is silent (#883 / DSL 2.0). No implicit `output("master")` is appended, so a sequence with `play()` but no `output()` produces nothing.
+
+```text
+kick.audio("kick.wav").play(1, 0, 1, 0)             // 🔴 silent (no output)
+kick.audio("kick.wav").play(1, 0, 1, 0).output()    // to master
+```
+
+The same rule applies to `sum` / `aux` buses and to instruments. Routing sequences into `global.sum("drum")` is not enough on its own — the bus itself has no output, so nothing reaches the speakers (you need `sum("drum").output()`).
+
+The editor raises an `output-missing` warning on a sounding sequence with no output, together with an "add `<name>.output()`" quick fix. Check whether the light bulb is showing. See [sum and aux/send](/en/mixing/routing) for details.
+
 ### Have You Called `global.start()`?
 
 In OrbitScore, the scheduler (the mechanism that manages timing) must be started before any sequence can run. If you forget to write `global.start()`, no sound is produced even when you execute the code.

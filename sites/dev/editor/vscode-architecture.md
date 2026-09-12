@@ -539,6 +539,18 @@ interface MethodChainContext {
 
 チェック内容は行内 3 種 + 横断解析 6 種の計 9 種です。詳細は [IV-2](/editor/execution-feedback#リアルタイム診断-updatediagnostics) を参照してください。
 
+診断を出すだけの登録に、#883 で **quick fix の登録**が 1 行足されました。`registerOutputCodeActionProvider(context)` が `output-missing` / `dry-not-routed` の 2 つの診断 code に対して「`<名前>.output()` を足す」CodeAction を返します。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:394-397
+  // Register IntelliSense providers
+  registerCompletionProviders(context)
+  registerHoverProvider(context)
+  registerOutputCodeActionProvider(context)
+```
+
+provider 本体は `extension.ts:3482-3520` にあり、`vscode.languages.registerCodeActionsProvider` の返り値を `context.subscriptions` へ push します。中身は [IV-2](/editor/execution-feedback) で扱います。
+
 ---
 
 ## バイナリ解決: daemon
