@@ -15,13 +15,36 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 **目的**: mainブランチでの直接実装を防止
 
 **チェック内容**:
+- 編集先（`tool_input.file_path`）が**リポジトリ配下か**を判定する
 - 現在のブランチがmainでないか確認
-- mainの場合は**実装をブロック**（exit 2）
+- mainかつ編集先がリポジトリ配下なら**実装をブロック**（`permissionDecision: "deny"` の JSON を stdout に出して exit 0。旧 exit 2 方式ではない — Issue #119）
 - ブランチ名にIssue番号が含まれているか確認（警告のみ）
 
+**対象外 / 判定できない入力の倒し方**（`.claude/hooks/pre-edit-check.sh`）:
+
+| 入力 | mainでの扱い | 根拠 |
+|---|---|---|
+| `*/.claude/plans/*` | **allow** | Plan mode の Phase 4 は protected branch でも plan file を書く（Issue #153） |
+| リポジトリ**外**の絶対パス | **allow** | memory (`~/.claude/projects/<project>/memory/`) / scratchpad / `~/.cvi` はブランチと無関係で保護対象ではない（Issue #913） |
+| 相対パス | **deny 対象**（repo 内扱い） | cwd = repo なのでパスは repo 相対 |
+| `..` を含む絶対パス | **deny 対象**（repo 内扱い） | 解決せず fail closed |
+| `file_path` 無し | **deny 対象** | 判定できない入力を許可しない |
+
+🔴 **個別ホワイトリストを増やす形にしない**（Issue #913）。次に別の外部パスで同じことが起きる。
+判定は「repo 配下かどうか」の 1 本にする。
+
+このフックが守っているのは「**main に直接実装を積まない**」ことであって、
+リポジトリ外のファイルは対象ではない。塞いでいた間は、**memory を 1 ファイル書くためだけに
+差分 0 のブランチを作って消す**運用が発生していた。
+
 **動作**:
-- mainでEdit/Writeを使おうとすると**ブロック**
+- mainで**リポジトリ配下**のEdit/Writeを使おうとすると**ブロック**
+- mainでもリポジトリ外の絶対パス（memory / scratchpad 等）は**ブロックしない**
 - Issue番号のないブランチ名の場合は警告のみ
+
+**テスト**: `tests/repo/pre-edit-hook.spec.ts`。使い捨ての git repo を 2 つ作り HEAD を
+`main` / `1-feature` に固定して `CLAUDE_PROJECT_DIR` で指すので、**どのブランチから走らせても**
+同じ判定を検査できる（本物の HEAD に依存させると feature ブランチと CI で空で緑になる）。
 
 **重要**: このフックにより、ワークフロー違反（Issue・ブランチ作成前の実装開始）を**システムとして防止**
 
