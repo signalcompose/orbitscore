@@ -3,7 +3,7 @@
   "displayName": "OrbitScore",
   "description": "Live coding music DSL with a bundled native audio engine (Rust daemon). macOS (Apple Silicon) only.",
   "publisher": "local",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "author": "Signal compose Inc.",
   "license": "SEE LICENSE IN ../../LICENSE",
   "repository": {

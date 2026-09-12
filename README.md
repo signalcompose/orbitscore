@@ -2,7 +2,7 @@
 
 **Live-coding music DSL with a native Rust audio engine, plugin hosting, and MIDI output**
 
-Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). The VS Code extension is at **4.0.0** (the version the `.vsix` and the git tag carry). `ENGINE_VERSION` (2.0.0, the session-log meta header) and `DSL_VERSION` (2.0, the spec version) are separate axes and are deliberately not synced to it — see `docs/design/656-release-design.md` §4.4. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). The VS Code extension is at **4.0.1** (the version the `.vsix` and the git tag carry). `ENGINE_VERSION` (2.0.0, the session-log meta header) and `DSL_VERSION` (2.0, the spec version) are separate axes and are deliberately not synced to it — see `docs/design/656-release-design.md` §4.4. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
 
 ## Core Features
 
@@ -52,7 +52,7 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 - **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
 - **quantize** — bar-quantized scheduling control
 - **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport
-- **Post-2.0 (shipped on `main`, extension 4.0.0)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654), and explicit-only output routing (#883). See [WORK_LOG.md](docs/development/WORK_LOG.md).
+- **Post-2.0 (shipped on `main`, extension 4.0.1)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654), explicit-only output routing (#883), and a file-size ratchet with the Rust sources split under it (#888). See [WORK_LOG.md](docs/development/WORK_LOG.md).
 
 > ⚠️ **Ableton Link / LinkAudio is not enabled in released builds, and nothing is audible under
 > `global.linkAudio()`.** Ableton Link is dual-licensed GPL-2.0-or-later / commercial, so the
