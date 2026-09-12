@@ -111,6 +111,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 lint・`docs:check`・`typecheck:e2e` 緑。**baseline 25 件の値は 1 つも変わっていない**
 （honesty 検査が `baseline == 実際` を要求するので、これが振る舞い保存の検算になる）。
 
+**`/code:pr-review-team`（4 名）+ Fable 設計監査（並行）のラウンド 1**:
+
+Critical 0。Important 5 件・Minor 17 件を main が集約し、**故障の向き**で仕分けた。
+
+🔴 **修正前に置いたポリシー**（CLAUDE.md「横断的関心事は先にポリシーを書いてから一括適用」）:
+
+> ラチェットの信用は「数え方が正しい」ことに依存する。数え方の誤りは **(a) 多く数える = 安全** /
+> **(b) 少なく数える = 穴** に分かれ、§3.3 は (b) を禁じている。しかし heuristic を含む字句解析で
+> (b) を*構成的に*排除することはできない。したがって **heuristic を改良するだけで済ませず、
+> 独立したオラクルで全件を検算する**形に変える。
+
+**直した 6 件**:
+
+| # | 内容 |
+|---|---|
+| **F-1** | 🔴 **`code-lines-oracle.spec.ts` 新設** — TypeScript の**パーサ**を独立オラクルにして TS 全 132 件を検算。既知の差は shebang 1 件のみで許容リストに明示（設計 D9・§3.4） |
+| **F-2** | **入れ子テンプレートリテラルで黙って少なく数える**穴を塞いだ。`templateStack` で `${…}` 置換の brace 深さを追う |
+| **F-3** | 真空防止を **pathspec エントリ単位**にした。従来は lang 合計だったので、将来足すエントリが `:(glob)` を忘れて 0 件でも既存 132 件が支えて緑だった |
+| **F-4** | ラチェット判定を純関数 `findViolations` / `findHonestyProblems` に切り出し、**合成データで §5.2 (a)〜(f) を網羅**。実データの 2 つの `it` は同じ関数を呼び続ける（配線を失わない） |
+| **F-5** | throw メッセージに**壊れ始めた行番号**を入れた（設計 §8.1 が要求していたが未実装だった） |
+| **F-6** | baseline JSON の**キー辞書順**を honesty 検査で強制（設計 §5.1 が要求） |
+
+**直さなかった 3 件**（いずれも**安全側**に倒れ、現リポジトリに該当 0 件）:
+`=>` 直後の正規表現（**throw する**）/ BOM のみの行（多く数える）/ `#[cfg(test)]` と `mod` の間の空行（除外されず多く数える）。
+
+🔴 **Fable 監査が main の検証の穴を突いた**（設計 §13.8 に反映）: main の敵対ケース 4 件は
+すべて「ブロックを塊のまま動かす」形だった。塊を崩す 2 型は residual をすり抜ける —
+**(E) 1 文を関数間で移動**（振る舞いが変わるのに residual 0。git は 20 英数字以上なら 1 行でも
+移動と認める）/ **(F) 消して 2 回足す**（複製が見えない）。対策として §13.4 に
+`moved+ == moved−` と「短い moved ブロックは residual 扱い」の 2 ゲートを追加。
+Fable はまた **TS オラクルを baseline の 10 件ではなく測定対象 132 件全件**に適用して
+131/132 一致を確認しており、main の検証範囲が狭かったことも示した。
+
+**設計文書の訂正**（main）: §3.1 の「誤判定は必ず例外で red になる」という**安全性の主張を撤回**
+（偶数個のクォート / backtick で黙って通る経路が実在）・§4.2「Rust 96 件」→ **95 件**
+（文書自身の算式も実測も 95）・§13.8〜§13.10 を新設・決定表に **D9 / D10** を追加。
+
+**検証**（すべて main が sandbox 外で実行・委譲先の緑は根拠にしていない）:
+`npm test` **167 files・2445 passed / 76 skipped**（+21 件）/ lint・`docs:check`（948 引用 0 failed）・
+`typecheck:e2e` 緑 / `tests/repo` **57 件**。
+fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
+**オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
+baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
+
 ### refactor/test(engine): fold the #889 review rounds — env containment, wiring coverage, a trigger (Sep 12, 2026)
 
 **Date**: 2026-09-12

@@ -76,12 +76,89 @@ function measureAll(): Map<string, number> {
   return measured
 }
 
+/**
+ * (A) ラチェット判定（設計 §5.2 の (a)(b)(c)）。純関数へ切り出す（レビュー指摘 F-4）— 実データの
+ * `it` から**引き続き呼ぶ**ことで配線を保つ（CLAUDE.md「純関数へ抽出しただけでは配線が
+ * 無防備」の罠を避ける）。加えて合成 baseline/measured を食わせる `describe` が
+ * この関数だけを直接検査し、健全な状態では一度も踏まれない分岐（超過ファイルが実在する
+ * ケース）を確実に踏む。
+ */
+function findViolations(baseline: Baseline, measured: ReadonlyMap<string, number>): string[] {
+  const violations: string[] = []
+  for (const [filePath, code] of measured) {
+    const allowed = baseline.files[filePath] ?? baseline.threshold
+    if (code > allowed) {
+      violations.push(`  ${filePath}: ${code} / allowed ${allowed}`)
+    }
+  }
+  return violations
+}
+
+/**
+ * (B) honesty 判定（設計 §5.2 の (d)(e)(f) + キー辞書順・レビュー指摘 F-6）。
+ * F-4 と同じ理由で純関数へ切り出す。
+ */
+function findHonestyProblems(baseline: Baseline, measured: ReadonlyMap<string, number>): string[] {
+  const measuredPaths = new Set(measured.keys())
+  const problems: string[] = []
+
+  if (baseline.threshold !== 500) {
+    problems.push(`threshold は 500 で固定です（#888 裁定1）。現在の値: ${baseline.threshold}`)
+  }
+
+  const keys = Object.keys(baseline.files)
+  const sortedKeys = [...keys].sort()
+  const firstOutOfOrder = keys.findIndex((key, i) => key !== sortedKeys[i])
+  if (firstOutOfOrder !== -1) {
+    problems.push(
+      `baseline.files のキーが辞書順ではありません（"${keys[firstOutOfOrder]}" の位置に ` +
+        `"${sortedKeys[firstOutOfOrder]}" が来るべきです）。diff を1ファイル1行にするため、` +
+        'キーは repo root からの相対パスの辞書順で並べてください（設計 §5.1）。',
+    )
+  }
+
+  for (const [filePath, baselineValue] of Object.entries(baseline.files)) {
+    if (!measuredPaths.has(filePath)) {
+      problems.push(
+        `${filePath}: baseline にありますが、測定対象に存在しません` +
+          '（消えた・改名した・測定対象外のパスに移った）。このエントリを消してください。',
+      )
+      continue
+    }
+
+    const actual = measured.get(filePath) as number
+
+    if (baselineValue <= baseline.threshold) {
+      problems.push(
+        `${filePath}: baseline 値 ${baselineValue} が閾値 ${baseline.threshold} 以下です。` +
+          'この行は意味を持たないので消してください。',
+      )
+      continue
+    }
+
+    if (baselineValue > actual) {
+      problems.push(
+        `${filePath}: baseline 値 ${baselineValue} が実際のコード行数 ${actual} より` +
+          ` 大きいです（減ったのに baseline が古いまま）。次の値に下げてください:\n` +
+          `    "${filePath}": ${actual},`,
+      )
+    }
+  }
+
+  return problems
+}
+
 describe('file size ratchet (#888 child 0)', () => {
   // 2 つの `it` は同じ入力（同じ git 状態のファイル群）を別の角度から検査するだけで、
   // どちらも副作用を持たない読み取りなので測定を共有してよい。`beforeAll` に置くのは
   // (a) 227 ファイルの走査を 2 回やらないため、(b) `measureAll()` が throw したとき
-  // （閉じていない文字列を持つファイルがある等）collection ではなくテストの失敗として
+  // （閉じていない文字列を持つファイルがある等）collection ではなく **suite の失敗**として
   // ファイル名付きで出るため。同じ PR の `file-size-targets.spec.ts` も測定を共有している。
+  //
+  // 🔴 正確には vitest 3.2.6 の `beforeAll` が throw すると、その suite の `it` は
+  // **skipped** になり **suite が fail** する（`@vitest/runner` の `markTasksAsSkipped` →
+  // rethrow → `failTask`）。red・exit 1 は変わらないが「テストが失敗した」表示にはならない
+  // ので、原因を追う時は suite のエラーを読むこと（2026-09-12 の設計監査 M-6）。
   let baseline: Baseline
   let measured: Map<string, number>
   beforeAll(() => {
@@ -90,13 +167,7 @@ describe('file size ratchet (#888 child 0)', () => {
   })
 
   it('does not let a file grow past the threshold or past its baseline (ratchet)', () => {
-    const violations: string[] = []
-    for (const [filePath, code] of measured) {
-      const allowed = baseline.files[filePath] ?? baseline.threshold
-      if (code > allowed) {
-        violations.push(`  ${filePath}: ${code} / allowed ${allowed}`)
-      }
-    }
+    const violations = findViolations(baseline, measured)
 
     expect(
       violations,
@@ -107,41 +178,99 @@ describe('file size ratchet (#888 child 0)', () => {
   })
 
   it('keeps the baseline honest (every entry is real, current, and above the threshold)', () => {
-    const measuredPaths = new Set(measured.keys())
-    const problems: string[] = []
-
-    if (baseline.threshold !== 500) {
-      problems.push(`threshold は 500 で固定です（#888 裁定1）。現在の値: ${baseline.threshold}`)
-    }
-
-    for (const [filePath, baselineValue] of Object.entries(baseline.files)) {
-      if (!measuredPaths.has(filePath)) {
-        problems.push(
-          `${filePath}: baseline にありますが、測定対象に存在しません` +
-            '（消えた・改名した・測定対象外のパスに移った）。このエントリを消してください。',
-        )
-        continue
-      }
-
-      const actual = measured.get(filePath) as number
-
-      if (baselineValue <= baseline.threshold) {
-        problems.push(
-          `${filePath}: baseline 値 ${baselineValue} が閾値 ${baseline.threshold} 以下です。` +
-            'この行は意味を持たないので消してください。',
-        )
-        continue
-      }
-
-      if (baselineValue > actual) {
-        problems.push(
-          `${filePath}: baseline 値 ${baselineValue} が実際のコード行数 ${actual} より` +
-            ` 大きいです（減ったのに baseline が古いまま）。次の値に下げてください:\n` +
-            `    "${filePath}": ${actual},`,
-        )
-      }
-    }
+    const problems = findHonestyProblems(baseline, measured)
 
     expect(problems, 'baseline が現状と食い違っています:\n' + problems.join('\n')).toEqual([])
+  })
+})
+
+/**
+ * `findViolations` / `findHonestyProblems` の合成データ検査（レビュー指摘 F-4）。
+ *
+ * 実データに対する上の2つの `it` は、baseline の定義上「baseline == 現在値」が健全な
+ * 状態なので、`code > allowed`（成長した）や `baselineValue <= threshold`（無意味な行）
+ * のような分岐を**一度も踏まない**。実測: `baselineValue <= baseline.threshold` の
+ * 判定を丸ごと削っても実データの2 `it` は緑のままだった。合成 baseline/measured を
+ * 直接渡すことで、設計 §5.2 の (a)〜(g) を全件踏む。
+ */
+describe('findViolations / findHonestyProblems (synthetic — exercises branches real data never hits)', () => {
+  const THRESHOLD = 500
+
+  it('(a) baseline に無いファイルが閾値超なら violation', () => {
+    const baseline: Baseline = { threshold: THRESHOLD, files: {} }
+    const measured = new Map([['a.ts', 501]])
+    expect(findViolations(baseline, measured)).toEqual(['  a.ts: 501 / allowed 500'])
+  })
+
+  it('(b) baseline にあるファイルが baseline 値を超えたら violation', () => {
+    const baseline: Baseline = { threshold: THRESHOLD, files: { 'a.ts': 600 } }
+    const measured = new Map([['a.ts', 601]])
+    expect(findViolations(baseline, measured)).toEqual(['  a.ts: 601 / allowed 600'])
+  })
+
+  it('(c) baseline 値以下（または閾値以下）なら violation 無し', () => {
+    const baseline: Baseline = { threshold: THRESHOLD, files: { 'a.ts': 600 } }
+    const measured = new Map([
+      ['a.ts', 600],
+      ['b.ts', 500],
+    ])
+    expect(findViolations(baseline, measured)).toEqual([])
+  })
+
+  it('(d) baseline のファイルが measured に無ければ honesty problem', () => {
+    const baseline: Baseline = { threshold: THRESHOLD, files: { 'gone.ts': 600 } }
+    const measured = new Map<string, number>()
+    const problems = findHonestyProblems(baseline, measured)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toMatch(/gone\.ts: baseline にありますが、測定対象に存在しません/)
+  })
+
+  it('(e) baseline 値 > 実際の値なら honesty problem（メッセージに正しい値が入る）', () => {
+    const baseline: Baseline = { threshold: THRESHOLD, files: { 'a.ts': 600 } }
+    const measured = new Map([['a.ts', 550]])
+    const problems = findHonestyProblems(baseline, measured)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('baseline 値 600 が実際のコード行数 550 より')
+    expect(problems[0]).toContain('"a.ts": 550,')
+  })
+
+  it('(f) baseline 値 ≤ threshold なら honesty problem', () => {
+    const baseline: Baseline = { threshold: THRESHOLD, files: { 'a.ts': 500 } }
+    const measured = new Map([['a.ts', 500]])
+    const problems = findHonestyProblems(baseline, measured)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toMatch(/a\.ts: baseline 値 500 が閾値 500 以下です/)
+  })
+
+  it('(f) threshold !== 500 なら honesty problem', () => {
+    const baseline: Baseline = { threshold: 600, files: {} }
+    const problems = findHonestyProblems(baseline, new Map())
+    expect(problems).toEqual(['threshold は 500 で固定です（#888 裁定1）。現在の値: 600'])
+  })
+
+  it('キーが辞書順でなければ honesty problem（レビュー指摘 F-6）', () => {
+    const baseline: Baseline = {
+      threshold: THRESHOLD,
+      files: { 'z.ts': 600, 'a.ts': 600 }, // JSON.parse はキー出現順を保つので、この順に食い違う
+    }
+    const measured = new Map([
+      ['z.ts', 600],
+      ['a.ts', 600],
+    ])
+    const problems = findHonestyProblems(baseline, measured)
+    expect(problems.some((p) => p.includes('辞書順ではありません'))).toBe(true)
+  })
+
+  it('キーが辞書順なら、それを理由にした honesty problem は出ない', () => {
+    const baseline: Baseline = {
+      threshold: THRESHOLD,
+      files: { 'a.ts': 600, 'z.ts': 600 },
+    }
+    const measured = new Map([
+      ['a.ts', 600],
+      ['z.ts', 600],
+    ])
+    const problems = findHonestyProblems(baseline, measured)
+    expect(problems.some((p) => p.includes('辞書順ではありません'))).toBe(false)
   })
 })

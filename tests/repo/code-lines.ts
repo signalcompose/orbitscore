@@ -35,6 +35,24 @@ type State =
   | { kind: 'template' }
   | { kind: 'block' }
 
+/**
+ * テンプレートリテラルは `${...}` 置換の中に別のテンプレートリテラルを入れ子にできる
+ * （例: `` `outer${`inner`}` ``）。1つの `state.kind === 'template'` では表現できないため、
+ * 開いているテンプレートリテラルをスタックで持つ。
+ *
+ * - `substDepth === null`: そのテンプレートの**生テキスト部分**にいる
+ *   （`state.kind === 'template'` と対応）
+ * - `substDepth !== null`: そのテンプレートの `${...}` 置換の中にいる
+ *   （`state.kind === 'normal'` として置換内のコードを通常どおり解釈しつつ、
+ *   置換内の `{`/`}` のネスト深さをこのフィールドで数える。対応する `}` に
+ *   達したら `null` に戻し生テキスト部分へ戻る）
+ */
+interface TemplateFrame {
+  substDepth: number | null
+  /** このテンプレートリテラル全体が開始した行（1-based）。エラーメッセージ用（§8.1）。 */
+  startLine: number
+}
+
 const WHITESPACE = new Set([' ', '\t', '\r', '\f', '\v'])
 
 function isWhitespace(ch: string): boolean {
@@ -117,7 +135,11 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
 
   let state: State = { kind: 'normal' }
   let braceDepth = 0
-  const excludeStack: number[] = []
+  const excludeStack: Array<{ braceDepth: number; startLine: number }> = []
+  const templateStack: TemplateFrame[] = []
+  // string / raw / block（`state.kind` で一意に特定できる・入れ子にならない）の開始行。
+  // template は入れ子になるので `templateStack` の各フレームが自分の startLine を持つ。
+  let blockingStateStartLine = 0
   let pendingAttrActive = false
   // 🔴 バッファに積まれる行は必ず `isTestCfgAttrLine` / `ATTRIBUTE_LINE` / `MOD_OPEN_LINE` の
   // どれかに一致した行で、いずれも `#[...]` や `mod x {` の**完全一致**を要求する。行コメントや
@@ -171,9 +193,50 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
           i += 2
           continue
         }
-        if (ch === '`') state = { kind: 'normal' }
+        if (ch === '`') {
+          // このテンプレートリテラルが閉じた。外側（置換の中 / 真の top-level）どちらに
+          // 戻る場合も、以降のコードは通常どおり解釈するので 'normal' へ戻る。
+          templateStack.pop()
+          state = { kind: 'normal' }
+          i++
+          continue
+        }
+        if (ch === '$' && lineText[i + 1] === '{') {
+          // 置換の開始。生テキスト部分を離れ、`${...}` の中身を通常のコードとして
+          // 解釈する（入れ子のテンプレートリテラル・文字列・コメントを許すため）。
+          const top = templateStack[templateStack.length - 1] as TemplateFrame
+          top.substDepth = 0
+          state = { kind: 'normal' }
+          i += 2
+          continue
+        }
         i++
         continue
+      }
+
+      // テンプレートリテラルの `${...}` 置換の中（`state.kind === 'normal'` のまま）。
+      // 置換内の `{`/`}` のネスト深さを数え、対応する `}` で生テキスト部分へ戻る。
+      if (state.kind === 'normal' && templateStack.length > 0) {
+        const top = templateStack[templateStack.length - 1] as TemplateFrame
+        if (top.substDepth !== null) {
+          if (ch === '{') {
+            lineHasCode = true
+            top.substDepth++
+            i++
+            continue
+          }
+          if (ch === '}') {
+            lineHasCode = true
+            if (top.substDepth === 0) {
+              top.substDepth = null
+              state = { kind: 'template' }
+            } else {
+              top.substDepth--
+            }
+            i++
+            continue
+          }
+        }
       }
 
       if (state.kind === 'raw') {
@@ -197,6 +260,7 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
       }
       if (ch === '/' && lineText[i + 1] === '*') {
         state = { kind: 'block' }
+        blockingStateStartLine = lineIndex + 1
         i += 2
         continue
       }
@@ -213,6 +277,7 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
           if (raw) {
             lineHasCode = true
             state = { kind: 'raw', hashes: raw.hashes }
+            blockingStateStartLine = lineIndex + 1
             i += raw.length
             continue
           }
@@ -229,7 +294,8 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
           i++
           if (
             excludeStack.length > 0 &&
-            braceDepth < (excludeStack[excludeStack.length - 1] as number)
+            braceDepth <
+              (excludeStack[excludeStack.length - 1] as { braceDepth: number }).braceDepth
           ) {
             excludeStack.pop()
           }
@@ -240,6 +306,7 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
       if (ch === '"') {
         lineHasCode = true
         state = { kind: 'string', quote: '"' }
+        blockingStateStartLine = lineIndex + 1
         i++
         continue
       }
@@ -247,11 +314,13 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
         if (ch === "'") {
           lineHasCode = true
           state = { kind: 'string', quote: "'" }
+          blockingStateStartLine = lineIndex + 1
           i++
           continue
         }
         if (ch === '`') {
           lineHasCode = true
+          templateStack.push({ substDepth: null, startLine: lineIndex + 1 })
           state = { kind: 'template' }
           i++
           continue
@@ -282,7 +351,7 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
         if (MOD_OPEN_LINE.test(trimmed)) {
           pendingCount++
           commitPending(true) // 属性行 + mod 行をまとめて除外する
-          excludeStack.push(braceDepth)
+          excludeStack.push({ braceDepth, startLine: lineIndex + 1 })
           pendingAttrActive = false
           continue
         }
@@ -315,15 +384,32 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
   }
 
   if (state.kind !== 'normal') {
+    // 'template' は入れ子になるので、開始行はスタックの最内側（現在アクティブなもの）から取る。
+    // string / raw / block は入れ子にならないので `blockingStateStartLine` を使う。
+    const startLine =
+      state.kind === 'template'
+        ? (templateStack[templateStack.length - 1] as TemplateFrame).startLine
+        : blockingStateStartLine
     throw new Error(
-      `countCodeLines: 終端で state=${state.kind} のまま終わりました` +
+      `countCodeLines: ${startLine} 行目から開始した state=${state.kind} が終端まで閉じられていません` +
         `（閉じていない文字列 / ブロックコメント / テンプレートリテラル）。全 ${lines.length} 行`,
     )
   }
-  if (excludeStack.length > 0) {
+  if (templateStack.length > 0) {
+    // state.kind === 'normal' のまま終端に達したが、テンプレートリテラルの `${...}` 置換が
+    // 閉じ切っていない（対応する `}` と、その外側のテンプレートを閉じる `` ` `` が無い）。
+    const top = templateStack[templateStack.length - 1] as TemplateFrame
     throw new Error(
-      `countCodeLines: 終端で #[cfg(test)] mod の閉じ括弧が見つからないまま終わりました` +
-        `（depth=${excludeStack.length}）。全 ${lines.length} 行`,
+      `countCodeLines: ${top.startLine} 行目から開始したテンプレートリテラルの ` +
+        `\${...} 置換（state=template）が終端まで閉じられていません` +
+        `（depth=${templateStack.length}）。全 ${lines.length} 行`,
+    )
+  }
+  if (excludeStack.length > 0) {
+    const top = excludeStack[excludeStack.length - 1] as { braceDepth: number; startLine: number }
+    throw new Error(
+      `countCodeLines: ${top.startLine} 行目から開始した #[cfg(test)] mod の閉じ括弧が` +
+        `見つからないまま終わりました（depth=${excludeStack.length}）。全 ${lines.length} 行`,
     )
   }
 

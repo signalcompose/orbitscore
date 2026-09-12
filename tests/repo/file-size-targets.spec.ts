@@ -96,19 +96,43 @@ describe('listMeasuredFiles', () => {
   })
 
   describe('L-2: 真空防止（しきい値未満なら throw）', () => {
-    it('列挙が閾値未満なら throw する', () => {
+    it('列挙が閾値未満なら throw する（lang 単位の合計チェック）', () => {
       // 実在するが極少数しかマッチしない pathspec を注入し、真空防止の発火そのものを確かめる。
       // MEASURED_PATHSPECS 本体は変更しない（第2引数での注入は file-size-targets.ts が
-      // テスト用に許している差し替え口）。
+      // テスト用に許している差し替え口）。この rust エントリの `minFiles` は実測値である
+      // 1 に合わせてある（このテストの狙いは lang 合計チェックの発火であって、下の
+      // 「エントリ単位」テストと発火する経路を分けるため）。
       expect(() =>
         listMeasuredFiles(repoRoot, [
-          { pathspec: ':(glob)rust/crates/orbit-link-audio/src/lib.rs', lang: 'rust' },
-          { pathspec: ':(glob)packages/*/src/**/*.ts', lang: 'ts' },
+          { pathspec: ':(glob)rust/crates/orbit-link-audio/src/lib.rs', lang: 'rust', minFiles: 1 },
+          { pathspec: ':(glob)packages/*/src/**/*.ts', lang: 'ts', minFiles: 100 },
         ]),
       ).toThrow(/rust の列挙（除外適用前）が 1 件しかありません/)
     })
 
     it('列挙が閾値以上なら throw しない（既定の pathspec）', () => {
+      expect(() => listMeasuredFiles(repoRoot, MEASURED_PATHSPECS)).not.toThrow()
+    })
+
+    it('🔴 F-3: エントリが1つでも空に近ければ throw する（他のエントリの件数で下駄を履けない）', () => {
+      // fail-before（レビュー指摘の再現）: 修正前の listMeasuredFiles はエントリ単位の
+      // minFiles を持たず、lang 単位の合計でしか判定しなかった。既存 TS pathspec の
+      // 132 件が、":(glob)" を欠いて 0 件しか返さない新規エントリを支えてしまい、
+      // 合計 132 ≥ 100 で緑になっていた（このテストが無かったことで実害化していた穴）。
+      expect(() =>
+        listMeasuredFiles(repoRoot, [
+          ...MEASURED_PATHSPECS,
+          // ":(glob)" を欠いた pathspec（`**` の既定解釈で `src/` 直下のファイルを含む
+          // 何もマッチしない極端な例。実在するが低いしきい値を意図的に要求する）。
+          { pathspec: 'packages/does-not-exist/src/**/*.ts', lang: 'ts', minFiles: 1 },
+        ]),
+      ).toThrow(
+        /pathspec "packages\/does-not-exist\/src\/\*\*\/\*\.ts"（ts）の列挙（除外適用前）が 0 件しかありません/,
+      )
+    })
+
+    it('F-3: エントリ単独が minFiles を満たせば throw しない（既定の pathspec は全エントリ通過）', () => {
+      // MEASURED_PATHSPECS の各エントリは自身の minFiles を単独で満たす（真の既定動作）。
       expect(() => listMeasuredFiles(repoRoot, MEASURED_PATHSPECS)).not.toThrow()
     })
   })

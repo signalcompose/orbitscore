@@ -127,6 +127,56 @@ describe('countCodeLines', () => {
     expect(() => countCodeLines(src, 'rust')).toThrow(/mod の閉じ括弧/)
   })
 
+  it('F-5: 閉じない文字列の例外メッセージに開始行番号が入る（設計 §8.1）', () => {
+    const src = ['fn a() {}', 'fn b() {}', 'let s = "unterminated', 'fn c() {}'].join('\n')
+    // 文字列は3行目（1-based）から始まる。15,000行のファイルで探す手掛かりが
+    // 「全 N 行」だけでは足りない（レビュー指摘 F-5）。
+    expect(() => countCodeLines(src, 'rust')).toThrow(/3 行目から開始した state=string/)
+  })
+
+  it('F-5: 閉じないブロックコメントの例外メッセージに開始行番号が入る', () => {
+    const src = ['fn a() {}', '/* unterminated', 'still going'].join('\n')
+    expect(() => countCodeLines(src, 'ts')).toThrow(/2 行目から開始した state=block/)
+  })
+
+  it('F-5: 閉じない test mod の例外メッセージに開始行番号が入る', () => {
+    const src = ['fn prod() {}', '#[cfg(test)]', 'mod tests {', '  fn t() {}'].join('\n')
+    // mod tests { は3行目（1-based）。
+    expect(() => countCodeLines(src, 'rust')).toThrow(/3 行目から開始した #\[cfg\(test\)\] mod/)
+  })
+
+  it('F-5: 閉じないテンプレートリテラルの例外メッセージに開始行番号が入る', () => {
+    const src = ['const a = 1', 'const s = `unterminated', 'still going'].join('\n')
+    expect(() => countCodeLines(src, 'ts')).toThrow(/2 行目から開始した state=template/)
+  })
+
+  it('F-5: 閉じないテンプレート置換（${...}）の例外メッセージに開始行番号が入る', () => {
+    const src = ['const a = 1', 'const s = `outer${notClosed', 'still going'].join('\n')
+    // テンプレートリテラル自体は2行目に開始する。置換が閉じないまま終端に達する。
+    expect(() => countCodeLines(src, 'ts')).toThrow(/2 行目から開始したテンプレートリテラル/)
+  })
+
+  it('F-20: 入れ子のテンプレートリテラル（`${...}` 置換の中の別テンプレート）は全行 code', () => {
+    // レビュー指摘 F-2: 旧実装は置換の中の `` ` `` を「外側テンプレートの終端」と
+    // 誤認識し、以降を 'normal' として扱ってしまう（`//` から始まる文字列内の行が
+    // 行コメントとして黙って除外される = 少なく数える）。
+    const src = ['const s = `outer', '${`inner', '// この行は文字列の中身', '`}', 'more`'].join(
+      '\n',
+    )
+    expect(countCodeLines(src, 'ts').code).toBe(5)
+  })
+
+  it('F-20b: 入れ子をもう一段深くしても正しく閉じる', () => {
+    const src = ['const s = `a', '${`b', '${`c', '// 最内層の中身', '`}', 'd`}', 'e`'].join('\n')
+    expect(countCodeLines(src, 'ts').code).toBe(7)
+  })
+
+  it('F-20c: 入れ子テンプレートの閉じ backtick が足りない（奇数）と throw する', () => {
+    const src = ['const s = `outer', '${`inner`', 'more'].join('\n')
+    // 外側テンプレートを閉じる backtick が無いまま終端に達する。
+    expect(() => countCodeLines(src, 'ts')).toThrow(/state=template/)
+  })
+
   it('F-19: Windows 改行 (\\r\\n) は \\n と同じ結果', () => {
     const lf = 'let a = 1;\nlet b = 2;\n'
     const crlf = 'let a = 1;\r\nlet b = 2;\r\n'
