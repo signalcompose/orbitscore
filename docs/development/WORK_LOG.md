@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): remove a docblock that was copy-pasted from extension.ts, and mechanize the check (Sep 12, 2026)
+
+`/simplify` のラウンド 1（4 観点並行）で見つかった 1 件を直し、同じ欠陥クラスを機械化した。
+
+#### 何が起きていたか
+
+`diagnostics-provider.ts` と `dsl-providers.ts` に、**`extension.ts` を説明する docblock が
+そのまま複製**されていた。死んだ `// import * as os from 'os'` 行まで一緒に付いてきていた。
+
+どちらのファイルにも**正しいファイル固有の doc が先頭に既にある**ので、複製は 2 つ目に居た。
+先頭が正しいと、人は 2 つ目を読み飛ばす。
+
+`// import * as os from 'os'` は main の `extension.ts:6` に元からあったもので、
+`extension.ts` 側は触っていない（この PR の持ち込みではない）。
+複製された 2 ファイルは**この PR で新規追加**したので、両方とも分割作業でのコピペである。
+
+#### 🔴 最初に書いた検査は何も見ていなかった
+
+`module-doc-purity.spec.ts` に足した最初の版は**先頭の doc ブロックだけ**を見ていた。
+複製は 2 つ目に居るので、**実際の欠陥を戻す変異を当てても緑のまま通った**。
+「新しいテストが緑」は「そのテストが何かを検査している」証明にならない
+（memory `test-assertions-must-discriminate` の 3 回目）。
+
+書き直して**ファイル内のすべての doc ブロック**を対象にし、変異 3 種で red を確認した:
+
+| 変異 | 結果 |
+|---|---|
+| TS 間のコピペ（実際に起きた欠陥を戻す） | red・両ファイルを名指し |
+| baseline の組を解消して表から消さない | red（厳密等価の向き） |
+| 無関係な Rust 2 ファイル間のコピペ | red・両ファイルを名指し |
+
+#### baseline は 2 組
+
+364 ファイル / 1,355 ブロックを走査して衝突は 2 件だけで、どちらも effect / instrument の
+並行実装（同じ構造の同じフィールドに同じ説明）という正当なもの。`KNOWN_SHARED_DOCS` に明示した。
+**厳密等価**にしてあるので、解消したら表から消さないと red になる。
+
+#### 引用の追随
+
+2 ファイルから 8 行 / 7 行を削ったので、引用 20 件が落ちた。`--fix` の後、
+**start と end が同じだけ動いたこと**（範囲の長さが変わった引用 0 件）と、
+**オフセットが実際の削除行数と一致すること**（−8 が 12 件 / −7 が 8 件・ファイル単位で一意）を
+検算した。`--fix` が別ブロックへ着地した形は排除できている。
+
+#### `__*ForTest` は減っていない（実測）
+
+#887 本文が「何が実際に困るか」として挙げたテスト専用の裏口は、
+**分割前 13 本 → 分割後 13 本で 1 本も減っていない**（本文の「14 本」は末尾が `...` の概数）。
+裏口を外すにはテストを書き直す必要があり、それは「既存テストの期待値を 1 つも変えていない」
+という #887 の検算そのものを壊す。**分割では解消しない**ことを記録しておく。
+
+#### 検証
+
+`npm test` 2,490 passed（2,488 + 新規 2 件・**既存の期待値は 1 つも変えていない**）/
+lint 緑 / `tsc --noEmit` 緑 / `docs:check` 982 引用 0 失敗。
+
+---
+
 ### refactor(extension): split mcp-server.ts — the TS split is complete (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`

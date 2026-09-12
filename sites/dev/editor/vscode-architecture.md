@@ -461,7 +461,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補の組み立ては `extension.ts` 側です。
 
 ```typescript
-// packages/vscode-extension/src/dsl-providers.ts:298-306
+// packages/vscode-extension/src/dsl-providers.ts:291-299
       case 'output-string':
         return makeItems(
           [
@@ -481,7 +481,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補が出てきません。
 
 ```typescript
-// packages/vscode-extension/src/dsl-providers.ts:168-178
+// packages/vscode-extension/src/dsl-providers.ts:161-171
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,

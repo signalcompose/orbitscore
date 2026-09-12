@@ -760,7 +760,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/dsl-providers.ts:126-136
+// packages/vscode-extension/src/dsl-providers.ts:119-129
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -863,7 +863,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:160-176
+// packages/vscode-extension/src/diagnostics-provider.ts:152-168
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

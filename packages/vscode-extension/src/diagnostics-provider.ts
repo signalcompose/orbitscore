@@ -6,14 +6,6 @@
  * その結果を `vscode.DiagnosticCollection` へ写す配線である（設計 §4.1）。
  */
 
-/**
- * OrbitScore VS Code extension root and public re-export surface.
- *
- * Engine wiring function bodies were moved unchanged to the engine modules;
- * formerly private helpers are imported only where this root still wires them.
- */
-// import * as os from 'os'
-
 import * as vscode from 'vscode'
 
 import {

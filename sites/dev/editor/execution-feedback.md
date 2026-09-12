@@ -377,7 +377,7 @@ editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフ
 `Cmd+Enter` とは別に、ドキュメントの open / change / activation 時に `updateDiagnostics()` が走ります (#384、[IV-1](/editor/vscode-architecture#intellisense-と診断の登録))。前半は 2026-05 時点と同じ行内チェック 3 種です。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:29-49
+// packages/vscode-extension/src/diagnostics-provider.ts:21-41
 export async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -404,7 +404,7 @@ export async function updateDiagnostics(
 後半は **横断解析** で、純関数 (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) が返す `DiagnosticIssue` を `vscode.Diagnostic` に写すだけです。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:105-116
+// packages/vscode-extension/src/diagnostics-provider.ts:97-108
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -548,7 +548,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagnostic` にそのまま載せます。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:135-146
+// packages/vscode-extension/src/diagnostics-provider.ts:127-138
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -572,7 +572,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 診断を出すだけでなく、直す手段も付いています。`activate()` が登録する CodeActionProvider が、2 つの code の両方に「`<名前>.output()` を足す」アクションを出します。
 
 ```typescript
-// packages/vscode-extension/src/dsl-providers.ts:187-204
+// packages/vscode-extension/src/dsl-providers.ts:180-197
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
@@ -616,7 +616,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:159-176
+// packages/vscode-extension/src/diagnostics-provider.ts:151-168
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

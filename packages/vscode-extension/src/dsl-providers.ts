@@ -7,14 +7,7 @@
  * そちらへ配線を持ち込むのは「戻す」ではなく「壊す」— 設計 `887-extension-split-design.md` §4.1）。
  */
 
-/**
- * OrbitScore VS Code extension root and public re-export surface.
- *
- * Engine wiring function bodies were moved unchanged to the engine modules;
- * formerly private helpers are imported only where this root still wires them.
- */
 import * as path from 'path'
-// import * as os from 'os'
 
 import * as vscode from 'vscode'
 

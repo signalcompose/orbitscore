@@ -748,7 +748,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/dsl-providers.ts:126-136
+// packages/vscode-extension/src/dsl-providers.ts:119-129
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -848,7 +848,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:160-176
+// packages/vscode-extension/src/diagnostics-provider.ts:152-168
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

@@ -377,7 +377,7 @@ The editor's `Cmd+Enter` does not send this marker. For a human, the flash + dia
 Separately from `Cmd+Enter`, `updateDiagnostics()` runs on document open / change / activation (#384, [IV-1](/en/editor/vscode-architecture#intellisense-and-diagnostics-registration)). The first half is the same three per-line checks as of 2026-05.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:29-49
+// packages/vscode-extension/src/diagnostics-provider.ts:21-41
 export async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -404,7 +404,7 @@ export async function updateDiagnostics(
 The second half consists of **cross-line analyses**, which merely map the `DiagnosticIssue`s returned by pure functions (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) to `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:105-116
+// packages/vscode-extension/src/diagnostics-provider.ts:97-108
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -548,7 +548,7 @@ The decision itself is a three-way branch.
 The mapping to severity happens in `updateDiagnostics()`, which also puts the `code` straight onto the `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:135-146
+// packages/vscode-extension/src/diagnostics-provider.ts:127-138
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -572,7 +572,7 @@ Putting the `code` on the `vscode.Diagnostic` has a side effect: MCP's `get_diag
 The diagnostic does not only report; it offers a way out. A CodeActionProvider registered by `activate()` offers an "add `<name>.output()`" action for both codes.
 
 ```typescript
-// packages/vscode-extension/src/dsl-providers.ts:187-204
+// packages/vscode-extension/src/dsl-providers.ts:180-197
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
@@ -616,7 +616,7 @@ The skip order mirrors the engine's own resolution order (`Sequence.resolveLineD
 A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-provider.ts:159-176
+// packages/vscode-extension/src/diagnostics-provider.ts:151-168
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

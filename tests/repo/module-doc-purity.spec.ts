@@ -17,12 +17,20 @@ import { describe, expect, it } from 'vitest'
  * 🔴 このテストを書いている最中にも 1 件ずれた。「可視性変更は 1 箇所」と書いたファイルが
  * 実際は 0 件だった。**人が数えて doc に書く限りずれる**ので、機械に突き合わせさせる。
  *
- * 検査するのは 2 つだけ:
+ * 🔴 3 つ目は #887（TS 分割）で実際に起きた欠陥である。`diagnostics-provider.ts` と
+ * `dsl-providers.ts` に、**`extension.ts` を説明する docblock がそのまま複製されて**いた
+ * （死んだ `// import * as os from 'os'` 行まで一緒に付いてきていた）。
+ * ファイル固有の正しい doc が既に書かれていたので、**人は 2 つ目の doc を読み飛ばす**。
+ * 上の 2 つは「doc の主張が実態と合っているか」を見るが、**doc がそもそも別のファイルの
+ * 話をしている**場合は捕まらなかった。
+ *
+ * 検査するのは 3 つ:
  *
  * 1. 「**可視性も 1 箇所も変えていない**」と書いたファイルは、本当に `pub(super)` が 0 であること。
  *    🔴 逆向き（0 件なら必ずそう書け）は**採らない**。`pub(crate)` は分割前から付いていることが
  *    あり、修飾子の絶対数からは「分割で変えたか」が決まらないためである（試して外した）。
  * 2. 「**N 行を除いて純粋な移動である**」という**件数の主張を書かない**こと（§14 で禁じた形）
+ * 3. **同一の module doc が 2 ファイルに存在しないこと**（コピペの検出）。Rust / TS 両方を対象にする
  */
 
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -116,5 +124,120 @@ describe('分割した子モジュールの doc と実際の可視性（設計 �
       }
     }
     expect(problems).toEqual([])
+  })
+})
+
+/**
+ * 測定対象のソース全件（Rust / TS）。#887 の欠陥は TS 側で起きたので、
+ * 3 つ目の検査は {@link listSplitChildModules} より広い範囲を見る。
+ */
+function listAllMeasuredSources(): string[] {
+  const output = execFileSync(
+    'git',
+    ['ls-files', '-z', '--', ':(glob)rust/crates/**/*.rs', ':(glob)packages/*/src/**/*.ts'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  )
+  return output
+    .split('\0')
+    .filter((entry) => entry.length > 0)
+    .sort()
+}
+
+/**
+ * ファイル内の**すべての** doc ブロックを、比較用に正規化して返す。
+ *
+ * 🔴 **先頭のブロックだけを見てはいけない。** #887 の欠陥はまさにそれで捕まらなかった:
+ * `diagnostics-provider.ts` の先頭には正しいファイル固有の doc があり、複製された
+ * `extension.ts` の doc は**2 つ目**に居た。先頭だけを見る版を書いて変異を当てたところ
+ * **緑のまま通り**、この検査が何も見ていないことが分かった（2026-09-12・実測）。
+ *
+ * 装飾（`*` / `//!` / `///`）と空白を落として内容行だけを残す。
+ * **内容行が 3 行未満のブロックは対象外** — 短い定型句が偶然一致するのは欠陥ではない。
+ */
+function docBlocks(source: string, lang: 'rust' | 'ts'): string[] {
+  const blocks: string[] = []
+  const push = (lines: string[]) => {
+    const meaningful = lines.filter((line) => line !== '')
+    if (meaningful.length >= 3) blocks.push(meaningful.join('\n'))
+  }
+
+  if (lang === 'rust') {
+    let current: string[] = []
+    for (const line of source.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//!') || trimmed.startsWith('///')) {
+        current.push(trimmed.replace(/^\/\/[!/]\s?/, '').trim())
+      } else if (current.length > 0) {
+        push(current)
+        current = []
+      }
+    }
+    if (current.length > 0) push(current)
+  } else {
+    const blockPattern = /\/\*\*([\s\S]*?)\*\//g
+    let match: RegExpExecArray | null
+    while ((match = blockPattern.exec(source)) !== null) {
+      push(
+        (match[1] as string).split('\n').map((line) =>
+          line
+            .trim()
+            .replace(/^\*\s?/, '')
+            .trim(),
+        ),
+      )
+    }
+  }
+
+  return blocks
+}
+
+/**
+ * 同一 doc を持つことが**正当**なファイル組。
+ *
+ * どちらも effect / instrument の並行実装で、同じ構造の同じフィールドに同じ説明が付いている。
+ * 🔴 **これはラチェットである。増やす編集はレビューで止める。** 解消したら**この表から消す**
+ * （残したままにすると、次のコピペを 1 件見逃す余地になる）。
+ */
+const KNOWN_SHARED_DOCS: ReadonlyArray<readonly [string, string]> = [
+  [
+    'rust/crates/orbit-audio-daemon/src/outproc_effect.rs',
+    'rust/crates/orbit-audio-daemon/src/outproc_instrument.rs',
+  ],
+  ['rust/crates/orbit-clap-host/src/effect.rs', 'rust/crates/orbit-clap-host/src/instrument.rs'],
+]
+
+describe('doc ブロックがコピペされていないこと（#887 で実際に起きた欠陥）', () => {
+  const sources = listAllMeasuredSources()
+
+  it('対象が空でない（列挙そのものが壊れていない）', () => {
+    // 真空防止。pathspec の `:(glob)` が外れると件数が落ちる（#888 §13.10 で実測）。
+    expect(sources.length).toBeGreaterThanOrEqual(200)
+  })
+
+  it('🔴 同一の doc ブロックを持つファイル組が baseline と一致する', () => {
+    const byDoc = new Map<string, Set<string>>()
+    for (const rel of sources) {
+      const lang = rel.endsWith('.rs') ? 'rust' : 'ts'
+      for (const doc of new Set(
+        docBlocks(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'), lang),
+      )) {
+        const bucket = byDoc.get(doc)
+        if (bucket === undefined) byDoc.set(doc, new Set([rel]))
+        else bucket.add(rel)
+      }
+    }
+
+    const actual = [
+      ...new Set(
+        [...byDoc.values()]
+          .filter((files) => files.size > 1)
+          .map((files) => [...files].sort().join(' + ')),
+      ),
+    ].sort()
+
+    const expected = KNOWN_SHARED_DOCS.map((pair) => [...pair].sort().join(' + ')).sort()
+
+    // 🔴 厳密等価にする。`actual ⊆ expected` にすると、解消した組を表から消さずに済んでしまう。
+    expect(actual).toEqual(expected)
   })
 })
