@@ -19,8 +19,9 @@ import { describe, expect, it } from 'vitest'
  *
  * 検査するのは 2 つだけ:
  *
- * 1. 「**可視性も 1 箇所も変えていない**」と書いたファイルは、本当に `pub(super)` が 0 であること
- *    （逆に 0 ならそう書いてあること）
+ * 1. 「**可視性も 1 箇所も変えていない**」と書いたファイルは、本当に `pub(super)` が 0 であること。
+ *    🔴 逆向き（0 件なら必ずそう書け）は**採らない**。`pub(crate)` は分割前から付いていることが
+ *    あり、修飾子の絶対数からは「分割で変えたか」が決まらないためである（試して外した）。
  * 2. 「**N 行を除いて純粋な移動である**」という**件数の主張を書かない**こと（§14 で禁じた形）
  */
 
@@ -62,7 +63,17 @@ function moduleDoc(source: string): string {
   return doc.join('\n')
 }
 
-/** コード行（コメントを除く）での `pub(super)` の出現数。doc 本文の字面に釣られないこと。 */
+/**
+ * コード行（コメントを除く）での `pub(super)` の出現数。
+ *
+ * 🔴 **数えるのは `pub(super)` だけ。** `pub(crate)` は分割前から付いていることがあり
+ * （例: `playback.rs` の `set_callback_alive`）、**絶対的な修飾子の数は「分割で変えたか」を
+ * 表さない**。`pub(super)` は「親の子モジュールになったから要る」修飾子なので、
+ * 分割の産物である度合いがはるかに高い。
+ *
+ * 🔴 コメント行を除くのは、**この検査が検査対象の doc の字面に釣られない**ようにするため
+ * （最初の版は doc 中の `pub(super)` という文字列まで数えていた）。
+ */
 function countVisibilityRaises(source: string): number {
   return (
     source
@@ -81,7 +92,7 @@ describe('分割した子モジュールの doc と実際の可視性（設計 �
     expect(modules.length).toBeGreaterThanOrEqual(20)
   })
 
-  it('🔴 「可視性も 1 箇所も変えていない」と書いたファイルは本当に 0 件である', () => {
+  it('🔴 「可視性も 1 箇所も変えていない」と書いた doc が嘘でないこと', () => {
     const problems: string[] = []
     for (const rel of modules) {
       const source = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')
@@ -90,12 +101,6 @@ describe('分割した子モジュールの doc と実際の可視性（設計 �
       if (claimsNone && raises > 0) {
         problems.push(
           `${rel}: doc は「${CLAIMS_NO_VISIBILITY_CHANGE}」と書いているが pub(super) が ${raises} 箇所ある`,
-        )
-      }
-      if (!claimsNone && raises === 0) {
-        problems.push(
-          `${rel}: pub(super) が 0 箇所なので、doc に「${CLAIMS_NO_VISIBILITY_CHANGE}」と書けるはず` +
-            '（書いておくと、後で可視性を上げた時にこのテストが気づく）',
         )
       }
     }

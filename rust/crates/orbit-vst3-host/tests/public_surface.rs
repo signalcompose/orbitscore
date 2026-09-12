@@ -19,6 +19,10 @@
 //!
 //! 項目を意図的に非公開へ変えるときは、この一覧からも消すこと（消さずに通ることはない）。
 
+//! 🔴 **crate ごと `#![cfg(target_os = "macos")]` なので、このテストも同じゲートを持つ。**
+//! 付け忘れると Linux CI（`rust-ci.yml` は全ジョブ ubuntu）で lib が空になり、
+//! 全 import が E0432 で落ちる。**手元は macOS なので気づけない** — 実際に CI で 15 件落とした。
+#![cfg(target_os = "macos")]
 #![allow(unused_imports)]
 
 use orbit_vst3_host::probe_factory_descriptors;
