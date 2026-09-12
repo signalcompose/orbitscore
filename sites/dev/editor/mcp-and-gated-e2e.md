@@ -68,26 +68,27 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:444-462
+// packages/vscode-extension/src/extension.ts:427-446
 /**
- * "OrbitScore: Browse Plugins" command (#638) — palette entry that lists the
- * catalog and writes the chosen name at the cursor.
+ * 補完プロバイダの登録（#495）。
  *
- * Completion covers "I remember part of the name"; this covers "what do I even
- * have". With 274 effects and 74 instruments installed, the second question is
- * the common one and had no entry point at all.
- *
- * When the cursor already sits inside an `effect(` / `instrument(` string the
- * verb comes from there and the typed fragment is replaced, so picking from the
- * list and completing produce the same edit. Outside that context the command
- * asks which kind to browse and inserts a quoted name.
+ * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
+ * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
+ * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
  */
-async function browsePlugins(): Promise<void> {
-  const editor = vscode.window.activeTextEditor
-  if (!editor) {
-    vscode.window.showInformationMessage('OrbitScore: open an .orbs file to insert a plugin name.')
-    return
-  }
+export function registerCompletionProviders(context: vscode.ExtensionContext) {
+  // Context-aware completion provider
+  const completionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    {
+      provideCompletionItems(document, position) {
+        const lineText = document.lineAt(position).text
+        const linePrefix = lineText.substr(0, position.character)
+
+        // Check if we're typing after a dot
+        if (!linePrefix.endsWith('.')) {
+          return undefined
+        }
 ```
 
 `extension.ts` の `activate()` がこのインターフェイスを `evaluateForAgent` / `runSelectionForAgent` のような `*ForAgent` 関数で埋めます。`mcp-server.ts` 自身は `vscode` を import していません。ユニットテスト（`tests/vscode-extension/mcp-server.spec.ts`）がスタブのハンドラで HTTP 層を丸ごと駆動できるのはこのためです。
@@ -99,7 +100,7 @@ async function browsePlugins(): Promise<void> {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:275-286
+// packages/vscode-extension/src/extension.ts:258-269
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -237,45 +238,11 @@ export interface DiagnosticEntry {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:927-964
+// packages/vscode-extension/src/agent-handlers.ts:72-75
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
-  const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  if (!writeCodeToEngine(code, documentDir)) {
-    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
-  }
-  // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は
-  // 「**stdin へ届いた**」までしか意味せず、パース/実行エラーは engine が stderr へ
-  // 非同期に出すだけだった。LLM は ok を成功と解釈するので、実機で
-  // `Variable not found: global` が出ていても先へ進んでしまう（実測）。
-  //
-  // REPL は行を FIFO で処理するので、コードの直後にマーカーを送れば
-  // **マーカーに到達した時点で評価は完了している**。時間で待つ必要はない。
-  const stdin = engineProcess.stdin
-  if (!stdin || !stdin.writable) {
-    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
-  }
-  const result = await evalMarkBridge.send((line, onError) => {
-    // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
-    stdin.write(line, (error) => {
-      if (error) {
-        outputChannel?.appendLine(`⚠️ failed to write //#evalMark to stdin: ${error.message}`)
-        onError(error)
-      }
-    })
-  }, randomUUID())
-  if (result.ok) return { ok: true }
-  const detail = result.diagnostics.length
-    ? result.diagnostics.map((d) => `[${d.kind}] ${d.message}`).join('; ')
-    : (result.error ?? 'engine reported an evaluation failure')
-  return {
-    ok: false,
-    error: `evaluation failed: ${detail}`,
-    ...(result.diagnostics.length ? { diagnostics: result.diagnostics } : {}),
-  }
-}
 ```
 
 `#614` より前の `ok` は「stdin に書けた」だけでした。engine の REPL は行を FIFO で処理するので、コードの直後に `//#evalMark {"requestId": ...}` というメタ行を送れば、そのマーカーの応答が返ってきた時点で先行コードの評価は終わっています。「settle 時間を待つ」のではなく「マーカーの到着を待つ」ので、instrument を 6 本 attach して 30 秒かかる評価でも誤検知しません。
@@ -363,7 +330,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1057-1068
+// packages/vscode-extension/src/agent-handlers.ts:202-213
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -401,7 +368,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:145-156
+// packages/vscode-extension/src/extension.ts:128-139
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)

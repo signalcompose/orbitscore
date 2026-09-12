@@ -158,7 +158,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:772-775
+// packages/vscode-extension/src/run-selection.ts:60-63
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -172,7 +172,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:739-752
+// packages/vscode-extension/src/run-selection.ts:27-40
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -217,7 +217,7 @@ The two ways, summarized:
 
 Why are two needed? Because `import` is evaluated before statements. The DSL injection runs as a statement, so at the moment `import` runs in the first evaluation, the base directory is not yet set. Only the meta line can deliver it ahead of time. The DSL injection is kept so that the proven behavior of existing paths such as `audio()` stays unchanged.
 
-The `globalInitialized` flag is bound to the engine process lifecycle and is reset at boot, restart, and activate (extension.ts:110-112, 292, 2173).
+The `globalInitialized` flag is bound to the engine process lifecycle and is reset at boot, restart, and activate (extension.ts:95-97, 292, 2173).
 
 There is no fallback to `process.cwd()` on the engine side (Issue #168). If documentDirectory is unset and a relative path is specified, an explicit error is raised.
 
@@ -226,7 +226,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:911-918
+// packages/vscode-extension/src/run-selection.ts:199-206
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

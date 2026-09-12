@@ -68,26 +68,27 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:444-462
+// packages/vscode-extension/src/extension.ts:427-446
 /**
- * "OrbitScore: Browse Plugins" command (#638) — palette entry that lists the
- * catalog and writes the chosen name at the cursor.
+ * 補完プロバイダの登録（#495）。
  *
- * Completion covers "I remember part of the name"; this covers "what do I even
- * have". With 274 effects and 74 instruments installed, the second question is
- * the common one and had no entry point at all.
- *
- * When the cursor already sits inside an `effect(` / `instrument(` string the
- * verb comes from there and the typed fragment is replaced, so picking from the
- * list and completing produce the same edit. Outside that context the command
- * asks which kind to browse and inserts a quoted name.
+ * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
+ * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
+ * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
  */
-async function browsePlugins(): Promise<void> {
-  const editor = vscode.window.activeTextEditor
-  if (!editor) {
-    vscode.window.showInformationMessage('OrbitScore: open an .orbs file to insert a plugin name.')
-    return
-  }
+export function registerCompletionProviders(context: vscode.ExtensionContext) {
+  // Context-aware completion provider
+  const completionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    {
+      provideCompletionItems(document, position) {
+        const lineText = document.lineAt(position).text
+        const linePrefix = lineText.substr(0, position.character)
+
+        // Check if we're typing after a dot
+        if (!linePrefix.endsWith('.')) {
+          return undefined
+        }
 ```
 
 `activate()` in `extension.ts` fills this interface with `*ForAgent` functions such as `evaluateForAgent` / `runSelectionForAgent`. `mcp-server.ts` itself never imports `vscode`. That is why the unit test (`tests/vscode-extension/mcp-server.spec.ts`) can drive the whole HTTP layer with stub handlers.
@@ -99,7 +100,7 @@ async function browsePlugins(): Promise<void> {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:275-286
+// packages/vscode-extension/src/extension.ts:258-269
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -237,45 +238,11 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:927-964
+// packages/vscode-extension/src/agent-handlers.ts:72-75
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
-  const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  if (!writeCodeToEngine(code, documentDir)) {
-    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
-  }
-  // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は
-  // 「**stdin へ届いた**」までしか意味せず、パース/実行エラーは engine が stderr へ
-  // 非同期に出すだけだった。LLM は ok を成功と解釈するので、実機で
-  // `Variable not found: global` が出ていても先へ進んでしまう（実測）。
-  //
-  // REPL は行を FIFO で処理するので、コードの直後にマーカーを送れば
-  // **マーカーに到達した時点で評価は完了している**。時間で待つ必要はない。
-  const stdin = engineProcess.stdin
-  if (!stdin || !stdin.writable) {
-    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
-  }
-  const result = await evalMarkBridge.send((line, onError) => {
-    // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
-    stdin.write(line, (error) => {
-      if (error) {
-        outputChannel?.appendLine(`⚠️ failed to write //#evalMark to stdin: ${error.message}`)
-        onError(error)
-      }
-    })
-  }, randomUUID())
-  if (result.ok) return { ok: true }
-  const detail = result.diagnostics.length
-    ? result.diagnostics.map((d) => `[${d.kind}] ${d.message}`).join('; ')
-    : (result.error ?? 'engine reported an evaluation failure')
-  return {
-    ok: false,
-    error: `evaluation failed: ${detail}`,
-    ...(result.diagnostics.length ? { diagnostics: result.diagnostics } : {}),
-  }
-}
 ```
 
 Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes lines FIFO, so if a meta line `//#evalMark {"requestId": ...}` is sent immediately after the code, the preceding code has finished evaluating by the time the marker's response comes back. Rather than "waiting for a settle time" it "waits for the marker to arrive", so even an evaluation that attaches six instruments and takes 30 seconds does not produce a false result.
@@ -363,7 +330,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1057-1068
+// packages/vscode-extension/src/agent-handlers.ts:202-213
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -401,7 +368,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:145-156
+// packages/vscode-extension/src/extension.ts:128-139
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)

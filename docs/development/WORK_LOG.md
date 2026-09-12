@@ -17,6 +17,60 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): move evaluation and agent handlers out of extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 D**。純粋な移動。
+
+| 新設 | コード行 |
+|---|---|
+| `agent-handlers.ts` | **392**（`*ForAgent` 17 本 + `__pluginUiForAgentForTest`） |
+| `run-selection.ts` | **152** |
+| `mcp-register-command.ts` | **152** |
+| `plugin-commands.ts` | **127** |
+
+`extension.ts` は 1,461 → **715** コード行（開始時 2,779 の **26%**。目標 500 まであと 215）。
+
+Codex は全 10 塊を `9143a233` と **verbatim 一致**で照合し、27 export の維持も確認している。
+`activate().handlers` のオブジェクトリテラルは byte-for-byte 不変。
+
+### 🔴 Codex に `npm test` の全件を頼んだのが間違いだった（束 0〜C）
+
+束 C の Codex が構造的な事実を報告した:
+
+```
+Error: listen EPERM: operation not permitted 127.0.0.1:<port>
+Tests  107 failed | 2381 passed
+```
+
+**sandbox が loopback の listen を禁じるので、localhost を使う 4 スイート（107 テスト）は
+原理的に走らない。** CLAUDE.md が「Codex は sandbox で daemon protocol（localhost bind）・
+MCP 系・実機 E2E が原理的に走らない」と明記しているとおりで、**私が読んでいたはずのこと**。
+
+束 B / C の Codex はどちらも「2,488 passed は自分の出力ではない」と明記して報告を拒んだ。
+**正しい態度である。** 束 D からブリーフを focused な spec だけに変えたところ、
+**衝突なしで完走した。**
+
+### 🔴 散文の参照は「範囲を潰さずに」直す
+
+散文中に `extension.ts:3000-3032` のような**行範囲つきの参照**が 12 件あり、これは引用 header
+ではないので `docs:check` が一切見ない。機械的に「関数の定義行 1 点」へ置き換えたところ
+`3000-3032` → `592` のように**範囲が潰れた**。**劣化なので取り消した。**
+
+取り消しに `git checkout -- sites/dev` を使って**引用の再アンカーまで巻き戻し**、やり直した。
+さらにその過程で `extension.ts:654-654`（`} else {` の 1 行）という**潰れた引用**を作ってしまい、
+元の 50 行（`run-selection.ts:63-112`）へ復元した。
+
+**範囲を保って移せた 2 件だけを移し、残り 10 件は据え置いた。** 内容が一致しないものを
+機械で動かすと、今回のように壊す。
+
+### 検証
+
+`npm test` **2,488 passed**（5 束連続で不変・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`public-surface.spec` 38 passed / `start-engine-for-agent.spec` 4 passed。
+
 ### refactor(extension): move view, docs and flash out of extension.ts (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`

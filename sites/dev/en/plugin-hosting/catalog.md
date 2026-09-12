@@ -590,26 +590,27 @@ go through the daemon: **the extension spawns the scanner binary directly**. The
 follows the same convention as the daemon lookup.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:444-462
+// packages/vscode-extension/src/extension.ts:427-446
 /**
- * "OrbitScore: Browse Plugins" command (#638) — palette entry that lists the
- * catalog and writes the chosen name at the cursor.
+ * 補完プロバイダの登録（#495）。
  *
- * Completion covers "I remember part of the name"; this covers "what do I even
- * have". With 274 effects and 74 instruments installed, the second question is
- * the common one and had no entry point at all.
- *
- * When the cursor already sits inside an `effect(` / `instrument(` string the
- * verb comes from there and the typed fragment is replaced, so picking from the
- * list and completing produce the same edit. Outside that context the command
- * asks which kind to browse and inserts a quoted name.
+ * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
+ * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
+ * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
  */
-async function browsePlugins(): Promise<void> {
-  const editor = vscode.window.activeTextEditor
-  if (!editor) {
-    vscode.window.showInformationMessage('OrbitScore: open an .orbs file to insert a plugin name.')
-    return
-  }
+export function registerCompletionProviders(context: vscode.ExtensionContext) {
+  // Context-aware completion provider
+  const completionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    {
+      provideCompletionItems(document, position) {
+        const lineText = document.lineAt(position).text
+        const linePrefix = lineText.substr(0, position.character)
+
+        // Check if we're typing after a dot
+        if (!linePrefix.endsWith('.')) {
+          return undefined
+        }
 ```
 
 The spawn always passes `--probe-artifacts`. In other words, **a rescan from the editor or MCP
@@ -754,7 +755,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1532-1542
+// packages/vscode-extension/src/extension.ts:512-522
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -857,7 +858,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1963-1979
+// packages/vscode-extension/src/extension.ts:943-959
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
