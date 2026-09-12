@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）、2026-09-11 に #860（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)・正常系で鳴っていた `warn!` を `debug!` へ）、2026-09-11 に #855（PR [#857](https://github.com/signalcompose/orbitscore/pull/857)・temp 掃除のレースが ERROR 件数を押し上げていた件）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）、2026-09-11 に #860（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)・正常系で鳴っていた `warn!` を `debug!` へ）、2026-09-11 に #855（PR [#857](https://github.com/signalcompose/orbitscore/pull/857)・temp 掃除のレースが ERROR 件数を押し上げていた件）、2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・cold install ゲートの追加）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -30,9 +30,10 @@ status: draft
 6. [`get_log` とリングバッファ](#get_log-とリングバッファ)
 7. [gated E2E ハーネス — 実 VS Code を MCP だけで駆動する](#gated-e2e-ハーネス--実-vs-code-を-mcp-だけで駆動する)
 8. [キャプチャ WAV と RMS アサーション](#キャプチャ-wav-と-rms-アサーション)
-9. [規律を仕組みに変えるテスト — ラチェットとアサーション衛生](#規律を仕組みに変えるテスト--ラチェットとアサーション衛生)
-10. [ライブ playhead — `[STEP]` 行から decoration まで](#ライブ-playhead--step-行から-decoration-まで)
-11. [手元で走らせる](#手元で走らせる)
+9. [cold install ゲート — dev host が構造的に通らない層](#cold-install-ゲート--dev-host-が構造的に通らない層)
+10. [規律を仕組みに変えるテスト — ラチェットとアサーション衛生](#規律を仕組みに変えるテスト--ラチェットとアサーション衛生)
+11. [ライブ playhead — `[STEP]` 行から decoration まで](#ライブ-playhead--step-行から-decoration-まで)
+12. [手元で走らせる](#手元で走らせる)
 
 ---
 
@@ -986,6 +987,56 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 
 ---
 
+## cold install ゲート — dev host が構造的に通らない層
+
+ここまで読んできた gated ハーネスには、**原理的に届かない層**があります。`--extensionDevelopmentPath` で起動する Extension Development Host は、リポジトリのソースをその場で読ませる仕組みなので、**出荷する `.vsix` を実際にインストールしたときにしか走らない経路**を一度も通らないのです。2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、その層だけを見る 2 本目の gated スイート `tests/e2e/vsix-cold-install-gated.spec.ts` が入りました。
+
+通らない経路は 3 つあります。daemon バイナリの解決先（dev host では `monorepo-release`、cold install では `extension-bundle`）、拡張自身の同梱依存、そして **engine を起動する Node ランタイムの選び方**です。3 つ目が #878 で、v3.0.0 では `activate()` すら走らない `.vsix` が凍結タグの直前まで残っていました（#873）。どちらも「ユニットテストも gated E2E も全部緑」の状態で起きています。
+
+```typescript
+// tests/e2e/vsix-cold-install-gated.spec.ts:9-17
+ * ここでは 2 つの構成で確かめる:
+ *
+ * | 構成 | 何を守るか |
+ * |---|---|
+ * | **strict**（CLI ラッパ経由 + node の無い最小 PATH） | **#878**。VS Code のシェル環境解決に救われない条件。修正前は確定で `spawn node ENOENT` |
+ * | **finder**（app 本体を直接起動） | 利用者の通常経路。`.vsix` を入れただけで音が出ること |
+ *
+ * 🔴 **strict を「Finder より厳しすぎる」と切り捨てない。** `code .` を、nodenv を初期化しない
+ * ログインシェルから叩けば同じ条件になる。engine の起動を PATH に依存させない限り両方緑になる。
+```
+
+2 つの構成の差は **launcher と env だけ**です。strict は `Contents/Resources/app/bin/code`（CLI ラッパ）を、finder は `Contents/MacOS/Code`（app 本体）を叩きます。CLI ラッパ経由だと VS Code は**ログインシェルの環境解決を省く**（端末から引き継ぐ前提のため）ので、node の無い PATH と組み合わせると「VS Code のシェル環境解決に救われない」条件が確定で再現します。
+
+```typescript
+// tests/e2e/vsix-cold-install-gated.spec.ts:48-51
+/** `/etc/paths` 相当。nodenv / Homebrew の node はここに無い。 */
+const NODE_LESS_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+
+const enabled = process.env.ORBIT_GATED_COLD_INSTALL === '1'
+```
+
+ゲート env は `ORBIT_GATED_ORBITSTUDIO` ではなく **`ORBIT_GATED_COLD_INSTALL`** です。別の env にしてあるのは、このスイートが `.vsix` のパッケージングを前提にするからで、`npm run test:e2e:cold-install` の `pretest` が古い `.vsix` を消してから `vsce package` を回します。ゲートが立っていない通常の `npm test` では `describe.skipIf(!enabled)` で describe ごと skip されます。
+
+オラクルは `ok` ではありません。空の extensions-dir へ `.vsix` を入れ、`--extensionDevelopmentPath` **無し**で起動して、キャプチャ WAV の RMS まで見ます。
+
+```typescript
+// tests/e2e/vsix-cold-install-gated.spec.ts:195-203
+  expect(windows, 'no capture windows were produced').toBeDefined()
+  // 🔴 `ok` で終わらせない。音が出たことは WAV の RMS でしか言えない。
+  expect(windows!.rms('sound')).toBeGreaterThan(0.01)
+
+  const log = (await client.call('get_log', { lines: 500 })).text
+  expect(
+    log.split('\n').filter((l) => l.includes('Cannot find module')),
+    'the packaged .vsix failed to resolve a bundled dependency',
+  ).toEqual([])
+```
+
+2 本目の `expect` が `get_log` を見ているのは、本章の [`ok` は何を意味するか](#evaluate_orbitscore-の-ok-は何を意味するか) と同じ理由です。同梱依存の解決失敗は評価が返ったあとに非同期で起きるので、`ok` にも RMS にも出ず、**出力チャンネルにしか現れません**。
+
+---
+
 ## 規律を仕組みに変えるテスト — ラチェットとアサーション衛生
 
 WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再現可能な仕組み』へ」です。CLAUDE.md には「DSL の機能を追加したら必ず E2E テストを追加する」と書いてあったのに、実測すると `seq` の 32 語のうち 19 語が実機で一度も評価されていませんでした。文章は読まれない時があります。そこで 2 本のテストが gated E2E の **ソースそのもの**を検査します。
@@ -1397,6 +1448,9 @@ npm run test:e2e:gated
 
 # アプリの場所を変える / キャプチャ WAV を残す
 ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
+
+# 出荷 `.vsix` の cold install ゲート（pretest で `vsce package` が走る）
+npm run test:e2e:cold-install
 ```
 
 実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、ラチェットと hygiene の 2 テストだけが常時走ります。
@@ -1462,6 +1516,8 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — `launchIsolatedOrbitStudio()`・describe のセットアップ・teardown
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — #654 playhead E2E
+- `tests/e2e/vsix-cold-install-gated.spec.ts:1-51` — cold install ゲートの env contract（`ORBIT_GATED_COLD_INSTALL`）と strict / finder の 2 構成（#878 / #873）
+- `tests/e2e/vsix-cold-install-gated.spec.ts:160-223` — DSL 評価から RMS と `get_log` のアサーションまで
 - `tests/e2e/helpers/harness-processes.ts:1-49` — teardown の封じ込めポリシー・`selectRootPids()`・`userDataDirExceedsSocketLimit()`（#830）
 - `tests/e2e/harness-processes.spec.ts:1-89` — 上のプロセス分類のユニットテスト（#830）
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント

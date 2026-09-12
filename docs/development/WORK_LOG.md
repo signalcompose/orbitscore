@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #889 into the chapters and guides that still said `spawn('node')` (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr889`
+**担当**: docs 追従ルーティン（マージ済み PR [#889](https://github.com/signalcompose/orbitscore/pull/889) を追う）
+
+PR #889（#878・engine を VS Code 同梱の Node で起動）は dev サイトの引用ブロックを追従させたが、
+**引用を囲む本文と図が古いまま**だった。`docs:check` は引用のアンカーしか見ないので red にならない
+（`docs/core/PROJECT_RULES.md` の「ルーティンは機械が見ていない層を見ている」）。
+
+#### 1. `spawn('node')` と言い続けていた本文・図
+
+| 場所 | 何が古かったか |
+|---|---|
+| `sites/dev/orientation/architecture-overview.md:60` | mermaid のラベルが `child_process.spawn('node', ...)` / `env は debug フラグと capture seam のみ` |
+| `sites/dev/editor/vscode-architecture.md:606` | 「debug フラグと capture seam（#307）だけを env へ積んで spawn します」 |
+
+どちらも spawn の第 1 引数が `process.execPath` になり、env に `ELECTRON_RUN_AS_NODE` /
+`ELECTRON_NO_ASAR` が加わった時点で事実でなくなっている。
+
+#### 2. `daemonEnv()` が説明なしで引用に現れていた
+
+`architecture-overview.md` の `spawnDaemon()` 引用には PR #889 で `env: daemonEnv(process.env)` が
+入ったが、**`daemonEnv()` が何かを述べる本文が 1 行も無かった**。関数本体の引用と、
+「自分が足したものを自分の出口で戻す」という根拠（および「ホスト由来の変数を第三者へ渡さない」を
+根拠にしていない理由）を書いた。
+
+#### 3. cold install ゲートがどの doc にも無かった
+
+`npm run test:e2e:cold-install`（`ORBIT_GATED_COLD_INSTALL=1`）は CLAUDE.md のマージ前ゲートには
+入ったが、**gated E2E を説明する章**（`sites/dev/editor/mcp-and-gated-e2e.md`）と
+**テスト手順の doc**（`docs/testing/TESTING_GUIDE.md`）には無かった。前者に 1 節
+（dev host が構造的に通らない 3 経路・strict / finder の差・オラクルが `ok` でなく RMS）を、
+後者に実行手順を足した。
+
+日英とも同一ターンで更新。`node sites/dev/scripts/check-citations.mjs` は 956 citations / 0 failed。
+
+---
+
 ### docs: follow PR #885 in the user site, the manual and the editor chapters (Sep 12, 2026)
 
 **Date**: 2026-09-12

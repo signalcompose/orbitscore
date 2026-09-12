@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しましたと束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・`registerOutputCodeActionProvider()` の登録）まで、さらに #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動）まで**engine spawn 節だけ**追従しました。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -682,7 +682,11 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
     })
 ```
 
-**2026-09-10 の裁定（#827 / #502）で `engineKind` による分岐・`ORBITSCORE_ENGINE` の明示 set・`ORBIT_SCSYNTH_PATH` の受け渡しはすべて削除**されました。唯一のバックエンドである Rust daemon 向けに、debug フラグと capture seam（#307）だけを env へ積んで spawn します。
+**2026-09-10 の裁定（#827 / #502）で `engineKind` による分岐・`ORBITSCORE_ENGINE` の明示 set・`ORBIT_SCSYNTH_PATH` の受け渡しはすべて削除**されました。唯一のバックエンドである Rust daemon 向けに、`env` 変数へ積むのは debug フラグと capture seam（#307）だけです。
+
+ただし spawn に渡る env はそれだけではありません。**2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、spawn の引数そのものが変わりました。** PATH から `node` を引くのをやめ、**VS Code 自身が同梱している Node**（`process.execPath`）を使います。Finder や launchd から起動された VS Code の PATH は `/etc/paths` の最小構成で、nodenv や Homebrew で node を入れている環境ではそこに `node` がないためです。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` を渡して初めて Node になります。`ELECTRON_NO_ASAR=1` が併記されているのは、その子では Electron の asar フックが生きていて `fs` が「`.asar` で終わるディレクトリ」をアーカイブとして扱うからで、利用者が `global.audioPath(...)` で与えたパスに `.asar` が現れたときだけ素の node と挙動が変わるのを消すためです。
+
+この 2 つは engine プロセスに入るので、engine がさらに起動する daemon へも放っておけば流れます。engine 側の出口（`daemonEnv()`）が `ELECTRON_RUN_AS_NODE` だけを落とします（[0-2 アーキテクチャ全景](/orientation/architecture-overview)）。
 
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
