@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): re-anchor the source pointers left behind by the #888 child-3 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr897` / **追従元**: PR [#897](https://github.com/signalcompose/orbitscore/pull/897)（merge `6dcd80bb2086fd6ced22e0c9711a7063e45ee535`）
+
+PR #897 は `orbit-vst3-host/src/lib.rs` / `orbit-plugin-scan/src/lib.rs` /
+`orbit-audio-sandbox/src/transport.rs` を分割し、dev サイトの **`// FILE:START-END`
+引用ヘッダ 32 件**を移動先へ追随させた。しかし各章末の **`## Sources` / 「Further reading」の
+散文ポインタは旧パスのまま**残っていた。
+
+🔴 **`docs:check` はこの取りこぼしを構造的に検出できない。**
+`sites/dev/scripts/check-citations.mjs` が突合するのは ```` ```rust ```` ブロック先頭の
+`// FILE:START-END` ヘッダだけで、**散文の中のバッククォート付きパスは走査対象外**である。
+そのため #897 は `948 citations / 0 failed` で緑のまま、**17 種 34 箇所**（ja / en 対）の
+死んだポインタを残せた。
+
+本コミットはその 17 種すべてを移動先へ張り直した（ja / en 対で 8 ファイル・計 34 箇所）:
+
+| 旧 | 新 |
+|---|---|
+| `transport.rs:79-87`（`EVT_SLOTS`） | `transport/layout.rs:33-41` |
+| `transport.rs:265-277`（evt ring / `dirty_epoch`） | `transport/layout.rs:222-234` |
+| `transport.rs:359-378`（`ReleaseAcquireSeq`） | `transport/event_ring.rs:37-56` |
+| `transport.rs:512-538`（`EventRingChild::service`） | `transport/event_ring.rs:192-218` |
+| `transport.rs:1213-1225`（`UiPumpNotification`） | `transport/ui_codec.rs:33-45` |
+| `transport.rs:1355-1374`（`UiPumpState`） | `transport/ui_pump.rs:63-82` |
+| `transport.rs:113-143,173-288`（`CONTROL_*` / `SharedRegion`） | `transport/layout.rs:67-97,127-239` |
+| `transport.rs:2031-2041`（`create_shared`） | `transport/shm.rs:171-186` |
+| `plugin-scan/src/lib.rs` 9 件（カタログ型・role 判定・scan dir・dedup・atomic write） | `types.rs` / `dirs.rs` / `clap_scan.rs` / `vst3_scan.rs` / `catalog_io.rs` |
+
+`docs/planning/DEVELOPMENT_MAP.md` の 2 件（`extra_scan_dirs_from_env` の実装位置、
+`reset_child_starting` の在処）も同様に張り直した。前者は「`CLAP_PATH` 対応は同じ関数に
+1 行並べるだけ」という**着手手順そのもの**を指すポインタで、死んだままだと実装者が迷う。
+
+`verified-against` / `verified-at` は**更新していない**。STYLE_GUIDE §4 の
+「小規模 cross-link / 体裁修正のみ: 更新しない（本文内容と code の対応関係に変更がないため）」に
+該当する — 純粋な移動なので本文の主張は 1 つも変わっていない。
+
+検証: `npm run docs:build`（user / dev）両方緑 / `npm run docs:check` **948 citations / 0 failed**。
+張り直した 17 種は docs:check の対象外なので、`sed -n '<start>p;<end>p'` で各範囲の先頭行・
+末尾行を**実ファイルから目視照合**した。
+
 ### fix(plugin-scan): re-export vst3_scan publicly — my sed excluded digits (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`

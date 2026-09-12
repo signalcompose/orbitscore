@@ -1389,7 +1389,7 @@ The second defect is that the gate itself failed intermittently with SIGBUS / SI
 the fixture's shm path. `ActualFixture::new` used `line!()` to make the path unique, but `line!()`
 expands at the line where the macro is written, so it is a constant no matter how many callers there
 are. Four fixtures therefore shared one `orbit-rack-gain-{pid}-652.shm`, and the `.truncate(true)` in
-`create_shared` (`orbit-audio-sandbox/src/transport.rs:2031-2041`) truncated a region another test
+`create_shared` (`orbit-audio-sandbox/src/transport/shm.rs:171-186`) truncated a region another test
 still had mapped. Writes then landed past EOF, which is what SIGBUS means here. That it never failed
 single-threaded and only failed in parallel follows from this being a collision *between* tests.
 
