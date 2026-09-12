@@ -80,7 +80,7 @@ The host (daemon) and the child open one mmap file as shared memory and overlay 
 alignment lands on a cache-line boundary. Let us first look at the audio and handshake substrate.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:173-207
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:127-161
 #[repr(C, align(64))]
 pub struct SharedRegion {
     /// host が input/n_frames 書き込み後に進める。child はこれが前回値より進むのを待つ。
@@ -183,7 +183,7 @@ Since 2026-07-17, three "non-audio" communication paths were appended to the tai
 3. **`active_stage_index`** (#628): the stage the rack child is processing right now.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:268-288
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-242
     // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
     /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
     pub evt_seq: ReleaseAcquireSeq,
@@ -219,7 +219,7 @@ A child does not enter its process loop the moment it starts; it only flips `chi
 starts submitting blocks after it sees READY.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:113-138
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:67-92
 /// `control` の値: child は spin を続ける。
 pub const CONTROL_RUN: u32 = 0;
 /// `control` の値: host が child に spin loop を抜けて正常終了するよう要求する。
@@ -280,7 +280,7 @@ child loaded (bit0 = has an audio input); the child Release-stores `child_flags`
 then sets `child_status` to READY.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:140-143
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:94-97
 /// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
 /// （`orbit_clap_host::buffers::HostAudioBuffers::has_audio_input()` 相当）。effect/instrument の
 /// 実体判定に使い、PR-1b で role 不一致検証に使う予定（本 PR では書き込みのみ）。

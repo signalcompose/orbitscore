@@ -394,7 +394,7 @@ UI を「開く」だけなら host → child のメールボックスで足り�
 追加された evt リングです。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:268-280
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-234
     // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
     /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
     pub evt_seq: ReleaseAcquireSeq,
@@ -416,7 +416,7 @@ UI を「開く」だけなら host → child のメールボックスで足り�
 導出根拠が別物です）。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:79-87
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:33-41
 /// child → host の取りこぼし不可イベント用 slot 数（UIH.2a）。
 ///
 /// audio pipeline の [`SLOTS`] とは導出根拠が異なる。1 close cycle で同時に in-flight に
@@ -435,7 +435,7 @@ publish / read の両側で Release / Acquire 対が**必須**です（欠ける
 データ競合 = UB）。面白いのは、これを**テストではなく型で守っている**ことです。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:362-381
+// rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:37-56
     #[repr(transparent)]
     pub struct ReleaseAcquireSeq(AtomicU64);
 
@@ -469,7 +469,7 @@ publish / read の両側で Release / Acquire 対が**必須**です（欠ける
 再利用の不変条件（`evt_ack_seq >= s - EVT_SLOTS`）を検査してから publish します。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:515-541
+// rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:192-218
     pub unsafe fn service(
         &mut self,
         region: *mut SharedRegion,
@@ -735,7 +735,7 @@ daemon の `UiEventPump::poll_step` は watchdog の 1 tick ごとにリング�
 しない・リング先頭で止まる）。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1216-1228
+// rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45
 /// [`UiEventPump::poll_step`] が daemon の非ブロッキング sink へ渡す固定通知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiPumpNotification {
@@ -910,26 +910,26 @@ open UI の共存は「動かさない（= 自動 close = C-A 違反）」か「
 daemon 側の `UiPumpState` は、こうして per-window の map になりました。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1358-1377
+// rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82
 #[derive(Debug, Default)]
-struct UiPumpState {
-    generation: u64,
+pub(super) struct UiPumpState {
+    pub(super) generation: u64,
     /// Engine へ通知済みで、`AckUiSafepoint` を待っている `UI_CLOSED`。
-    pending_safepoint: Option<PendingSafepoint>,
+    pub(super) pending_safepoint: Option<PendingSafepoint>,
     /// Window ごとの lifecycle と、遅着 ack を warn 付きで受理するための放棄水位。
-    windows: BTreeMap<UiWindowKey, UiWindowState>,
+    pub(super) windows: BTreeMap<UiWindowKey, UiWindowState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PendingSafepoint {
-    window: UiWindowKey,
-    evt_seq: u64,
+pub(super) struct PendingSafepoint {
+    pub(super) window: UiWindowKey,
+    pub(super) evt_seq: u64,
 }
 
 #[derive(Debug)]
-struct UiWindowState {
-    lifecycle: UiLifecycle,
-    abandoned_safepoint: Option<u64>,
+pub(super) struct UiWindowState {
+    pub(super) lifecycle: UiLifecycle,
+    pub(super) abandoned_safepoint: Option<u64>,
 }
 ```
 

@@ -67,7 +67,7 @@ crash isolation 原則で、crate の `description` も
 カタログ 1 エントリと、トップレベルのドキュメントは Rust 側でこう定義されています。
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:29-50
+// rust/crates/orbit-plugin-scan/src/types.rs:21-42
 /// カタログ 1 エントリ（PC.1 JSON スキーマ）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,10 +103,10 @@ pub struct Catalog {
 判定できないときは**安全側で両方入れる**のがポイントです。
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:571-584
+// rust/crates/orbit-plugin-scan/src/clap_scan.rs:43-56
 /// CLAP feature タグから role (instrument/effect) を判定する。
 /// 両方一致・どちらも不一致の場合は両方入れる（安全側・PC.1 の role フィルタで絞り込む前提）。
-fn roles_from_clap_features(features: &[String]) -> Vec<String> {
+pub(crate) fn roles_from_clap_features(features: &[String]) -> Vec<String> {
     let has_instrument = features.iter().any(|f| f == "instrument");
     let has_effect = features
         .iter()
@@ -130,10 +130,10 @@ VST3 側の `roles_from_vst3_subcategories`（`lib.rs:922-940`）も同じ発想
 スキャン対象は macOS 標準の 4 ディレクトリと、`ORBIT_PLUGIN_PATH`（`:` 区切り）です。
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:187-198
+// rust/crates/orbit-plugin-scan/src/dirs.rs:9-20
 /// スキャン対象ディレクトリのデフォルト（PC.1）。
 /// `~` は `dirs_home` で解決する（HOME 環境変数が読めない場合はスキップ）。
-fn default_scan_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+pub(crate) fn default_scan_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = home {
         dirs.push(home.join("Library/Audio/Plug-Ins/CLAP"));
@@ -149,7 +149,7 @@ fn default_scan_dirs(home: Option<&Path>) -> Vec<PathBuf> {
 「各ディレクトリ直下のみ = 非再帰」がそのまま実装になっています。
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:228-253
+// rust/crates/orbit-plugin-scan/src/dirs.rs:50-75
 /// 1 ディレクトリ直下（非再帰）を走査し、`.clap` / `.vst3` バンドル候補を列挙する。
 /// ディレクトリが存在しない・読めない場合は空 Vec を返す（stderr warn のみ）。
 pub fn list_bundle_candidates(dir: &Path) -> Vec<(PathBuf, Format)> {
@@ -184,7 +184,7 @@ pub fn list_bundle_candidates(dir: &Path) -> Vec<(PathBuf, Format)> {
 同じプラグインが 2 箇所にある場合の dedup は**後勝ち**です。
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:1037-1055
+// rust/crates/orbit-plugin-scan/src/vst3_scan.rs:215-233
 /// エントリ列を dedup する（後勝ち: 同キーの後続要素が前の要素を置き換える）。
 pub fn dedup_entries(entries: Vec<CatalogEntry>) -> Vec<CatalogEntry> {
     let mut order: Vec<(u8, String, String)> = Vec::new();
@@ -218,7 +218,7 @@ pub fn dedup_entries(entries: Vec<CatalogEntry>) -> Vec<CatalogEntry> {
 書きかけの JSON を掴まないための最低限の防御です。
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:1854-1866
+// rust/crates/orbit-plugin-scan/src/catalog_io.rs:29-41
 /// カタログを JSON にシリアライズして `path` へ atomic write（tmp + rename）する。
 pub fn write_catalog(catalog: &Catalog, path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {

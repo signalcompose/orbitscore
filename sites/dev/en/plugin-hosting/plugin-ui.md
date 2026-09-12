@@ -400,7 +400,7 @@ If all we needed was to "open" a UI, the host → child mailbox would suffice. T
 #474 P2.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:268-280
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-234
     // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
     /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
     pub evt_seq: ReleaseAcquireSeq,
@@ -421,7 +421,7 @@ from the occupancy bound "at most `UI_CLOSED` 1 + `UI_CLOSED_DONE` 1 = 2 can be 
 close cycle" (a derivation entirely separate from the audio pipeline's `SLOTS`).
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:79-87
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:33-41
 /// child → host の取りこぼし不可イベント用 slot 数（UIH.2a）。
 ///
 /// audio pipeline の [`SLOTS`] とは導出根拠が異なる。1 close cycle で同時に in-flight に
@@ -441,7 +441,7 @@ a cross-process data race, i.e. UB). What is interesting is that this is **guard
 tests**.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:362-381
+// rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:37-56
     #[repr(transparent)]
     pub struct ReleaseAcquireSeq(AtomicU64);
 
@@ -475,7 +475,7 @@ then call `publish`". The child-side publisher `EventRingChild::service` keeps t
 checking the slot-reuse invariant (`evt_ack_seq >= s - EVT_SLOTS`) before publishing.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:515-541
+// rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:192-218
     pub unsafe fn service(
         &mut self,
         region: *mut SharedRegion,
@@ -747,7 +747,7 @@ The daemon's `UiEventPump::poll_step` reads the ring on every watchdog tick; whe
 `false`** (= does not ack; stops at the ring head).
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1216-1228
+// rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45
 /// [`UiEventPump::poll_step`] が daemon の非ブロッキング sink へ渡す固定通知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiPumpNotification {
@@ -924,26 +924,26 @@ The essence of the problem was "open windows were being addressed and attributed
 The daemon's `UiPumpState` thereby became a per-window map.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1358-1377
+// rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82
 #[derive(Debug, Default)]
-struct UiPumpState {
-    generation: u64,
+pub(super) struct UiPumpState {
+    pub(super) generation: u64,
     /// Engine へ通知済みで、`AckUiSafepoint` を待っている `UI_CLOSED`。
-    pending_safepoint: Option<PendingSafepoint>,
+    pub(super) pending_safepoint: Option<PendingSafepoint>,
     /// Window ごとの lifecycle と、遅着 ack を warn 付きで受理するための放棄水位。
-    windows: BTreeMap<UiWindowKey, UiWindowState>,
+    pub(super) windows: BTreeMap<UiWindowKey, UiWindowState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PendingSafepoint {
-    window: UiWindowKey,
-    evt_seq: u64,
+pub(super) struct PendingSafepoint {
+    pub(super) window: UiWindowKey,
+    pub(super) evt_seq: u64,
 }
 
 #[derive(Debug)]
-struct UiWindowState {
-    lifecycle: UiLifecycle,
-    abandoned_safepoint: Option<u64>,
+pub(super) struct UiWindowState {
+    pub(super) lifecycle: UiLifecycle,
+    pub(super) abandoned_safepoint: Option<u64>,
 }
 ```
 

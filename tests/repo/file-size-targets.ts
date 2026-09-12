@@ -111,3 +111,37 @@ export function listMeasuredFiles(
 
   return files.sort((a, b) => a.path.localeCompare(b.path))
 }
+
+/**
+ * 測定対象の pathspec にマッチする**未追跡**ファイル（設計 §4.1 の補強・L-3）。
+ *
+ * 🔴 `git ls-files` は **index を見る**。新しく作っただけで `git add` していない
+ * ソースは列挙に現れず、**閾値超過でもラチェットが緑のまま通る**。#888 子 3 の
+ * `orbit-vst3-host` 分割で実際に踏んだ（新設した `host/interfaces.rs` が 576 コード行
+ * ありながら、untracked のあいだ 11 テスト全緑だった）。
+ *
+ * 真空防止（{@link listMeasuredFiles} の `minFiles`）はこれを塞げない — 既存の
+ * 追跡済みファイルだけで件数のしきい値は満たされるからである。
+ */
+export function listUntrackedMeasuredFiles(
+  repoRoot: string,
+  pathspecs: ReadonlyArray<{ pathspec: string; lang: Lang }> = MEASURED_PATHSPECS,
+): MeasuredFile[] {
+  const files: MeasuredFile[] = []
+  for (const { pathspec, lang } of pathspecs) {
+    const output = execFileSync(
+      'git',
+      ['ls-files', '-z', '--others', '--exclude-standard', '--', pathspec],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      },
+    )
+    for (const entry of output.split('\0')) {
+      if (!entry) continue
+      if (lang === 'rust' && isExcludedRustPath(entry)) continue
+      files.push({ path: entry, lang })
+    }
+  }
+  return files.sort((a, b) => a.path.localeCompare(b.path))
+}

@@ -71,7 +71,7 @@ host（daemon）と child は 1 つの mmap ファイルを共有メモリとし
 境界に載ります。まず audio と handshake の土台の部分を見てみましょう。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:173-207
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:127-161
 #[repr(C, align(64))]
 pub struct SharedRegion {
     /// host が input/n_frames 書き込み後に進める。child はこれが前回値より進むのを待つ。
@@ -172,7 +172,7 @@ instrument IPC 用の event 転送窓（`input_events`/`output_events` 等）も
 3. **`active_stage_index`**（#628）: rack child がいま処理している stage の index。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:268-288
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-242
     // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
     /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
     pub evt_seq: ReleaseAcquireSeq,
@@ -207,7 +207,7 @@ child は起動後すぐに process loop へ入るのではなく、plugin の�
 submit を始めます。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:113-138
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:67-92
 /// `control` の値: child は spin を続ける。
 pub const CONTROL_RUN: u32 = 0;
 /// `control` の値: host が child に spin loop を抜けて正常終了するよう要求する。
@@ -264,7 +264,7 @@ READY と対で `child_flags` という bit flags もあります。child がロ
 してから `child_status` を READY にします。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:140-143
+// rust/crates/orbit-audio-sandbox/src/transport/layout.rs:94-97
 /// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
 /// （`orbit_clap_host::buffers::HostAudioBuffers::has_audio_input()` 相当）。effect/instrument の
 /// 実体判定に使い、PR-1b で role 不一致検証に使う予定（本 PR では書き込みのみ）。
