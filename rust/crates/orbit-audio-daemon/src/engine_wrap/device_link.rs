@@ -4,9 +4,10 @@
 //! `DeviceSwitchRequest`）と capture パス解決も**このモジュールの主題**なので、
 //! レビュー（altitude）を受けて `role.rs` から移してある（ファイル後半）。
 //!
-//! 🔴 **2 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
-//! そのまま移した。変更したのは `record_stream_config` と `record_device_switch_result` の
-//! 可視性（`fn` → `pub(super) fn`）だけで、どちらも `engine_wrap.rs` に残る側
+//! 🔴 **本文は 1 行も書き換えていない。** 変えたのは可視性だけである（設計 §14）。
+//! `engine_wrap.rs` の `impl EngineWrap` から
+//! そのまま移した。`impl EngineWrap` の部分では `record_stream_config` と
+//! `record_device_switch_result` を `pub(super)` にした。どちらも `engine_wrap.rs` に残る側
 //! （`finish_start` とインラインテスト）から呼ばれている。
 //! **親は子の private メソッドを呼べない**（設計 §5 の **E3′**）。
 //!

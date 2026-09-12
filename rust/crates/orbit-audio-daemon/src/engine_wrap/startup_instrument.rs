@@ -1,7 +1,11 @@
 //! `EngineWrap` の起動 variant — instrument / both 系（#888 子 1・第 7 束）。
 //!
-//! 🔴 **これは純粋な移動である。** `startup.rs` から分けた。1 ファイルにまとめると
+//! 🔴 **本文は 1 行も書き換えていない。** `startup.rs` から分けた。1 ファイルにまとめると
 //! **565 コード行**で #888 の閾値 500 を超えるため（設計 §13.9 の制約 1）。
+//!
+//! 変えたのは可視性だけで、`resolve_outproc_both_buffer_frames`（`engine_wrap.rs` に残る
+//! インラインテストから）と `start_outproc_both_with_options`（親に残る
+//! `start_with_options` から）を `pub(super)` にした（設計 §5 の **E3′** / §14）。
 //!
 //! 親の子モジュールなので `EngineWrap` の private フィールドに到達できる。
 

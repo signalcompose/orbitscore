@@ -1,8 +1,12 @@
 //! `EngineWrap` の構築と OOP プラグインの load 本体（#888 子 1・第 12 束＝最終）。
 //!
-//! 🔴 **1 行を除いて純粋な移動である。** 唯一の変更は `build` の可視性で、
-//! `engine_wrap.rs` に残る `start_with` と `test_wrap_with_three_stage_topology` から
-//! 呼ばれるため `pub(super)` にした（設計 §5 の **E3′**）。
+//! 🔴 **本文は 1 行も書き換えていない。** 変えたのは可視性だけである（設計 §14）。
+//! `build` は `engine_wrap.rs` に残る `start_with` /
+//! `test_wrap_with_three_stage_topology` から、`load_outproc_plugin_impl` は親と
+//! 兄弟 3 モジュールから呼ばれるため、どちらも `pub(super)` にした（設計 §5 の **E3′**）。
+//!
+//! 🔴 `build` を親へ戻す案はレビュー（altitude）で出たが、親 420 + `build` 89 = **513 コード行**で
+//! 閾値 500 を超えるため採れない。
 
 #[allow(unused_imports)]
 use super::*;

@@ -2,15 +2,14 @@
 //!
 //! replace / unload は同じ束の中で 500 行に収めるため `outproc_effect_replace.rs` にある。
 //!
-//! 🔴 **1 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
-//! そのまま移した。唯一の変更は `apply_outproc_effect_chain_with_timeout` の可視性で、
-//! `fn` → `pub(super) fn` にした（下記）。
+//! 🔴 **本文は 1 行も書き換えていない。** `engine_wrap.rs` の `impl EngineWrap` から
+//! そのまま移した。変えたのは可視性だけである（設計 §14）。
 //!
-//! 🔴 **なぜ 1 行だけ可視性を変えたか**（設計 §5 の **E3′**）: 親は子の private メソッドを
-//! 呼べない。このメソッドは `engine_wrap.rs` に残るインラインテスト `effect_rack_tests` から
-//! 呼ばれているので、private のままでは E0624 になる。
-//! `teardown_outproc_effect_slot` と `load_outproc_effect_chain_impl` は呼び出し元が
-//! すべてこのモジュール内なので private のまま。**変更は必要最小の 1 行に留めた。**
+//! 🔴 **なぜ可視性を変えるのか**（設計 §5 の **E3′**）: 親は子の private メソッドを呼べず、
+//! 兄弟同士も private は見えない。`apply_outproc_effect_chain_with_timeout` は
+//! `engine_wrap.rs` に残るインラインテスト `effect_rack_tests` から呼ばれているので、
+//! private のままでは E0624 になる。**呼び出し元がこのモジュール内だけの項目は private のまま**に
+//! してあり、引き上げは必要最小に留めている。
 //!
 //! 親の子モジュールなので `EngineWrap` の private フィールドには到達できる。
 

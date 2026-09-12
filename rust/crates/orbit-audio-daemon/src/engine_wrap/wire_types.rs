@@ -1,7 +1,9 @@
 //! wire に載る公開型（#888 子 1・第 12 束＝最終）。
 //!
 //! 🔴 **これは純粋な移動である。** `LoadedPluginSummary` / `PluginUiTarget` /
-//! `PluginUiEvent` などの**公開型**をそのまま移した。本文は 1 行も書き換えていない。
+//! `PluginUiEvent` などの**公開型**をそのまま移した。**本文は 1 行も書き換えていない。**
+//! 公開型は `pub` のまま。`from_state_target` / `matches_state_target` / `short_uuid` は
+//! 親・兄弟から呼ばれるので `pub(super)` にした（設計 §5 の **E3′** / §14）。
 //!
 //! これらは `session.rs` ほかクレート内の各所と、`main.rs` から名前で参照されるので
 //! **`pub` のまま**にし、親から `pub use` で再エクスポートする。

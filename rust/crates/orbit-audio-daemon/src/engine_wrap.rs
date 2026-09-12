@@ -1999,14 +1999,24 @@ pub(crate) use plugin_ui_wiring::{
     PluginUiRouteRegistry, PluginUiWiring,
 };
 // 🔴 `session.rs` が `crate::engine_wrap::{BusKind, BusLineDest, BusLineOp, SourceRoutingTarget}`
-// を名前で import している。移動先が子モジュールになったので、**親から再エクスポート**する
-// （`use` は既定で private なので `pub(crate) use` が要る）。
+// を名前で import している。移動先が子モジュールになったので、**親から再エクスポート**する。
+//
+// 🔴 **`pub use` であって `pub(crate) use` ではない。** `engine_wrap` は `lib.rs` で
+// `pub mod` として公開されており、これらは main では crate 外から見えていた。private な子
+// モジュールへ移したうえで `pub(crate) use` で再エクスポートすると、**crate 内はコンパイルが
+// 通るのに crate 外からは E0603 になる**。下流に消費者がまだ居ないので**誰も気づかない**。
+// Fable 監査がこの 9 件を発見し、`tests/public_surface.rs` で固定した（#888 子 1）。
+//
 // 🔴 cfg は**定義側と一致させる**。`SourceRoutingTarget` だけ
 // `any(test, all(outproc-effect, outproc-instrument))` で他の 3 つと条件が違う。
+pub use device_link::{StreamConfigSnapshot, StreamGuard};
 #[cfg(any(test, all(feature = "outproc-effect", feature = "outproc-instrument")))]
-pub(crate) use effect_slot_types::SourceRoutingTarget;
+pub use effect_slot_types::SourceRoutingTarget;
 #[cfg(feature = "outproc-effect")]
-pub(crate) use effect_slot_types::{BusKind, BusLineDest, BusLineOp};
+pub use effect_slot_types::{
+    BusKind, BusLineDest, BusLineOp, DEFAULT_AUX_BUS_POOL_PREFIX, DEFAULT_EFFECT_BUS_POOL_PREFIX,
+    DEFAULT_SUM_BUS_POOL_PREFIX,
+};
 #[allow(unused_imports)]
 use slot_errors::*;
 #[allow(unused_imports)]

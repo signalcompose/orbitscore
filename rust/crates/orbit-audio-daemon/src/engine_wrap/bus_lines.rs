@@ -1,6 +1,7 @@
 //! `EngineWrap` のバスルーティング（#888 子 1・第 2 束）。
 //!
-//! 🔴 **これは純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
+//! 🔴 **これは純粋な移動である。** 本文も可視性も 1 箇所も変えていない。
+//! `engine_wrap.rs` の `impl EngineWrap` から
 //! `device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` /
 //! `set_bus_line` / `set_bus_routing` / `set_source_routing` をそのまま移しただけで、
 //! 本文は 1 行も書き換えていない。

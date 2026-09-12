@@ -1,10 +1,14 @@
 //! `EngineWrap` の起動 variant（#888 子 1・第 7 束）。
 //!
-//! 🔴 **2 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
-//! cfg feature ごとの `start*()` variant をそのまま移した。唯一の変更は
-//! `resolve_outproc_both_buffer_frames` の可視性（`pub(super)`）で、
-//! `engine_wrap.rs` に残るインラインテスト 3 箇所から呼ばれているため（設計 §5 の **E3′**）。
-//! もう 1 つは `start_outproc_both_with_options`（親に残る `start_with_options` から呼ばれる）。
+//! 🔴 **本文は 1 行も書き換えていない。** `engine_wrap.rs` の `impl EngineWrap` から
+//! cfg feature ごとの `start*()` variant をそのまま移した。`start*()` は元から `pub fn` なので、
+//! **本文も可視性も 1 箇所も変えていない**。
+//!
+//! 🔴 **instrument / both 系の variant はこのファイルに無い**（`startup_instrument.rs` にある）。
+//! 以前ここには `resolve_outproc_both_buffer_frames` /
+//! `start_outproc_both_with_options` の可視性を説明する記述があったが、**どちらも
+//! このファイルには存在しない** — 2 段目の分割で縮んだ側の doc を直さなかったための誤りで、
+//! レビュー（comment-analyzer）が発見した。設計 §14 を参照。
 //!
 //! **なぜ variant が多いのか**: `start` / `start_with_options` は `clap-host` /
 //! `outproc-effect` / `outproc-instrument` の組み合わせごとに別実装を持つ。

@@ -1,9 +1,10 @@
 //! OOP role の抽象と child-slot の共通機構（#888 子 1・第 11 束）。
 //!
-//! 🔴 **これは純粋な移動である。** `OutProcRole` トレイトとその 2 実装、`ChildSlot` /
+//! `OutProcRole` トレイトとその 2 実装、`ChildSlot` /
 //! `ChildLaunch`、`ShmCleanupGuard`、quiesce/drain のタイムアウト定数、リトライ付き push、
 //! および in-process CLAP の role 型（`ClapControl` / `ClapPluginRole`）をそのまま移した。
-//! 本文は 1 行も書き換えていない。
+//! 🔴 **本文は 1 行も書き換えていない。** 変えたのは可視性だけで、同一モジュール内では
+//! 修飾子が要らなかった項目に `pub(super)` を付けた（分割の必然・設計 §5 の **E3′**）。
 //!
 //! 🔴 **ストリーム/デバイスのライフサイクルはここに無い**（`StreamGuard` /
 //! `StreamConfigSnapshot` / `DeviceSwitchRequest` / capture パス解決）。第 1 版では

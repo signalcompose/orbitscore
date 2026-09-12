@@ -1,6 +1,8 @@
 //! プラグイン UI の配線と通知（#888 子 1・第 10 束）。
 //!
-//! 🔴 **これは純粋な移動である。** `instrument_slot_types.rs` から分けた。
+//! 🔴 **本文は 1 行も書き換えていない。** 変えたのは `remove_plugin_ui_binding` の可視性だけで、
+//! 兄弟 `plugin_ui.rs` から呼ばれるため `pub(super)` にした（設計 §14）。
+//! `instrument_slot_types.rs` から分けた。
 //! 1 ファイルにまとめると **534 コード行**で #888 の閾値 500 を超えるため（設計 §13.9 の制約 1）。
 //!
 //! `PluginUiWiring` 等は `outproc_effect.rs` / `outproc_respawn_guard.rs` からも使われるので

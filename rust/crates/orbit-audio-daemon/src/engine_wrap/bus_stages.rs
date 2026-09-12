@@ -1,6 +1,8 @@
 //! エフェクトバス stage の構築（#888 子 1・第 12 束＝最終）。
 //!
-//! 🔴 **これは純粋な移動である。** `build_effect_bus_stages` /
+//! 🔴 **本文は 1 行も書き換えていない。** 変えたのは可視性だけで、`startup.rs` /
+//! `startup_instrument.rs` から呼ばれる項目に `pub(super)` を付けた（設計 §14）。
+//! `build_effect_bus_stages` /
 //! `install_effect_bus_slots` と、その周辺のインラインテストをそのまま移した。
 
 #[allow(unused_imports)]

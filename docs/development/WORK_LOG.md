@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): restore nine public items the split had hidden (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
+
+レビュー（`/code:pr-review-team` + Fable 監査）の指摘への対応。
+
+### 🔴 公開面が 9 件、黙って crate 外から見えなくなっていた（Fable 監査）
+
+`engine_wrap` は `lib.rs` で `pub mod` として公開されている。`BusKind` / `BusLineDest` /
+`BusLineOp` / `SourceRoutingTarget` / `StreamGuard` / `StreamConfigSnapshot` /
+`DEFAULT_{AUX,EFFECT,SUM}_BUS_POOL_PREFIX` は main では crate 外から見えていたが、
+private な子モジュールへ移して `pub(crate) use` で再エクスポートしたため **E0603** になる。
+**下流にまだ消費者が居ないので、全ゲートが緑のまま通過していた。**
+
+🔴 **「分割前後で `^pub (fn|struct|…)` の集合を diff して同一」という私の検算は無効だった。**
+宣言は `pub` のままで、**到達経路だけが失われる**からである。正しい検算は
+**crate の外側からコンパイルすること** — 統合テストは外部 crate なので、そこで `use` できる
+ことが到達可能性そのものの証明になる。
+
+`tests/public_surface.rs` を 4 crate（daemon / sandbox / plugin-scan / vst3-host・計 143 項目）に
+置いて main 時点の公開面を固定した。書く過程でもう 1 つ踏んだ: **統合テストでは `cfg(test)` が
+真だが、参照先の lib は `--test` 無しでコンパイルされるので偽**。定義側の `#[cfg(any(test, X))]`
+をそのまま写すと E0432 になる（`test` 項を落としてある）。
+
+### module doc の 7 件が実態とずれていた（comment-analyzer）
+
+最悪は `startup.rs` / `startup_instrument.rs` で、**可視性変更の説明がまるごと入れ替わって**いた
+（前者が名指しした 2 関数はどちらも後者にある）。個別パッチではなく設計 §14 に開示ポリシーを
+置き、21 モジュールへ一括適用した。**「N 行を除いて純粋な移動である」という件数の主張を禁じた** —
+件数は doc が追随せず必ずずれる（書いている最中に自分でも 1 件ずらした）。
+`tests/repo/module-doc-purity.spec.ts` で機械に突き合わせさせる。
+
 ### refactor(daemon): re-cut role.rs after the simplify review (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`

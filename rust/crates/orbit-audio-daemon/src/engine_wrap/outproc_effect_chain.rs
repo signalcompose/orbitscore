@@ -1,6 +1,7 @@
 //! `EngineWrap` の out-of-process エフェクト chain の適用本体（#888 子 1・第 4 束）。
 //!
-//! 🔴 **これは純粋な移動である。** `outproc_effect_slots.rs` から `load_outproc_effect_chain_impl`
+//! 🔴 **本文は 1 行も書き換えていない。** 変えたのは可視性だけ（設計 §14）。
+//! `outproc_effect_slots.rs` から `load_outproc_effect_chain_impl`
 //! だけを切り出した。**1 ファイルにまとめると 510 コード行**になり #888 の閾値 500 を
 //! 10 行超えるため（設計 §13.9 の制約 1）。
 //!

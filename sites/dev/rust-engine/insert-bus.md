@@ -165,7 +165,7 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 `SequenceEffectManager` と数値・文字列とも一致させる必要がある契約です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:262-270
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:264-272
 /// 既定 insert bus プールの名前 prefix。DSL 側（TS）の per-sequence effect manager が
 /// 同じ規則（`seq-bus-<n>`）で bus 名を組み立てて `LoadPlugin.bus` / `PlayAt.bus` に
 /// 送るため、prefix を変える場合は TS 側の定数も合わせて更新すること（#434 S3）。
@@ -181,7 +181,7 @@ pub(super) const DEFAULT_EFFECT_BUS_POOL_SIZE: usize = 8;
 いればそれを優先し、無ければ `ORBIT_EFFECT_BUS_POOL` に従って既定プールを生成します:
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:294-306
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:296-308
 /// bus 名の解決: `ORBIT_EFFECT_BUSES`（明示名・非空）が設定されていればそれを使う（既存 S2 挙動を
 /// 保つ）。未設定なら `ORBIT_EFFECT_BUS_POOL`（既定 8・`"0"` で無効）に従って `seq-bus-<n>` の
 /// 既定プールを生成する。両方指定は `ORBIT_EFFECT_BUSES` を優先（明示指定が常に勝つ）。
@@ -203,7 +203,7 @@ pub(super) fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
 `kind: BusKind`（insert / sum / aux）と mixer 用の routing 共有 Arc が足された点です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:501-523
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:503-525
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。

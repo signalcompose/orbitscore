@@ -4,13 +4,11 @@
 //! 🔴 ファイル名は `outproc_instrument_slots` である（`crate::outproc_instrument` —
 //! 子プロセスの supervisor 本体 — と取り違えないため。レビュー（altitude）の指摘）。
 //!
-//! 🔴 **1 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
-//! そのまま移した。唯一の変更は `teardown_outproc_instrument_resources` の可視性で、
-//! `fn` → `pub(super) fn` にした。`engine_wrap.rs` に残るインラインテスト 2 箇所から
-//! 呼ばれており、**親は子の private メソッドを呼べない**ため（設計 §5 の **E3′**）。
+//! 🔴 **本文は 1 行も書き換えていない。** `engine_wrap.rs` の `impl EngineWrap` から
+//! そのまま移した。変えたのは可視性だけである（設計 §14）。
 //!
-//! 🔴 **可視性を変えた行が 2 つある**: `teardown_outproc_instrument_resources`（親の
-//! インラインテストから）と `resolve_outproc_slot`（兄弟 `plugin_ui.rs` から）を `pub(super)` に。
+//! `teardown_outproc_instrument_resources` は `engine_wrap.rs` に残るインラインテストから、
+//! `resolve_outproc_slot` は兄弟 `plugin_ui.rs` から呼ばれるため `pub(super)` にした。
 //! **親は子の private を呼べず、兄弟同士も private は見えない**（設計 §5 の **E3′**）。
 //!
 //! 親の子モジュールなので `EngineWrap` の private フィールドに到達できる。

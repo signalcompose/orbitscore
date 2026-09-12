@@ -1,6 +1,8 @@
 //! `EngineWrap` の out-of-process エフェクトの replace / unload / teardown（#888 子 1・第 4 束）。
 //!
-//! 🔴 **これは純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` からそのまま移した。
+//! 🔴 **本文は 1 行も書き換えていない。** `engine_wrap.rs` の `impl EngineWrap` からそのまま移した。
+//! 変えたのは `teardown_outproc_effect_slot` の可視性だけで、兄弟から呼ばれるため
+//! `pub(super)` にした（設計 §14）。
 //!
 //! `load` 系と分けたのは、1 ファイルにまとめると 724 コード行になり、
 //! #888 の閾値 500 を超えるため（設計 §13.9 の制約 1: 分割で生まれる新ファイルも

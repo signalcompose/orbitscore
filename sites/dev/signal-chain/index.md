@@ -818,7 +818,7 @@ pub struct EffectChainPlan {
 選びます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:145-153
+// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:144-152
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -831,7 +831,7 @@ pub struct EffectChainPlan {
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:216-238
+// rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:215-237
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
