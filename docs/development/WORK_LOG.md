@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the startup variants into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-start-lifecycle`
+
+#888 子 1 の**第 7 束**。cfg feature ごとの `start*()` variant（645 行）を 2 ファイルへ
+（`startup.rs` 292 / `startup_instrument.rs` 276）。
+`engine_wrap.rs` は **3,417 → 2,857** コード行。
+
+**可視性の変更 2 行**（E3′）: `resolve_outproc_both_buffer_frames`（親のテスト 3 箇所）と
+`start_outproc_both_with_options`（親に残る `start_with_options`）。
+
+### 🔴 抽出範囲を 2 度取り違えた — 複数行属性の罠
+
+`#[cfg(all(\n  feature = …,\n  …\n))]` は**複数行に跨る 1 つの属性**である。
+`pub fn` の行から遡って「`#[` で始まる行」だけを見ると、**属性の途中で切ってしまう**。
+実際 2 度失敗した:
+
+1. 終端を 5657 に取り、`))]` だけを親に残した → **`expected item after attributes`**
+2. 開始を 5017（`pub fn` の行）に取り、`#[cfg(all(` 〜 `))]` を親に残した → 同じエラー
+
+**正しい境界**は「doc コメントの先頭」から「次の item の属性が始まる直前」。
+第 4 束の doc コメント分断（fmt でしか気づけなかった）と違い、**こちらはコンパイルエラーになる**
+ので気づける。属性の分断と**コメントの分断は検出可能性が違う**。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
 ### refactor(daemon): move device switching and Link tempo into a child module (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-device-link`
