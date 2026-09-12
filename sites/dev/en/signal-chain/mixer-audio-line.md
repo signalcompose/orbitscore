@@ -164,7 +164,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2196-2209
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:434-447
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -175,10 +175,10 @@ pub const DEFAULT_SUM_BUS_POOL_PREFIX: &str = "sum-bus-";
 pub const DEFAULT_AUX_BUS_POOL_PREFIX: &str = "aux-bus-";
 /// `ORBIT_SUM_BUS_POOL` の既定サイズ（未設定時）。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
+pub(super) const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
 /// `ORBIT_AUX_BUS_POOL` の既定サイズ（未設定時）。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
+pub(super) const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
 ```
 
 In other words, when you write `global.sum("drum")`, the name `"drum"` never reaches the daemon.

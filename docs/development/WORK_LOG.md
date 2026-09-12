@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the effect slot types and env parsing into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-effect-slot-types`
+
+#888 子 1 の**第 9 束**。`OutProcControl` / `EffectSlotEntry` / `BusKind` 系の型と
+`ORBIT_*` 環境変数の解析（512 行）を `engine_wrap/effect_slot_types.rs`（390 コード行）へ。
+🔴 **`engine_wrap.rs` が 2,000 行を切った**（2,362 → **1,989** コード行）。
+
+### 🔴 構造体フィールドの可視性 — 第 8 束より一段深い
+
+第 8 束は関数と型に `pub(super)` を付ければ済んだが、本束は **187 件が「フィールドが private」**
+のエラーだった。親が構造体のフィールドを**直接触っている**ため、**フィールド 44 個**にも
+`pub(super)` が要った（関数・型 30 個と合わせて 74 箇所）。
+
+### 🔴 `session.rs` からの外部参照 — 再エクスポートが要った
+
+`BusKind` / `BusLineDest` / `BusLineOp` / `SourceRoutingTarget` は **`session.rs` が
+`crate::engine_wrap::` から名前で import** していた。親から `pub(crate) use` で再エクスポートした。
+
+**cfg は定義側と一致させる必要があった**: `SourceRoutingTarget` だけ
+`any(test, all(outproc-effect, outproc-instrument))` で他の 3 つと条件が違い、
+まとめて 1 行にすると default ビルドで `unresolved import` になった。
+
+### 🔴 引用の追随に新しい型が出た — 行番号ではなく**本文**が変わる
+
+`pub(super)` を付けると**引用しているコード行そのものが変わる**。`--fix` は行番号しか直さないので
+効かない。1 行ずつ置換したが**収束しなかった**（8 ラウンド回して残った）ので、
+**引用ブロックの本文を実ファイルから再生成する**スクリプトを書いて解決した
+（scratchpad の `resync-citations.mjs`）。差分は追加 40 / 削除 40 で対応しており、
+**引用の追随以外の変更が無い**ことを確認済み。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
 ### refactor(daemon): move the out-of-process slot helpers into child modules (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-slot-helpers`

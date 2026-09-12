@@ -165,7 +165,7 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 `SequenceEffectManager` と数値・文字列とも一致させる必要がある契約です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2028-2036
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:262-270
 /// 既定 insert bus プールの名前 prefix。DSL 側（TS）の per-sequence effect manager が
 /// 同じ規則（`seq-bus-<n>`）で bus 名を組み立てて `LoadPlugin.bus` / `PlayAt.bus` に
 /// 送るため、prefix を変える場合は TS 側の定数も合わせて更新すること（#434 S3）。
@@ -174,19 +174,19 @@ pub const DEFAULT_EFFECT_BUS_POOL_PREFIX: &str = "seq-bus-";
 
 /// `ORBIT_EFFECT_BUS_POOL` の既定サイズ（未設定時）。PH.2b の v1 上限（同時 insert 8 seq）と一致。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_EFFECT_BUS_POOL_SIZE: usize = 8;
+pub(super) const DEFAULT_EFFECT_BUS_POOL_SIZE: usize = 8;
 ```
 
 `ORBIT_EFFECT_BUSES`（明示 bus 名リスト・既存 S2 の後方互換経路）が設定されて
 いればそれを優先し、無ければ `ORBIT_EFFECT_BUS_POOL` に従って既定プールを生成します:
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2060-2072
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:294-306
 /// bus 名の解決: `ORBIT_EFFECT_BUSES`（明示名・非空）が設定されていればそれを使う（既存 S2 挙動を
 /// 保つ）。未設定なら `ORBIT_EFFECT_BUS_POOL`（既定 8・`"0"` で無効）に従って `seq-bus-<n>` の
 /// 既定プールを生成する。両方指定は `ORBIT_EFFECT_BUSES` を優先（明示指定が常に勝つ）。
 #[cfg(feature = "outproc-effect")]
-fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
+pub(super) fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
     let explicit = std::env::var("ORBIT_EFFECT_BUSES").unwrap_or_default();
     if !explicit.trim().is_empty() {
         return parse_effect_buses(&explicit).map_err(WrapError::OutProcEffect);
@@ -203,29 +203,29 @@ fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
 `kind: BusKind`（insert / sum / aux）と mixer 用の routing 共有 Arc が足された点です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2259-2281
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:501-523
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。
 #[cfg(feature = "outproc-effect")]
-struct EffectBusBuild {
-    name: String,
-    kind: BusKind,
-    shm_path: std::path::PathBuf,
-    engaged: Arc<std::sync::atomic::AtomicBool>,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-    done: Arc<std::sync::atomic::AtomicBool>,
-    stats: Arc<crate::outproc_effect::OutProcEffectStats>,
+pub(super) struct EffectBusBuild {
+    pub(super) name: String,
+    pub(super) kind: BusKind,
+    pub(super) shm_path: std::path::PathBuf,
+    pub(super) engaged: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) stop: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) done: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) stats: Arc<crate::outproc_effect::OutProcEffectStats>,
     /// render 側 `InsertBusStage::active` と共有。LoadPlugin が bus を指名した時点で
     /// `true`（宣言 = activation → 以降 pass-through）。それまで callback は bus を
     /// render 対象に含めない = 既定プールのコストゼロ。
-    active: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) active: Arc<std::sync::atomic::AtomicBool>,
     /// render 側 `InsertBusStage::routing_override` と共有（M2）。`SetBusRouting` が
     /// control 側からこの Arc を書き換えて実行時に output target を切替える。
-    routing_override: Arc<AtomicUsize>,
+    pub(super) routing_override: Arc<AtomicUsize>,
     /// render 側 `InsertBusStage::send_gain_overrides` と共有（M2・index k = 「この stage の
     /// 絶対 index + 1 + k」への send gain）。`SetBusRouting` が該当 index の Arc を書き換える。
-    send_gain_overrides: Vec<Arc<AtomicU32>>,
+    pub(super) send_gain_overrides: Vec<Arc<AtomicU32>>,
 }
 ```
 
