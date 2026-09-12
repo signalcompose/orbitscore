@@ -8,7 +8,7 @@
     "packages/engine/src/interpreter/process-statement.ts": 554,
     "packages/engine/src/parser/parse-expression.ts": 1000,
     "packages/engine/src/parser/parse-statement.ts": 648,
-    "packages/vscode-extension/src/extension.ts": 2779,
+    "packages/vscode-extension/src/extension.ts": 2662,
     "packages/vscode-extension/src/mcp-server.ts": 1161,
     "rust/crates/orbit-audio-daemon/src/outproc_effect.rs": 812,
     "rust/crates/orbit-audio-daemon/src/outproc_instrument.rs": 705,

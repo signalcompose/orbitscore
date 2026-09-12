@@ -1063,7 +1063,7 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `extension.ts` picks up this result line by the `{"pluginUi"` prefix. Since #773 ([#811](https://github.com/signalcompose/orbitscore/pull/811)) these four branches live inside the callback of `createLinePrefixer`, so **a line split at a chunk boundary is no longer lost** (see [IV-1](/en/editor/vscode-architecture#the-stdout-bridge-envelopes-are-reassembled-into-lines-too-773)).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1290-1294
+// packages/vscode-extension/src/extension.ts:1069-1073
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {

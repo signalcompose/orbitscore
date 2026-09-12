@@ -68,60 +68,22 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:237-289
+// packages/vscode-extension/src/extension.ts:364-378
 /**
- * VSCode-agnostic handler seam. Keeping the tool implementations behind this
- * interface (rather than reaching into the extension directly) means the same
- * handlers can be re-hosted later by the WCTM pi harness (spec §3/§4.2).
+ * Canonical local URL of the dev learning site, or null (with the shared error
+ * message shown) when the MCP server is not running. Single source for every
+ * entry point (browser command, webview panel) — the site is served at the
+ * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
+ * is only a redirect kept for muscle memory).
  */
-export interface OrbitScoreToolHandlers {
-  evaluate(code: string): Promise<EvaluateResult> | EvaluateResult
-  startEngine(options?: {
-    captureWav?: string
-    debug?: boolean
-  }): Promise<CommandResult> | CommandResult
-  stopEngine(): Promise<CommandResult> | CommandResult
-  getEngineState(): Promise<EngineState> | EngineState
-  listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
-  selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
-  configureFlash(options: FlashConfigInput): Promise<FlashConfigResult> | FlashConfigResult
-  openFile(path: string): Promise<CommandResult> | CommandResult
-  setSelection(range: SelectionInput): CommandResult
-  runSelection(): Promise<CommandResult> | CommandResult
-  editReplace(args: EditReplaceInput): Promise<CommandResult> | CommandResult
-  getEditorState(): EditorState
-  saveFile(): Promise<CommandResult> | CommandResult
-  getDocumentText(): DocumentText
-  getDiagnostics(path?: string): FileDiagnostics[]
-  getLog(lines?: number): string[]
-  analyzeAudio(
-    wavPath: string,
-    windowMs?: number,
-    perChannel?: boolean,
-  ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
-  /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
-  listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
-  /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
-  rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
-  /** 明示plugin state保存。互換フィールド `sequence` で UIH.5 の `(receiver,index)` を受ける。 */
-  savePluginState?(
-    sequence: string,
-    index: number,
-  ): Promise<SavePluginStateResult> | SavePluginStateResult
-  openPluginUi?(
-    receiver: string,
-    index: number,
-    expectedName?: string,
-  ): Promise<PluginUiResult> | PluginUiResult
-  closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
-  /**
-   * Optional (unlike the members above): only hosts that can register
-   * themselves into Claude Code expose the register_mcp_server tool — the
-   * tool is skipped when this handler is absent, so existing stub suites and
-   * alternative hosts (WCTM pi harness) stay valid without changes.
-   */
-  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
-}
+function resolveDevDocsUrl(): string | null {
+  const port = mcpServerHandle?.port ?? 0
+  if (!port) {
+    void vscode.window.showErrorMessage(
+      'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
+    )
+    return null
+  }
 ```
 
 `extension.ts` の `activate()` がこのインターフェイスを `evaluateForAgent` / `runSelectionForAgent` のような `*ForAgent` 関数で埋めます。`mcp-server.ts` 自身は `vscode` を import していません。ユニットテスト（`tests/vscode-extension/mcp-server.spec.ts`）がスタブのハンドラで HTTP 層を丸ごと駆動できるのはこのためです。
@@ -133,7 +95,7 @@ export interface OrbitScoreToolHandlers {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:434-445
+// packages/vscode-extension/src/extension.ts:285-296
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -271,7 +233,7 @@ export interface DiagnosticEntry {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2784-2821
+// packages/vscode-extension/src/extension.ts:2564-2601
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -330,7 +292,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1295-1303
+// packages/vscode-extension/src/extension.ts:1074-1082
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -397,7 +359,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2914-2925
+// packages/vscode-extension/src/extension.ts:2694-2705
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -421,29 +383,28 @@ const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
 拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:144-154
+// packages/vscode-extension/src/extension-state.ts:60-69
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
-const outputLogRing: string[] = []
+export const outputLogRing: string[] = []
 
-function pushLogRing(line: string): void {
+export function pushLogRing(line: string): void {
   outputLogRing.push(line)
   if (outputLogRing.length > OUTPUT_LOG_RING_MAX) {
     outputLogRing.shift()
   }
-}
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:307-318
-  const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
-  outputChannel.appendLine = (value: string) => {
+// packages/vscode-extension/src/extension.ts:155-166
+  const rawAppendLine = channel.appendLine.bind(channel)
+  channel.appendLine = (value: string) => {
     pushLogRing(value)
     rawAppendLine(value)
   }
-  const rawAppend = outputChannel.append.bind(outputChannel)
-  outputChannel.append = (value: string) => {
+  const rawAppend = channel.append.bind(channel)
+  channel.append = (value: string) => {
     for (const line of value.split('\n')) {
       if (line) pushLogRing(line)
     }
@@ -1327,8 +1288,8 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 `handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
-function handleStepLine(step: StepEvent): void {
+// packages/vscode-extension/src/playhead-decorations.ts:96-107
+export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
   const timeout = setTimeout(
@@ -1345,7 +1306,7 @@ function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:254-273
+// packages/vscode-extension/src/playhead-decorations.ts:109-128
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1373,7 +1334,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:956-980
+// packages/vscode-extension/src/extension.ts:809-833
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 

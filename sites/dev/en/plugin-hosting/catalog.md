@@ -552,21 +552,13 @@ The extension has its own `plugin-catalog-reader.ts`, a separate implementation 
 JSON shape and the same mtime cache** as the engine side. Its header explains why.
 
 ```typescript
-// packages/vscode-extension/src/plugin-catalog-reader.ts:1-15
+// packages/vscode-extension/src/extension.ts:364-370
 /**
- * Plugin catalog reader for the VS Code extension (#463 C1b/C3).
- *
- * Deliberately independent from `packages/engine/src/core/global/plugin-catalog.ts`
- * (same JSON shape, same mtime-cache idea) rather than a cross-package import:
- * the extension and engine are separate build targets (engine ships as compiled
- * JS copied into `engine/dist/`, see `scripts/copy-daemon-bin.sh` / build:engine),
- * so this module reads the on-disk cache file directly instead of reaching into
- * engine source.
- *
- * Catalog file: `~/.orbitscore/plugin-catalog.json`, written by the
- * `orbit-plugin-scan` binary (rust/crates/orbit-plugin-scan). Consumers here
- * only read it — the extension's job is completion (C3) + MCP tools (PC.4) +
- * spawning a rescan (C1b), never writing the catalog itself.
+ * Canonical local URL of the dev learning site, or null (with the shared error
+ * message shown) when the MCP server is not running. Single source for every
+ * entry point (browser command, webview panel) — the site is served at the
+ * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
+ * is only a redirect kept for muscle memory).
  */
 ```
 
@@ -599,36 +591,22 @@ go through the daemon: **the extension spawns the scanner binary directly**. The
 follows the same convention as the daemon lookup.
 
 ```typescript
-// packages/vscode-extension/src/plugin-catalog-reader.ts:174-202
+// packages/vscode-extension/src/extension.ts:364-378
 /**
- * Resolve the `orbit-plugin-scan` binary path. Candidate order mirrors
- * `resolveDaemonBinaryPath` in `packages/engine/src/audio/rust-engine/daemon-client.ts`:
- * explicit override → `ORBIT_PLUGIN_SCAN_PATH` env → monorepo release build
- * (dev workflow) → .vsix-bundled binary (scripts/copy-daemon-bin.sh).
+ * Canonical local URL of the dev learning site, or null (with the shared error
+ * message shown) when the MCP server is not running. Single source for every
+ * entry point (browser command, webview panel) — the site is served at the
+ * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
+ * is only a redirect kept for muscle memory).
  */
-export function resolvePluginScanBinaryPath(explicitPath?: string): string {
-  const searched: string[] = []
-  const candidates: string[] = []
-  if (explicitPath) candidates.push(explicitPath)
-  const envPath = process.env.ORBIT_PLUGIN_SCAN_PATH
-  if (envPath) candidates.push(envPath)
-
-  // This compiled file sits at `<extension>/dist/plugin-catalog-reader.js` once
-  // built (mirrors extension.ts's __dirname convention); monorepo root is 3
-  // levels up: dist -> vscode-extension -> packages -> root.
-  const monorepoRoot = path.resolve(__dirname, '../../../')
-  candidates.push(path.join(monorepoRoot, 'rust/target/release/orbit-plugin-scan'))
-  candidates.push(path.join(monorepoRoot, 'rust/target/debug/orbit-plugin-scan'))
-
-  const platform = `${process.platform}-${process.arch}`
-  candidates.push(path.join(__dirname, '../engine/bin', platform, 'orbit-plugin-scan'))
-
-  for (const candidate of candidates) {
-    searched.push(candidate)
-    if (isExecutableFile(candidate)) return candidate
+function resolveDevDocsUrl(): string | null {
+  const port = mcpServerHandle?.port ?? 0
+  if (!port) {
+    void vscode.window.showErrorMessage(
+      'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
+    )
+    return null
   }
-  throw new PluginScanBinaryNotFoundError(searched)
-}
 ```
 
 The spawn always passes `--probe-artifacts`. In other words, **a rescan from the editor or MCP
@@ -773,13 +751,13 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3452-3462
+// packages/vscode-extension/src/extension.ts:3232-3242
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
         if (!catalog) {
           if (!pluginCatalogHintShown) {
-            pluginCatalogHintShown = true
+            setPluginCatalogHintShown(true)
             vscode.window.showInformationMessage(
               'OrbitScore: no plugin catalog found. Run "OrbitScore: Rescan Plugin Catalog" to enable name completion.',
             )
@@ -876,7 +854,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3883-3899
+// packages/vscode-extension/src/extension.ts:3663-3679
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

@@ -8,7 +8,7 @@ import { StringDecoder } from 'node:string_decoder'
 import * as vscode from 'vscode'
 
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
-import { OUTPUT_LOG_RING_MAX, selectLogLines } from './log-ring'
+import { selectLogLines } from './log-ring'
 import {
   analyzeAudioPathOrdering,
   analyzeEmptyOutputArg,
@@ -35,7 +35,6 @@ import {
   type FlashConfigInput,
   type FlashConfigResult,
   type ListPluginsResult,
-  type McpServerHandle,
   type PluginUiResult,
   type RegisterMcpServerInput,
   type RescanPluginsResult,
@@ -57,11 +56,8 @@ import {
   type EngineViewNode,
   type SelectAudioDeviceBridgeResult,
 } from './engine-view'
-import { DeviceSwitchBridge } from './device-switch-bridge'
-import { PluginStateBridge } from './plugin-state-bridge'
-import { PluginUiBridge, type PluginUiAction } from './plugin-ui-bridge'
-import { EvalMarkBridge } from './eval-mark-bridge'
-import { EngineStateBridge, resolveEngineState } from './engine-state-bridge'
+import type { PluginUiAction } from './plugin-ui-bridge'
+import { resolveEngineState } from './engine-state-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -98,219 +94,71 @@ import {
   terminateActivePluginScans,
 } from './plugin-catalog-reader'
 import {
-  colorForSeq,
-  findPlayArgRangeForPath,
-  type PlayheadColorConfig,
-  type StepEvent,
-} from './playhead'
+  bumpEngineGeneration,
+  bundleStatusItem,
+  devDocsPanel,
+  engineGeneration,
+  engineProcess,
+  engineStateBridge,
+  engineViewProvider,
+  evalMarkBridge,
+  globalInitialized,
+  isEngineRunning,
+  isLiveCodingMode,
+  mcpServerHandle,
+  outputChannel,
+  outputLogRing,
+  pluginCatalogHintShown,
+  pluginStateBridge,
+  pluginUiBridge,
+  pushLogRing,
+  selectAudioDeviceBridge,
+  setBundleStatusItem,
+  setDevDocsPanel,
+  setEngineProcess,
+  setEngineViewProvider,
+  setGlobalInitialized,
+  setLiveCodingMode,
+  setMcpServerHandle,
+  setOutputChannel,
+  setPluginCatalogHintShown,
+  setStatusBarItem,
+  setTransportPlaying,
+  statusBarItem,
+  transportPlaying,
+} from './extension-state'
+import {
+  clearAllPlayheadDecorations,
+  clearPlayheadForSequence,
+  handleStepLine,
+  playheadDecorationTypes,
+  resetPlayheadDecorationTypes,
+} from './playhead-decorations'
 import { analyzeWavBuffer } from './wav-analysis'
-
-// Engine process management
-let engineProcess: child_process.ChildProcess | null = null
-let outputChannel: vscode.OutputChannel | null = null
-let statusBarItem: vscode.StatusBarItem | null = null
-let bundleStatusItem: vscode.StatusBarItem | null = null
-let devDocsPanel: vscode.WebviewPanel | null = null
-let isLiveCodingMode: boolean = false
-// Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
-// Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
-let globalInitialized: boolean = false
-let transportPlaying: boolean = false
-// Optional MCP control server (Agent Bridge). Non-null only while running.
-let mcpServerHandle: McpServerHandle | null = null
-// Stateful FIFO/timeout/drain logic for the `//#selectAudioDevice` live bridge
-// (#484 D2.5, extracted to device-switch-bridge.ts in PR #501 review so it's
-// testable without mocking vscode). One instance for the extension's lifetime —
-// drained on every engine exit/stop so a resolver from a dead engine can never
-// FIFO-match a future engine's response.
-const selectAudioDeviceBridge = new DeviceSwitchBridge()
-const pluginStateBridge = new PluginStateBridge()
-const pluginUiBridge = new PluginUiBridge()
-/** #614: `evaluate_orbitscore` に評価結果を返すための相関ブリッジ。 */
-const evalMarkBridge = new EvalMarkBridge()
-const engineStateBridge = new EngineStateBridge()
-// Audio Engine Settings TreeView (#484 D3). Non-null once activated.
-let engineViewProvider: EngineViewProvider | null = null
-// Changes whenever a spawn is created or a user explicitly stops the engine.
-// Auto-start's delayed health check uses it to avoid warning about a later action.
-let engineGeneration = 0
-// #463 C3: show the "no plugin catalog yet, run rescan" hint at most once per
-// activation (loadPluginCatalog() is cheap but the info popup shouldn't nag on
-// every keystroke while typing an effect()/instrument() argument).
-let pluginCatalogHintShown = false
-
-// let isDebugMode: boolean = false // Debug mode flag
-
-// Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
-// no other central log sink to tap, so activate() monkey-patches
-// outputChannel.appendLine/append to also push here.
-const outputLogRing: string[] = []
-
-function pushLogRing(line: string): void {
-  outputLogRing.push(line)
-  if (outputLogRing.length > OUTPUT_LOG_RING_MAX) {
-    outputLogRing.shift()
-  }
-}
-
-// --- Live playhead highlight (#390) ---
-// The engine emits `[STEP] <seqName> <argPath> <atEpochMs>` on stdout for each
-// dispatched play event (see playhead.ts for the grammar). setupStdoutHandler
-// parses these from the RAW stream (shouldFilterLine keeps them out of the
-// Output channel), delays until the event's grid time, then highlights the
-// corresponding `<seqName>.play(...)` argument (argPath descends into nested
-// groups — "1.0" lights the first element inside the second arg). ONE
-// decoration type PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB");
-// each seq gets a vivid color first-come from `orbitscore.playheadPalette`
-// (see playhead.ts colorForSeq; per-seq pinning is the planned DSL feature
-// #391). ONE active range per seq (replaced on each step, so the highlight
-// "moves" per beat and wraps at loop start). Cleared on seq stop (`⏹ <seq>`
-// line), global stop, engine stop / exit, and deactivate.
-const playheadDecorationTypes = new Map<string, vscode.TextEditorDecorationType>()
-const playheadPaletteAssignments = new Map<string, number>()
-const playheadActiveRanges = new Map<string, { docUriString: string; range: vscode.Range }>()
-const playheadTimeouts = new Set<NodeJS.Timeout>()
-
-function playheadColorConfig(): PlayheadColorConfig {
-  const config = vscode.workspace.getConfiguration('orbitscore')
-  // seqColors intentionally absent: per-seq pinning arrives as a DSL feature
-  // (#391), not a setting (owner 2026-07-07).
-  return {
-    palette: config.get<string[]>('playheadPalette'),
-  }
-}
-
-function ensurePlayheadDecorationType(color: string): vscode.TextEditorDecorationType {
-  let decorationType = playheadDecorationTypes.get(color)
-  if (!decorationType) {
-    decorationType = vscode.window.createTextEditorDecorationType({
-      // 50% alpha fill + solid border: must stay readable on top of the editor
-      // selection background (owner feedback 2026-07-07 — theme find-match
-      // color was too faint).
-      backgroundColor: `${color}80`,
-      border: `1.5px solid ${color}`,
-      borderRadius: '3px',
-    })
-    playheadDecorationTypes.set(color, decorationType)
-  }
-  return decorationType
-}
-
-/** Drop all decoration types (e.g. after a color-config change) and redraw. */
-function resetPlayheadDecorationTypes(): void {
-  for (const decorationType of playheadDecorationTypes.values()) {
-    decorationType.dispose() // dispose also removes it from every editor
-  }
-  playheadDecorationTypes.clear()
-  applyPlayheadDecorations()
-}
-
-/** Re-apply the current per-seq playhead ranges to every visible editor. */
-function applyPlayheadDecorations(): void {
-  const colorConfig = playheadColorConfig()
-  for (const editor of vscode.window.visibleTextEditors) {
-    const uri = editor.document.uri.toString()
-    // Start every known type at [] so a seq that stopped (or moved) has its
-    // previous color cleared, then fill in the live ranges per color.
-    const rangesByType = new Map<vscode.TextEditorDecorationType, vscode.Range[]>()
-    for (const decorationType of playheadDecorationTypes.values()) {
-      rangesByType.set(decorationType, [])
-    }
-    for (const [seqName, entry] of playheadActiveRanges) {
-      if (entry.docUriString !== uri) continue
-      const decorationType = ensurePlayheadDecorationType(
-        colorForSeq(seqName, colorConfig, playheadPaletteAssignments),
-      )
-      const ranges = rangesByType.get(decorationType) ?? []
-      ranges.push(entry.range)
-      rangesByType.set(decorationType, ranges)
-    }
-    for (const [decorationType, ranges] of rangesByType) {
-      editor.setDecorations(decorationType, ranges)
-    }
-  }
-}
-
-/**
- * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
- * so wait until `atEpochMs` (the event's grid time — actual audio lands a
- * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
- * highlight; a marginally late line still tracks (clamped to now), while stale
- * lines (>1s late, e.g. replayed buffered output) are dropped.
- */
-function handleStepLine(step: StepEvent): void {
-  const delayMs = step.atEpochMs - Date.now()
-  if (delayMs < -1000) return
-  const timeout = setTimeout(
-    () => {
-      playheadTimeouts.delete(timeout)
-      showPlayheadStep(step)
-    },
-    Math.max(0, delayMs),
-  )
-  playheadTimeouts.add(timeout)
-}
-
-function showPlayheadStep(step: StepEvent): void {
-  for (const editor of vscode.window.visibleTextEditors) {
-    // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
-    // degrading to the deepest resolvable ancestor (stacks are one visual
-    // unit). Null = even the top-level arg is gone (user edited away the
-    // pattern) — skip; leaving the previous highlight is less misleading
-    // than lighting a wrong arg.
-    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
-    if (!argRange) continue
-    playheadActiveRanges.set(step.seqName, {
-      docUriString: editor.document.uri.toString(),
-      range: new vscode.Range(
-        editor.document.positionAt(argRange.start),
-        editor.document.positionAt(argRange.end),
-      ),
-    })
-    applyPlayheadDecorations()
-    return // first visible editor containing the call wins (MVP)
-  }
-}
-
-function clearPlayheadForSequence(seqName: string): void {
-  if (playheadActiveRanges.delete(seqName)) {
-    applyPlayheadDecorations()
-  }
-}
-
-function clearAllPlayheadDecorations(): void {
-  for (const timeout of playheadTimeouts) {
-    clearTimeout(timeout)
-  }
-  playheadTimeouts.clear()
-  if (playheadActiveRanges.size > 0) {
-    playheadActiveRanges.clear()
-    applyPlayheadDecorations()
-  }
-}
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
   // Reset state on activation (important for reload)
-  engineProcess = null
-  isLiveCodingMode = false
-  globalInitialized = false
-  transportPlaying = false
+  setEngineProcess(null)
+  setLiveCodingMode(false)
+  setGlobalInitialized(false)
+  setTransportPlaying(false)
 
   // Create output channel
-  outputChannel = vscode.window.createOutputChannel('OrbitScore')
+  const channel = vscode.window.createOutputChannel('OrbitScore')
+  setOutputChannel(channel)
 
   // Tap appendLine/append into the ring buffer so the MCP get_log tool can read
   // recent output without a separate logging sink (#388). Installed before the
   // version banner below so get_log's history starts from activation.
-  const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
-  outputChannel.appendLine = (value: string) => {
+  const rawAppendLine = channel.appendLine.bind(channel)
+  channel.appendLine = (value: string) => {
     pushLogRing(value)
     rawAppendLine(value)
   }
-  const rawAppend = outputChannel.append.bind(outputChannel)
-  outputChannel.append = (value: string) => {
+  const rawAppend = channel.append.bind(channel)
+  channel.append = (value: string) => {
     for (const line of value.split('\n')) {
       if (line) pushLogRing(line)
     }
@@ -320,24 +168,26 @@ export async function activate(context: vscode.ExtensionContext) {
   // Show version info
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'))
   const buildTime = fs.statSync(__filename).mtime.toISOString()
-  outputChannel.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-  outputChannel.appendLine(`🎵 OrbitScore Extension v${packageJson.version}`)
-  outputChannel.appendLine(`📦 Build: ${buildTime}`)
-  outputChannel.appendLine(`📂 Path: ${__dirname}`)
-  outputChannel.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-  outputChannel.appendLine('')
+  channel.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  channel.appendLine(`🎵 OrbitScore Extension v${packageJson.version}`)
+  channel.appendLine(`📦 Build: ${buildTime}`)
+  channel.appendLine(`📂 Path: ${__dirname}`)
+  channel.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  channel.appendLine('')
 
   // Create status bar item
-  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
-  statusBarItem.text = '🎵 OrbitScore: Stopped'
-  statusBarItem.tooltip = 'Open Audio Engine Settings'
-  statusBarItem.command = 'orbitscore.showCommands'
-  statusBarItem.show()
+  const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
+  setStatusBarItem(statusItem)
+  statusItem.text = '🎵 OrbitScore: Stopped'
+  statusItem.tooltip = 'Open Audio Engine Settings'
+  statusItem.command = 'orbitscore.showCommands'
+  statusItem.show()
 
   // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)。daemon
   // が解決できない時だけ表示するエラー・インジケータ（健全時は非表示）。
-  bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
-  bundleStatusItem.command = {
+  const bundleItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
+  setBundleStatusItem(bundleItem)
+  bundleItem.command = {
     command: 'workbench.action.openSettings',
     title: 'Open OrbitScore settings',
     arguments: ['orbitscore'],
@@ -377,8 +227,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // 出す（viewsWelcome は tree が空の時だけ描画される — 上の学習ビューと同じ制約）。起動中は
     // engine 状態 + Output Device セクションを TreeView として描画する。
     (() => {
-      engineViewProvider = new EngineViewProvider()
-      return vscode.window.registerTreeDataProvider('orbitscore.engineView', engineViewProvider)
+      const provider = new EngineViewProvider()
+      setEngineViewProvider(provider)
+      return vscode.window.registerTreeDataProvider('orbitscore.engineView', provider)
     })(),
     vscode.commands.registerCommand('orbitscore.engineViewSelectDevice', engineViewSelectDevice),
     vscode.commands.registerCommand('orbitscore.engineViewToggleEngine', engineViewToggleEngine),
@@ -387,8 +238,8 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),
     vscode.commands.registerCommand('orbitscore.openWalkthrough', openWalkthrough),
-    statusBarItem,
-    bundleStatusItem,
+    statusItem,
+    bundleItem,
   )
 
   // Register IntelliSense providers
@@ -444,7 +295,7 @@ export async function activate(context: vscode.ExtensionContext) {
       : vscode.workspace.getConfiguration('orbitscore').get<number>('mcpServer.port', 0)
   if (mcpPort && mcpPort > 0) {
     try {
-      mcpServerHandle = await startOrbitScoreMcpServer({
+      const handle = await startOrbitScoreMcpServer({
         port: mcpPort,
         version: packageJson.version,
         handlers: {
@@ -476,6 +327,7 @@ export async function activate(context: vscode.ExtensionContext) {
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
       })
+      setMcpServerHandle(handle)
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       outputChannel?.appendLine(`❌ MCP server failed to start on port ${mcpPort}: ${reason}`)
@@ -501,12 +353,12 @@ export function deactivate() {
   }
   playheadDecorationTypes.clear()
   void mcpServerHandle?.dispose()
-  mcpServerHandle = null
+  setMcpServerHandle(null)
   outputChannel?.dispose()
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
   devDocsPanel?.dispose()
-  devDocsPanel = null
+  setDevDocsPanel(null)
 }
 
 /**
@@ -576,7 +428,7 @@ function openDevDocsPanel(context: vscode.ExtensionContext): void {
     return
   }
 
-  devDocsPanel = vscode.window.createWebviewPanel(
+  const panel = vscode.window.createWebviewPanel(
     'orbitscore.devDocsPanel',
     'OrbitScore Docs',
     vscode.ViewColumn.Active,
@@ -585,10 +437,11 @@ function openDevDocsPanel(context: vscode.ExtensionContext): void {
       retainContextWhenHidden: true,
     },
   )
-  devDocsPanel.webview.html = buildDevDocsPanelHtml(url)
-  devDocsPanel.onDidDispose(
+  setDevDocsPanel(panel)
+  panel.webview.html = buildDevDocsPanelHtml(url)
+  panel.onDidDispose(
     () => {
-      devDocsPanel = null
+      setDevDocsPanel(null)
     },
     null,
     context.subscriptions,
@@ -1093,42 +946,16 @@ function shouldFilterLine(line: string): boolean {
 // running extension with no compiler warning. Keep new test-only exports
 // confined to this block, and re-check this note before adding an importer
 // of `extension.ts` outside `tests/`.
-export function __setEngineProcessForTest(process: child_process.ChildProcess | null): void {
-  engineProcess = process
-}
-export function __getEngineProcessForTest(): child_process.ChildProcess | null {
-  return engineProcess
-}
-export function __setStatusBarItemForTest(
-  item: Pick<vscode.StatusBarItem, 'text' | 'tooltip'> | null,
-): void {
-  statusBarItem = item as unknown as vscode.StatusBarItem | null
-}
-export function __setOutputChannelForTest(
-  channel: Pick<vscode.OutputChannel, 'appendLine' | 'append'> | null,
-): void {
-  outputChannel = channel as unknown as vscode.OutputChannel | null
-}
-export function __setEngineViewProviderForTest(
-  provider: Pick<EngineViewProvider, 'refresh'> | null,
-): void {
-  engineViewProvider = provider as unknown as EngineViewProvider | null
-}
-/** Exposes the real singleton bridge so a spec can prove drainDeviceBridge
- * wiring by observing a pending `send()` actually resolve, rather than just
- * asserting the handler doesn't throw. */
-export function __getDeviceSwitchBridgeForTest(): DeviceSwitchBridge {
-  return selectAudioDeviceBridge
-}
-/** Same rationale as the device bridge seam above, for the plugin UI bridge
- * (#601 review I5): proves the three drainAll call sites and the stdout
- * handleLine dispatch by observing a pending `send()` resolve. */
-export function __getPluginUiBridgeForTest(): PluginUiBridge {
-  return pluginUiBridge
-}
-export function __setLiveCodingModeForTest(value: boolean): void {
-  isLiveCodingMode = value
-}
+export {
+  __getDeviceSwitchBridgeForTest,
+  __getEngineProcessForTest,
+  __getPluginUiBridgeForTest,
+  __setEngineProcessForTest,
+  __setEngineViewProviderForTest,
+  __setLiveCodingModeForTest,
+  __setOutputChannelForTest,
+  __setStatusBarItemForTest,
+} from './extension-state'
 /** `pluginUiForAgent` is module-private (only `activate()` wires it into MCP);
  * this seam lets a spec drive the real engine-guard + meta-line round-trip. */
 export function __pluginUiForAgentForTest(
@@ -1140,60 +967,12 @@ export function __pluginUiForAgentForTest(
   return pluginUiForAgent(action, receiver, index, expectedName)
 }
 
-// -- Playhead test seams (#527 review round 3 Critical #1) ------------------
-//
-// `clearAllPlayheadDecorations()` had no independent test coverage at all —
-// every existing assertion about `setupExitHandler`/`setupStdoutHandler`
-// checked only `engineProcess` (governed by `clearEngineState`), so swapping
-// which real implementation lands under the `clearEngineState` vs.
-// `clearAllPlayheads` effect keys type-checked and left every test green.
-// These seams let a spec seed a playhead range and observe its OWN clearing
-// (via the real `editor.setDecorations` call, once a fake editor is pushed
-// into the `vscode` mock's `window.visibleTextEditors`) as a signal
-// independent of `engineProcess`.
-/** Seed a playhead active range as if a real `[STEP]` line had resolved to it
- * — bypasses playhead.ts's document-text parsing (already covered by
- * playhead.spec.ts) and also pre-creates the color's decoration type via
- * `ensurePlayheadDecorationType`, so `clearAllPlayheadDecorations()`'s
- * `editor.setDecorations(type, [])` call is observable rather than skipped
- * for want of a registered decoration type. */
-export function __setPlayheadActiveRangeForTest(
-  seqName: string,
-  docUriString: string,
-  // `unknown`, not `vscode.Range`: the mock's `Range` (tests/mocks/vscode.ts)
-  // is a minimal duck-typed stand-in that does not structurally satisfy the
-  // real `@types/vscode` interface, and nothing this seam's consumers read
-  // needs more than `{ start, end }` — accepting the real type here would
-  // just push an `as unknown as vscode.Range` cast onto every call site.
-  range: unknown,
-): void {
-  ensurePlayheadDecorationType(
-    colorForSeq(seqName, playheadColorConfig(), playheadPaletteAssignments),
-  )
-  playheadActiveRanges.set(seqName, { docUriString, range: range as vscode.Range })
-}
-export function __getPlayheadActiveRangeCountForTest(): number {
-  return playheadActiveRanges.size
-}
-/** Number of pending playhead-step `setTimeout`s — `handleStepLine` adds one
- * synchronously on every `[STEP]` line it processes (unless the event is
- * stale), independent of clearSequence/clearAllPlayheads/
- * handleSelectAudioDeviceLine, so this is a signal specific to `handleStep`
- * wiring in `setupStdoutHandler`. */
-export function __getPlayheadTimeoutCountForTest(): number {
-  return playheadTimeouts.size
-}
-/** Resets all module-private playhead state between specs — disposes every
- * decoration type and clears every pending timeout, so one spec's seeded
- * range/decoration type never leaks into the next. */
-export function __resetPlayheadStateForTest(): void {
-  for (const timeout of playheadTimeouts) clearTimeout(timeout)
-  playheadTimeouts.clear()
-  playheadActiveRanges.clear()
-  for (const decorationType of playheadDecorationTypes.values()) decorationType.dispose()
-  playheadDecorationTypes.clear()
-  playheadPaletteAssignments.clear()
-}
+export {
+  __getPlayheadActiveRangeCountForTest,
+  __getPlayheadTimeoutCountForTest,
+  __resetPlayheadStateForTest,
+  __setPlayheadActiveRangeForTest,
+} from './playhead-decorations'
 
 // ---- Handler-body crash containment (#527 review round 4 Important #1) ----
 //
@@ -1363,7 +1142,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
         // this whole listener body (#527 review round 4 Important #1) — it
         // reaches `logHandlerFailure` below, NOT the extension host.
         setTransportStatus: (state) => {
-          transportPlaying = state === 'playing'
+          setTransportPlaying(state === 'playing')
           statusBarItem!.text = transportStatusText(state, debugMode)
         },
       })
@@ -1506,10 +1285,10 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
 function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
   return {
     clearEngineState: () => {
-      engineProcess = null
-      isLiveCodingMode = false
-      globalInitialized = false
-      transportPlaying = false
+      setEngineProcess(null)
+      setLiveCodingMode(false)
+      setGlobalInitialized(false)
+      setTransportPlaying(false)
     },
     clearAllPlayheads: clearAllPlayheadDecorations,
     drainDeviceBridge: (reason) => {
@@ -1574,10 +1353,6 @@ export function setupErrorHandler(process: child_process.ChildProcess): void {
       logHandlerFailure('setupErrorHandler', innerErr)
     }
   })
-}
-
-function isEngineRunning(): boolean {
-  return engineProcess !== null && !engineProcess.killed
 }
 
 /**
@@ -1778,6 +1553,8 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     return deviceSectionChildren(this.deviceFetchState, selectedDevice)
   }
 }
+
+export type { EngineViewProvider }
 
 async function engineViewToggleEngine(): Promise<void> {
   if (isEngineRunning()) {
@@ -2021,40 +1798,43 @@ async function startEngine(
   // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
   // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
   // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
-  try {
-    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
-      cwd: workspaceRoot,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
-      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
-      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
-      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
-      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
-    })
-  } catch (err) {
-    // spawn threw before engineProcess was assigned, so no engine state was dirtied.
-    logHandlerFailure('startEngine', err)
-    return false
-  }
-  engineGeneration += 1
+  const spawnedProcess = (() => {
+    try {
+      return child_process.spawn(process.execPath, [enginePath, ...args], {
+        cwd: workspaceRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+        // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+        // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+        // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+        // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
+      })
+    } catch (err) {
+      // spawn threw before engineProcess was assigned, so no engine state was dirtied.
+      logHandlerFailure('startEngine', err)
+      return null
+    }
+  })()
+  if (!spawnedProcess) return false
+  setEngineProcess(spawnedProcess)
+  bumpEngineGeneration()
 
   // Update state
-  isLiveCodingMode = true
-  globalInitialized = false
-  transportPlaying = false
+  setLiveCodingMode(true)
+  setGlobalInitialized(false)
+  setTransportPlaying(false)
 
   statusBarItem!.text = effectiveDebugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
 
   // Setup handlers
-  setupStdoutHandler(engineProcess, effectiveDebugMode)
-  setupStderrHandler(engineProcess)
-  setupExitHandler(engineProcess)
-  setupStdinErrorHandler(engineProcess)
-  setupErrorHandler(engineProcess)
+  setupStdoutHandler(spawnedProcess, effectiveDebugMode)
+  setupStderrHandler(spawnedProcess)
+  setupExitHandler(spawnedProcess)
+  setupStdinErrorHandler(spawnedProcess)
+  setupErrorHandler(spawnedProcess)
 
-  const spawnedProcess = engineProcess
   await new Promise<void>((resolve) => process.nextTick(resolve))
   if (!engineProcess || engineProcess !== spawnedProcess || engineProcess.killed) {
     return false
@@ -2073,15 +1853,15 @@ async function startEngineDebug(): Promise<void> {
 }
 
 export function stopEngine(): boolean {
-  engineGeneration += 1
+  bumpEngineGeneration()
   if (engineProcess && !engineProcess.killed) {
     // Capture process reference before nulling module-level variable
     // (the SIGKILL timeout needs this reference after engineProcess is set to null)
     const proc = engineProcess
-    engineProcess = null
-    isLiveCodingMode = false
-    globalInitialized = false
-    transportPlaying = false
+    setEngineProcess(null)
+    setLiveCodingMode(false)
+    setGlobalInitialized(false)
+    setTransportPlaying(false)
     clearAllPlayheadDecorations() // #390: don't wait for the exit event
     // #501 review Critical #1: drain here too — `stopEngine()` nulls
     // `engineProcess` immediately (before the `exit` event fires), so a caller
@@ -2213,7 +1993,7 @@ async function rescanPlugins(): Promise<void> {
   outputChannel?.appendLine('🔎 Rescanning plugin catalog...')
   const result = await runPluginScan()
   if (result.ok) {
-    pluginCatalogHintShown = false
+    setPluginCatalogHintShown(false)
     const summary = result.summary
     const duration = `p50=${summary.durationMs.p50 ?? '-'}ms p95=${summary.durationMs.p95 ?? '-'}ms max=${summary.durationMs.max ?? '-'}ms`
     outputChannel?.appendLine(
@@ -2755,7 +2535,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       const insertPos = globalInitMatch.index! + globalInitMatch[0].length
       codeToSend =
         codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      globalInitialized = true
+      setGlobalInitialized(true)
     } else if (globalInitialized) {
       codeToSend = setDirCommand + '\n' + codeToSend
     }
@@ -2959,7 +2739,7 @@ async function rescanPluginsForAgent(): Promise<RescanPluginsResult> {
   if (!result.ok) {
     return { ok: false, error: result.error }
   }
-  pluginCatalogHintShown = false
+  setPluginCatalogHintShown(false)
   return {
     ok: true,
     count: result.count,
@@ -3454,7 +3234,7 @@ export function registerCompletionProviders(context: vscode.ExtensionContext) {
         const catalog = loadPluginCatalog()
         if (!catalog) {
           if (!pluginCatalogHintShown) {
-            pluginCatalogHintShown = true
+            setPluginCatalogHintShown(true)
             vscode.window.showInformationMessage(
               'OrbitScore: no plugin catalog found. Run "OrbitScore: Rescan Plugin Catalog" to enable name completion.',
             )

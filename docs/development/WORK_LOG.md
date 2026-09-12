@@ -17,6 +17,70 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): move module state to a leaf and turn 31 assignments into setters (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 A**。分割の核心で、以降の束が「純粋な移動」になるための前提。
+
+### 読みは live binding・書きは setter
+
+ES module の import 束縛は**代入できない**が、読みは常に最新値が見える。そこで:
+
+- **読み出し約 220 箇所の本文は 1 文字も変えていない**
+- **代入 31 箇所だけ**が `setX(v)` になった
+
+新設は `extension-state.ts`（103 コード行・leaf）と `playhead-decorations.ts`（124）。
+`__*ForTest` **13 本**は名前も引数も本文も変えず、閉じている状態と同じモジュールへ移し、
+`extension.ts` が `export { … } from` で再輸出する。**テスト側 239 箇所の変更は 0**。
+
+`extension.ts` は 2,779 → **2,662** コード行。
+
+### residual 322 行をすべて分類した
+
+設計 §7.2 の done 条件。**未分類 0**:
+
+| 分類 | 行数 |
+|---|---|
+| setter の定義と本体 | 54 |
+| setter の呼び出し | 32 |
+| 局所定数化 / 旧宣言 | 31+ |
+| import / 再輸出 | 89 |
+| 宣言・関数に `export` を前置（移動） | 25 |
+| doc / コメント | 11 |
+
+分類中に `outputChannel.appendLine` → `channel.appendLine` が一度「未分類」に落ちたが、
+設計 §4.5 が予告した **narrowing のための局所定数化**だった
+（`const channel = vscode.window.createOutputChannel(...)` の直後に `setOutputChannel(channel)`。
+**同一オブジェクト**であることを実物で確認）。
+
+### 🔴 今朝作った L-3 ガードが、今日のうちに TS 側で仕事をした
+
+新設 2 ファイルが `git add` 前だったため、ラチェットが**名指しで検出**した
+（`docs/design/888-file-size-ratchet-design.md` §13.10）。Rust 側で踏んだ穴が TS でも同じ形で出る。
+
+### 引用 124 件が壊れた — 3 段階で直した
+
+| 手段 | 解決 |
+|---|---|
+| `--fix`（行番号のみ） | 88 |
+| 本文一致で移動先を特定（`export` 前置を剥がす） | 12 |
+| 先頭行・末尾行を鍵にした再アンカー + **本文をソースから再生成** | 22 |
+| 手で 1 組 | 2 |
+
+🔴 途中で relocate スクリプトが **`/tmp` の一時パスを markdown に書き込んだ**（2 件）。
+候補ディレクトリに `/tmp` を渡した私の使い方の誤りで、直した。
+
+🔴 **引用が緑になっても散文は検査されない。** `vscode-architecture.md` が
+「`extension.ts` は 4,115 行の大きなファイルで、状態はモジュールレベル変数に置かれています」と
+書いており、**分割後は両方とも事実でない**。ja/en とも実態に合わせた。
+
+### 検証
+
+`npm test` **2,488 passed**（束 0 と同値・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`grep -cE '^let ' extension.ts` = **0**。
+
 ### test(extension): freeze the public surface before splitting extension.ts (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`

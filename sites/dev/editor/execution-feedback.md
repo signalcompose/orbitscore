@@ -37,7 +37,7 @@ status: draft
 `Cmd+Enter` が押されると `orbitscore.runSelection` コマンドが発火し、`runSelection()` 関数が呼ばれます。まず 2 つのガード条件を確認します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2436-2447
+// packages/vscode-extension/src/extension.ts:2216-2227
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -63,7 +63,7 @@ async function runSelection() {
 選択がある場合 (`!selection.isEmpty`) は単純です。選択範囲のテキストをそのまま取得します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2454-2456
+// packages/vscode-extension/src/extension.ts:2234-2236
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -78,7 +78,7 @@ async function runSelection() {
 選択がない場合が面白いです。「カーソルがいる行はどの変数 (subject) に属しているか」を調べて、そのsubject に関わる **ファイル全体の行** をかき集めます:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2457-2506 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/extension.ts:2237-2286 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -134,7 +134,7 @@ async function runSelection() {
 `getLineSubject()` は各行を見て「この行はどの変数に属するか」を返す関数です。初稿では深掘りしませんでしたが、実装は 2 本の正規表現だけの小さなものです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2421-2434
+// packages/vscode-extension/src/extension.ts:2201-2214
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -179,7 +179,7 @@ _kick.play(
 `getLineSubject()` が `null` を返した場合は、スタンドアロンコマンド (`LOOP`, `RUN`, `MUTE` 等) と判断します。この場合も同じ `parenBalance` ロジックで複数行を追いかけますが、ファイル全体を走査するのではなく**カーソル行から下方向のみ**に範囲を拡張します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2506-2529
+// packages/vscode-extension/src/extension.ts:2286-2309
     } else {
       // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
       let endLine = currentLine
@@ -213,7 +213,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2738-2776
+// packages/vscode-extension/src/extension.ts:2518-2556
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -234,7 +234,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       const insertPos = globalInitMatch.index! + globalInitMatch[0].length
       codeToSend =
         codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      globalInitialized = true
+      setGlobalInitialized(true)
     } else if (globalInitialized) {
       codeToSend = setDirCommand + '\n' + codeToSend
     }
@@ -273,7 +273,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 `runSelection()` の末尾はこうなっています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2593-2600
+// packages/vscode-extension/src/extension.ts:2373-2380
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -293,7 +293,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 実行した範囲をエディタ上で点滅させるのが `flashLines()` です。`createTextEditorDecorationType` (VS Code API) を使って実装されています:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2534-2591
+// packages/vscode-extension/src/extension.ts:2314-2371
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -402,8 +402,8 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` は `play()` の引数ツリーへのインデックスで、`"1.0"` なら「2 番目の引数の中の最初の要素」です。`atEpochMs` はイベントの **グリッド時刻** で、engine は lookahead で先に dispatch するため行は早く届きます。拡張はその時刻まで decoration を遅らせます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
-function handleStepLine(step: StepEvent): void {
+// packages/vscode-extension/src/playhead-decorations.ts:96-107
+export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
   const timeout = setTimeout(
@@ -428,7 +428,7 @@ function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2803-2812
+// packages/vscode-extension/src/extension.ts:2583-2592
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -444,7 +444,7 @@ function handleStepLine(step: StepEvent): void {
 stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** として置かれています。コメントが、最初は `{"pluginUi"` 分岐に相乗りさせて一度も dispatch されず、ユニットテストは全部緑で実機 E2E だけが捕まえた、と記録しています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1295-1303
+// packages/vscode-extension/src/extension.ts:1074-1082
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -467,7 +467,7 @@ editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフ
 `Cmd+Enter` とは別に、ドキュメントの open / change / activation 時に `updateDiagnostics()` が走ります (#384、[IV-1](/editor/vscode-architecture#intellisense-と診断の登録))。前半は 2026-05 時点と同じ行内チェック 3 種です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3752-3826
+// packages/vscode-extension/src/extension.ts:3532-3606
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -548,7 +548,7 @@ async function updateDiagnostics(
 後半は **横断解析** で、純関数 (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) が返す `DiagnosticIssue` を `vscode.Diagnostic` に写すだけです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3828-3839
+// packages/vscode-extension/src/extension.ts:3608-3619
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -692,7 +692,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagnostic` にそのまま載せます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3858-3869
+// packages/vscode-extension/src/extension.ts:3638-3649
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -716,7 +716,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 診断を出すだけでなく、直す手段も付いています。`activate()` が登録する CodeActionProvider が、2 つの code の両方に「`<名前>.output()` を足す」アクションを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3513-3530
+// packages/vscode-extension/src/extension.ts:3293-3310
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
@@ -735,7 +735,6 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
           )
           action.diagnostics = [diagnostic]
           action.isPreferred = diagnostic.code === 'output-missing'
-          // ...
 ```
 
 `isPreferred` が `output-missing` のときだけ true になっているのがポイントです。`dry-not-routed` は「意図しているかもしれない」側なので、Cmd+. を押したときに既定で選ばれる手には**しません**。挿入位置は診断が出た行の行末で、元の行のインデントを引き継いだ `\n<indent><名前>.output()` を足します (`missingOutputQuickFixEdit`)。
@@ -761,7 +760,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3882-3899
+// packages/vscode-extension/src/extension.ts:3662-3679
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

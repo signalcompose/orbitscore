@@ -55,7 +55,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
 まず、エンジンがどう起動しているかを確認しておきましょう。`startEngine()` では引数に `'repl'` を指定して Node プロセスを spawn します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1976-2034 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:1753-1811 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -104,17 +104,17 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
   // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
   // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
   // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
-  try {
-    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
-      cwd: workspaceRoot,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
-      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
-      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
-      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
-      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
-    })
+  const spawnedProcess = (() => {
+    try {
+      return child_process.spawn(process.execPath, [enginePath, ...args], {
+        cwd: workspaceRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+        // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+        // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+        // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+        // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
 ```
 
 `stdio: ['pipe', 'pipe', 'pipe']` がポイントです。stdin、stdout、stderr がすべてパイプで接続されるため、拡張側から `engineProcess.stdin.write(...)` でコードを流し込めます。省略した部分で組み立てている `env` には、debug フラグと capture seam（#307）だけが載ります。バックエンド種別を伝えていた `ORBITSCORE_ENGINE` は #502 で撤去されました ([0-2](/orientation/architecture-overview) 参照)。`repl` サブコマンドを受けたエンジンは `startREPLMode()` を呼び出します。
@@ -158,7 +158,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 選択テキストが空でなければシンプルにその内容を使います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2454-2457
+// packages/vscode-extension/src/extension.ts:2234-2237
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -172,7 +172,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 subject を判定する関数が `getLineSubject()` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2421-2434
+// packages/vscode-extension/src/extension.ts:2201-2214
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -200,7 +200,7 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 送るコードが確定したあと、`writeCodeToEngine()` がドキュメントのディレクトリパスを 2 通りの方法で engine に伝えます。`audioPath()` / `audio()` の相対パス解決、そして `import` の基準ディレクトリ (IM.6) に使われます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2738-2776
+// packages/vscode-extension/src/extension.ts:2518-2556
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -221,7 +221,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       const insertPos = globalInitMatch.index! + globalInitMatch[0].length
       codeToSend =
         codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      globalInitialized = true
+      setGlobalInitialized(true)
     } else if (globalInitialized) {
       codeToSend = setDirCommand + '\n' + codeToSend
     }
@@ -258,7 +258,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
 `runSelection()` は `writeCodeToEngine()` の戻り値を見て、送れたときだけ視覚フィードバックを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2593-2600
+// packages/vscode-extension/src/extension.ts:2373-2380
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

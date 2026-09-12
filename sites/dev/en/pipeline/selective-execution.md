@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1976-2034 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:1753-1811 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -104,17 +104,17 @@ First, let's confirm how the engine boots. `startEngine()` spawns a Node process
   // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
   // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
   // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
-  try {
-    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
-      cwd: workspaceRoot,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
-      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
-      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
-      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
-      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
-    })
+  const spawnedProcess = (() => {
+    try {
+      return child_process.spawn(process.execPath, [enginePath, ...args], {
+        cwd: workspaceRoot,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+        // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+        // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+        // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+        // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
 ```
 
 The point is `stdio: ['pipe', 'pipe', 'pipe']`. Because stdin, stdout, and stderr are all pipe-connected, the extension can pump code in via `engineProcess.stdin.write(...)`. The `env` assembled in the omitted part carries only the debug flag and the capture seam (#307); `ORBITSCORE_ENGINE`, which used to announce the backend kind, was removed in #502 (see [0-2](/en/orientation/architecture-overview)). On receiving the `repl` subcommand, the engine calls `startREPLMode()`.
@@ -158,7 +158,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2454-2457
+// packages/vscode-extension/src/extension.ts:2234-2237
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -172,7 +172,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2421-2434
+// packages/vscode-extension/src/extension.ts:2201-2214
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -200,7 +200,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2738-2776
+// packages/vscode-extension/src/extension.ts:2518-2556
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -221,7 +221,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       const insertPos = globalInitMatch.index! + globalInitMatch[0].length
       codeToSend =
         codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      globalInitialized = true
+      setGlobalInitialized(true)
     } else if (globalInitialized) {
       codeToSend = setDirCommand + '\n' + codeToSend
     }
@@ -258,7 +258,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2593-2600
+// packages/vscode-extension/src/extension.ts:2373-2380
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
