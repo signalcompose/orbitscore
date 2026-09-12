@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): extension.ts is under 500 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 E**。**`extension.ts` が 2,779 → 301 コード行（89% 削減）**になり、
+ラチェットの baseline から外れた。
+
+| 新設 | コード行 |
+|---|---|
+| `dsl-providers.ts` | **302**（補完・quick fix・hover の登録） |
+| `diagnostics-provider.ts` | **127**（`updateDiagnostics`） |
+
+`extension.ts` に残ったのは `activate` / `deactivate` / `showCommands` / `restartEngine` /
+`reloadWindow` / `isTransportCommand` と、import・再輸出ブロックだけ。
+
+### 🔴 この束は main が直接やった
+
+Codex の発注が sandbox の `EPERM`（companion のログ書き込み）で**起動しなかった**
+（memory `codex-rescue-sandbox-broker-gotcha`）。残りが小さかったので main が実装した
+（CLAUDE.md「4 ラウンド目は main が直す」の一般化）。
+
+### 🔴 import は「推測」せず「引き写す」
+
+新モジュールに import を**自分で書こうとして名前を 5 つ外した**
+（`detectPitchScopeContext` / `detectPlayArgContext` / `detectOutputArgContext` /
+`detectEffectArgContext` / `analyzeMissingOutput` の受け方）。
+
+そこで**束 E 前の `extension.ts` の import 群 111 行をそのまま引き写し**、
+未使用分を `eslint --format json` の指摘で機械的に刈る方式へ切り替えた。**推測が 0 になった。**
+残った型エラー 2 件（`registerHoverProvider` / `updateDiagnostics` に `export` が必要）も
+コンパイラが名指ししたものだけを直した。
+
+### 散文参照は「範囲を保てない限り動かさない」
+
+束 D で範囲を 1 点に潰した失敗を踏まえ、**束 E 前の内容と一致した場合のみ**移す実装にした。
+今回は 12 件すべて一致せず（散文の行番号がもっと古い版を指している）、**据え置いた**。
+壊すより据え置く方が良い。
+
+### 検証
+
+`npm test` **2,488 passed**（6 束連続で不変・**既存テストの期待値の変更 0 件**）/
+`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
+`dsl-completion-provider.spec` 15 passed / `output-code-action.spec` 1 passed /
+`public-surface.spec` 38 passed（設計 §7.6 の done 条件）。
+
+**残るは `mcp-server.ts`（1,161）= 束 F。**
+
 ### refactor(extension): move evaluation and agent handlers out of extension.ts (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
@@ -1777,169 +1824,6 @@ docs:check  948 引用 / 0 failed
 ```
 
 `tests/e2e/output-line-expectations.ts` の式は**1 つも変わっていない**（束 C の検算）。
-
----
-
-### refactor: fold the /simplify findings for #883 bundle C (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: ✅ 完了（PR #884）
-
-`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行起動。
-**独立した 3 観点が同じ 2 機構に収束**したので、指摘単位ではなく**機構単位**で直した
-（CLAUDE.md「指摘単位のローカルパッチは禁止・振動の主因」）。
-
-| 機構 | 収束した観点 | 修正 |
-|---|---|---|
-| **A** 述語の所在 | reuse / efficiency / altitude の 3 つ | `lineNeedsBus` を `audio-line.ts` の **export 純関数**へ + `AudioLine.needsBus()`（`elements` を直読・コピーしない） |
-| **B** 補完の重複 | reuse / efficiency / altitude の 3 つ | `scanVarDeclarations()` へ一本化 + 正規表現をモジュール定数へ |
-| **C** 分岐の畳み込み | simplification のみ | `output(dest ?? {kind:'master'})` / `resolveDest` が `undefined` を吸収 |
-
-#### A の根拠（3 観点が別々の理由で同じ結論に達した）
-
-- **reuse**: 設計 §2.3 が「`audio-line.ts` に純関数として置く」と**コード例まで示していた**
-- **efficiency**: `snapshot()` は `return [...this.elements]` で**配列を丸ごとコピー**する。
-  述語は走査するだけなのでコピーは使い捨て。`elements` は private なので、
-  **`audio-line.ts` に置くことが非コピーの唯一の経路**
-- **altitude**: 束 S の instrument 経路（設計 §2.2.1）が**同じ述語**を使う。`Sequence` の
-  private ローカル式のままだと、束 S は private へ手を伸ばすか書き写すかになり**ドリフトする**
-
-#### B の根拠
-
-`var NAME = <ident>.<member>` を拾うループが 2 箇所に写されており、`\b` の有無や
-`output\s*\(` の扱いが将来ずれて**片方だけ直る**形だった。加えて 1 回の補完で同じ文書を
-**4 回走査**していた（`matchAll`×2 + `split`×2）。`(` がトリガー文字に足されて発火頻度も上がる経路。
-
-#### 採らなかった指摘
-
-補完の `output-string` / `output-node` を 1 つの kind に畳む案は**却下**。
-正規表現・語彙状態（`string` vs `code`）・候補の中身（バス"名" vs 変数"識別子"）・
-`CompletionItemKind`（`Value` vs `Variable`）がすべて異なり、畳むと `mode` 判別フィールドが
-要るだけで**複雑さは減らず名前が変わるだけ**（simplification agent が実読して同じ結論）。
-
-#### 検証
-
-```
-Test Files  160 passed | 4 skipped (164)      Tests  2352 passed | 68 skipped (2420)
-```
-
-lint 緑 / 🔴 `git diff main...HEAD --exit-code -- tests/e2e/output-line-expectations.ts` **無出力**
-（束 C の検算が simplify 後も保たれている）。
-
----
-
-### feat(dsl): make output() default to master and migrate every score (#883 bundle C) (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: 実装完了・main 検証中（実機 gated 未実施）
-**担当**: 実装 = Codex（`gpt-5.6-sol` / effort high・2 ラウンド）/ 検証 = main
-
-**束 C は「振る舞いを変えない」束。** 暗黙 master の廃止は束 S。
-
-#### 中身
-
-| 対象 | 変更 |
-|---|---|
-| `sequence.ts` / `mixer-manager.ts` | `output()` の宛先を省略可に（既定 `{kind:'master'}`）。**暗黙ではなく既定引数**なので要素は譜面に現れる |
-| 同 | 🔴 **実現の省略**（設計 §2.3）: ラインが「素の master 出口」だけの間は**バスを確保しない**。`.output()` 必須化がプール 8 本を食い潰すのを防ぐ（出荷 example の 4 本が 8 を超える） |
-| 拡張の補完 | `.output(` の引数位置で `master` / 宣言済み sum・aux / 物理アウトノードを候補に |
-| fixture 11 本 + 新規 2 本 | §7.1 の表どおり `.output()` を明示。**バス自身の出口も** |
-| examples 12 本 / `docs/user` / `sites/user` | 同上 |
-
-#### 🔴 main の審査で 1 件差し戻した — 完了条件 D3（E2E X2）の欠落
-
-Codex の 1 回目は inline 譜面の移行までで、**X2 を作っていなかった**。
-
-進捗ログが `kick.master` のアサーション変更を「**stale な structural assertion**」と説明していたが、
-実際には**振る舞いの変更**だった — 裸形 `.master` は今まで `seq-bus-0` を確保していたのに、
-実現の省略で確保しなくなった（テストが実装に合わせて書き換えられた形）。
-
-変更自体は設計どおりだが、**検証が無かった**:
-
-- 設計 §2.3 はこれを**確度「中」**とし、反証条件を「X2 で RMS が `noBus` golden から ±0.12 を超えて動く」としている
-- 既存 fixture は `output("master")` も裸形 `.master` も **1 つも使っていない** → 「既存 golden が動かない」が**この変更を素通りする**
-- ラチェット（`dsl-e2e-coverage`）も効かない（`output` は既に covered なので新語彙として検出されない）
-
-→ 譜面 2 本（`output_default_master_omitted.orbs` / `_explicit.orbs`）と X2 を追加させた。
-
-#### 実現の省略が安全である構造的理由（main の確認）
-
-省略が効くのは「ライン全体が素の master 出口」の場合のみ。そのとき:
-
-| ケース | 変更前 | 変更後 |
-|---|---|---|
-| 出口なし → `dry.output()` | 暗黙 master → **直接経路** | 省略 → **直接経路** |
-| `kick.gain(-6).output(drms)` | バス経路 | **バス経路**（述語が true） |
-
-**経路が変わるケースが実質無い。** 唯一変わる明示 `output("master")` は使用譜面 0 本（grep 実測）。
-
-#### 検証（main・sandbox 外）
-
-🔴 **Codex は緑を装わなかった** —「`npm test` did not exit successfully, I am not claiming all three
-acceptance checks passed」と報告。sandbox 内の失敗 4 ファイルはすべて loopback を立てるもので
-`listen EPERM`。**sandbox 外で回し直したら消えた**:
-
-```
-Test Files  160 passed | 4 skipped (164)
-     Tests  2352 passed | 68 skipped (2420)
-  Duration  23.54s        （sandbox 内は 400s — MACOS_DEV_SETUP の「遅さの 91% はスキャン」と同型）
-```
-
-`npm run lint` 緑 / `npm run docs:check` 948 引用・0 failed /
-`git diff --exit-code -- tests/e2e/output-line-expectations.ts` 無出力（**束 C の検算**）。
-
-#### 残件（レビューへ送る）
-
-- `dsl-completion-context.ts` の新規 2 関数が `lexicalStateAt(line, ...)` を**行単位**で呼んでおり、
-  同じ関数内の既存パスは `lexicalStateAt(sourceText, ...)` を**全文**で呼んでいる。
-  複数行コメント内の `var x = mix.sum` を候補に拾いうる（補完候補のみなので実害は軽微）
-- 実現の省略の述語が `sequence.ts` に inline。設計 §2.3 は `audio-line.ts` の純関数を指定しており、
-  束 S で同じ述語が要る（main のブリーフが `audio-line.ts` を範囲外にしたため。Codex の落ち度ではない）
-
-#### 🔴 実機 gated が退行を 1 件捕まえた（`ph654`）— 束 C が**露見させた**既存の潜在欠陥
-
-1 回目の gated: **1 failed / 38 passed**。
-
-```
-ERROR: Sequence 'ph654': MIDI degrees need a root. Declare global.key("C") (or set seq.root()).
-```
-
-ユニット 2352 件・lint・docs:check が全部緑で、**golden も 1 つも動いていない**状態で、実機だけが落ちた。
-
-**原因**: `ph654` の譜面は `play(1, 0, 3, 0)` で**度数**を使うのに `global.key("C")` を持っていない。
-他の instrument 譜面は **10 本すべてが持っている**（`:2078 :2117 :2160 :2216 :2272 :2316 :2367 :2865 :2967 :3336`）。
-gated suite は **1 つの VS Code / エンジンを共有**するので、`ph654` は**先行譜面が設定した key を
-継承して偶然通っていた**。束 C が先行譜面に `.output()` を足したことでその漏れが起きなくなり露見した。
-
-🔴 **これは #883 の grand truth そのもの** — 譜面が他ファイルの残留状態に依存していた。
-修正は「譜面に自分の前提を書かせる」（`global.key("C")` を追加）であって、テストを通すための
-書き換えではない。**なぜ今まで通っていたか**をコメントに残した。
-
-#### 実機 gated（2 回目・main が sandbox 外で）
-
-```
-Test Files  1 passed (1)
-     Tests  39 passed | 1 skipped (40)
-  Duration  685.13s
-```
-
-skip 1 件は E2E-4/E2E-5（>=4ch デバイス不在・既知）。
-
-🔴 **X2 が実測で通った** — 設計が確度「中」としていた「実現の省略は bit 同一クラス」が裏づけられた:
-
-```
-[#883 X2] default-master RMS: {"omittedRms":0.08701663329273443,
-                               "explicitRms":0.08701663329503133}
-```
-
-| 判定 | 実測 | 閾値 |
-|---|---|---|
-| `output()` ≡ `output("master")` | 相対差 **2.6e-11**（11 桁一致） | ≤ 0.02 |
-| `output()` ≈ `noBus` golden（0.0846173） | 約 **2.8%** | ≤ 12% |
-
-#### 関連
-
-#883 / 設計 §2.3 §4 §5.3 §7.1 §7.2 / 完了条件 D3・D9・D10
 
 ---
 

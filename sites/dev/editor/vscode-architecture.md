@@ -121,7 +121,7 @@ export let mcpServerHandle: McpServerHandle | null = null
 エントリポイントは `extension.ts` の `activate()` です。VS Code が extension を読み込んだ直後に一度だけ呼ばれます。前半を見てみましょう。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:112-168
+// packages/vscode-extension/src/extension.ts:91-147
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -194,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:258-312 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:237-291 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -336,7 +336,7 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
 `activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 15 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります（`forceKillScsynth` / `selectAudioDevice` は #502 で削除）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:180-215
+// packages/vscode-extension/src/extension.ts:159-194
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -461,7 +461,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補の組み立ては `extension.ts` 側です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:684-697
+// packages/vscode-extension/src/dsl-providers.ts:298-306
       case 'output-string':
         return makeItems(
           [
@@ -470,11 +470,6 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
             ...extractDeclaredBusNames(document.getText(), 'aux'),
           ],
           vscode.CompletionItemKind.Value,
-        )
-      case 'output-node':
-        return makeItems(
-          ['master', ...extractDeclaredMixerNodeNames(document.getText())],
-          vscode.CompletionItemKind.Variable,
         )
 ```
 
@@ -486,7 +481,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補が出てきません。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:554-564
+// packages/vscode-extension/src/dsl-providers.ts:168-178
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,
@@ -534,7 +529,7 @@ interface MethodChainContext {
 診断 (`updateDiagnostics`) は、2026-05 時点では `onDidChangeTextDocument` だけで駆動していましたが、#384 で「開いたとき」「閉じたとき」「activation 時に既に開いていたもの」にも広がりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:227-256
+// packages/vscode-extension/src/extension.ts:206-235
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -572,7 +567,7 @@ interface MethodChainContext {
 診断を出すだけの登録に、#883 で **quick fix の登録**が 1 行足されました。`registerOutputCodeActionProvider(context)` が `output-missing` / `dry-not-routed` の 2 つの診断 code に対して「`<名前>.output()` を足す」CodeAction を返します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:218-221
+// packages/vscode-extension/src/extension.ts:197-200
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)

@@ -590,27 +590,26 @@ go through the daemon: **the extension spawns the scanner binary directly**. The
 follows the same convention as the daemon lookup.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:427-446
+// packages/vscode-extension/src/playhead-decorations.ts:89-107
 /**
- * 補完プロバイダの登録（#495）。
- *
- * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
- * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
- * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
  */
-export function registerCompletionProviders(context: vscode.ExtensionContext) {
-  // Context-aware completion provider
-  const completionProvider = vscode.languages.registerCompletionItemProvider(
-    'orbitscore',
-    {
-      provideCompletionItems(document, position) {
-        const lineText = document.lineAt(position).text
-        const linePrefix = lineText.substr(0, position.character)
-
-        // Check if we're typing after a dot
-        if (!linePrefix.endsWith('.')) {
-          return undefined
-        }
+export function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
+}
 ```
 
 The spawn always passes `--probe-artifacts`. In other words, **a rescan from the editor or MCP
@@ -755,7 +754,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:512-522
+// packages/vscode-extension/src/dsl-providers.ts:126-136
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -858,7 +857,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:943-959
+// packages/vscode-extension/src/diagnostics-provider.ts:160-176
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

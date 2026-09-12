@@ -579,27 +579,26 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 **拡張がスキャナバイナリを直接 spawn** します。バイナリの探索順は daemon の探索と同じ流儀です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:427-446
+// packages/vscode-extension/src/playhead-decorations.ts:89-107
 /**
- * 補完プロバイダの登録（#495）。
- *
- * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
- * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
- * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
  */
-export function registerCompletionProviders(context: vscode.ExtensionContext) {
-  // Context-aware completion provider
-  const completionProvider = vscode.languages.registerCompletionItemProvider(
-    'orbitscore',
-    {
-      provideCompletionItems(document, position) {
-        const lineText = document.lineAt(position).text
-        const linePrefix = lineText.substr(0, position.character)
-
-        // Check if we're typing after a dot
-        if (!linePrefix.endsWith('.')) {
-          return undefined
-        }
+export function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
+}
 ```
 
 spawn 時には必ず `--probe-artifacts` を付けます。つまり**エディタ / MCP からの rescan は
@@ -743,7 +742,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:512-522
+// packages/vscode-extension/src/dsl-providers.ts:126-136
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -843,7 +842,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:943-959
+// packages/vscode-extension/src/diagnostics-provider.ts:160-176
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

@@ -68,27 +68,26 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:427-446
+// packages/vscode-extension/src/playhead-decorations.ts:89-107
 /**
- * 補完プロバイダの登録（#495）。
- *
- * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
- * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
- * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
  */
-export function registerCompletionProviders(context: vscode.ExtensionContext) {
-  // Context-aware completion provider
-  const completionProvider = vscode.languages.registerCompletionItemProvider(
-    'orbitscore',
-    {
-      provideCompletionItems(document, position) {
-        const lineText = document.lineAt(position).text
-        const linePrefix = lineText.substr(0, position.character)
-
-        // Check if we're typing after a dot
-        if (!linePrefix.endsWith('.')) {
-          return undefined
-        }
+export function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
+}
 ```
 
 `extension.ts` の `activate()` がこのインターフェイスを `evaluateForAgent` / `runSelectionForAgent` のような `*ForAgent` 関数で埋めます。`mcp-server.ts` 自身は `vscode` を import していません。ユニットテスト（`tests/vscode-extension/mcp-server.spec.ts`）がスタブのハンドラで HTTP 層を丸ごと駆動できるのはこのためです。
@@ -100,7 +99,7 @@ export function registerCompletionProviders(context: vscode.ExtensionContext) {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:258-269
+// packages/vscode-extension/src/extension.ts:237-248
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -368,7 +367,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:128-139
+// packages/vscode-extension/src/extension.ts:107-118
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)

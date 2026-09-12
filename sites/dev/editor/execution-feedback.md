@@ -173,16 +173,10 @@ _kick.play(
 `getLineSubject()` が `null` を返した場合は、スタンドアロンコマンド (`LOOP`, `RUN`, `MUTE` 等) と判断します。この場合も同じ `parenBalance` ロジックで複数行を追いかけますが、ファイル全体を走査するのではなく**カーソル行から下方向のみ**に範囲を拡張します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:654-662
-        } else {
-          // 変数名。宣言を見て決める。判定できない識別子には出さない
-          // （無関係な `foo.` にまで DSL メソッドを並べない）。
-          const head = completionContext.identifier
-          if (!head) return undefined
-          if (extractDeclaredGlobalNames(text).includes(head)) methods = GLOBAL_METHODS
-          else if (extractDeclaredSequenceNames(text).includes(head)) methods = SEQUENCE_METHODS
-          else return undefined
-        }
+// packages/vscode-extension/src/engine-handlers.ts:308-310
+          } else {
+            outputChannel?.append(output)
+          }
 ```
 
 ---
@@ -383,8 +377,8 @@ editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフ
 `Cmd+Enter` とは別に、ドキュメントの open / change / activation 時に `updateDiagnostics()` が走ります (#384、[IV-1](/editor/vscode-architecture#intellisense-と診断の登録))。前半は 2026-05 時点と同じ行内チェック 3 種です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:812-886
-async function updateDiagnostics(
+// packages/vscode-extension/src/diagnostics-provider.ts:29-49
+export async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
 ) {
@@ -405,66 +399,12 @@ async function updateDiagnostics(
       if (!inMultilineStatement) {
         inMultilineStatement = true
       }
-      continue // Skip parenthesis check for multiline statements
-    }
-
-    // Detect multiline statement end: line with closing parenthesis
-    if (inMultilineStatement && trimmedLine.endsWith(')')) {
-      inMultilineStatement = false
-      continue // Skip parenthesis check for closing line
-    }
-
-    // Skip parenthesis check if we're inside a multiline statement
-    if (inMultilineStatement) {
-      continue
-    }
-
-    // Check for common syntax errors
-
-    // Missing closing parenthesis (only for single-line statements)
-    const openParens = (line.match(/\(/g) || []).length
-    const closeParens = (line.match(/\)/g) || []).length
-    if (openParens > closeParens) {
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, 0, i, line.length),
-        'Missing closing parenthesis',
-        vscode.DiagnosticSeverity.Error,
-      )
-      diagnostics.push(diagnostic)
-    }
-
-    // Invalid tempo range
-    const tempoMatch = line.match(/\.tempo\((\d+)\)/)
-    if (tempoMatch && tempoMatch[1]) {
-      const tempo = parseInt(tempoMatch[1])
-      if (tempo < 20 || tempo > 999) {
-        const start = line.indexOf(tempoMatch[1])
-        const diagnostic = new vscode.Diagnostic(
-          new vscode.Range(i, start, i, start + tempoMatch[1].length),
-          `Tempo must be between 20 and 999 (got ${tempo})`,
-          vscode.DiagnosticSeverity.Warning,
-        )
-        diagnostics.push(diagnostic)
-      }
-    }
-
-    // Check for deprecated syntax (old MIDI DSL)
-    if (line.includes('sequence ') && !line.includes('//')) {
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, 0, i, line.length),
-        'Deprecated: Use "var seq = init GLOBAL.seq" instead of "sequence"',
-        vscode.DiagnosticSeverity.Warning,
-      )
-      diagnostic.tags = [vscode.DiagnosticTag.Deprecated]
-      diagnostics.push(diagnostic)
-    }
-  }
 ```
 
 後半は **横断解析** で、純関数 (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) が返す `DiagnosticIssue` を `vscode.Diagnostic` に写すだけです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:888-899
+// packages/vscode-extension/src/diagnostics-provider.ts:105-116
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -608,7 +548,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagnostic` にそのまま載せます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:918-929
+// packages/vscode-extension/src/diagnostics-provider.ts:135-146
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -632,7 +572,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 診断を出すだけでなく、直す手段も付いています。`activate()` が登録する CodeActionProvider が、2 つの code の両方に「`<名前>.output()` を足す」アクションを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:573-590
+// packages/vscode-extension/src/dsl-providers.ts:187-204
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
@@ -676,7 +616,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:942-959
+// packages/vscode-extension/src/diagnostics-provider.ts:159-176
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

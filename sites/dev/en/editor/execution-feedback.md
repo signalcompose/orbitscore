@@ -173,16 +173,10 @@ On the line `_kick.play(`, `parenBalance = 1`. On `1, 0, 1, 0,` there is no chan
 When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:654-662
-        } else {
-          // 変数名。宣言を見て決める。判定できない識別子には出さない
-          // （無関係な `foo.` にまで DSL メソッドを並べない）。
-          const head = completionContext.identifier
-          if (!head) return undefined
-          if (extractDeclaredGlobalNames(text).includes(head)) methods = GLOBAL_METHODS
-          else if (extractDeclaredSequenceNames(text).includes(head)) methods = SEQUENCE_METHODS
-          else return undefined
-        }
+// packages/vscode-extension/src/engine-handlers.ts:308-310
+          } else {
+            outputChannel?.append(output)
+          }
 ```
 
 ---
@@ -383,8 +377,8 @@ The editor's `Cmd+Enter` does not send this marker. For a human, the flash + dia
 Separately from `Cmd+Enter`, `updateDiagnostics()` runs on document open / change / activation (#384, [IV-1](/en/editor/vscode-architecture#intellisense-and-diagnostics-registration)). The first half is the same three per-line checks as of 2026-05.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:812-886
-async function updateDiagnostics(
+// packages/vscode-extension/src/diagnostics-provider.ts:29-49
+export async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
 ) {
@@ -405,66 +399,12 @@ async function updateDiagnostics(
       if (!inMultilineStatement) {
         inMultilineStatement = true
       }
-      continue // Skip parenthesis check for multiline statements
-    }
-
-    // Detect multiline statement end: line with closing parenthesis
-    if (inMultilineStatement && trimmedLine.endsWith(')')) {
-      inMultilineStatement = false
-      continue // Skip parenthesis check for closing line
-    }
-
-    // Skip parenthesis check if we're inside a multiline statement
-    if (inMultilineStatement) {
-      continue
-    }
-
-    // Check for common syntax errors
-
-    // Missing closing parenthesis (only for single-line statements)
-    const openParens = (line.match(/\(/g) || []).length
-    const closeParens = (line.match(/\)/g) || []).length
-    if (openParens > closeParens) {
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, 0, i, line.length),
-        'Missing closing parenthesis',
-        vscode.DiagnosticSeverity.Error,
-      )
-      diagnostics.push(diagnostic)
-    }
-
-    // Invalid tempo range
-    const tempoMatch = line.match(/\.tempo\((\d+)\)/)
-    if (tempoMatch && tempoMatch[1]) {
-      const tempo = parseInt(tempoMatch[1])
-      if (tempo < 20 || tempo > 999) {
-        const start = line.indexOf(tempoMatch[1])
-        const diagnostic = new vscode.Diagnostic(
-          new vscode.Range(i, start, i, start + tempoMatch[1].length),
-          `Tempo must be between 20 and 999 (got ${tempo})`,
-          vscode.DiagnosticSeverity.Warning,
-        )
-        diagnostics.push(diagnostic)
-      }
-    }
-
-    // Check for deprecated syntax (old MIDI DSL)
-    if (line.includes('sequence ') && !line.includes('//')) {
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, 0, i, line.length),
-        'Deprecated: Use "var seq = init GLOBAL.seq" instead of "sequence"',
-        vscode.DiagnosticSeverity.Warning,
-      )
-      diagnostic.tags = [vscode.DiagnosticTag.Deprecated]
-      diagnostics.push(diagnostic)
-    }
-  }
 ```
 
 The second half consists of **cross-line analyses**, which merely map the `DiagnosticIssue`s returned by pure functions (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) to `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:888-899
+// packages/vscode-extension/src/diagnostics-provider.ts:105-116
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -608,7 +548,7 @@ The decision itself is a three-way branch.
 The mapping to severity happens in `updateDiagnostics()`, which also puts the `code` straight onto the `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:918-929
+// packages/vscode-extension/src/diagnostics-provider.ts:135-146
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -632,7 +572,7 @@ Putting the `code` on the `vscode.Diagnostic` has a side effect: MCP's `get_diag
 The diagnostic does not only report; it offers a way out. A CodeActionProvider registered by `activate()` offers an "add `<name>.output()`" action for both codes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:573-590
+// packages/vscode-extension/src/dsl-providers.ts:187-204
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
@@ -676,7 +616,7 @@ The skip order mirrors the engine's own resolution order (`Sequence.resolveLineD
 A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:942-959
+// packages/vscode-extension/src/diagnostics-provider.ts:159-176
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
