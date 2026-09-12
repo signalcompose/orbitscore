@@ -678,6 +678,22 @@ residual の中身: `use super::*;` / `mod effect_slots;` / `mod effect_slots {`
   守られるが、**`git add` 前の手元 `npm test` は緑になる**
 - **作業ツリーで消したが index に残るファイル**は `readFileSync` の ENOENT で throw（隠れない）
 
+#### 🔴 予告どおり踏んだ — そして塞いだ（main・子 3・2026-09-12）
+
+`orbit-vst3-host/src/lib.rs` の分割で新設した `host/interfaces.rs` は **576 コード行**
+（閾値 500 超過）だったが、`git add` していなかったため列挙に現れず、**ラチェットは
+11 テスト全緑を返した**。気づいたのは、WORK_LOG 用に各モジュールのコード行数を
+手で測り直した時である。
+
+**真空防止（`minFiles`）はこれを塞げない** — 追跡済みファイルだけで件数のしきい値は
+満たされるからで、L-1 / L-2 の時と同じ「**分割が成功した瞬間に実害化する**」構造をしている。
+
+対処: `listUntrackedMeasuredFiles`（`tests/repo/file-size-targets.ts`）を足し、
+**測定対象の pathspec にマッチする未追跡ファイルが 1 つでもあれば赤**にした（L-3・
+`file-size-targets.spec.ts`）。未追跡の `.rs` を置いて red、消して green を実測済み。
+手元の `npm test` に「新しいソースは `git add` してから測る」という摩擦が入るが、
+これは設計の精神（穴が黙って開くのを防ぐ）そのものなので受け入れる。
+
 ### 13.6 main による独立検証（2026-09-12・別素材 + 敵対的ケース 4 件）
 
 §13.3 の主張を main が**別の合成素材**で再現し、さらに「この方式が壊れる条件」を探した。

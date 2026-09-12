@@ -68,7 +68,7 @@ into a **short-lived separate process**. The crate's `description` even names th
 One catalog entry, and the top-level document, are defined on the Rust side like this.
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:29-50
+// rust/crates/orbit-plugin-scan/src/types.rs:21-42
 /// カタログ 1 エントリ（PC.1 JSON スキーマ）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,10 +104,10 @@ Role detection differs per format. CLAP uses the feature tags, and the important
 when neither can be decided it **errs on the safe side and includes both**.
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:571-584
+// rust/crates/orbit-plugin-scan/src/clap_scan.rs:43-56
 /// CLAP feature タグから role (instrument/effect) を判定する。
 /// 両方一致・どちらも不一致の場合は両方入れる（安全側・PC.1 の role フィルタで絞り込む前提）。
-fn roles_from_clap_features(features: &[String]) -> Vec<String> {
+pub(crate) fn roles_from_clap_features(features: &[String]) -> Vec<String> {
     let has_instrument = features.iter().any(|f| f == "instrument");
     let has_effect = features
         .iter()
@@ -132,10 +132,10 @@ The scan targets are the four standard macOS directories plus `ORBIT_PLUGIN_PATH
 (`:`-separated).
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:187-198
+// rust/crates/orbit-plugin-scan/src/dirs.rs:9-20
 /// スキャン対象ディレクトリのデフォルト（PC.1）。
 /// `~` は `dirs_home` で解決する（HOME 環境変数が読めない場合はスキップ）。
-fn default_scan_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+pub(crate) fn default_scan_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = home {
         dirs.push(home.join("Library/Audio/Plug-Ins/CLAP"));
@@ -151,7 +151,7 @@ Each directory is walked **at the top level only**; it never descends into subdi
 Spec PC.1's "each directory's immediate children only = non-recursive" is implemented as is.
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:228-253
+// rust/crates/orbit-plugin-scan/src/dirs.rs:50-75
 /// 1 ディレクトリ直下（非再帰）を走査し、`.clap` / `.vst3` バンドル候補を列挙する。
 /// ディレクトリが存在しない・読めない場合は空 Vec を返す（stderr warn のみ）。
 pub fn list_bundle_candidates(dir: &Path) -> Vec<(PathBuf, Format)> {
@@ -186,7 +186,7 @@ this `match`.
 When the same plugin exists in two places, dedup is **last wins**.
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:1037-1055
+// rust/crates/orbit-plugin-scan/src/vst3_scan.rs:215-233
 /// エントリ列を dedup する（後勝ち: 同キーの後続要素が前の要素を置き換える）。
 pub fn dedup_entries(entries: Vec<CatalogEntry>) -> Vec<CatalogEntry> {
     let mut order: Vec<(u8, String, String)> = Vec::new();
@@ -220,7 +220,7 @@ The file is written to a tmp path and then renamed — an atomic write. It is th
 so that readers (engine, extension) never pick up a half-written JSON.
 
 ```rust
-// rust/crates/orbit-plugin-scan/src/lib.rs:1854-1866
+// rust/crates/orbit-plugin-scan/src/catalog_io.rs:29-41
 /// カタログを JSON にシリアライズして `path` へ atomic write（tmp + rename）する。
 pub fn write_catalog(catalog: &Catalog, path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {

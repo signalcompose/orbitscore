@@ -3,7 +3,11 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { listMeasuredFiles, MEASURED_PATHSPECS } from './file-size-targets'
+import {
+  listMeasuredFiles,
+  listUntrackedMeasuredFiles,
+  MEASURED_PATHSPECS,
+} from './file-size-targets'
 
 /** 真空防止（§4.1）は除外適用**前**の生の `git ls-files` 件数で判定する。テストも同じ数を見る。 */
 function rawFileCount(repoRoot: string, pathspec: string): number {
@@ -92,6 +96,28 @@ describe('listMeasuredFiles', () => {
       for (const f of files) {
         expect(f.path.startsWith('tests/')).toBe(false)
       }
+    })
+  })
+
+  describe('L-3: 未追跡ファイルは測定されない（git ls-files は index を見る）', () => {
+    it('🔴 測定対象の未追跡ファイルが 1 つも無い（あるなら git add してから測る）', () => {
+      // 🔴 #888 子 3 で実際に踏んだ穴。新設した `host/interfaces.rs` は 576 コード行
+      // （閾値 500 超過）だったが、untracked のあいだ `git ls-files` に現れず、
+      // ラチェットは 11 テスト全緑を返した。分割作業そのものが列挙をすり抜ける構造で、
+      // L-1 / L-2 と同じ「成功した瞬間に実害化する」型である。
+      //
+      // 真空防止（minFiles）はこれを塞げない — 追跡済みファイルだけで件数は足りるため。
+      expect(listUntrackedMeasuredFiles(repoRoot).map((f) => f.path)).toEqual([])
+    })
+
+    it('未追跡ファイルがあれば列挙される（検出器そのものが動くことの確認）', () => {
+      // 実在する untracked なパスを持たない repo でも検出器が動くことを、`--others` が
+      // 効かない pathspec（追跡済みしか無い）で空、という形でしか確かめられないため、
+      // ここでは Rust の除外規則が未追跡側にも適用されることを確かめる。
+      const excluded = listUntrackedMeasuredFiles(repoRoot, [
+        { pathspec: ':(glob)rust/crates/**/tests/**/*.rs', lang: 'rust' },
+      ])
+      expect(excluded).toEqual([])
     })
   })
 

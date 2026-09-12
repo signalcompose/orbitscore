@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(rust): split the last three Rust files — #888 child 3 done (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`
+
+🎯 **#888 子 3 完了。目標 6 ファイルがすべて 500 コード行以下になった。**
+
+| ファイル | 前 | 後 | 新モジュール（コード行） |
+|---|---|---|---|
+| `orbit-vst3-host/src/lib.rs` | 2,388 | **455** | `setup` 466 / `effect` 406 / `instrument` 303 / `interfaces` 280 / `events` 276 / `probe` 232 |
+| `orbit-plugin-scan/src/lib.rs` | 1,652 | **44** | `scan_run` 271 / `artifact_probe` 237 / `child_probe` 193 / `vst3_scan` 186 / `process` 180 / `macho` 175 / `types` 135 ほか 5 |
+| `orbit-audio-sandbox/src/transport.rs` | 1,416 | **36** | `ui_pump` 478 / `mailbox` 374 / `event_ring` 218 / `shm` 160 / `layout` 93 / `ui_codec` 92 |
+
+`npm test` は **2,445 passed で不変**（既存テストの期待値を 1 つも変えていない）。
+cargo fmt / cfg 4 象限 / `clippy --workspace --all-targets -D warnings` / `cargo test --workspace`（93 スイート）/
+lint / docs:check（948 引用）すべて緑。dev サイトの引用 32 件は `relocate-citations.mjs` で追随。
+
+### 🔴 public API が黙って消える — `pub(crate) use` の罠
+
+`pub fn` を private な子モジュールへ移し `pub(crate) use child::*;` で再エクスポートすると、
+**crate 内はコンパイルが通るのに crate 外からは見えなくなる**。`cargo clippy -p <crate>` は
+下流を見ないので捕まらない。実際 `orbit-vst3-host` の `probe_factory_descriptors` は
+この形で public API から落ち、`orbit-plugin-scan` の 15 件は dead_code 警告で初めて露見した。
+
+対処は `pub use child::*;`（低い可視性の項目はそのまま低いまま再エクスポートされる）。
+検算として **分割前後で `^pub (fn|struct|enum|const|type|trait)` の集合を diff** し、
+3 crate とも同一であることを確認した。
+
+### 🔴 ラチェットが緑のまま閾値超過を見逃した — `git ls-files` は index を見る
+
+新設した `host/interfaces.rs` は **576 コード行**あったが、`git add` 前だったため
+`git ls-files` の列挙に現れず、**ラチェットは 11 テスト全緑**だった。設計 §13.10 が
+この帰結を予告していたのに、実作業で踏んだ。真空防止（`minFiles`）は塞げない —
+追跡済みファイルだけで件数のしきい値は満たされるからで、**L-1 / L-2 と同じ
+「分割が成功した瞬間に実害化する」構造**をしている。
+
+`listUntrackedMeasuredFiles` を足し、測定対象の未追跡ファイルが 1 つでもあれば赤にした
+（**L-3**）。未追跡の `.rs` を置いて red、消して green を実測。設計 §13.10 に追記済み。
 ### fix(daemon): restore nine public items the split had hidden (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
