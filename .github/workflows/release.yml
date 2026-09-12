@@ -241,8 +241,31 @@ jobs:
           if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
           fi
+
+          # 🔴 インストール手順は**ここに書かない**。正本は
+          # sites/user/getting-started/installation.md（版に依存しない書き方で、
+          # GitHub Pages に公開済み）で、ここからはリンクするだけにする。
+          #
+          # なぜ: v3.0.0 のリリースページには 45 行の手順が手書きされていたが、
+          # **v4.0.0 で丸ごと消えた**（#905）。手で書く運用は 1 回で失敗している。
+          # 複製を増やすと、腐った時に気づけるのは利用者だけになる。
+          cat > "$RUNNER_TEMP/release-notes-head.md" <<'NOTES'
+          ## インストール
+
+          下の **Assets** から `.vsix` をダウンロードして、VS Code / Cursor に入れてください。
+
+          📖 **[インストール手順](https://signalcompose.github.io/orbitscore/getting-started/installation)** —
+          3 通りの入れ方・動作環境・最初の音を出すまで
+
+          > macOS Apple Silicon 専用です（Intel / Windows / Linux は非対応）。
+          > VS Code Marketplace と Open VSX では配布していません。この GitHub Releases が唯一の入手経路です。
+
+          ---
+          NOTES
+
           gh release create "$TAG" \
             $PRERELEASE_FLAG \
+            --notes-file "$RUNNER_TEMP/release-notes-head.md" \
             --generate-notes \
             packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix
 

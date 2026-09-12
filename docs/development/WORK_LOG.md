@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: link the install guide from README and every release (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `905-install-route-links`
+
+owner の指摘から。「インストール手順は**リリースページに書く**のではなく、**マニュアルに載せて
+README やリリースからリンクする**」という裁定に従った（#905）。
+
+### 🔴 手書きの定型は次の版まで生き残らなかった
+
+v3.0.0 のリリースページには **45 行の丁寧な手順**が手書きされていたが、**v4.0.0 では丸ごと消えた**。
+`release.yml` は `gh release create --generate-notes` だけなので、**自動では何も付かない**。
+v3.0.0 のものは後から手で書き足したものだった。
+
+**これが「リリースページに書く」案を採らない実測の根拠**である。私は当初そちらを提案したが、
+owner の案（正本へリンク）の方が正しい。複製は必ず本体より遅れる。
+
+### やったこと
+
+| 対象 | 変更 |
+|---|---|
+| `release.yml` | `--notes-file` で短い定型（動作環境 + 正本へのリンク）を先頭に置き、`--generate-notes` の changelog をその後ろへ。**次の版から自動で付く** |
+| `README.md` | 既存の「Just want to use it?」節に正本へのリンクを足した |
+
+正本は `sites/user/getting-started/installation.md`（版に依存しない書き方・公開済み。
+https://signalcompose.github.io/orbitscore/getting-started/installation が 200 を返すことを確認）。
+
+🔴 **heredoc の字下げを検証した。** YAML の `run: |` ブロック内に heredoc を書くと、字下げ次第で
+markdown が丸ごとコードブロックになる。YAML を実際に展開して列 0 に揃うことを確認し、
+生成物も実行して目視した。
+
+### 🔴 やらなかったこと 2 件
+
+- **README に新しい `## Install` 節を作らない** — 一度作ったが、既存の「Just want to use it?」と
+  合わせて**三つ目の複製**になると気づいて取り消した
+- **`docs/user/ja/USER_MANUAL.md` を直さない** — scsynth の記述など明らかに腐っているが、
+  この文書は **DEPRECATED で「履歴として保持」（#237）** と明記されている。一度書き換えてから
+  気づいて戻した。腐りは冒頭の 2 つのバナーが既に無効宣言しており、さらに「リリースページに
+  手順が載っています」という 65 行目の約束は、上の `release.yml` の変更で**再び真になる**
+
 ### chore(release): bump the extension to 4.0.1 — the Rust split ships (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-release-4.0.1`
