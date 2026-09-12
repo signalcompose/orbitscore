@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(extension): freeze the public surface before splitting extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887（TS 分割）の**束 0 = 道具を先に置く**。**ソースは 1 行も動かしていない**
+（`git diff --stat main -- packages/` が空）。
+
+### 🔴 Rust で 2 度踏んだ欠陥の TS 版を先に塞ぐ
+
+Rust では `pub` 項目が `pub(crate) use` 経由で crate 外から消え、**全ゲート緑のまま通過**した。
+TS に `pub(crate)` は無いが、同型の欠陥は「再輸出ブロックから 1 本抜ける」「型だけ export されて
+値が消える」形で出る。しかも **`tests/vscode-extension/` は一度も型検査されていなかった**
+（`tsconfig.tests.json` の include は `tests/e2e/**` のみ）。
+
+`tests/vscode-extension/public-surface.spec.ts` を置き、**tsc と vitest の 2 層**に通した。
+凍結したのは `extension.ts` **27** + `mcp-server.ts` 値 **11** = **38 値**と、型 **25**。
+（設計文書の一覧を写さず、現物を `grep -E '^export'` して突き合わせた結果が一致）
+
+main が実測した fail-before **3 件**:
+
+| 変異 | 検出した層 |
+|---|---|
+| 存在しない export を import | tsc **TS2724** |
+| 型を値として使う | tsc **TS2693** |
+| 🔴 **実際に `export` を 1 本消す** | vitest（実行時に `undefined`） |
+
+3 番目が本題。Rust で踏んだ欠陥はこの形だった。
+
+### 引用追随スクリプトもリポジトリへ
+
+`sites/dev/scripts/relocate-citations.mjs`。引用は `extension.ts` **248 箇所** /
+`mcp-server.ts` **46 箇所**あり、全束で動く。`--fix` は**行番号しか直せない**ので、
+移動先を中身から特定するこれが要る。Rust 分割では scratchpad に置いていて毎回探していた。
+
+### 検証
+
+`npm test` **2,488 passed**（main の基準 2,450 + surface spec 38・**既存テストの期待値の変更 0 件**）/
+`npm run typecheck:e2e` / `npm run lint` / `npm run docs:check` 982 引用。
+
 ### docs: link the install guide from README and every release (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `905-install-route-links`
