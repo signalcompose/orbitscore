@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move device switching and Link tempo into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-device-link`
+
+#888 子 1 の**第 6 束**。オーディオデバイス切替と Link テンポ（317 行）を
+`engine_wrap/device_link.rs`（242 コード行）へ。
+`engine_wrap.rs` は **3,655 → 3,417** コード行。
+
+**可視性の変更 2 行**（E3′）: `record_stream_config`（親の `finish_start` から）と
+`record_device_switch_result`（親のインラインテスト 3 箇所から）を `pub(super)` に。
+
+🔴 **第 5 束の教訓を仕組みにした**: 抽出範囲の開始を手で選ぶのをやめ、
+**doc コメントと属性を遡って item の真の開始行を求める関数**で決めた。
+第 4 束の doc コメント分断は、開始行を目で選んだために起きていた。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（1 件を再アンカー）。
+
+
 ### refactor(daemon): move the instrument slots and plugin UI into child modules (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-instrument`
