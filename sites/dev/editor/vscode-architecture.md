@@ -1,16 +1,16 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: f575f27
+verified-against: 1553e65
 verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しましたと束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・`registerOutputCodeActionProvider()` の登録）まで、さらに #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動）まで**engine spawn 節だけ**追従しました。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しましたと束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・`registerOutputCodeActionProvider()` の登録）まで、さらに #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動）まで**engine spawn 節だけ**追従し、#888 のリリース（PR [#903](https://github.com/signalcompose/orbitscore/pull/903)・拡張 4.0.1）まで**package version の表記だけ**追従しました。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
-OrbitScore の VS Code 拡張 (`packages/vscode-extension`、package version 3.0.0) は、どのようにして起動し、エンジンとどのようにつながっているのでしょうか。本章ではその内部構造を extension の activation から engine プロセスとの通信まで順を追って読み解きます。2026-05 の初稿から最も変わったのは「engine kind の分岐」「engine ライフサイクルの vscode 非依存モジュールへの抽出」「MCP サーバ・playhead・Engine ビューといった周辺機能の増加」で、末尾に drift の一覧をまとめました。
+OrbitScore の VS Code 拡張 (`packages/vscode-extension`、package version 4.0.1) は、どのようにして起動し、エンジンとどのようにつながっているのでしょうか。本章ではその内部構造を extension の activation から engine プロセスとの通信まで順を追って読み解きます。2026-05 の初稿から最も変わったのは「engine kind の分岐」「engine ライフサイクルの vscode 非依存モジュールへの抽出」「MCP サーバ・playhead・Engine ビューといった周辺機能の増加」で、末尾に drift の一覧をまとめました。
 
 ---
 
@@ -1125,7 +1125,7 @@ flowchart TD
 
 ## Sources
 
-- `packages/vscode-extension/package.json` — version 3.0.0、`activationEvents`、`contributes.commands` (15)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`mcpServer.port` / `playheadPalette` 等。`orbitscore.engine` / `orbitscore.scsynthPath` は #502 で削除)
+- `packages/vscode-extension/package.json` — version 4.0.1、`activationEvents`、`contributes.commands` (15)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`mcpServer.port` / `playheadPalette` 等。`orbitscore.engine` / `orbitscore.scsynthPath` は #502 で削除)
 - `packages/vscode-extension/package.json:34-43` — `capabilities.untrustedWorkspaces` の宣言 (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — 宣言を検査する 6 本 (`restrictedConfigurations` を `?? []` に落とさない理由もここ)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — マニフェスト読み取りの共有ヘルパー (`readExtensionManifest()` / `declaredConfigurationKeys()`)

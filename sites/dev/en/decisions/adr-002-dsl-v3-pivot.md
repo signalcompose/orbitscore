@@ -1,12 +1,12 @@
 ---
 title: "ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot"
 chapter-id: "adr-002"
-verified-against: 56c34c3
-verified-at: "2026-09-11"
+verified-against: 1553e65
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version-bearing passages** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. The main argument about the v0.1 → v3.0 pivot is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version-bearing passages** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) and the #888 release (PR [#903](https://github.com/signalcompose/orbitscore/pull/903) — extension 4.0.1) on 2026-09-12. The main argument about the v0.1 → v3.0 pivot is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 

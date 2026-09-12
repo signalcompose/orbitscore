@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the 4.0.1 bump into the pages it missed (PR #903 追従) (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr903`
+
+ルーティン docs 追従。追従元は PR [#903](https://github.com/signalcompose/orbitscore/pull/903)
+（マージコミット `1553e652a04b980af4f33432be7470364a0b1b92`・head `69371a14`）。
+**実装とテストは触っていない**（`docs/core` と dev サイトのみ）。
+
+#903 は正本（`packages/vscode-extension/package.json:6` = `4.0.1`）を動かし、`CLAUDE.md` /
+root `README.md` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / dev サイト 4 箇所を追従させた。
+**現在形で版を名乗っているのに 3.0.0 のまま残っていたページ**と、
+**本文だけ 4.0.1 になり provenance の Note が #883（4.0.0）で止まっていたページ**が残っていた。
+
+| 直した箇所 | 何が食い違っていたか |
+|---|---|
+| `docs/core/INDEX.md:5` | 表紙が拡張 **3.0.0** / `DSL_VERSION` **1.2** を名乗ったまま（正本は `package.json:6` = 4.0.1・`packages/engine/src/version.ts:18` = `'2.0'`）|
+| `sites/dev{,/en}/editor/vscode-architecture.md:13,1128` | 導入と Sources が `package version 3.0.0` |
+| `sites/dev{,/en}/orientation/architecture-overview.md:9` | 本文 `:618,621` は #903 で 4.0.1 になったのに、Note の追従先が #883（4.0.0）のまま |
+| `sites/dev{,/en}/decisions/adr-002-dsl-v3-pivot.md:9` | 同上（本文 `:17` は 4.0.1）|
+
+dev サイトは日英両方。frontmatter の `verified-against` / `verified-at` を更新した 3 章（6 ファイル）は、
+Note 行に「**版の表記だけ**追従した」と明記して、章全体を再検証したと読まれないようにしてある。
+
+🔴 **歴史的記述は変えていない。** 「#883 で拡張を 4.0.0 に上げた」
+（`sites/dev{,/en}/orientation/architecture-overview.md:621`）と、#873 の再現ログに出てくる
+`local.orbitscore-3.0.0/dist/extension.js`（`sites/dev{,/en}/editor/vscode-architecture.md:222`）は
+その時点の事実なのでそのまま。
+
+**直さずに PR 本文へ回したもの**: `tests/e2e/vsix-cold-install-gated.spec.ts:53-67` の
+`locateVsix()` が `.vsix` の版を `package.json` と突合していない点（テストは変更しない規律に従い報告のみ）。
+
 ### chore(release): bump the extension to 4.0.1 — the Rust split ships (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-release-4.0.1`

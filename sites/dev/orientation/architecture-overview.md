@@ -1,12 +1,12 @@
 ---
 title: "0-2. アーキテクチャ全景"
 chapter-id: "0-2"
-verified-against: 56c34c3
-verified-at: "2026-09-11"
+verified-against: 1553e65
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）と #888 のリリース（PR [#903](https://github.com/signalcompose/orbitscore/pull/903)・拡張 4.0.1）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # 0-2. アーキテクチャ全景
 

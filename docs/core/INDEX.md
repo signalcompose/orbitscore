@@ -2,7 +2,7 @@
 
 OrbitScore is a live coding music DSL for VS Code with a bundled native audio engine (Rust `orbit-audio-daemon`) and MIDI output.
 
-**Current release**: VS Code 拡張 **3.0.0**（`.vsix` と git タグが担う版・正本は `packages/vscode-extension/package.json`）。`ENGINE_VERSION 2.0.0`（セッションログの meta ヘッダ）と `DSL_VERSION 1.2`（spec 版）は**別軸で同期しない**（`docs/design/656-release-design.md` §4.4）。
+**Current release**: VS Code 拡張 **4.0.1**（`.vsix` と git タグが担う版・正本は `packages/vscode-extension/package.json`）。`ENGINE_VERSION 2.0.0`（セッションログの meta ヘッダ）と `DSL_VERSION 2.0`（spec 版）は**別軸で同期しない**（`docs/design/656-release-design.md` §4.4）。
 **Audio backend**: Rust `orbit-audio-daemon` が唯一のバックエンド（cutover #108・2026-07-03 で既定化・SuperCollider opt-out 経路と `ORBITSCORE_ENGINE` は #502（2026-09-10）で削除）。
 **Supported platforms**: macOS (Apple Silicon, arm64) **only**。Intel Mac は**非対応**。Windows / Linux is not supported.
 
