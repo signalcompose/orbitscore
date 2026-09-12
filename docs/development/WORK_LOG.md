@@ -17,6 +17,144 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test: add a file-size ratchet for Rust and TS sources (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `888-file-size-ratchet`
+**担当**: 設計 = Fable / 実装 = Sonnet subagent（🔴 **Codex CLI は一度も起動していない**。
+`codex:rescue` のラッパが自分で実装した。`codex-companion status` の `recent` が空で
+`latestFinished` が null であることで確認）/ 検証・裁定 = main
+
+#888 子タスク 0「仕組みだけ入れる（振る舞い不変）」。設計は
+`docs/design/888-file-size-ratchet-design.md`。ソースは1行も変えていない。
+
+**やったこと**:
+
+- `tests/repo/code-lines.ts`: 「コード行」を数える純関数 `countCodeLines`。行単位の状態機械
+  （通常 / 文字列 / raw 文字列 / テンプレートリテラル / ブロックコメント）で、空行・コメント
+  専用行を除き、複数行の文字列やテンプレートリテラルの内側は中身に関わらず数える。Rust の
+  `#[cfg(test)] mod`（`#[cfg(all(test, ...))]` を含む）はブロックごと除外する。終端で異常状態
+  （閉じていない文字列・test mod）のまま終わったら例外を投げる（迷ったら数える側に倒す）。
+- `tests/repo/file-size-targets.ts`: `git ls-files -z`（`:(glob)` magic 付き）で測定対象を列挙。
+  Rust は `rust/crates/**/*.rs` から `tests/` `examples/` `benches/` `build.rs` `src/**/tests.rs`
+  を除いたもの、TS は `packages/*/src/**/*.ts`。真空防止（除外適用前の生の列挙件数で判定）。
+- `tests/repo/file-size-baseline.json`: 閾値超過ファイルだけを列挙した baseline（25件・Rust 15 /
+  TS 10）。**実装のカウンタが出した現寸をそのまま登録**した。
+- `tests/repo/file-size-ratchet.spec.ts`: 既存3本（`worklog-size.spec.ts` /
+  `dsl-e2e-coverage.spec.ts` / `planning-issue-state.spec.ts`）と同型のラチェット+honesty。
+  baseline を超えた成長は red、baseline が古くなった（消えた・実際より緩い）ら red。
+- `tests/repo/code-lines.spec.ts`: `countCodeLines` の機能テスト（設計 §9.1 の F-1〜F-19 相当）。
+- `tests/repo/file-size-targets.spec.ts`: 列挙そのもののテスト（設計 §9.2 の L-1 / L-2）。
+  **レビューで未実装が判明して後から足した**（下記）。
+
+**設計からの逸脱・補足**:
+
+- 真空防止の閾値判定は、`tests/` 等の除外を適用した**後**の件数ではなく、`git ls-files` の
+  **生の**結果に対して行うよう修正した。除外後の件数（Rust 95件）で判定すると、正当な除外で
+  100件を割り、真空防止が誤って発火する。
+- `listMeasuredFiles` に既定値付きの第2引数（pathspec 差し替え口）を足した。L-2 が真空防止の
+  発火そのものを確かめるための注入口で、既定の挙動は変わらない。
+- 🔴 **baseline の数値は設計文書 §5.1 の試作値と 25 件中 8 件で食い違い、main が「実装側が正しい」と
+  裁定した**（設計 §11 の反証条件がそのまま発火したケース。設計文書の表は実装値に差し替え済み）。根拠:
+  - **TS 10 件**: TypeScript 自身の**パーサ**を独立オラクルにして測り（`ts.createSourceFile` の葉
+    トークンが占める文字を印し、JSDoc ノードは除外）、**実装の値と 10/10 完全一致**。
+    `extension.ts` は **2,779**（試作の 3,004 は正規表現リテラル未対応による過大）
+  - **Rust**: main が独立に `#[cfg(test)] mod` の除外レンジを列挙し 4 件中 3 件で一致。唯一ずれた
+    `engine_wrap.rs` は **main の列挙の側のバグ**だった（Rust のフォーマット文字列の中の `{` `}` を
+    brace として数え、`mod outproc_load_error_test_support` を 12279 行で早期終了。実際の終端は
+    12557 行で、差の 278 行が実装との差と正確に一致した）
+
+**🔴 レビューで塞いだ穴 — 「仕事が成功した時に開く」型**:
+
+初回実装には設計 §4.1・§9.2 が名指しで要求していた **L-1（列挙に既知の代表ファイルが含まれることの
+検査）が無かった**。真空防止のしきい値（Rust/TS とも 100 件）だけでは、pathspec が `:(glob)` magic を
+欠いて `src/` 直下を落とす事故を**検出できない** — TS は非 glob でも 109 件（> 100）返るためである。
+
+いまは `extension.ts` が baseline にあるため honesty 検査が偶然 red にするが、**子 4/5 でそのファイルを
+分割して baseline から外した瞬間にその防御は消える。** main が再現した fail-before: baseline から 2 件を
+外し（= 分割後の姿）`:(glob)` を落とすと、**23 ファイルが黙って測定対象から消えたままスイートは緑**
+だった。L-1 を足した後は、同じ条件で red（exit=1）になることを main が確認している。
+
+**検証**（すべて main が sandbox 外で実行。委譲先の緑は根拠にしていない）:
+`npx vitest run --dir tests --config vitest.config.ts tests/repo`（**36件緑**）/
+`npm test`（**166 files・2424 passed / 76 skipped**）/ `npm run lint`（緑）/
+`npm run docs:check`（948 引用・0 failed）。**既存テストの期待値は 1 つも変えていない。**
+
+変異検証（main が実行・5 件すべて red → restore 後 緑・baseline は byte 一致）: baseline 値の
++1 / −1 / エントリ削除 / 架空パス追加 / `threshold` を 600 へ。
+
+**`/simplify` で適用した整理**（4 観点を並行レビュー・PR #894）:
+
+- `code-lines.ts`: `pendingBuffer: Array<{isCode:boolean}>` → `pendingCount: number`。
+  バッファに積まれる行は `isTestCfgAttrLine` / `ATTRIBUTE_LINE` / `MOD_OPEN_LINE` のどれかに
+  **完全一致**した行だけで、行コメントや末尾コメント付きの行は一致しない。よって `isCode` は
+  常に `true` で、持つ意味が無かった（main が正規表現を読んで検算）
+- `file-size-ratchet.spec.ts`: 2 つの `it` が独立に呼んでいた `measureAll()` を `beforeAll` へ集約。
+  同じ PR の `file-size-targets.spec.ts` が既に測定を共有しており、**同一 PR 内で同じ問題に 2 つの
+  書き方が混在**していた。`beforeAll` を選んだのは、`measureAll()` が throw した時に collection
+  エラーではなく**ファイル名付きのテスト失敗**として出るため
+- `code-lines.spec.ts`: 3 つの `it` が共有していた `F-18` ラベルを `F-18a/b/c` に分けた
+  （設計 §9.1 の F-18 は 1 行で 3 シナリオを束ねているので重複自体は仕様に忠実だが、識別できない）
+
+**却下した指摘 1 件**（altitude 観点・`listMeasuredFiles` の第 2 引数が #887 の `__*ForTest` と同型という指摘）:
+
+1. #887 が問題視しているのは**出荷される** `extension.ts` の裏口。`tests/repo/file-size-targets.ts`
+   はテスト基盤そのもので出荷されない。既定値付き引数は通常の引数化である
+2. 提案された「真空防止を純関数へ切り出す」は、**`listMeasuredFiles` がそれを呼んでいるかの配線が
+   検証されなくなる**（CLAUDE.md が名指しで警告している形）
+3. 指摘の「該当言語の pathspec が無ければチェックが素通りする」は事実誤認。ループは
+   `Object.keys(MIN_FILES_PER_LANG)`（固定の `{rust, ts}`）を回しており、片方が欠ければ
+   `0 < 100` で throw する（穴ではなくガードが働いている姿）
+
+**リファクタ後の再検証**（main が実行）: 変異 5 件すべて再び red / `code-lines.ts` の
+`commitPending` を殺す変異 2 種も red（除外側 4 件・code 側 2 件）/ `npm test` 2424 passed /
+lint・`docs:check`・`typecheck:e2e` 緑。**baseline 25 件の値は 1 つも変わっていない**
+（honesty 検査が `baseline == 実際` を要求するので、これが振る舞い保存の検算になる）。
+
+**`/code:pr-review-team`（4 名）+ Fable 設計監査（並行）のラウンド 1**:
+
+Critical 0。Important 5 件・Minor 17 件を main が集約し、**故障の向き**で仕分けた。
+
+🔴 **修正前に置いたポリシー**（CLAUDE.md「横断的関心事は先にポリシーを書いてから一括適用」）:
+
+> ラチェットの信用は「数え方が正しい」ことに依存する。数え方の誤りは **(a) 多く数える = 安全** /
+> **(b) 少なく数える = 穴** に分かれ、§3.3 は (b) を禁じている。しかし heuristic を含む字句解析で
+> (b) を*構成的に*排除することはできない。したがって **heuristic を改良するだけで済ませず、
+> 独立したオラクルで全件を検算する**形に変える。
+
+**直した 6 件**:
+
+| # | 内容 |
+|---|---|
+| **F-1** | 🔴 **`code-lines-oracle.spec.ts` 新設** — TypeScript の**パーサ**を独立オラクルにして TS 全 132 件を検算。既知の差は shebang 1 件のみで許容リストに明示（設計 D9・§3.4） |
+| **F-2** | **入れ子テンプレートリテラルで黙って少なく数える**穴を塞いだ。`templateStack` で `${…}` 置換の brace 深さを追う |
+| **F-3** | 真空防止を **pathspec エントリ単位**にした。従来は lang 合計だったので、将来足すエントリが `:(glob)` を忘れて 0 件でも既存 132 件が支えて緑だった |
+| **F-4** | ラチェット判定を純関数 `findViolations` / `findHonestyProblems` に切り出し、**合成データで §5.2 (a)〜(f) を網羅**。実データの 2 つの `it` は同じ関数を呼び続ける（配線を失わない） |
+| **F-5** | throw メッセージに**壊れ始めた行番号**を入れた（設計 §8.1 が要求していたが未実装だった） |
+| **F-6** | baseline JSON の**キー辞書順**を honesty 検査で強制（設計 §5.1 が要求） |
+
+**直さなかった 3 件**（いずれも**安全側**に倒れ、現リポジトリに該当 0 件）:
+`=>` 直後の正規表現（**throw する**）/ BOM のみの行（多く数える）/ `#[cfg(test)]` と `mod` の間の空行（除外されず多く数える）。
+
+🔴 **Fable 監査が main の検証の穴を突いた**（設計 §13.8 に反映）: main の敵対ケース 4 件は
+すべて「ブロックを塊のまま動かす」形だった。塊を崩す 2 型は residual をすり抜ける —
+**(E) 1 文を関数間で移動**（振る舞いが変わるのに residual 0。git は 20 英数字以上なら 1 行でも
+移動と認める）/ **(F) 消して 2 回足す**（複製が見えない）。対策として §13.4 に
+`moved+ == moved−` と「短い moved ブロックは residual 扱い」の 2 ゲートを追加。
+Fable はまた **TS オラクルを baseline の 10 件ではなく測定対象 132 件全件**に適用して
+131/132 一致を確認しており、main の検証範囲が狭かったことも示した。
+
+**設計文書の訂正**（main）: §3.1 の「誤判定は必ず例外で red になる」という**安全性の主張を撤回**
+（偶数個のクォート / backtick で黙って通る経路が実在）・§4.2「Rust 96 件」→ **95 件**
+（文書自身の算式も実測も 95）・§13.8〜§13.10 を新設・決定表に **D9 / D10** を追加。
+
+**検証**（すべて main が sandbox 外で実行・委譲先の緑は根拠にしていない）:
+`npm test` **167 files・2445 passed / 76 skipped**（+21 件）/ lint・`docs:check`（948 引用 0 failed）・
+`typecheck:e2e` 緑 / `tests/repo` **57 件**。
+fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
+**オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
+baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
+
 ### refactor/test(engine): fold the #889 review rounds — env containment, wiring coverage, a trigger (Sep 12, 2026)
 
 **Date**: 2026-09-12
