@@ -423,7 +423,7 @@ position.
 Assembling the candidates happens on the `extension.ts` side.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3597-3610
+// packages/vscode-extension/src/extension.ts:3624-3637
       case 'output-string':
         return makeItems(
           [
@@ -448,7 +448,7 @@ One trigger character was added too. Without `(`, nothing appears right after `.
 completion is invoked explicitly.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3467-3477
+// packages/vscode-extension/src/extension.ts:3494-3504
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,

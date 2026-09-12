@@ -692,7 +692,7 @@ The decision itself is a three-way branch.
 The mapping to severity happens in `updateDiagnostics()`, which also puts the `code` straight onto the `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3831-3842
+// packages/vscode-extension/src/extension.ts:3858-3869
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -716,7 +716,7 @@ Putting the `code` on the `vscode.Diagnostic` has a side effect: MCP's `get_diag
 The diagnostic does not only report; it offers a way out. A CodeActionProvider registered by `activate()` offers an "add `<name>.output()`" action for both codes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3486-3503
+// packages/vscode-extension/src/extension.ts:3513-3530
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)

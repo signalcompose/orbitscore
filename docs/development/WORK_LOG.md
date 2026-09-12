@@ -17,6 +17,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: land the four routine docs-sync PRs as one roundup (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `893-docs-sync-roundup`
+
+#882 / #891 / #892 / #893 を 1 本に畳んだ。**4 本とも CONFLICTING** で、#888 の分割が main に
+入った直後だったため放置すれば腐る一方だった（owner の指摘で着手）。前例は #867（9 本の roundup）。
+
+衝突は 2 種類:
+
+- **WORK_LOG**（4 本とも Recent Work へ追記）— 両方残す
+- **`vscode-architecture.md` の「どの PR まで追従したか」の Note 行** — #884 / #885 / #889 の
+  3 本すべてを反映した 1 文にまとめた。HEAD 側に残っていた「束 S（#885）はまだ反映していません」は
+  **#885 を取り込んだ時点で古くなっていた**（2 段目の取り込みで前段の宣言が嘘になる型）
+
+🔴 引用は 8 件壊れていたが、**すべて `extension.ts`** で #888 の Rust 分割とは無関係だった
+（PR の base が古かったための一様な **+27 行**シフト）。`--fix` の着地先 4 件は散文と突き合わせて
+確認済み — `updateDiagnostics` の `analyzeMissingOutput` ループ / `registerOutputCodeActionProvider`
+の `provideCodeActions` / 補完候補の組み立て / トリガ文字の登録。
+
+検証: `npm test` 2,450 passed / `npm run lint` / `npm run docs:check` **982 引用**（4 本が +34 件）。
+
 ### docs: follow PR #889 into the chapters and guides that still said `spawn('node')` (Sep 12, 2026)
 
 **Date**: 2026-09-12

@@ -692,7 +692,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagnostic` にそのまま載せます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3831-3842
+// packages/vscode-extension/src/extension.ts:3858-3869
   for (const issue of analyzeMissingOutput(text)) {
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
@@ -716,7 +716,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 診断を出すだけでなく、直す手段も付いています。`activate()` が登録する CodeActionProvider が、2 つの code の両方に「`<名前>.output()` を足す」アクションを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3486-3503
+// packages/vscode-extension/src/extension.ts:3513-3530
       provideCodeActions(document, _range, actionContext) {
         const source = document.getText()
         const issues = analyzeMissingOutput(source)
