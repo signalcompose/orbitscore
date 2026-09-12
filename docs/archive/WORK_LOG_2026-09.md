@@ -6,6 +6,167 @@
 
 ### 09-11 分の追加移設（本体の 2,000 行上限・2026-09-12・#888 子 1 の追記で超過）
 
+### 09-11/09-12 分の追加移設（#888 子 1 の第 5〜8 束で超過・2026-09-12）
+
+### docs(sites): follow PR #861 — record the mirror-image consequence of line-wise ERROR prefixing (Sep 11, 2026)
+
+PR [#861](https://github.com/signalcompose/orbitscore/pull/861)（#860・merge `5ed3ce5`）の追従。
+
+IV-3 章（`sites/dev/editor/mcp-and-gated-e2e.md`）は #756 の「`ERROR:` 前置が chunk 単位
+だったので ERROR 件数が**構造的に過小**だった」までを書いていたが、**その裏返し**を
+書いていなかった。行単位になったということは「engine の stderr に出た行はすべて `ERROR:`」
+であり、**正常系の `warn!` 1 行で件数テストが巻き添えになる**。#861 はまさにそれで、
+`query_note_port_index` の warn が `default-baseline cycle must add no ERROR: lines`
+（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）を落としていた。
+
+ja / en の両方に節を追加（STYLE_GUIDE のバイリンガル必須）。ERROR 会計という 1 本の
+計測系に**測定器の側**（前置の粒度）と**被測定側**（engine のログレベル）の 2 つの入口が
+あり、**直す場所が正反対**であることを本文に残した。
+
+`verified-against` は据え置き。1 節の追記であって章本文の書き直しではなく、STYLE_GUIDE
+§4「小規模 cross-link / 体裁修正のみは更新しない」と「実質的に書き直したとき」の中間に
+あたるため、章冒頭の Note（この章が従来から追従履歴を書いている場所）に #861 を追記する
+方式を採った。
+
+検証: `npm run docs:build`（user / dev）緑 / `npm run docs:check` 緑。
+
+### docs: follow PR #852 in the user site and the diagnostics chapter (Sep 11, 2026)
+
+マージ済み PR [#852](https://github.com/signalcompose/orbitscore/pull/852)（束 B・`611-dsl-surface` →
+main・merge commit `ded9709`）の追従。**ドキュメントのみ**の変更で、`packages/` `rust/` `tests/` は触っていない。
+
+#852 は core spec（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 / MX.3 / MX.4 / MX.5）と
+specs-v2（`SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4）を自分で更新していたが、**ユーザー向けの 3 ファイルが
+旧仕様のまま残っていた** — いずれも「dB 化は決まったが未実装」「send は post-fader 固定」と書いており、
+実装済みの今は**読んだ人が逆の行動を取る**記述になっていた。
+
+## 直したもの
+
+| ファイル | 何が古かったか |
+|---|---|
+| `sites/user/mixing/routing.md` / `en/` | `send(name, amount)` が線形・dB 化は未実装・post-fader 固定 |
+| `sites/user/reference/methods.md` / `en/` | 同上 + `output()` の宛先が sum のみ・`thru:` / `db:` 不在 |
+| `docs/user/ja/USER_MANUAL.md` | `output()` / `send()` の宛先を「sum バス」と書いていた |
+| `sites/dev/editor/execution-feedback.md` / `en/` | 診断 6 がミキサー宛先を除外するようになったこと（#852 の `diagnostics-analysis.ts:257-262`）が未記載 |
+
+追記した利用者から見える表面（すべて #852 の差分から読み取れるもの）:
+
+- `send(aux, db)` の単位が **dB**（線形 `0.3` 相当は `-10.5`）。`amount:` は loud に throw
+- `send(aux, db, enabled: false)` はチェーン上の位置を保持したまま送出を止める
+- `output(dest, thru:, db:)`。`thru: false`（既定）が終端・`thru: true` がタップ
+- `send(name, db)` ≡ `output(name, thru: true, db: db)`
+- 宛先の解決順: 解決済みノード → `"master"` → 宣言済み sum/aux → `"L,R"` → LinkAudio channel
+- `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線**に並ぶ
+- `sum` / `aux` バスも `output()` / `send()` / `gain()` / `pan()` を受ける（`BUS_DSL_METHODS`）
+- `master` はミキサーノード名として予約・`mix.output(1, 2)` はデバイスであって master ではない
+- `mix.output(n)` の 1 引数形はモノラル（L+R マージ）
+
+## 書かなかったこと（PR 本文の「確認してほしい点」へ回した）
+
+- core spec MX.5 の「sum ネスト不可」と、同 PR が MX.2.2 に書いた「sum が別の sum へ出せる ✅」が
+  **食い違って見える**。どちらが正しいかは仕様の判断なので追従作業では直さない
+- `gain()` / `pan()` の固定値が**バス未確保の audio シーケンスでは発音側に留まる**という条件分岐は、
+  ユーザー向けページには書いていない（内部の割り当て事情で、書くと「位置が効かない場合がある」と
+  読めてしまう）
+
+検証: `npm run docs:build -w @orbitscore/user-site` 緑 / `-w @orbitscore/dev-site` 緑 /
+`npm run docs:check` **938 citations verified, 0 failed**。
+
+### docs(sites): follow PR #857 — a benign warn is an input to the release gate (#855) (Sep 11, 2026)
+
+マージ済み PR [#857](https://github.com/signalcompose/orbitscore/pull/857)（merge commit `a6e1f13`）への
+ドキュメント追従。**実装とテストは変更していない。**
+
+## 追従先
+
+**`sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`**（ja/en 両方）。
+
+この PR が直したのは engine 内部の TOCTOU だが、**観測可能な表面は ERROR 件数**である。
+IV-3 の「`get_log` とリングバッファ」節は、この計数が信用できない理由を 2 つ挙げていた
+（固定窓による false green・#756 以前の chunk 単位前置による**構造的な過小**）。#855 は
+その 3 つ目で、向きが逆の**構造的な過大**にあたるので、同じ節に並べて書いた。
+
+- `temp-file-manager.ts:98-118` を引用し、per-entry の `try` が ENOENT だけを飲む形を示す
+- #840 のマージ前ゲートで `expected 9 to be less than or equal to 8` として出た実測を明記
+- ループ全体を囲む `try` だと ENOENT 1 件で残りが掃除されない副次問題も残す
+- 一般則を #756 と対にして締める:
+  **engine のどこかの `console.warn` 1 行が、そのままリリース可否ゲートの入力になる**
+
+frontmatter は `verified-against: a6e1f13` / `verified-at: 2026-09-11` へ更新し、
+冒頭 Note の追従リストにも #855 を足した。
+
+## WORK_LOG の並びを直した
+
+#857 の WORK_LOG エントリ（Sep 11）が、マージ時のコンフリクト解消（`1c3056a`）で
+**Sep 10 の #611 エントリ群の間**に入っていた。本文は変えず、位置だけ Recent Work の
+先頭へ移した。#857 は #860 / #852 より後のマージなので、そこが時系列上の正しい位置になる。
+
+## 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論・`.orbslog` 形式に変更が無い |
+| `sites/user/` `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語に変更が無い。temp 掃除は DSL から不可視 |
+| `rust/` 側の章 | diff は TypeScript の engine のみ。MCP ツールの引数・返り値・エラー挙動は不変 |
+| `sites/dev/audio/audio-file-playback.md` | slicing 章だが SC 経路の歴史的読解で、`TempFileManager` を扱っていない |
+
+### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
+
+#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
+
+```
+AssertionError: expected 9 to be less than or equal to 8
+ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
+       stat '.../T/orbitscore_1789065642138_xx52jsw'
+```
+
+**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
+する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
+エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
+
+`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
+engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
+**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
+
+**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
+いた。孤児が溜まる。
+
+## 🔴 変異検証が別の穴を見つけた
+
+修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
+この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
+接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
+
+| 変異 | 結果 |
+|---|---|
+| ENOENT も含め全部握り潰す | 1 failed |
+| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
+| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
+| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
+| restore | 5 passed・baseline とバイト一致 |
+
+## テストはモックを使わず実物のファイルシステム条件で書いた
+
+`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
+最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
+
+| 条件 | 作り方 | Node が出すもの |
+|---|---|---|
+| レース | dangling symlink | 本物の `ENOENT` |
+| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
+| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
+
+`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
+
+捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
+結果的に良い方向へ転んだ。
+
+`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
+
+Closes #855
+
+---
+
 ### docs(sites): re-anchor the release.yml line references shifted by #853 (Sep 11, 2026)
 
 PR [#853](https://github.com/signalcompose/orbitscore/pull/853)（タグと `.vsix` の版を照合する
