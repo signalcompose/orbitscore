@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): follow PR #884 in the dev site and repair a mangled citation (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr884`（docs 追従ルーチン・main 宛 draft）
+**対象**: PR [#884](https://github.com/signalcompose/orbitscore/pull/884)（#883 束 0+C・マージコミット `82acaa3`）
+
+マージ済み PR #884 に dev 学習サイトを追従させた。**実装とテストは一切変更していない。**
+
+#### 1. `sites/dev/pipeline/evaluation.md` の引用が壊れていた（🔴 docs:check は緑だった）
+
+PR #884 で `check-citations.mjs --fix` が `evaluate-method.ts:58-145` を再アンカーした際、
+**直前の別 docblock の末尾（` * ``` ` / ` */ `）を引用の先頭に取り込み、末尾は
+`if (sawNamedArg) {` で切れていた**。引用は実ファイルと**文字単位で一致していた**ので
+`docs:check` は 0 failed のまま通る — **この検査は「引用が意味のある単位か」を見ない。**
+
+実ファイルを読み直し、`60-159`（`NAMED_ARG_SCHEMA` の docblock から `processArguments()` の
+閉じ括弧まで）へ引用し直した。
+
+#### 2. 追従した内容
+
+| 章 | 足したもの |
+|---|---|
+| `pipeline/evaluation.md` | 名前付き引数だけの `output(db: -6)` で options 袋が**宛先の位置に座る**問題と、`output` / `send` に限って `undefined` を unshift して宛先位置を空ける処理（`evaluate-method.ts:145-158`）。判定に使う `isOutputDest()` が core 側と同一関数であること |
+| `signal-chain/mixer-audio-line.md` | 新節「宛先の省略と『実現の省略』」— `output()` の宛先省略（既定引数であって暗黙要素ではない）/ `isOutputDest()` の 1 点賭け / `assertSendDestination()` が両 `send()` の契約であること / `lineNeedsBus()` による実現の省略と `gain`・`pan` 引き継ぎへの副作用 |
+| `editor/vscode-architecture.md` | 補完を **3 系統 → 4 系統**に更新。`.output(` の宛先補完（`output-string` / `output-node` の 2 コンテキスト・`mixerNode` 除外の理由・トリガ文字 `(` の追加） |
+
+ja / en 両方（STYLE_GUIDE のバイリンガル要件）。3 章の frontmatter の
+`verified-against` / `verified-at` を `f575f27` / `2026-09-12` に更新した。
+
+#### 3. 🔴 引用は `f575f27`（#885 マージ後の main）基準である
+
+追従の起点は #884 だが、**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）が
+既に main へ入っている**ため、branch を main から切った時点で `sequence.ts` /
+`audio-line.ts` / `extension.ts` の行番号が動いていた。行ずれだけのものは `--fix` で再アンカーし、
+**内容が変わっていた `lineNeedsBus()`（#885 が `isPlainMasterOutput()` を切り出した）は
+実ファイルを読み直して引用し直した**。束 S 自身の追従（`AudioLine.program()` からの
+暗黙 master 撤去・診断 2 種・版 4.0.0）は**このコミットには入っていない**。
+
+#### 4. 追従できていない点（PR 本文に書き出しただけ・直していない）
+
+- `.output()`（宛先省略）は E2E カバレッジのラチェットに**見えない** — 走査が
+  `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/` なので `.output()` と `.output("drum")` が同じ 1 語に潰れる
+- `output(db: -6)` / `send(db: -6)`（名前付き引数だけの形）は unit のみ。**実機 gated E2E に無い**
+- 実現の省略の目的（`.output()` 必須化で 8 本のプールを食い潰さない）を押さえる E2E が無い —
+  X2 は 1 シーケンスの等価性しか測っていない
+
 ### docs: carry the install-route fix into the legacy ja manual (PR #880 追従) (Sep 11, 2026)
 
 ルーティン docs 追従。追従元は PR [#880](https://github.com/signalcompose/orbitscore/pull/880)

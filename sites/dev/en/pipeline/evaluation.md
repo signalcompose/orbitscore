@@ -1,12 +1,12 @@
 ---
 title: "I-2. AST Evaluation Model"
 chapter-id: "I-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to #883 bundle C (PR [#884](https://github.com/signalcompose/orbitscore/pull/884) — the omitted `output()` destination, realization elision, and `.output(` destination completion) on 2026-09-12 (citation line numbers are anchored at `f575f27`; **bundle S (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) is not reflected on this page yet**).
 
 # I-2. AST Evaluation Model
 
@@ -444,9 +444,7 @@ The method is dynamically obtained via `obj[methodName]` and called with `method
 Most arguments are passed through as-is, but a few special conversions are inserted.
 
 ```typescript
-// packages/engine/src/interpreter/evaluate-method.ts:58-145
- * ```
- */
+// packages/engine/src/interpreter/evaluate-method.ts:60-159
 /**
  * #611 §3.8: methods that fold one or more `name:` arguments into a single trailing options
  * object instead of the staged-error path below. `output`/`send` are the only ones today
@@ -533,11 +531,29 @@ export async function processArguments(methodName: string, args: any[]): Promise
   }
 
   if (sawNamedArg) {
+    processed.push(options)
+    // output/send receive `(destination, options)`. With named arguments only, the parser's
+    // options bag would otherwise occupy the destination slot. Use the same `kind`-field
+    // discriminator as the runtime call sites so the two layers cannot disagree.
+    if (
+      (methodName === 'output' || methodName === 'send') &&
+      processed.length === 1 &&
+      !isOutputDest(processed[0])
+    ) {
+      processed.unshift(undefined)
+    }
+  }
+  return processed
+}
 ```
 
 What is noteworthy is the handling of the `beat` method. The parser outputs `beat(4 by 4)` as the meter notation object `{ numerator: 4, denominator: 4 }`, but `processArguments()` expands it into the two arguments `[4, 4]`. Writing `beat(4)` and omitting `n by m` is designed to throw an error — an enforced notation that is essential for polymeter support.
 
 The leading `named_arg` branch exists for the named arguments of the Signal Chain DSL (SC.3): when a named argument that was not consumed by plugin-name dispatch reaches a DSL method, it throws an error stating explicitly "at which stage this becomes usable." Silently ignoring it is forbidden by SC.3.3.
+
+The trailing `if (sawNamedArg)` gained one more step in #883 (bundle C, PR #884). `output()` / `send()` take their arguments as `(destination, options)`, so writing **named arguments only** — as in `kick.output(db: -6)` — would leave the options object folded by the parser **sitting in the destination slot**. For `output` / `send` alone, therefore, when the folded result is a single value and that value is not an already-resolved destination (an `OutputDest`, which always carries a `kind` field), `undefined` is unshifted in front to vacate the destination slot.
+
+The `isOutputDest()` used for that decision is imported from core's `audio-line.ts` — **the same function the runtime call sites use** — so the interpreter layer and the core layer cannot disagree about "is this a destination or an options bag." The vacated slot is then resolved to `{ kind: 'master' }` inside `Sequence.output()` (the default argument of `output()` is master; #883 / DSL 2.0). `send()` has no default, so when the same `undefined` arrives there, `assertSendDestination()` raises a loud error — see the corresponding section of [SC-2. The Mixer and AudioLine](/en/signal-chain/mixer-audio-line).
 
 ## Transport Semantics
 

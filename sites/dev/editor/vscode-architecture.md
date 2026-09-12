@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: a2ac724
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -389,11 +389,78 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 
 ## IntelliSense と診断の登録
 
-`registerCompletionProviders(context)` と `registerHoverProvider(context)` が IntelliSense を担当します。補完は 3 系統に増えました。
+`registerCompletionProviders(context)` と `registerHoverProvider(context)` が IntelliSense を担当します。補完は 4 系統に増えました。
 
 1. **メソッドチェーン文脈補完**: `completion-context.ts` の `analyzeMethodChain()` と `getContextualCompletions()`。`.` をトリガに、チェーンのどの段階かを見て候補を並べ替えます
 2. **pitch scope 補完**: `.play(` の括弧が閉じていない位置で `).` と打ったときは `getPitchScopeCompletions()` に切り替わります (`extension.ts:3652-3672`)
 3. **plugin catalog 名前補完**: `effect(` / `instrument(` の文字列引数の中で `"` をトリガに catalog の名前を出します (#463 C3、`extension.ts:3689-` 以降)。深掘りは [PH-3. プラグインカタログと差し替え](/plugin-hosting/catalog)
+4. **`.output(` の宛先補完**: `.output(` を打った時点で候補を出します（#883 束 C・PR #884）。文字列引数の中（`"` トリガ）では `master` + 宣言済みの sum / aux 名、括弧直後の識別子位置（`(` トリガ）では `master` + 宣言済みのミキサーノード変数（`mix.sum` / `mix.aux` / `mix.output(...)`）を並べます
+
+`.output(` の宛先補完は 2 つのコンテキストに分かれています。`dsl-completion-context.ts` の
+`detectDslCompletionContext()` が、文字列の中なら `output-string`、コード位置なら `output-node` を
+返します。
+
+```typescript
+// packages/vscode-extension/src/dsl-completion-context.ts:86-97
+  if (state !== 'code') return null
+
+  // `.output(` accepts the reserved `master` identifier and any declared mixer-node
+  // variable (`mix.sum`, `mix.aux`, or `mix.output(...)`). Stop at the first argument:
+  // options after a comma are a different completion surface.
+  const outputNode = /\.output\(\s*([A-Za-z_$][\w$]*)?$/.exec(prefix)
+  // A mixer-node declaration uses numeric channel arguments, not routing destinations. Reuse
+  // the receiver-aware declaration pattern below so `var cue = mix.output(` cannot be mistaken
+  // for a Sequence/MixerBusHandle output call.
+  if (outputNode && !VAR_NODE_PATTERNS.mixerNode.test(prefix)) {
+    return { kind: 'output-node', typed: outputNode[1] ?? '' }
+  }
+```
+
+🔴 `VAR_NODE_PATTERNS.mixerNode.test(prefix)` の除外が効いているのは、`var cue = mix.output(3, 4)`
+の `output(` が**宛先を取る `output()` ではなく、物理アウトノードの宣言**だからです。ここで
+除外しないと、チャンネル番号を打つ位置に `master` が出ます。
+
+候補の組み立ては `extension.ts` 側です。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3597-3610
+      case 'output-string':
+        return makeItems(
+          [
+            'master',
+            ...extractDeclaredBusNames(document.getText(), 'sum'),
+            ...extractDeclaredBusNames(document.getText(), 'aux'),
+          ],
+          vscode.CompletionItemKind.Value,
+        )
+      case 'output-node':
+        return makeItems(
+          ['master', ...extractDeclaredMixerNodeNames(document.getText())],
+          vscode.CompletionItemKind.Variable,
+        )
+```
+
+`output-string` が sum **と** aux の両方を出すのは、`output()` が aux も指せる（`send` はその糖衣）
+ためです（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 の宛先表）。対して `aux-name`
+（`.send("` の中）は aux だけを出します。
+
+トリガ文字も 1 つ増えました。`(` が無いと、`.output(` の直後では明示的に補完を呼ばない限り
+候補が出てきません。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3467-3477
+  const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    dslCompletionItemProvider,
+    '"',
+    '{',
+    // #495 第1段: `<receiver>.` の後のメソッド補完を出すためのトリガー。
+    // これが無いと、明示的に補完を呼び出さない限り出てこない。
+    '.',
+    // #883: destination completion starts as soon as `.output(` is typed.
+    '(',
+  )
+```
 
 `MethodChainContext` は 2026-05 から 3 フラグ増えています。
 
