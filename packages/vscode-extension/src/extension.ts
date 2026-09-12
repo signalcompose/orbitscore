@@ -397,8 +397,6 @@ export {
 } from './engine-handlers'
 export { stopEngine, toggleEngine } from './engine-process'
 
-export type { EngineViewProvider }
-
 // Removed unused executeCode function
 
 /*

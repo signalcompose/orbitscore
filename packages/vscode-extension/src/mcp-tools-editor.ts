@@ -2,11 +2,7 @@ import { readDevDoc, searchDevDocs } from './mcp-docs'
 import { errorResult, type McpServerLike, toToolResult, z } from './mcp-sdk'
 import type { OrbitScoreToolHandlers } from './mcp-types'
 
-export function registerEditorTools(
-  server: McpServerLike,
-  handlers: OrbitScoreToolHandlers,
-  docsSourceRoot: string,
-): void {
+export function registerEditorTools(server: McpServerLike, handlers: OrbitScoreToolHandlers): void {
   server.registerTool(
     'open_file',
     {
@@ -186,7 +182,26 @@ export function registerEditorTools(
       return { content: [{ type: 'text', text: handlers.getLog(lines).join('\n') }] }
     },
   )
+}
 
+/**
+ * dev サイトのドキュメントを読む 3 本（#887 束 F・`mcp-server.ts` から移した）。
+ *
+ * 🔴 **`registerEditorTools` と分けてあるのは順序のためである。** MCP SDK の
+ * `tools/list` は `Object.entries(this._registeredTools)` を返す = **登録順がそのまま
+ * 一覧の順序**になる（`@modelcontextprotocol/sdk/dist/cjs/server/mcp.js` の
+ * `setRequestHandler(ListToolsRequestSchema, ...)`）。分割前の `mcp-server.ts` では
+ * この 3 本が **plugin 系 6 本より後ろ**（23-25 番）に登録されていたので、editor 系と
+ * 同じ関数に入れたままにすると 17-19 番へ繰り上がり、**クライアントに見える並びが変わる**。
+ *
+ * `buildServer` は engine → editor → plugins → docs の順で呼ぶこと。
+ * この 4 本の呼び出し順が、分割前の 25 本の順序を byte 単位で再現する唯一の並びである。
+ */
+export function registerDocsTools(
+  server: McpServerLike,
+  handlers: OrbitScoreToolHandlers,
+  docsSourceRoot: string,
+): void {
   server.registerTool(
     'get_dev_doc',
     {

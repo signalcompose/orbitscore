@@ -10982,3 +10982,88 @@ skip 1 件は E2E-4/E2E-5（>=4ch デバイス不在・既知）。
 #### 関連
 
 #883 / 設計 §2.3 §4 §5.3 §7.1 §7.2 / 完了条件 D3・D9・D10
+
+---
+
+### fix: close the review round-1 findings for #883 bundle C (Sep 11, 2026)
+
+**Date**: 2026-09-11
+**Status**: ✅ ラウンド 1 収束（PR #884）
+**担当**: レビュー = `/simplify` 4 観点 + `/code:pr-review-team` 4 名 + **Fable 監査を並行** /
+fix = Codex（コード）+ main（docs・spec）/ 裁定と検証 = main
+
+#### 🔴 main が偽陽性 2 件を裁定した — どちらも**層をまたいだ誤判定**
+
+| レビュアー | 主張 | 裁定の根拠 |
+|---|---|---|
+| pr-test-analyzer | 「instrument は `ensureInsertBusForInstrument()` が `instrument()` 宣言時に先にバスを確保するので影響なし」 | ❌ 呼び出し元は **`gain()`（`sequence.ts:372→396`）と `pan()`（`:425→449`）のみ**。`instrument()` からは **0 件** |
+| silent-failure-hunter | **Critical**「再宣言で daemon の古いルーティングが黙って生き残る」 | ❌ Rust 側（`engine_wrap.rs:7656` `new_dest.store(old_dest.load())`）は**正しい**が、TS 側は `process-initialization.ts:91`「**Reuse existing sequence for REPL persistence**」で `_insertBus` を**保持**する |
+
+`mem:reviewers-judge-one-layer-only` の再現。TS・インタプリタ・Rust をまたぐ契約は main が両端を読むしかない。
+
+#### 実害 1 件（Fable だけが見つけた・main が再現確認）
+
+**`kick.output(db: -6)` がオプションを宛先として食っていた。**
+
+```
+processArguments('output', [named_arg db:-6])  →  [{"db":-6}]   ← 引数 1 個・オブジェクト
+  → Sequence.output({db:-6}) → typeof dest === 'object' → OutputDest として扱う
+  → db は消える / バスを 1 本消費 / 宛先の無い wire op を daemon に送る
+```
+
+🔴 **束 0 で `destination` を省略可にした spec 改訂（main の作業）が、この形を正当にした帰結。**
+Sonnet チーム 4 名は誰も見ていない — **差分に「無い」もの**（誰も書かなかった形）だったため。
+
+#### 横断ポリシーを 1 つ置いてから全箇所へ適用（指摘単位のパッチにしない）
+
+> `output()` / `send()` の引数は「宛先（省略可）」と「オプション」の 2 種類しかない。
+> `OutputDest` は必ず `kind` を持ち、オプションバッグは持たない。**`undefined` だけが省略**であり、
+> `null` は不正入力として loud に拒否する。
+
+`isOutputDest()` を `audio-line.ts` に置き、**パーサ層（`evaluate-method.ts`）と呼び出し層
+（`sequence.ts` / `mixer-manager.ts`）が同じ判別子を使う**。2 層で防ぐが**判別のルールは 1 つ**。
+
+#### 直した内容
+
+| # | 出どころ | 内容 |
+|---|---|---|
+| F-A | Fable | `output(db:)` / `send(db:)` の宛先スロットにオプションが入る |
+| F-null | silent-failure-hunter | `output(null)` が黙って master に（**main が `/simplify` で入れた退行**） |
+| F-B | code-reviewer | instrument `.output()` 単独が未検証 |
+| F-C | pr-test-analyzer | `needsBus()` の thru / db≠0 分岐が未検証 |
+| F-D | pr-test-analyzer + Fable | `mix.output(` で補完が誤爆 |
+| F-E | comment-analyzer | **未実装の診断を現在形で断定**（main の spec 誤り） |
+| F-G | Fable | 🔴 **MX.1 注記が実装と逆**（「`output()` が bus を確保した瞬間」）ほか設計 §10 の 5 行が未着地 |
+
+🔴 **main 自身の誤りが 3 件**（F-null・F-E・F-G）。うち 2 件はこの PR で main が書いたもの。
+
+#### Codex の変異検証（**実出力を貼らせた**・5 件すべて red → revert で green）
+
+`needsBus()` の単純化 / instrument で無条件確保 / `unshift`→`push` / ノード除外の削除 /
+`null` を通す — **すべて red**。pr-test-analyzer が予告した「述語を単純化する変異が全件緑で通る」穴が塞がった。
+
+#### 引用チェックで踏んだこと
+
+`--fix` が 8 件を直せなかった — **行ずれではなく引用元のコードが変わった**ため。実コードから
+再抽出したところ、今度は**引用がコメントの途中から始まった**。
+🔴 **緑は「行が合った」証明でしかない**（`mem:citation-fix-can-land-on-the-wrong-function`）ので、
+範囲を `/**` の境界へ合わせ直した。
+
+#### 検証（すべて main が sandbox 外で実測）
+
+```
+npm test    160 files / 2360 passed | 68 skipped (2428) / 0 failed   ← +8 は追加テスト
+lint        緑
+docs:check  948 引用 / 0 failed
+実機 gated  39 passed | 1 skipped (40) / 0 failed
+```
+
+🔴 **X2 の再実測**（実現の省略が bit 同一クラスであることの裏づけ）:
+
+```
+[#883 X2] omittedRms=0.08701663328809114  explicitRms=0.08701663328672658
+```
+
+`tests/e2e/output-line-expectations.ts` の式は**1 つも変わっていない**（束 C の検算）。
+
+---

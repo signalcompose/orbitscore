@@ -20,7 +20,7 @@ import {
   StreamableHTTPServerTransport,
   type TransportLike,
 } from './mcp-sdk'
-import { registerEditorTools } from './mcp-tools-editor'
+import { registerDocsTools, registerEditorTools } from './mcp-tools-editor'
 import { registerEngineTools } from './mcp-tools-engine'
 import { registerPluginTools } from './mcp-tools-plugins'
 import type { OrbitScoreToolHandlers } from './mcp-types'
@@ -88,9 +88,14 @@ function buildServer(
   const server = new McpServer({ name: 'orbitscore', version })
   const docsSourceRoot = path.resolve(docsRoot, '../..')
 
+  // 🔴 **この 4 行の順序が MCP の `tools/list` の順序である**（SDK は登録順を返す）。
+  // 分割前の 25 本の並びを再現する唯一の順序で、docs 系を editor 系に含めると
+  // plugin 系より前へ繰り上がってクライアントに見える並びが変わる
+  // （詳細は `mcp-tools-editor.ts` の `registerDocsTools` の doc）。
   registerEngineTools(server, handlers)
-  registerEditorTools(server, handlers, docsSourceRoot)
+  registerEditorTools(server, handlers)
   registerPluginTools(server, handlers)
+  registerDocsTools(server, handlers, docsSourceRoot)
 
   return server
 }

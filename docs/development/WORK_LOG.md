@@ -17,6 +17,75 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(mcp): restore the tool registration order the split had changed (Sep 13, 2026)
+
+Fable 監査が、Sonnet レビュアー 8 体が全員通した後に **MCP ツール一覧の順序の変化**を検出した。
+
+#### 何が起きていたか
+
+分割前の `mcp-server.ts` は docs 系 3 本（`get_dev_doc` / `search_dev_docs` /
+`register_mcp_server`）を **plugin 系 6 本より後ろ**（23–25 番）に登録していた。
+束 F で `registerEditorTools` に docs 系を含めたため、**17–19 番へ繰り上がり、
+plugin 系 6 本が 3 つ後ろへずれた。**
+
+MCP SDK の `tools/list` は `Object.entries(this._registeredTools)` を返す
+= **登録順がそのまま一覧の順序**なので、これは**クライアントに見える観測可能な変化**である。
+
+#### 🔴 なぜ 8 体が見落としたか — done 条件の検証コマンドが条件を見ていなかった
+
+設計 §7.7 の done 条件は「25 本・**順序も**同一」と書いていたが、
+指定していた検証コマンドが
+
+```
+grep -oE "'[a-z_]+'" | sort
+```
+
+で、**`| sort` が順序の情報を消していた。** レビュアーも私も Codex も
+「集合が diff ゼロ」までしか確かめておらず、**順序は誰も見ていなかった**
+（「列挙は一段手前で止まる」の形）。
+
+**done 条件を書く時は、それを検査するコマンドが本当にその条件を見ているかを確かめること。**
+
+#### 直し方
+
+`registerDocsTools(server, handlers, docsSourceRoot)` を `mcp-tools-editor.ts` 内に切り出し、
+`buildServer` を **engine → editor → plugins → docs** の 4 呼び出しにした。
+これが分割前の 25 本の順序を再現する唯一の並びである。
+副作用として `registerEditorTools` から `docsSourceRoot` が外れ、署名が揃った。
+
+**恒久対策**: `mcp-server.spec.ts` に `tools/list keeps the exact registration order` を追加。
+実サーバを立てて `tools/list` を叩き、順序を配列で固定する。
+退行を再現する変異（docs を plugins の前へ）で red を確認済み。
+
+#### 同時に直した 1 件
+
+`extension.ts` の export が 27 → 28 に増えていた（`export type { EngineViewProvider }` を
+分割時に足していた）。葉の `extension-state.ts` が根から型を取る形は設計が棄却した向きなので、
+本籍の `engine-view-provider.ts` から取るようにし、根の型 re-export を落とした。
+**main と HEAD の export 集合が完全一致（対称差が空）** になった。
+
+#### 🔴 自分の件数主張が誤っていた
+
+PR 本文と束 A のコミットに書いた「**31 箇所の代入を setter 化**」は再現できない。
+実測は main の直接代入 **37 件** / HEAD の setter 呼び出し **32 件**。
+設計 §14 の「件数の主張を書かない。何を変えたかを書く」に従い、
+**数値を別の数値に差し替えず、主張自体を落とす**。
+
+#### 別 issue に切り出した 1 件
+
+散文の `## Sources` 参照 **110 件が存在しない行を指すようになった**（#911）。
+`docs:check` はコードブロックのヘッダ引用しか見ないため、**982 件が緑のまま**起きていた。
+108 件はこの分割が壊したもの。「振る舞い不変の分割」と「#887 より前から在る腐りの修復」を
+同じ束に混ぜると双方の検算ができなくなるので分けた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1）。
+
+#### 検証
+
+`npm test` 2,491 passed（既存の期待値は 1 つも変えていない）/ lint 緑 /
+`tsc --noEmit` 緑 / `typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 /
+ファイルサイズのラチェット 64 passed。
+
+---
+
 ### fix(extension): remove a docblock that was copy-pasted from extension.ts, and mechanize the check (Sep 12, 2026)
 
 `/simplify` のラウンド 1（4 観点並行）で見つかった 1 件を直し、同じ欠陥クラスを機械化した。
@@ -1851,89 +1920,6 @@ lint 緑 / docs:check 948 引用 0 failed
 
 ---
 
-### fix: close the review round-1 findings for #883 bundle C (Sep 11, 2026)
-
-**Date**: 2026-09-11
-**Status**: ✅ ラウンド 1 収束（PR #884）
-**担当**: レビュー = `/simplify` 4 観点 + `/code:pr-review-team` 4 名 + **Fable 監査を並行** /
-fix = Codex（コード）+ main（docs・spec）/ 裁定と検証 = main
-
-#### 🔴 main が偽陽性 2 件を裁定した — どちらも**層をまたいだ誤判定**
-
-| レビュアー | 主張 | 裁定の根拠 |
-|---|---|---|
-| pr-test-analyzer | 「instrument は `ensureInsertBusForInstrument()` が `instrument()` 宣言時に先にバスを確保するので影響なし」 | ❌ 呼び出し元は **`gain()`（`sequence.ts:372→396`）と `pan()`（`:425→449`）のみ**。`instrument()` からは **0 件** |
-| silent-failure-hunter | **Critical**「再宣言で daemon の古いルーティングが黙って生き残る」 | ❌ Rust 側（`engine_wrap.rs:7656` `new_dest.store(old_dest.load())`）は**正しい**が、TS 側は `process-initialization.ts:91`「**Reuse existing sequence for REPL persistence**」で `_insertBus` を**保持**する |
-
-`mem:reviewers-judge-one-layer-only` の再現。TS・インタプリタ・Rust をまたぐ契約は main が両端を読むしかない。
-
-#### 実害 1 件（Fable だけが見つけた・main が再現確認）
-
-**`kick.output(db: -6)` がオプションを宛先として食っていた。**
-
-```
-processArguments('output', [named_arg db:-6])  →  [{"db":-6}]   ← 引数 1 個・オブジェクト
-  → Sequence.output({db:-6}) → typeof dest === 'object' → OutputDest として扱う
-  → db は消える / バスを 1 本消費 / 宛先の無い wire op を daemon に送る
-```
-
-🔴 **束 0 で `destination` を省略可にした spec 改訂（main の作業）が、この形を正当にした帰結。**
-Sonnet チーム 4 名は誰も見ていない — **差分に「無い」もの**（誰も書かなかった形）だったため。
-
-#### 横断ポリシーを 1 つ置いてから全箇所へ適用（指摘単位のパッチにしない）
-
-> `output()` / `send()` の引数は「宛先（省略可）」と「オプション」の 2 種類しかない。
-> `OutputDest` は必ず `kind` を持ち、オプションバッグは持たない。**`undefined` だけが省略**であり、
-> `null` は不正入力として loud に拒否する。
-
-`isOutputDest()` を `audio-line.ts` に置き、**パーサ層（`evaluate-method.ts`）と呼び出し層
-（`sequence.ts` / `mixer-manager.ts`）が同じ判別子を使う**。2 層で防ぐが**判別のルールは 1 つ**。
-
-#### 直した内容
-
-| # | 出どころ | 内容 |
-|---|---|---|
-| F-A | Fable | `output(db:)` / `send(db:)` の宛先スロットにオプションが入る |
-| F-null | silent-failure-hunter | `output(null)` が黙って master に（**main が `/simplify` で入れた退行**） |
-| F-B | code-reviewer | instrument `.output()` 単独が未検証 |
-| F-C | pr-test-analyzer | `needsBus()` の thru / db≠0 分岐が未検証 |
-| F-D | pr-test-analyzer + Fable | `mix.output(` で補完が誤爆 |
-| F-E | comment-analyzer | **未実装の診断を現在形で断定**（main の spec 誤り） |
-| F-G | Fable | 🔴 **MX.1 注記が実装と逆**（「`output()` が bus を確保した瞬間」）ほか設計 §10 の 5 行が未着地 |
-
-🔴 **main 自身の誤りが 3 件**（F-null・F-E・F-G）。うち 2 件はこの PR で main が書いたもの。
-
-#### Codex の変異検証（**実出力を貼らせた**・5 件すべて red → revert で green）
-
-`needsBus()` の単純化 / instrument で無条件確保 / `unshift`→`push` / ノード除外の削除 /
-`null` を通す — **すべて red**。pr-test-analyzer が予告した「述語を単純化する変異が全件緑で通る」穴が塞がった。
-
-#### 引用チェックで踏んだこと
-
-`--fix` が 8 件を直せなかった — **行ずれではなく引用元のコードが変わった**ため。実コードから
-再抽出したところ、今度は**引用がコメントの途中から始まった**。
-🔴 **緑は「行が合った」証明でしかない**（`mem:citation-fix-can-land-on-the-wrong-function`）ので、
-範囲を `/**` の境界へ合わせ直した。
-
-#### 検証（すべて main が sandbox 外で実測）
-
-```
-npm test    160 files / 2360 passed | 68 skipped (2428) / 0 failed   ← +8 は追加テスト
-lint        緑
-docs:check  948 引用 / 0 failed
-実機 gated  39 passed | 1 skipped (40) / 0 failed
-```
-
-🔴 **X2 の再実測**（実現の省略が bit 同一クラスであることの裏づけ）:
-
-```
-[#883 X2] omittedRms=0.08701663328809114  explicitRms=0.08701663328672658
-```
-
-`tests/e2e/output-line-expectations.ts` の式は**1 つも変わっていない**（束 C の検算）。
-
----
-
 ## Archived sections
 
 Older entries have been archived by month for readability:
@@ -1946,4 +1932,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md)
+- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1 を含む

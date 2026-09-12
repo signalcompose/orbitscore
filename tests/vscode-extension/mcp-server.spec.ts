@@ -393,6 +393,63 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect((res.headers['mcp-session-id'] as string).length).toBeGreaterThan(0)
   })
 
+  /**
+   * 🔴 **ツールの順序を固定する**（#887 束 F・2026-09-12）。
+   *
+   * 上のテストは名前ごとに `toContain` するだけなので**順序が変わっても緑のまま通る**。
+   * 実際に #887 の分割で `get_dev_doc` / `search_dev_docs` / `register_mcp_server` が
+   * 23-25 番から 17-19 番へ繰り上がり、plugin 系 6 本が 3 つ後ろへずれていた
+   * （Fable 監査が検出・レビュアー 6 体は全員「集合が同一」までしか見ていなかった）。
+   *
+   * MCP SDK の `tools/list` は `Object.entries(this._registeredTools)` を返すので
+   * **登録順がそのまま一覧の順序**になる。`buildServer` の
+   * engine → editor → plugins → docs という呼び出し順が、この配列そのものである。
+   *
+   * 🔴 順序が変わってよいのは owner が「変えていい」と決めた時だけである。
+   * ここを触る前に `mcp-tools-editor.ts` の `registerDocsTools` の doc を読むこと。
+   */
+  it('tools/list keeps the exact registration order (order is observable to clients)', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await client.toolsList()
+    expect(res.status).toBe(200)
+    const body = res.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
+
+    // 分割前（main `0f930f36` の `mcp-server.ts`）の `registerTool` 呼び出し順そのまま。
+    //
+    // `createStubHandlers()` は任意ハンドラ（`savePluginState` / `openPluginUi` /
+    // `closePluginUi` / `registerMcpServer`）を持たないので、条件付きの 4 本
+    // （`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server`）は
+    // ここには現れない。**それでもこの 21 本は退行を捕まえる** — 壊れていたのは
+    // 「docs 系 2 本が plugin 系より前へ繰り上がる」形で、どちらも無条件登録だからである。
+    expect(body.result.tools.map((tool) => tool.name)).toEqual([
+      'evaluate_orbitscore',
+      'start_engine',
+      'stop_engine',
+      'get_engine_state',
+      'list_audio_devices',
+      'select_audio_device',
+      'configure_flash',
+      'open_file',
+      'set_selection',
+      'run_selection',
+      'edit_replace',
+      'get_editor_state',
+      'save_file',
+      'get_document_text',
+      'get_diagnostics',
+      'get_log',
+      'analyze_audio',
+      'list_plugins',
+      'rescan_plugins',
+      'get_dev_doc',
+      'search_dev_docs',
+    ])
+  })
+
   it('tools/list contains all 19 tools; evaluate_orbitscore requires code:string', async () => {
     const { handlers } = createStubHandlers()
     handle = await startTestServer(handlers)

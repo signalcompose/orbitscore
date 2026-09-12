@@ -368,13 +368,36 @@ export function registerEngineTools(server: McpServerLike, handlers: OrbitScoreT
   server.registerTool('evaluate_orbitscore', { … }, async (args) => { … })   // ← 本文は 1 行も書き換えない
   …
 }
-// mcp-tools-editor.ts   — 688–868 + 1081–1160（245 行）: open_file … get_log + get_dev_doc / search_dev_docs / register_mcp_server
-export function registerEditorTools(server, handlers, docsSourceRoot: string): void
+// mcp-tools-editor.ts   — 688–868: open_file … get_log
+export function registerEditorTools(server, handlers): void
 // mcp-tools-plugins.ts  — 869–1080（206 行）: save_plugin_state / open & close_plugin_ui（条件付き登録ごと）/ analyze_audio / list & rescan_plugins
 export function registerPluginTools(server, handlers): void
+// mcp-tools-editor.ts   — 1081–1160: get_dev_doc / search_dev_docs / register_mcp_server（同ファイル内の 2 本目）
+export function registerDocsTools(server, handlers, docsSourceRoot: string): void
 ```
 
-`buildServer` は残り 7 行 + 3 呼び出しになる。**インデント深さが同じ（2 スペース）なので `registerTool` 呼び出しの行は byte 単位で一致し、moved として検出される。**
+`buildServer` は残り 7 行 + **4 呼び出し**になる。**インデント深さが同じ（2 スペース）なので `registerTool` 呼び出しの行は byte 単位で一致し、moved として検出される。**
+
+🔴 **docs 系 3 本を `registerEditorTools` に含めてはいけない**（2026-09-12 訂正）。
+起案時の版は editor 系（688–868）と docs 系（1081–1160）を 1 つの関数にまとめていたが、
+**それをやると MCP の `tools/list` の順序が変わる。**
+
+MCP SDK の `tools/list` は `Object.entries(this._registeredTools)` を返す
+（`node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js` の
+`setRequestHandler(ListToolsRequestSchema, …)`）= **登録順がそのまま一覧の順序**である。
+分割前は docs 系が plugin 系（869–1080）より**後ろ**に登録されていたので、
+editor 系と同じ関数に入れると **17–19 番へ繰り上がり、plugin 系 6 本が 3 つ後ろへずれる**。
+
+**実測**（2026-09-12・束 F の先端）:
+
+| ツール | 分割前 | まとめた版 |
+|---|---|---|
+| `get_dev_doc` / `search_dev_docs` / `register_mcp_server` | 23–25 | **17–19** |
+| `save_plugin_state` … `rescan_plugins` | 17–22 | **20–25** |
+
+**`buildServer` の呼び出し順は engine → editor → plugins → docs でなければならない。**
+これが分割前の 25 本の順序を再現する唯一の並びである。
+副作用として `registerEditorTools` から `docsSourceRoot` が外れ、4 本の署名が揃う。
 
 共有物の置き場:
 
@@ -529,9 +552,21 @@ done / 検証は束 B と同じ形。追加: `engine-command-awaits.spec.ts` の
 |---|---|
 | 36 export 不変（型 25 は再輸出） | `public-surface.spec.ts` + `typecheck:e2e` + **`npm run build`**（`ZodTypeLike` の header が言う「build だけが落ちる」経路） |
 | `registerTool` 25 回の**本文**が不変 | residual = 3 関数のシグネチャ + `buildServer` shell の呼び出し 3 行 + import / 再輸出 / doc **のみ** |
-| ツール一覧が不変 | base と HEAD で `grep -A1 "registerTool($" … \| grep -oE "'[a-z_]+'" \| sort` が**同一**（25 本・順序も） |
+| ツール一覧が**集合として**不変 | base と HEAD で `grep -A1 "registerTool($" … \| grep -oE "'[a-z_]+'" \| sort` が同一（25 本） |
+| 🔴 ツール一覧の**順序**が不変 | **`\| sort` を付けない**で同じ抽出を比べる。加えて `mcp-server.spec.ts` の `tools/list keeps the exact registration order` が緑（実サーバを立てて `tools/list` を叩く） |
 | 条件付き登録（`if (savePluginState)` / `open_plugin_ui` / `register_mcp_server`）が同じ条件で行われる | `mcp-server.spec.ts` 緑（handlers を省いた時にツールが出ないことを既に検査している） |
 | 引用 `538-1147` を散文と突き合わせて再アンカー | 手作業 1 件（§5.3） |
+
+🔴 **`| sort` が順序の情報を消していた**（2026-09-12 訂正）。起案時の done 条件は
+「25 本・**順序も**」と書いていたが、指定した検証コマンドが `| sort` で並べ替えていたため
+**順序は原理的に検査できなかった**。実際に束 F で順序が変わり、
+`/simplify` 4 観点と `/code:pr-review-team` 4 体は**全員「集合が同一」までしか見ずに通した**
+（Fable 監査が実サーバの `tools/list` を叩いて検出）。
+
+**done 条件を書く時は、それを検査するコマンドが本当にその条件を見ているかを確かめること。**
+ここでは条件の文と検証の手段が食い違っており、**文だけが正しかった**。
+恒久的な対策として `mcp-server.spec.ts` に順序を固定するテストを置いた
+（`tools/list keeps the exact registration order`・退行を再現する変異で red を確認済み）。
 
 ### 7.8 束のマージ単位
 
