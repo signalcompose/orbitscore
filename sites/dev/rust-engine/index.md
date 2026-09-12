@@ -202,7 +202,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1005-1032
+// rust/crates/orbit-audio-daemon/src/session/run_loop.rs:9-36
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -238,8 +238,8 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1621-1648
-async fn handle_command(
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:12-39
+pub(super) async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
     tx: &mpsc::Sender<String>,
@@ -264,9 +264,9 @@ async fn handle_command(
         .await;
     }
 
-    match method.as_str() {
-        "Ping" => ok(&id, Value::String("pong".to_string())),
-        // cpal の output device 列挙（#484 D1）。host 列挙は環境によっては軽くブロックしうるため
+    // 🔴 プラグイン系のアームは `dispatch_plugin.rs` へ切り出した（#888 子 2）。
+    // 単一 match が 1,028 コード行あり、ファイルを分けるだけでは閾値 500 を満たせないため。
+    // 該当しない method は `None` が返り、下の `match` がそのまま処理する。
 ```
 
 ### コマンド一覧（`handle_command` の match arm から）
@@ -796,7 +796,7 @@ wire（`SetGlobalGain`）の `ramp_sec` は互換のため受け取り続けま�
 dispatch が `engine.output_channels()` を渡して間に挟まります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2670-2685
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:406-421
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {

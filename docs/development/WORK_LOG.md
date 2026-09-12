@@ -68,6 +68,46 @@ capture パス解決）166 行を、その主題そのものである `device_li
 
 🔴 レビュー指摘の前提が誤っていた例: 「`LoadedSample` の消費者は `playback.rs` だけ」は
 **`session.rs` が型名を書かずに（型推論で）使っている**ため誤り。名前の grep には掛からない。
+### refactor(daemon): split session.rs — 2,605 to 439 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c2-session`
+
+🎯 **#888 子 2 の前半完了。`session.rs` が 2,605 → 439 コード行。** 7 ファイルすべて 500 以下
+（`dispatch.rs` 411 / `dispatch_plugin.rs` 498 / `dispatch_transport.rs` 158 /
+`params.rs` 289 / `params_plugin.rs` 413 / `run_loop.rs` 476）。
+
+### 🔴 ここで初めて「純粋な移動」を超えた（owner 裁定 2026-09-12）
+
+`handle_command` は **1,028 コード行の単一 `match` 式**だった。ファイルを分けても 1 つの式なので、
+**行数だけでは閾値 500 を満たせない**。owner に諮り「**アームを関数へ切り出す**」を選んだ。
+
+切り出した形（`dispatch_plugin.rs` / `dispatch_transport.rs`）:
+
+```rust
+pub(super) async fn handle_plugin_command(...) -> Option<Value> {
+    Some(match method {
+        "LoadPlugin" => { ... }     // アーム本体は 1 行も書き換えていない
+        _ => return None,           // 該当しなければ親の match へ戻す
+    })
+}
+```
+
+🔴 **アーム本体は 1 行も書き換えていない。** 変わったのは (a) 関数シグネチャ (b) 呼び出し側の
+3 行 (c) 早期 `return err(...)` を `return Some(err(...))` に包んだこと（**21 + 12 箇所**）。
+**「既存テストの期待値を 1 つも変えていない」という検算は維持されている。**
+
+(c) の包み直しは、第 11 束で確立した**コンパイラの指摘行を使うループ**でやった。
+E0308 の行番号を抜いて該当行だけを包む処理を収束するまで回す。手で探すと必ず取りこぼす。
+
+### 引用の追随 6 件
+
+3 件は移動先が別ファイル、3 件は**範囲がファイル外**（`session.rs` が短くなったため
+`range 2412-2413 is outside the file (2120 lines)`）。引用ブロックの中身から移動先を検索して
+特定し、第 9 束で書いた再生成スクリプトで本文を同期した。**6 件とも着地先を目視で照合済み。**
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
 
 ### refactor(daemon): finish splitting engine_wrap.rs — 6,418 to 424 code lines (Sep 12, 2026)
 

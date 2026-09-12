@@ -809,10 +809,12 @@ session side only looks at the JSON shape (op names, `gain` finite and >= 0, at 
 `master` line not pointing at master or at a bus); it never resolves a name into an RT index.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:306-318
+// rust/crates/orbit-audio-daemon/src/session/params.rs:107-119
 /// `SetBusLine` の一方通行 wire shape を完全に検証してから engine 用 vocabulary を返す。
 #[cfg(feature = "outproc-effect")]
-fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
+pub(super) fn parse_set_bus_line_params(
+    params: &Value,
+) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
     let bus = match params.get("bus") {
         Some(Value::String(bus)) if !bus.trim().is_empty() => bus.clone(),
         _ => return Err(set_bus_line_malformed("'bus' must be a non-empty string")),
@@ -821,15 +823,13 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
         .get("line")
         .and_then(Value::as_array)
         .ok_or_else(|| set_bus_line_malformed("'line' must be an array"))?;
-    let mut line = Vec::with_capacity(items.len());
-    let mut rack_seen = false;
 ```
 
 The dispatch is just those three steps in order (shape check, device-channel range check, delegation
 to the engine), with a separate arm returning `UNSUPPORTED` on a build without the feature.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2670-2693
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:406-429
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {

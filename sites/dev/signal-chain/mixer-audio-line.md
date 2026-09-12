@@ -783,10 +783,12 @@ export type WireLineOp =
 指していないこと）だけを見て、名前から RT の index への解決には立ち入りません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:306-318
+// rust/crates/orbit-audio-daemon/src/session/params.rs:107-119
 /// `SetBusLine` の一方通行 wire shape を完全に検証してから engine 用 vocabulary を返す。
 #[cfg(feature = "outproc-effect")]
-fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
+pub(super) fn parse_set_bus_line_params(
+    params: &Value,
+) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
     let bus = match params.get("bus") {
         Some(Value::String(bus)) if !bus.trim().is_empty() => bus.clone(),
         _ => return Err(set_bus_line_malformed("'bus' must be a non-empty string")),
@@ -795,15 +797,13 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
         .get("line")
         .and_then(Value::as_array)
         .ok_or_else(|| set_bus_line_malformed("'line' must be an array"))?;
-    let mut line = Vec::with_capacity(items.len());
-    let mut rack_seen = false;
 ```
 
 dispatch はその 3 段（形の検証 → デバイスチャンネルの範囲検証 → engine への委譲）を並べただけで、
 feature が無いビルドには `UNSUPPORTED` を返す別腕が用意されています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2670-2693
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:406-429
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {

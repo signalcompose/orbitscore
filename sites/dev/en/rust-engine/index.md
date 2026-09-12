@@ -208,7 +208,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1005-1032
+// rust/crates/orbit-audio-daemon/src/session/run_loop.rs:9-36
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -245,8 +245,8 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1621-1648
-async fn handle_command(
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:12-39
+pub(super) async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
     tx: &mpsc::Sender<String>,
@@ -271,9 +271,9 @@ async fn handle_command(
         .await;
     }
 
-    match method.as_str() {
-        "Ping" => ok(&id, Value::String("pong".to_string())),
-        // cpal の output device 列挙（#484 D1）。host 列挙は環境によっては軽くブロックしうるため
+    // 🔴 プラグイン系のアームは `dispatch_plugin.rs` へ切り出した（#888 子 2）。
+    // 単一 match が 1,028 コード行あり、ファイルを分けるだけでは閾値 500 を満たせないため。
+    // 該当しない method は `None` が返り、下の `match` がそのまま処理する。
 ```
 
 ### The command list (from the match arms of `handle_command`)
@@ -818,7 +818,7 @@ indices** (does the bus exist, is the reference forward-only) is checked by
 the actual output width, so the dispatch sits in between and passes `engine.output_channels()`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2670-2685
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:406-421
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
