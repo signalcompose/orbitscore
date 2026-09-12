@@ -51,7 +51,7 @@ pub use summary::*;
 #[allow(unused_imports)]
 pub use types::*;
 #[allow(unused_imports)]
-pub(crate) use vst3_scan::*;
+pub use vst3_scan::*;
 
 #[cfg(test)]
 mod tests {

@@ -10263,3 +10263,229 @@ PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199
 
 検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
 ---
+
+### さらなる移設（#888 束のレビュー追記で超過・2026-09-12）
+
+### fix(release): ship the extension's own runtime deps so the .vsix can activate (#873) (Sep 11, 2026)
+
+🔴 **凍結版リリースのブロッカー。** cold install（#138・ゴールの最終段）で発見した。
+素の VS Code に `.vsix` を入れると、**拡張が activate せずに落ちていた**。
+
+```
+Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
+  at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
+```
+
+#### 原因 — npm workspaces の hoisting
+
+`packages/vscode-extension/package.json` は `@modelcontextprotocol/sdk` と `zod` を実行時依存として
+宣言しているが、どちらも npm workspaces が**リポジトリルートへ hoist** する。`.vscodeignore` は
+`../../**` と `../*/**` でパッケージ外を全部落とすので、`vsce package` が同梱する
+`extension/node_modules` は **`@types` と `undici-types` の 2 つだけ**だった（実測）。
+
+`require` は遅延ではない: `dist/extension.js:74` → `require("./mcp-server")` →
+`dist/mcp-server.js:51-53` がトップレベルで SDK と zod を要求する。よって activate が無条件に落ちる。
+
+#### engine 側では 2 回起きていた事故が、拡張側だけ無防備だった
+
+| 出典 | 欠けた依存 | 症状 |
+|---|---|---|
+| WORK_LOG 6.119 (Jun 17, 2026) | `@julusian/midi` / `uuid` / `ws` | engine が MIDI 初期化で落ちる |
+| WORK_LOG 6.422 (Aug 30, 2026) | `yaml` | #654 の実機ゲートで発見。engine が最初の evaluate で落ちる |
+| **#873** | **`@modelcontextprotocol/sdk`** | **activate() がそもそも走らない** |
+
+対策の `scripts/install-engine-deps.sh` は **engine の依存しか見ていなかった**。ロジックを
+`scripts/install-bundle-deps.sh` へ抽出し、engine と拡張の両方がそこを通るようにした（DRY）。
+
+#### 置き場所が `dist/node_modules` なのには理由が 2 つある
+
+1. **`vsce package` はパッケージ直下の `node_modules` を無条件に除外する。**
+   `.vscodeignore` に `!node_modules/**` と書いても**上書きできない**（実測）。
+   `engine/node_modules` や `dist/node_modules` のような入れ子は特別扱いされず普通に入る
+2. **Node の解決順で最初に当たる。** `dist/mcp-server.js` から見て `dist/node_modules` は
+   1 つ目の候補なので、パスの書き換えが要らない
+
+パッケージ直下へ入れると**パッケージング自体が壊れる**: 依存が hoist 先とローカルの 2 箇所で
+解決できるようになり、`vsce` の依存探索が 1 つの `.vsix` エントリに 2 つの元パスを出して
+`the following files have the same case insensitive path` で失敗する。だから
+`vsce package` には **`--no-dependencies`** を付け、探索そのものを止めてある。
+
+#### CI が捕まえられなかった理由と、足したゲート
+
+`release.yml` の post-package 検証は `packages/engine/package.json` の依存しか突合していなかった。
+同型の検査を**拡張自身の依存**にも足した（`extension/dist/node_modules/<dep>` の実在確認）。
+この PR は `packages/vscode-extension/**` と `release.yml` の両方を触るので、
+release smoke が本 PR 上で実際に `.vsix` を作ってこのゲートを通す。
+
+#### 検証 — cold install で音が出るところまで
+
+空の `--extensions-dir` に `.vsix` を入れ、**`--extensionDevelopmentPath` を使わず**
+インストール済み拡張として素の VS Code を起動し、MCP だけで駆動した。
+
+| 確認 | 結果 |
+|---|---|
+| activate | ✅ `Cannot find module` 0 件 |
+| MCP サーバ | ✅ 2 秒で listen |
+| daemon の解決 | ✅ `/private/tmp/orbcold-e-*/local.orbitscore-3.0.0/engine/bin/darwin-arm64/orbit-audio-daemon` |
+| 評価 | ✅ `ok` |
+| **音** | ✅ capture 36.10 s・非ゼロ **46.7%**・**RMS 0.053537**・peak 1.133490 |
+
+🔴 **daemon が拡張バンドルから解決された**ことが、cold install でしか通らない経路の確認にあたる。
+dev host（`--extensionDevelopmentPath`）はリポジトリの `rust/target/release` を引くため、
+`extension-bundle` 分岐を一度も通らない。#138 がここまで「⏳ Pending」だった穴がこれ。
+
+検証: `npm test` 2,338 passed / 0 failed・`npm run lint` 緑・引用 944 / 0 failed
+（`release.yml` に行を足したので `signal-chain/index.md` の `184-193` を `204-213` へ再アンカー。
+着地先が標準プラグイン同梱ゲートであることを目視で確認済み）。
+
+Closes #873
+
+
+#### `/simplify` の反映（4 エージェント並行・#874）
+
+| 指摘 | 対応 |
+|---|---|
+| `--prune` / merge の分岐を**どの呼び出し元も使っていない**（両方 `--prune`） | 削除。`dist/node_modules` へ寄せる前の探索の残骸だった。常に置き換える形に一本化 |
+| `install-bundle-deps.sh` が `DEST_DIR` を作らないので wrapper が `mkdir` を持たされていた | `mkdir -p "$DEST_DIR"` にした |
+| `release.yml` の依存検査ループが engine / extension で重複（同型が計 3 箇所） | 1 ループに畳んだ。`"<label>:<package.json>:<vsix 内の node_modules>"` の表を回す |
+| `npm run build` のたびに `npm install` が 2 回走る | 宣言した依存の spec を `node_modules/.orbitscore-bundle-deps.json` に刻み、一致していれば skip。実測で 2 回目以降は `already current — skipping install` |
+| 同じ JSON を `node -e` で 2 回読んでいた | 1 回に畳んだ（書き出しと同じ pass で名前も出す） |
+| レジストリへの往復 | `npm install` に `--prefer-offline` を足した |
+| esbuild という深い解が検討された形跡が残らない | **#875** を立て、`install-bundle-deps.sh` のヘッダから指した |
+
+**見送ったもの**:
+
+- **wrapper 2 本を 1 本に畳む** — `install-engine-deps.sh` は外部（CLAUDE.md の手動ゲート・root の `pretest:e2e:gated`・dev サイト）が名前で呼ぶので残す必要がある。`install-extension-deps.sh` を消すと、**「なぜ `dist/node_modules` なのか」という実測 2 件の知識**を `package.json` の 1 行に添える場所が無くなる。名前付きファイルに置く方の価値を取った
+- **`scripts/orbitstudio/make-local-release.sh` が同じ機構を再実装している** — git 管理外（未追跡）で、`scripts/orbitstudio/` ごと畳む予定（正本 §12.7 の 3）。なお `extension/node_modules/$DEP` を見ているので、**黙って壊れた成果物を作るのではなく loud に落ちる**（安全な側）
+
+#### 整理後にもう一度 cold install を通した
+
+| 確認 | 結果 |
+|---|---|
+| activate | ✅ `Cannot find module` 0 件・MCP は 4 秒で listen |
+| 評価 | ✅ `ok` |
+| 音 | ✅ capture 15.04 s・非ゼロ **46.5%**・**RMS 0.052550**・peak 1.133490（前回と同一） |
+
+CI ゲートの**負の確認**も取れている: 修正前の `.vsix` を展開したディレクトリに同じループを当てると
+`::error::extension runtime dependency '@modelcontextprotocol/sdk' missing` で exit 1 になった。
+
+
+#### レビューラウンド 1（4 レビュアー + Fable 監査を並行）と、その fix
+
+**Critical 2 件はどちらも main（自分）の手が原因だった。**
+
+| # | 誰が | 指摘 |
+|---|---|---|
+| C1 | silent-failure-hunter | `/simplify` で 2 つのループを 1 本に畳んだ際に足した `|| {}` が、**`dependencies` を読めない時に「何も検査せず緑」**を作っていた。旧 engine 版には `|| {}` が無く `TypeError` → `set -e` で落ちていた。`package.json` の typo 1 つで、この PR が塞いだ欠陥クラスがゲート側に復活する |
+| C2 | comment-analyzer | 出典の `#209` / `#654` が**無関係の issue**（#209 = LinkAudio の feature、#654 = playhead の修正）。既存コメントの誤帰属を「3 回刺さった」という目立つ表へ増幅していた |
+
+**Fable が Sonnet 4 体と直交して見つけたもの:**
+
+- ゲートは**宣言された最上位の依存しか見ない**。sdk の推移依存 17 個が欠けても緑のまま MCP が落ちる
+- **出荷版が lockfile と乖離**（sdk 1.29.0→1.30.0 / zod 4.4.3→4.6.2 / yaml 2.8.3→2.9.0 / midi 3.6.1→3.8.1）。**テストしたのと別の版を凍結版として出す**ことになっていた
+- **ゲート自身を守るテストが無い**。同型の child バイナリのゲートには `bundled-child-binaries.spec.ts` があり、台帳照合とゲートの bash 実走の両方をやっている
+- `release.yml` の `pull_request.paths` に install スクリプトが無く、それだけを触る PR は smoke が走らない
+
+一方 **`vsce` の挙動についての実測クレームは、vsce 2.32.0 のソースで裏付けが取れた**（`collectAllFiles` が `.vscodeignore` 適用**前**に `node_modules/**` をハードコード除外し、そのパターンは入れ子にマッチしない）。ただし「無条件」は `--no-dependencies` 下でのみ真。
+
+#### 設計パス（指摘ごとのローカルパッチにしない）
+
+> **ゲートは「宣言を数える」のではなく「出荷物の中で実際に解決できるか」を検査する。
+> チェックリストが空になったら「依存が無い」ではなく「読み方を間違えた」として loud に落とす。
+> そしてゲート自身を守るテストを同じ PR に置く。**
+
+`scripts/check-vsix-bundled-deps.mjs` を新設（前例: `check-release-tag-version.mjs`）。`release.yml` の
+インライン 14 行はその呼び出し 1 行になり、**C1 の `|| {}` ごと消えた**。検査は
+`createRequire(<出荷物内の実 require 元>).resolve(<実 specifier>)` で、解決した各パッケージの
+`dependencies` を再帰的に辿る（コードは実行しない）。
+
+#### 受け入れ検証（main が sandbox 外で実走・自己申告は根拠にしない）
+
+🔴 **同一の壊れたツリーに対する新旧の比較**（`dist/node_modules/express` = sdk の推移依存を削除）:
+
+| ゲート | 結果 |
+|---|---|
+| 旧（宣言された最上位ディレクトリのみ） | `all declared dependencies present — PASS` / **exit 0** |
+| 新（出荷物内で実際に解決） | **exit 1** |
+
+**検出力が名目でなく実際に増えている。**
+
+壊し方を 3 通り試して全部 exit=1（原因を名指し）: 宣言依存の削除（`zod`）/ **推移依存の削除（`express`）** / engine 依存の削除（`yaml`）。
+
+C1 の変異: `dependencies` → `dependencyes`（#873 と同型の typo）で **exit=1**、戻して **exit=0**。
+
+lockfile 固定の実測 — 7 件すべて一致し、`uuid` は罠を回避（`packages/engine/node_modules/uuid` の
+**13.0.2**。`node_modules/mermaid/node_modules/uuid` の 11.1.1 ではない）:
+
+| 依存 | lockfile | 出荷 | 修正前 |
+|---|---|---|---|
+| `@modelcontextprotocol/sdk` | 1.29.0 | **1.29.0** | 1.30.0 |
+| `zod` | 4.4.3 | **4.4.3** | 4.6.2 |
+| `uuid` | 13.0.2 | **13.0.2** | — |
+| `yaml` | 2.8.3 | **2.8.3** | 2.9.0 |
+| `@julusian/midi` | 3.6.1 | **3.6.1** | 3.8.1 |
+
+cold install をやり直し（**Finder 相当の最小 PATH** で起動）: activate ✅ / `Cannot find module` 0 件 /
+MCP 4 秒 / `evaluate` ok / **engine ログの `ERROR:` 0 行** / capture 16.04 s・非ゼロ **42.7%**・
+**RMS 0.050784**。
+
+`npm test` **2,347 passed / 67 skipped / 0 failed**（+9）・lint 緑・`typecheck:e2e` 緑・
+引用 944 / 0 failed（`release.yml` の行が動いたので 4 件を再アンカーし、着地先が
+「実 Gain テスト」と「標準プラグイン同梱ゲート」であることを目視確認。散文の行参照も追従させた）。
+
+#### 見送り・切り出し
+
+- **wrapper 2 本を 1 本に畳む** — `install-engine-deps.sh` は外部が名前で呼ぶので残す必要があり、
+  `install-extension-deps.sh` を消すと「なぜ `dist/node_modules` なのか」という実測 2 件の知識を
+  置く場所が無くなる
+- **#877**: cold install を再実行できる gated spec にする（#138 を #656 へ吸収する計画から切り離す —
+  #656 はネイティブ `.app` 配布で別物・後の話）
+- **#878**: `extension.ts:2000` の `spawn('node', …)` が PATH 依存で `process.execPath` の
+  フォールバックが無い。実測では VS Code の shell 環境解決に救われて通ったが、**出荷の前提が
+  他社実装の詳細に乗っている**
+- **#875**: esbuild でバンドルして本機構ごと退役させる（宣言されていない import は今の機構では
+  原理的に見えない）
+
+
+#### fix 差分の再点検（ラウンドを閉じる前・1 レビュアー）
+
+問いは 2 つだけ: 「この修正が導入する新しい故障モードは何か」「新コードはどの実行コンテキストで走るか」。
+**Critical 0 / Important 3**。いずれも同じ向き — **保証が深さ 1 では本物で、深さ 2 以上で宣言検査へ退化する**。
+
+🔴 **加えて、main 自身が 1 件見つけた**: `.vscodeignore` に**未コミットの変更が残っていた**。
+`git commit` した**後**に Codex が書いたもので、「完了通知は稼働終了を意味しない」の実例。
+内容は `!engine/node_modules/**` の削除で、理由として「入れ子は普通に入る」と書かれていた。
+
+**実測したら理由が誤りだった**: 否定指定を外すと `engine/node_modules` の同梱が **422 → 317 件**へ減る。
+つまり否定指定は load-bearing で、`**/*.ts` 等の一般規則が効いているのを打ち消していた。
+ただし失われる 105 件の内訳は **`.ts` が 104 個とスタンプ 1 件**で、`.js` / `.node` /
+パッケージの `package.json` は 1 つも落ちない。**変更自体は実害のないサイズ削減**（9.4 → 9.34 MB）
+なので採用し、**コメントを実態に書き直した**（数字つきで）。
+
+| 指摘 | 対応 |
+|---|---|
+| 推移依存の版が固定されていない（temp install に lockfile が無く range で再解決される） | **限界として明記**。宣言層の乖離（sdk 1.30.0 / zod 4.6.2 対 lockfile の 1.29.0 / 4.4.3）は潰れており、そこが譜面の振る舞いに効く層。グラフ全体の固定は lockfile の合成が要るので #875 へ |
+| 深さ 2 以上は `require.resolve` ではなくディレクトリ探索（存在すれば通る） | **限界として明記**。全辺を実解決する案は**試して却下**されている — CJS が実際には require しない ESM-only の推移パッケージで**偽の赤**になり、リリースを理由なく止める |
+| `catch {}` が内側のエラーを捨て、どの推移パッケージが欠けたか分からない | **直した**。`reason` を持ち回って診断に出す |
+
+再点検後の実測 — `dist/node_modules/express`（sdk の推移依存）を削除:
+
+```
+::error::extension runtime specifier '@modelcontextprotocol/sdk/server/mcp.js' cannot be
+resolved from extension/dist/mcp-server.js in the packaged .vsix
+  — express cannot be resolved from .../node_modules/@modelcontextprotocol/sdk/package.json
+```
+
+**どの推移パッケージが欠けたかがログだけで分かる。** 以前は最上位の specifier しか出なかった。
+
+`npm test` 2,347 passed / 0 failed・lint 緑・引用 944 / 0 failed・ゲートは実 `.vsix` で exit 0。
+
+#### 🔴 CI が 3 回走っていなかった
+
+`f83aa658` / `b99c1d04` / `af19ac93` の push で CI が 1 度も起動していなかった。原因は
+**PR が `DIRTY`**（main と衝突）だったこと — GitHub は merge commit を計算できない PR では
+`pull_request` ワークフローを走らせない。**緑でも赤でもなく「無」だったので、`gh pr checks` は
+`no checks reported` としか言わない。** main をマージして解消した。
+
+**教訓**: `gh pr checks` が「no checks reported」と言う時は、待つのではなく
+`gh pr view --json mergeStateStatus` を見る。
