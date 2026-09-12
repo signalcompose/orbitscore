@@ -83,6 +83,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 変異検証（main が実行・5 件すべて red → restore 後 緑・baseline は byte 一致）: baseline 値の
 +1 / −1 / エントリ削除 / 架空パス追加 / `threshold` を 600 へ。
 
+**`/simplify` で適用した整理**（4 観点を並行レビュー・PR #894）:
+
+- `code-lines.ts`: `pendingBuffer: Array<{isCode:boolean}>` → `pendingCount: number`。
+  バッファに積まれる行は `isTestCfgAttrLine` / `ATTRIBUTE_LINE` / `MOD_OPEN_LINE` のどれかに
+  **完全一致**した行だけで、行コメントや末尾コメント付きの行は一致しない。よって `isCode` は
+  常に `true` で、持つ意味が無かった（main が正規表現を読んで検算）
+- `file-size-ratchet.spec.ts`: 2 つの `it` が独立に呼んでいた `measureAll()` を `beforeAll` へ集約。
+  同じ PR の `file-size-targets.spec.ts` が既に測定を共有しており、**同一 PR 内で同じ問題に 2 つの
+  書き方が混在**していた。`beforeAll` を選んだのは、`measureAll()` が throw した時に collection
+  エラーではなく**ファイル名付きのテスト失敗**として出るため
+- `code-lines.spec.ts`: 3 つの `it` が共有していた `F-18` ラベルを `F-18a/b/c` に分けた
+  （設計 §9.1 の F-18 は 1 行で 3 シナリオを束ねているので重複自体は仕様に忠実だが、識別できない）
+
+**却下した指摘 1 件**（altitude 観点・`listMeasuredFiles` の第 2 引数が #887 の `__*ForTest` と同型という指摘）:
+
+1. #887 が問題視しているのは**出荷される** `extension.ts` の裏口。`tests/repo/file-size-targets.ts`
+   はテスト基盤そのもので出荷されない。既定値付き引数は通常の引数化である
+2. 提案された「真空防止を純関数へ切り出す」は、**`listMeasuredFiles` がそれを呼んでいるかの配線が
+   検証されなくなる**（CLAUDE.md が名指しで警告している形）
+3. 指摘の「該当言語の pathspec が無ければチェックが素通りする」は事実誤認。ループは
+   `Object.keys(MIN_FILES_PER_LANG)`（固定の `{rust, ts}`）を回しており、片方が欠ければ
+   `0 < 100` で throw する（穴ではなくガードが働いている姿）
+
+**リファクタ後の再検証**（main が実行）: 変異 5 件すべて再び red / `code-lines.ts` の
+`commitPending` を殺す変異 2 種も red（除外側 4 件・code 側 2 件）/ `npm test` 2424 passed /
+lint・`docs:check`・`typecheck:e2e` 緑。**baseline 25 件の値は 1 つも変わっていない**
+（honesty 検査が `baseline == 実際` を要求するので、これが振る舞い保存の検算になる）。
+
 ### refactor/test(engine): fold the #889 review rounds — env containment, wiring coverage, a trigger (Sep 12, 2026)
 
 **Date**: 2026-09-12

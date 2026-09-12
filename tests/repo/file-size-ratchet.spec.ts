@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { countCodeLines } from './code-lines'
 import { listMeasuredFiles } from './file-size-targets'
@@ -77,10 +77,19 @@ function measureAll(): Map<string, number> {
 }
 
 describe('file size ratchet (#888 child 0)', () => {
-  it('does not let a file grow past the threshold or past its baseline (ratchet)', () => {
-    const baseline = loadBaseline()
-    const measured = measureAll()
+  // 2 つの `it` は同じ入力（同じ git 状態のファイル群）を別の角度から検査するだけで、
+  // どちらも副作用を持たない読み取りなので測定を共有してよい。`beforeAll` に置くのは
+  // (a) 227 ファイルの走査を 2 回やらないため、(b) `measureAll()` が throw したとき
+  // （閉じていない文字列を持つファイルがある等）collection ではなくテストの失敗として
+  // ファイル名付きで出るため。同じ PR の `file-size-targets.spec.ts` も測定を共有している。
+  let baseline: Baseline
+  let measured: Map<string, number>
+  beforeAll(() => {
+    baseline = loadBaseline()
+    measured = measureAll()
+  })
 
+  it('does not let a file grow past the threshold or past its baseline (ratchet)', () => {
     const violations: string[] = []
     for (const [filePath, code] of measured) {
       const allowed = baseline.files[filePath] ?? baseline.threshold
@@ -98,8 +107,6 @@ describe('file size ratchet (#888 child 0)', () => {
   })
 
   it('keeps the baseline honest (every entry is real, current, and above the threshold)', () => {
-    const baseline = loadBaseline()
-    const measured = measureAll()
     const measuredPaths = new Set(measured.keys())
     const problems: string[] = []
 

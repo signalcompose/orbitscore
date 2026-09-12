@@ -119,17 +119,19 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
   let braceDepth = 0
   const excludeStack: number[] = []
   let pendingAttrActive = false
-  let pendingBuffer: Array<{ isCode: boolean }> = []
+  // 🔴 バッファに積まれる行は必ず `isTestCfgAttrLine` / `ATTRIBUTE_LINE` / `MOD_OPEN_LINE` の
+  // どれかに一致した行で、いずれも `#[...]` や `mod x {` の**完全一致**を要求する。行コメントや
+  // 末尾コメント付きの行は一致しないので、積まれた行は例外なくコード行である。よって行ごとの
+  // `isCode` は持たず件数だけを数える（一致条件を緩める変更をしても、多く数える側へ倒れる）。
+  let pendingCount = 0
 
   let code = 0
   let excluded = 0
 
   const commitPending = (asExcluded: boolean) => {
-    for (const entry of pendingBuffer) {
-      if (asExcluded) excluded++
-      else if (entry.isCode) code++
-    }
-    pendingBuffer = []
+    if (asExcluded) excluded += pendingCount
+    else code += pendingCount
+    pendingCount = 0
   }
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
@@ -278,14 +280,14 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
     if (lang === 'rust' && stateAtLineStart === 'normal' && excludeDepthAtLineStart === 0) {
       if (pendingAttrActive) {
         if (MOD_OPEN_LINE.test(trimmed)) {
-          pendingBuffer.push({ isCode: lineHasCode })
+          pendingCount++
           commitPending(true) // 属性行 + mod 行をまとめて除外する
           excludeStack.push(braceDepth)
           pendingAttrActive = false
           continue
         }
         if (ATTRIBUTE_LINE.test(trimmed)) {
-          pendingBuffer.push({ isCode: lineHasCode })
+          pendingCount++
           continue
         }
         // パターンが切れた。バッファは通常どおり数える（除外しない）。
@@ -295,7 +297,7 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
       }
       if (isTestCfgAttrLine(trimmed)) {
         pendingAttrActive = true
-        pendingBuffer.push({ isCode: lineHasCode })
+        pendingCount++
         continue
       }
     }
@@ -308,7 +310,7 @@ export function countCodeLines(source: string, lang: Lang): CodeLineCount {
   }
 
   // ファイル末尾で pending が残っていたら（mod に至らなかった属性行）通常どおり数える。
-  if (pendingBuffer.length > 0) {
+  if (pendingCount > 0) {
     commitPending(false)
   }
 

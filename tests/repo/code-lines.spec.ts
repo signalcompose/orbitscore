@@ -114,15 +114,15 @@ describe('countCodeLines', () => {
     expect(countCodeLines('const y = a / b / c // 注', 'ts').code).toBe(1)
   })
 
-  it('F-18: 閉じない文字列は例外を投げる', () => {
+  it('F-18a: 閉じない文字列は例外を投げる', () => {
     expect(() => countCodeLines('let s = "unterminated', 'rust')).toThrow(/state=string/)
   })
 
-  it('F-18: 閉じないブロックコメントは例外を投げる', () => {
+  it('F-18b: 閉じないブロックコメントは例外を投げる', () => {
     expect(() => countCodeLines('/* unterminated', 'ts')).toThrow(/state=block/)
   })
 
-  it('F-18: 閉じない test mod は例外を投げる', () => {
+  it('F-18c: 閉じない test mod は例外を投げる', () => {
     const src = ['#[cfg(test)]', 'mod tests {', '  fn t() {}'].join('\n')
     expect(() => countCodeLines(src, 'rust')).toThrow(/mod の閉じ括弧/)
   })
