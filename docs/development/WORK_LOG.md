@@ -17,6 +17,435 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): restore nine public items the split had hidden (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
+
+レビュー（`/code:pr-review-team` + Fable 監査）の指摘への対応。
+
+### 🔴 公開面が 9 件、黙って crate 外から見えなくなっていた（Fable 監査）
+
+`engine_wrap` は `lib.rs` で `pub mod` として公開されている。`BusKind` / `BusLineDest` /
+`BusLineOp` / `SourceRoutingTarget` / `StreamGuard` / `StreamConfigSnapshot` /
+`DEFAULT_{AUX,EFFECT,SUM}_BUS_POOL_PREFIX` は main では crate 外から見えていたが、
+private な子モジュールへ移して `pub(crate) use` で再エクスポートしたため **E0603** になる。
+**下流にまだ消費者が居ないので、全ゲートが緑のまま通過していた。**
+
+🔴 **「分割前後で `^pub (fn|struct|…)` の集合を diff して同一」という私の検算は無効だった。**
+宣言は `pub` のままで、**到達経路だけが失われる**からである。正しい検算は
+**crate の外側からコンパイルすること** — 統合テストは外部 crate なので、そこで `use` できる
+ことが到達可能性そのものの証明になる。
+
+`tests/public_surface.rs` を 4 crate（daemon / sandbox / plugin-scan / vst3-host・計 143 項目）に
+置いて main 時点の公開面を固定した。書く過程でもう 1 つ踏んだ: **統合テストでは `cfg(test)` が
+真だが、参照先の lib は `--test` 無しでコンパイルされるので偽**。定義側の `#[cfg(any(test, X))]`
+をそのまま写すと E0432 になる（`test` 項を落としてある）。
+
+### module doc の 7 件が実態とずれていた（comment-analyzer）
+
+最悪は `startup.rs` / `startup_instrument.rs` で、**可視性変更の説明がまるごと入れ替わって**いた
+（前者が名指しした 2 関数はどちらも後者にある）。個別パッチではなく設計 §14 に開示ポリシーを
+置き、21 モジュールへ一括適用した。**「N 行を除いて純粋な移動である」という件数の主張を禁じた** —
+件数は doc が追随せず必ずずれる（書いている最中に自分でも 1 件ずらした）。
+`tests/repo/module-doc-purity.spec.ts` で機械に突き合わせさせる。
+
+### refactor(daemon): re-cut role.rs after the simplify review (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
+
+`/simplify` の altitude 指摘に対応。`role.rs` に同居していた**ストリーム/デバイスの
+ライフサイクル型**（`StreamGuard` / `StreamConfigSnapshot` / `DeviceSwitchRequest` /
+capture パス解決）166 行を、その主題そのものである `device_link.rs` へ移した。
+併せて `engine_wrap/outproc_instrument.rs` を `outproc_instrument_slots.rs` へ改名
+（crate 直下の同名 supervisor との衝突解消）、実態とずれた module doc 3 件を訂正、
+`LoadedSample` を生成元の `playback.rs` へ移した。
+
+🔴 **単一象限の unused 警告で import を消してはいけない。** デバイス群を移した後
+`use role::*;` が default 象限で unused になったので消したところ、`outproc-*` 両 feature
+象限が **E0432 で落ちた**（他象限のインラインテストが `super::ChildSlot` 等でこの glob 経由の
+名前に到達している）。`#[allow(unused_imports)]` で戻し、理由をコメントに残した。
+この赤は `check-cfg-matrix.sh ... | tail -2` で**終了コードが隠れて**おり、出力を読んで気づいた。
+
+🔴 レビュー指摘の前提が誤っていた例: 「`LoadedSample` の消費者は `playback.rs` だけ」は
+**`session.rs` が型名を書かずに（型推論で）使っている**ため誤り。名前の grep には掛からない。
+
+### refactor(daemon): finish splitting engine_wrap.rs — 6,418 to 424 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-ui-types`
+
+🎯 **#888 子 1 完了。`engine_wrap.rs` が 6,418 → 424 コード行（閾値 500 以下）。**
+baseline から削除した。子モジュール **21 本**、いずれも 500 以下。
+
+第 12 束（最終）で移したもの: wire に載る公開型（`wire_types.rs` 130）/ `EngineWrap` の構築と
+OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクトバス stage の構築（`bus_stages.rs`）。
+
+### 子 1 の全経過
+
+```
+6,418 → 6,014 → 5,585 → 5,127 → 4,409 → 3,655
+      → 3,417 → 2,857 → 2,362 → 1,989 → 1,468 → 995 → 424
+```
+
+### 🔴 12 束を通して分かったこと
+
+1. **「純粋な移動」は目標ではなく性質。** 相互依存があれば可視性の変更は避けられない。
+   大事なのは**変更を最小に留め、それが residual に見えること**（第 4 束以降）
+2. **必要な作業は対象の種類で変わる。** メソッド（1〜7 束）→ 自由関数（8 束）→
+   構造体フィールド（9 束）→ トレイト（11 束）と、`pub(super)` を付ける対象が深くなった。
+   元が 1 つの巨大モジュールだったので、内部の結合が可視化されていなかっただけ
+3. 🔴 **境界の失敗には検出可能性の差がある。** 属性の分断は**コンパイルエラー**になるが、
+   doc コメントの分断は **`cargo fmt --check` しか捕まえない**（第 4 束で実際に残った）
+4. 🔴 **構文を正規表現で判定するのをやめ、コンパイラの指摘行を使う**方式に切り替えたら速くなった
+   （第 11 束）。子 0 の **D9**（heuristic を改良せず基準を言語の正規実装に置く）と同じ転換
+5. **cfg は定義側と一致させる** — 第 9・10 束で 2 度同じ誤りをした。
+   毎回 `check-cfg-matrix.sh` を回していたので 2 回とも即座に検出できた
+
+**検証**（全 12 束で毎回実施）: cfg 4 象限 + `clap-host` 単独 / `cargo fmt --check` /
+`cargo test` / `npm test` **2,445 passed**（**12 束を通して 1 件も変わっていない**）/ lint /
+`docs:check` 948 引用。
+
+
+### refactor(daemon): move the OOP role abstraction into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-role-traits`
+
+#888 子 1 の**第 11 束**。`OutProcRole` トレイトとその 2 実装、`StreamGuard`、
+リトライ付き push（696 行）を `engine_wrap/role.rs`（483 コード行）へ。
+🔴 **`engine_wrap.rs` が 1,000 行を切った**（1,468 → **995** コード行）。
+
+### 🔴 トレイトの中では `pub(super)` が使えない
+
+一括で `pub(super)` を付けたところ **E0449「visibility qualifiers are not permitted here」が 33 件**
+出た。トレイト定義の本体とトレイト実装ブロックのメソッドは、**可視性がトレイト側で決まる**ので
+修飾子を書けない。これまでの束は inherent impl（`impl EngineWrap`）だったので出なかった。
+
+**対処**: 正規表現で構文を判定するのをやめ、**コンパイラの指摘行をそのまま使って**外した。
+`cargo clippy` の出力から `role.rs:<行>` を抜き、その行の `pub(super) ` を削るループを回して収束させた。
+同じ手法を「フィールドが private」47 件にも使い、エラーメッセージから
+`struct 名 + フィールド名` を抜いて該当行だけに付けた。
+
+**再エクスポート 2 件**: `DeviceSwitchRequest`（`main.rs` から）と `ClapPluginRole`（`session.rs` から）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the instrument slot types and plugin UI wiring out (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-instrument-slot-types`
+
+#888 子 1 の**第 10 束**。instrument slot の型群とプラグイン UI の配線（606 行）を 2 ファイルへ
+（`instrument_slot_types.rs` 392 / `plugin_ui_wiring.rs` 144）。
+`engine_wrap.rs` は **1,989 → 1,468** コード行。
+
+**可視性**: `pub(super)` を 63 箇所（第 9 束の知見どおり**フィールドにも**）。
+`PluginUiWiring` 等 5 つは `outproc_effect.rs` / `outproc_respawn_guard.rs` からも使われるので
+`pub(crate)` のまま、親から再エクスポート。
+
+🔴 **再エクスポートの cfg を狭く書いて 1 象限落とした。** `outproc-instrument` と書いたが、
+定義側は `any(outproc-effect, outproc-instrument)` だった。**cfg は定義側と一致させる** —
+第 9 束と同じ誤りを繰り返した。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the effect slot types and env parsing into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-effect-slot-types`
+
+#888 子 1 の**第 9 束**。`OutProcControl` / `EffectSlotEntry` / `BusKind` 系の型と
+`ORBIT_*` 環境変数の解析（512 行）を `engine_wrap/effect_slot_types.rs`（390 コード行）へ。
+🔴 **`engine_wrap.rs` が 2,000 行を切った**（2,362 → **1,989** コード行）。
+
+### 🔴 構造体フィールドの可視性 — 第 8 束より一段深い
+
+第 8 束は関数と型に `pub(super)` を付ければ済んだが、本束は **187 件が「フィールドが private」**
+のエラーだった。親が構造体のフィールドを**直接触っている**ため、**フィールド 44 個**にも
+`pub(super)` が要った（関数・型 30 個と合わせて 74 箇所）。
+
+### 🔴 `session.rs` からの外部参照 — 再エクスポートが要った
+
+`BusKind` / `BusLineDest` / `BusLineOp` / `SourceRoutingTarget` は **`session.rs` が
+`crate::engine_wrap::` から名前で import** していた。親から `pub(crate) use` で再エクスポートした。
+
+**cfg は定義側と一致させる必要があった**: `SourceRoutingTarget` だけ
+`any(test, all(outproc-effect, outproc-instrument))` で他の 3 つと条件が違い、
+まとめて 1 行にすると default ビルドで `unresolved import` になった。
+
+### 🔴 引用の追随に新しい型が出た — 行番号ではなく**本文**が変わる
+
+`pub(super)` を付けると**引用しているコード行そのものが変わる**。`--fix` は行番号しか直さないので
+効かない。1 行ずつ置換したが**収束しなかった**（8 ラウンド回して残った）ので、
+**引用ブロックの本文を実ファイルから再生成する**スクリプトを書いて解決した
+（scratchpad の `resync-citations.mjs`）。差分は追加 40 / 削除 40 で対応しており、
+**引用の追随以外の変更が無い**ことを確認済み。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the out-of-process slot helpers into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-slot-helpers`
+
+#888 子 1 の**第 8 束**。`impl EngineWrap` の**外**にある自由関数・小さな型（598 行）を
+2 ファイルへ（`slot_helpers.rs` 397 / `slot_errors.rs` 122）。
+`engine_wrap.rs` は **2,857 → 2,362** コード行。
+
+### 🔴 これまでの束と性質が違う — モジュールレベルの item
+
+第 1〜7 束は `impl` の**メソッド**を動かしてきたが、本束は**モジュールレベルの item**
+（自由関数・`enum`・`struct`・`type`）が対象。2 つの新しい対処が要った:
+
+1. **`pub(super)` を 35 箇所**に付けた（モジュールレベル 22 + `impl` 内 13）。
+   メソッドと違い、自由関数は親と兄弟の両方から名前で呼ばれている
+2. 🔴 **`use slot_helpers::*;` を親に足す必要があった。** `pub(super)` は**可視性を上げるだけで、
+   名前をスコープへ持ち込まない**。これが無いと `cannot find function ... in this scope` になる
+
+### 🔴 `clap-host` 単独ビルドで import が未使用になった
+
+このモジュールの item は全部 `#[cfg(any(outproc-effect, outproc-instrument))]` なので、
+`clap-host` 単独だと**中身が空になり `use super::*;` が未使用**になる。CI は `-D warnings` なので
+落ちる。`#[allow(unused_imports)]` を付けた（中身が feature 次第で空になるモジュールの定型）。
+
+### rustfmt の折り返し
+
+`pub(super)` を足すと行が長くなり、rustfmt が引数の折り返しを要求する。
+該当パッケージにだけ `cargo fmt` をかけた（`git diff --stat` で**他のファイルが変わっていない**ことを確認済み）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the startup variants into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-start-lifecycle`
+
+#888 子 1 の**第 7 束**。cfg feature ごとの `start*()` variant（645 行）を 2 ファイルへ
+（`startup.rs` 292 / `startup_instrument.rs` 276）。
+`engine_wrap.rs` は **3,417 → 2,857** コード行。
+
+**可視性の変更 2 行**（E3′）: `resolve_outproc_both_buffer_frames`（親のテスト 3 箇所）と
+`start_outproc_both_with_options`（親に残る `start_with_options`）。
+
+### 🔴 抽出範囲を 2 度取り違えた — 複数行属性の罠
+
+`#[cfg(all(\n  feature = …,\n  …\n))]` は**複数行に跨る 1 つの属性**である。
+`pub fn` の行から遡って「`#[` で始まる行」だけを見ると、**属性の途中で切ってしまう**。
+実際 2 度失敗した:
+
+1. 終端を 5657 に取り、`))]` だけを親に残した → **`expected item after attributes`**
+2. 開始を 5017（`pub fn` の行）に取り、`#[cfg(all(` 〜 `))]` を親に残した → 同じエラー
+
+**正しい境界**は「doc コメントの先頭」から「次の item の属性が始まる直前」。
+第 4 束の doc コメント分断（fmt でしか気づけなかった）と違い、**こちらはコンパイルエラーになる**
+ので気づける。属性の分断と**コメントの分断は検出可能性が違う**。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move device switching and Link tempo into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-device-link`
+
+#888 子 1 の**第 6 束**。オーディオデバイス切替と Link テンポ（317 行）を
+`engine_wrap/device_link.rs`（242 コード行）へ。
+`engine_wrap.rs` は **3,655 → 3,417** コード行。
+
+**可視性の変更 2 行**（E3′）: `record_stream_config`（親の `finish_start` から）と
+`record_device_switch_result`（親のインラインテスト 3 箇所から）を `pub(super)` に。
+
+🔴 **第 5 束の教訓を仕組みにした**: 抽出範囲の開始を手で選ぶのをやめ、
+**doc コメントと属性を遡って item の真の開始行を求める関数**で決めた。
+第 4 束の doc コメント分断は、開始行を目で選んだために起きていた。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（1 件を再アンカー）。
+
+
+### refactor(daemon): move the instrument slots and plugin UI into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-instrument`
+
+#888 子 1 の**第 5 束**。out-of-process インストゥルメントとプラグイン UI（839 行）を 2 ファイルへ。
+`engine_wrap.rs` は **4,409 → 3,655** コード行（`outproc_instrument.rs` 455 / `plugin_ui.rs` 307）。
+
+### 🔴 第 4 束の欠陥を見つけて直した — doc コメントを途中で切っていた
+
+第 4 束で `load_outproc_plugin` の doc コメントを**分断**しており、頭 7 行が
+`engine_wrap.rs` に item を持たない孤児として残っていた。第 5 束の `cargo fmt --check` が
+その位置の重複空行を指摘して発覚した。
+
+**原因**: 抽出範囲の開始を「doc コメントの途中の行」に取っていた。設計 E1 が
+「属性と doc コメントを置き去りにするな」と警告していたのは**属性の付き替え**の話だったが、
+**コメント自体の分断**も同じ型の失敗である。孤児コメントは**コンパイルエラーにならない**ので、
+cfg 4 象限も `cargo test` も通ってしまった。
+
+**検出したもの**: `cargo fmt --check`（重複空行）。**振る舞いを変えない欠陥は fmt しか捕まえない。**
+
+### 可視性の変更 2 行（E3′ の適用）
+
+- `teardown_outproc_instrument_resources` — 親のインラインテスト 2 箇所から呼ばれる
+- `resolve_outproc_slot` — 兄弟 `plugin_ui.rs` から呼ばれる
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
+
+
+### refactor(daemon): move the out-of-process effect slot lifecycle into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-effect`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 4 束**。out-of-process エフェクトの load / chain / replace / unload（799 行）を
+3 ファイルへ:
+
+| ファイル | コード行 |
+|---|---|
+| `engine_wrap/outproc_effect_slots.rs` | 297 |
+| `engine_wrap/outproc_effect_chain.rs` | 216 |
+| `engine_wrap/outproc_effect_replace.rs` | 217 |
+
+`engine_wrap.rs` は **5,127 → 4,409** コード行。`excluded` 7,730 で不変。
+
+### 🔴 3 ファイルに割った理由（設計 §13.9 の制約 1）
+
+1 ファイルにまとめると **724 コード行**で閾値 500 を超える。§13.9 は「**分割で生まれる新ファイルも
+同じ PR 内で 500 以下**」と定めている（「粗く割ってから細かく」の 2 段階は取れない）。
+2 ファイルでも `slots` が **510 行**で 10 行超えたので、`load_outproc_effect_chain_impl` を
+3 つ目へ分けた。
+
+### 🔴 可視性の変更 3 行（E3′ の適用）
+
+このグループは相互依存していて、**純粋な移動だけでは成立しなかった**。`pub(super)` を 3 つ:
+
+| メソッド | 呼び出し元 | 理由 |
+|---|---|---|
+| `apply_outproc_effect_chain_with_timeout` | 親のインラインテスト `effect_rack_tests` | **親は子の private を呼べない** |
+| `teardown_outproc_effect_slot` | 兄弟 `outproc_effect_slots.rs` | **兄弟同士も private は見えない** |
+| `load_outproc_effect_chain_impl` | 兄弟 `outproc_effect_slots.rs` | 同上 |
+
+**変更を必要最小の 3 行に留めた**ことが residual にそのまま出ている（`fn` → `pub(super) fn`）。
+これは隠すべきものではなく、**レビュアーが読むべき行**である。
+
+**residual**: moved+ 794 / moved− 795 / residual 60（doc コメント 40 行を除くと**約 20 行**）。
+ゲート (i) は 1 行差で NG になったが、多重集合の照合で「**削除されたが追加されていない行は
+上記 3 メソッドのシグネチャのみ**」= `pub(super)` を付けた行であり、**コードの欠損は 0** と確定した。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（**5 箇所を再アンカー**）。
+
+
+### refactor(daemon): move note dispatch and sample playback into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-notes-samples`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 3 束**。🔴 **純粋な移動**。2 グループを 2 ファイルへ:
+
+- プラグインへのノート送出（CLAP / out-of-process instrument）→ `engine_wrap/notes.rs`（286 コード行）
+- サンプル再生・トランスポート・オフライン render → `engine_wrap/playback.rs`（180 コード行）
+
+`engine_wrap.rs` は **5,585 → 5,127** コード行。`excluded` は 7,730 で不変。
+
+### 🔴 設計 E3「可視性の変更 0 件」には条件がある（第 3 束で実測）
+
+「**子モジュールは親の private に到達できる**」は正しいが、**逆は成り立たない**。
+親は子の private メソッドを呼べない。
+
+`lock_active_notes`（`#[cfg(feature = "outproc-instrument")]` の private ヘルパー）を
+`notes.rs` へ動かしたところ、`engine_wrap.rs` に残った 2 箇所とインラインテスト 2 箇所から
+呼べなくなり **`outproc-instrument` の 2 象限が E0624 で落ちた**。
+
+**残る側が使うヘルパーは移さない**（親へ戻す）のが正しい。`pub(super)` にするのは
+「移動」ではなく「変更」なので residual に出る。設計文書に **E3′** として記録した。
+
+### 🔴 ゲート (i) が発火した（`moved+ 602 ≠ moved− 603`）— 調査手順が定まった
+
+1 行差だったので、**削除行と追加行を多重集合で照合**したところ
+「**削除されたが追加されていない行 = 0 件**」で、コードは 1 行も失われていなかった。
+新規追加 24 行はすべて新設モジュールのヘッダと `mod` 宣言。
+git のブロック照合が空行を片方だけ移動と認めたための **false positive** である。
+
+**正しい向きの false positive**（「怪しいから見ろ」と言われて見たら確定的に否定できた）。
+この多重集合判定を**子 0b の `move-residual.sh` に組み込む**価値がある。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
+
+
+### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 2 束**。🔴 **純粋な移動**。
+
+`device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` / `set_bus_line` /
+`set_bus_routing` / `set_source_routing`（元 6956-7451・496 行）を
+`src/engine_wrap/bus_lines.rs` へ。**ヘルパー 3 本を一緒に動かした**のは、置いていくと
+モジュールを跨いで `pub(crate)` 化が要り、それは「移動」ではなく「変更」だから。
+
+| | before | after |
+|---|---|---|
+| `engine_wrap.rs` | 6,014 コード行 | **5,585** |
+| `engine_wrap/bus_lines.rs` | — | 433 |
+| `excluded` | 7,730 | **7,730** |
+
+**residual**: 素の変更行 1,013 → moved+ 496 == moved− 496 → **residual 21**
+（うち 15 行は新設 doc コメント = **実質 6 行**）。ゲート (i) 通過。
+
+🔴 **引用が 14 件落ちた**（7 箇所 ×2 言語）。第 1 束と違い、**移動したコード自体が引用されていた**ので
+4 箇所は**ファイルパスごと** `bus_lines.rs` へ向け直した。残り 3 箇所は行番号のずれ。
+`docs:check` は**先頭行しか照合しない**ので、末尾が関数シグネチャの途中で終わっていた 1 件を
+引用元の文脈まで読んで確認した（「関数コメントが機構を一文で言い切っている」を見せる意図なので
+doc コメント + シグネチャで正しい）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
+**担当**: 設計 = Fable / 実装・検証 = main
+
+#888 子 1 の**第 1 束**。設計は `docs/design/888-child1-first-extraction.md`。
+🔴 **純粋な移動**（本文は 1 行も書き換えていない）。
+
+- `impl EngineWrap` の 40 メソッド（`clap_post_peak` 〜 `output_channels`・元 8972-9550）を
+  **子モジュール** `src/engine_wrap/stats.rs` へ。`use super::*;` + `impl EngineWrap { … }` で包む
+- 🔴 **可視性の変更 0 件**。子モジュールは親の private フィールド・private `use` に到達できる
+  （兄弟モジュールにすると `pub(crate)` 化が多数必要で、それは「移動」ではなく「変更」）
+- **インラインテスト mod は動かさない**（コード行に数えられず目標に寄与しない）。`excluded` は 7,730 で不変
+- `mod stats;` は**先頭ではなく impl の閉じ括弧の直後**に置いた。先頭だと行番号が +2 ずれて
+  dev サイトの引用が約 20 箇所動く
+
+**結果**: `engine_wrap.rs` **6,418 → 6,014** コード行 / `stats.rs` 408（500 以下なので baseline 無し）。
+
+**residual**（§5.1a の新ルールで初の実測）:
+
+```
+素の変更行 1,176  →  moved+ 579 == moved− 579  →  residual 18
+```
+
+うち 11 行は新設モジュールの doc コメントなので**実質 7 行**。移動した 579 行は 1 行も residual に出ていない。
+ゲート (i) `moved+ == moved−` 通過。
+
+**検証**（main が sandbox 外で実行）: `cargo fmt --check` / `clippy --all-targets -D warnings` /
+**`scripts/check-cfg-matrix.sh` 4 象限緑** + `clap-host` 単独 / `cargo test -p orbit-audio-daemon` /
+`npm test` **2,445 passed**（前と同数 = 期待値不変）/ lint / `docs:check` 948 引用 0 failed。
+
+🔴 **`docs:check` は一度落ちた**（4 件 = 引用 2 箇所 ×2 言語）。ソースを動かすと引用が必ず動く。
+`--fix` は行番号を合わせるだけなので、**新しい行を grep で探し、着地先の中身を目視で照合してから**
+書き換えた（構造体が `}` で閉じ、メソッドが `}` で閉じることを確認）。
+ずれ幅が −578 と −580 の 2 種類あるのは、`mod stats;` の挿入位置の前後で変わるため。
+
+🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
+しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
+CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
+
+
 ### test: add a file-size ratchet for Rust and TS sources (Sep 12, 2026)
 
 **Date**: 2026-09-12
@@ -151,6 +580,31 @@ Fable はまた **TS オラクルを baseline の 10 件ではなく測定対象
 **検証**（すべて main が sandbox 外で実行・委譲先の緑は根拠にしていない）:
 `npm test` **167 files・2445 passed / 76 skipped**（+21 件）/ lint・`docs:check`（948 引用 0 failed）・
 `typecheck:e2e` 緑 / `tests/repo` **57 件**。
+
+**マージ前ゲート**（main が sandbox 外で実行）: `npm run build` ✅ / `bundle-macos.sh` + 
+`rack-child --lib -- --ignored` **3 passed** + `--lib` **16 passed** ✅ /
+**実機 gated E2E 45 passed / 1 skipped / 0 failed** ✅ / **cold install 2 passed** ✅ /
+CI 3/3 pass ✅。
+
+🔴 **実機 E2E は 1 回目が「走っていなかった」。** sandbox 内で `mktemp` が
+`Operation not permitted` になり、しかも `| tail` のせいで **exit code 0 に化けていた**
+（タスク通知も「completed (exit code 0)」と報告した）。出力の中身を読んで気づき、
+sandbox 外で `set -o pipefail` 付きで回し直した。**終了コードと通知だけでは区別がつかない。**
+
+### 🔴 owner 裁定: 分割束の上限は residual で数える（2026-09-12）
+
+> フルレビュー 40 回はちょっと作業として重すぎる
+
+`BUNDLE_BRANCH_WORKFLOW.md` に **§5.1a** を制定した。分割（純粋な移動）の束は
+**residual 行数で 1,500 を判定**し、加えて **(i) `moved+ == moved−`**（複製・移動先の作り忘れ）と
+**(ii) K 行未満の短い moved ブロックは residual 扱い**（1 文の関数間移動）の 2 ゲートを課す。
+**最終防波堤は「既存テストの期待値を 1 つも変えていない」。**
+
+根拠は実測（設計 §13.6〜§13.8）: 実素材の抽出で **686 変更行 → residual 2 行（0.3%）**。
+敵対ケース 4 件は全部捕まえるが、**Fable 監査が見つけた抜け道 2 型**（1 文の関数間移動 = residual 0 /
+消して 2 回足す = 複製が見えない）は追加ゲートが要る。
+
+**見込み**: #888 の子 1〜3 は素の変更行なら約 40 束、residual なら **8〜9 束**。
 fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
 **オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
 baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
@@ -1393,546 +1847,6 @@ resolved from extension/dist/mcp-server.js in the packaged .vsix
 **教訓**: `gh pr checks` が「no checks reported」と言う時は、待つのではなく
 `gh pr view --json mergeStateStatus` を見る。
 
-### test(core): freeze the clock in the loop-quantize mock (#869) (Sep 11, 2026)
-
-`tests/core/loop-quantize.spec.ts` の「snaps to the same boundary already crossed when
-currentTime equals a boundary」が CI で間欠的に落ちていた（PR #847 の `code-review` ジョブ・
-run 34560570537）。**#847 は docs 7 ファイルのみ**で、コードに触れていない。
-
-#### 原因は `Date.now()` を 2 回呼んでいたこと
-
-モックの `startTime` が getter で、アクセスのたびに `Date.now() - elapsedMs` を再計算していた。
-呼ぶ側（`prepare-playback.ts:73-75`）はその直後に**別の `Date.now()`** を呼ぶ。この 2 回の間に
-ミリ秒が繰り上がると `currentTime = elapsedMs + 1` になる。
-
-このテストだけが **`elapsedMs = 2000`（小節境界ちょうど）** を突くので、+1ms で
-`nextQuantizedTime` が「境界を過ぎた」と判定し、次の境界 **4000** を返す。他のテストは境界の
-途中（1500 等）なので 1ms では判定が変わらない。
-
-**プロダクションコードの欠陥ではない。** 実機の `startTime` は保存された数値で、読むたびに
-動いたりしない。壊れていたのはモックの側。
-
-#### 4000 には犯人候補が 2 つあった
-
-`expected 4000 to be close to 2000` は、**(a) +1ms で次の小節**でも
-**(b) 直前のテストの `global.quantize('2bar')` が漏れた**でも同じ値になる。(b) を潰してある:
-`QuantizeManager._value` は private なインスタンスフィールド（既定 `'bar'`）で、`beforeEach` が
-`Global` ごと作り直すため漏れる経路が無い（`packages/engine/src/core/global/quantize-manager.ts:75-76`）。
-
-#### 機構の実測
-
-旧モックと同じ 2 回読みを 500 万回回すと、**109 回**（0.0022%）で
-`currentTime !== elapsedMs` になった。手元ではこの頻度だが、負荷のかかった CI runner では
-2 回の `Date.now()` の間隔が広がるので、実際の発火率はこれより高い。
-
-#### 直したもの
-
-describe 全体で `Date.now` を固定値に固定し、`startTime` の getter も同じ定数から引く。
-**両方が揃って初めて成立する** — getter だけ定数にして `Date.now` を生かすと、
-`currentTime` が巨大な値になる。`afterEach` の `vi.restoreAllMocks()` が復元する。
-
-検証: `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
-引用 938 / 0 failed。
-
-Closes #869
-
-### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
-
-owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。
-
-## 🔴 動かしたのは 1 つだけ — 正本は拡張の package.json
-
-`docs/design/656-release-design.md` §4.4 が版の所在を確定させている:
-
-| 場所 | 規則 | 今回 |
-|---|---|---|
-| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ | **2.1.0 → 3.0.0** |
-| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。同期しない | **2.0.0 のまま** |
-| `DSL_VERSION` | **別軸**（spec 版）。同期しない | 1.1 → **1.2**（別軸の理由で動かす） |
-| ルート `package.json` | `private: true` で配布物にならない | 触らない（裁定待ち (7)） |
-
-`DSL_VERSION` を上げたのは「拡張が 3.0.0 になったから」ではなく、**DSL の表面が変わったから**
-（`send` の dB 化・`output(dest, thru, db)` の導入・`pan` のライン要素化）。理由が別なので
-数字も揃わない。
-
-🔴 **私は一度これを間違えた。** 「拡張 package.json・`ENGINE_VERSION`・`DSL_VERSION` の 3 つを
-揃える」と報告し、`/simplify` の Altitude が §4.4 を示して正した。
-`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
-
-## なぜ major か
-
-- `ORBITSCORE_ENGINE` 環境変数・`orbitscore.engine` / `scsynthPath` 設定・
-  `Force Kill scsynth` コマンド・MCP `force_kill_scsynth` を**削除**した（#502）
-- `send` が**線形係数から dB へ**変わり、既存の譜面の意味が変わる
-
-## 追従した記述
-
-root `README.md`（2 箇所）・`CLAUDE.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2 箇所）・
-dev サイトの `version.ts` 引用 4 箇所。いずれも「3 つは別軸」と明記して、
-次に読む人が同じ取り違えをしないようにした。
-
-
-#### owner 裁定（2026-09-11）と、リリース直前の README 2 件
-
-正本 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.7 が **未決**として残していた 2 件に
-裁定が出た。
-
-| 未決だったもの | 裁定 |
-|---|---|
-| バージョン番号 | **3.0.0 / DSL 1.2**（`send()` の dB 化で既存譜面の意味が変わるので semver では major） |
-| タグ名前空間 | **`v3.0.0`**。`ext-v*` / `app-v*` の分離はネイティブ版の新ラインで行う（§12.3）。`release.yml` のトリガーは `v*` のままでよく、ワークフローの変更は不要 |
-
-残り 3 件は裁定待ちではなく既に解消済み: SC 削除 = #840 / gated ハーネス = #831 /
-README の導線 = #842。Marketplace publish は「行わない」（owner 2026-09-10）で、
-リポジトリ変数 `PUBLISH_MARKETPLACE` が未設定のため publish ステップは skip される（実測）。
-
-**ついでに直した README 2 件** — どちらも「これから打つタグが何をするか」と食い違っていた:
-
-- `tag push で全 channel に自動 publish` → 当時の計画である旨と、現在は GitHub Release だけが
-  作られることを明記
-- 「ICMC v1.1.0 bundle release」節の見出しに historical を付け、表が挙げている scsynth 同梱は
-  #502 で削除済みで**現在の `.vsix` に scsynth は入っていない**という注記を足した
-
-出荷される `packages/vscode-extension/README.md` は元から SC 参照 0 件で、Marketplace 非公開も
-正しく書かれている（実測）。直したのはリポジトリ表紙の側。
-
-ガードの実測: `checkTagAgainstVersion('v3.0.0', '3.0.0', 'darwin-arm64')` → `{ok: true}` /
-`('v3.0.0', '2.1.0')` → 版が食い違うと fail（#853）。**バージョンバンプがタグより前に入る必要がある**
-ことをこのガードが担保している。
-
-検証: `npm test` 2,338 passed / 0 failed・`npm run lint` 緑・引用 944 / 0 failed。
-
-### docs: land the nine routine docs-sync PRs as one roundup (#867) (Sep 11, 2026)
-
-凍結版リリース（#827）のタグを打つ前に、溜まっていたルーティン docs 追従 PR **9 本**
-（#837 / #844 / #847 / #856 / #858 / #862 / #864 / #865 / #866）を統合ブランチ
-`867-docs-sync-roundup` で 1 本にまとめて main へ入れた。**docs のみ**で `packages/` `rust/`
-`tests/` `.github/` は触っていない。学習サイトはリリースの一部なので、タグ前に反映させる必要がある
-（owner 2026-09-11）。
-
-#### なぜ 1 本にまとめたか — 逐次マージだと兄弟の内容が消える
-
-9 本すべてが `WORK_LOG.md` を触り、#844 と #856 は 13 ファイルを共有、#837 / #862 / #865 は
-`sites/dev/editor/mcp-and-gated-e2e.md` の**同じ Note 行と同じ節**に追記していた。1 本ずつ main へ
-入れると残り 8 本を毎回再同期することになり、しかも従来の解決規則「WORK_LOG は両側・他は追従側を
-採る」は、**main 側に兄弟 PR の内容が入った後では兄弟の内容を落とす**（規則が前提にしていた
-「main 側 = 古い baseline」が成り立たなくなるため）。
-
-#### 衝突の解決（全 22 hunk・いずれも同じ事実の別表現か、同じアンカーへの独立追記）
-
-| 種別 | 解決 |
-|---|---|
-| WORK_LOG の同一アンカーへの独立エントリ（4 箇所） | 両方残す |
-| #844 × #856 の SC 削除記述（11 ファイル・18 hunk） | hunk ごとに**情報量の多い側**を採る。`glossary.md` の Sources 一覧（ja/en）と `index.md` の Part VII 行（ja/en）は #844 側（#836 / #838 の粒度と `daemon-client.ts` の行がある）、残りは #856 側 |
-| `mcp-and-gated-e2e.md` の Note 追従リスト（ja/en） | #830・#860・#855 の 3 件を**合併**。frontmatter は最新の `a6e1f13` / 2026-09-11 |
-| 同じ章の新設節（#862 の `###` 節 × #865 の散文） | 両方残す。#865 の散文を先（直前の #756 段落から続く）、#862 の `###` 節を後 |
-
-🔴 **1 件だけ「両方残す」では壊れた**: #865 は #857 の WORK_LOG エントリを Recent Work の先頭へ
-**移動**していたので、素朴に両側を残すと同じエントリが 2 箇所に出る。移動先を残して旧位置
-（54 行）を削除した。**「両側を残す」は追記には正しく、移動には正しくない。**
-
-#### 検証
-
-`node sites/dev/scripts/check-citations.mjs` **944 citations verified / 0 failed**（`--fix` は
-使わず素で実行）/ `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
-`docs:build` dev・user 両方緑。
-
-Closes #867
-
-### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
-
-PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
-#860 自身が `34e12b3` で dev サイトを更新しているが、**引用の再アンカーが 3 箇所ずれていた**。
-`check-citations.mjs` は「引用文字列が実ファイルと一致するか」しか見ないので、
-**別の関数に一致してしまった引用は緑のまま通る**。
-
-| 箇所 | 何が起きていたか |
-|---|---|
-| `sites/dev{,/en}/signal-chain/mixer-audio-line.md` | bus post-loop の `LineOp::Output` 腕を引用していたはずが、`execute_master_line`（master 側）の `LineOp::Output` 腕に再アンカーされていた。直後の本文「`Output` として実行されるのは `Master` / `Bus` / `Device` の 3 つ」と引用が食い違う（master 側は `Device` 以外を `debug_assert!(false)` で落とす）。`output.rs:2566-2592` へ戻した |
-| 同上（pan 節） | `apply_line_pan` の引用が切り詰められ、直後の本文が指す **`√2`** が引用内に無くなっていた。`√2` は #859 で `line_pan_coefficients` へ切り出されたので、その関数（`output.rs:2227-2243`）の引用を足した |
-| `sites/dev{,/en}/rust-engine/index.md` | `render_block_with_sources` の引用が 4 行はみ出して `execute_master_line` のシグネチャを含んでいた。`1846-1932`（関数の閉じ括弧）で止めた |
-
-あわせて、#859 が**コード引用だけ更新して本文を更新しなかった**箇所を直した
-（`sites/dev{,/en}/rust-engine/index.md` の `advance_gain` 節）。旧本文の
-「block が ramp より長ければ 1 回で目標へ到達」は、いまはブロック**終端**の値の話であって、
-ブロック内は `ramp_frames` サンプルかけて補間される。これは #859 が直した欠陥そのものなので、
-そのまま残すと修正前の振る舞いを説明する文が残ることになる。
-
-4 章の `verified-against` / `verified-at` を `e4d4199` / 2026-09-11 に更新。
-
-検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
-### docs(sites): follow PR #861 — record the mirror-image consequence of line-wise ERROR prefixing (Sep 11, 2026)
-
-PR [#861](https://github.com/signalcompose/orbitscore/pull/861)（#860・merge `5ed3ce5`）の追従。
-
-IV-3 章（`sites/dev/editor/mcp-and-gated-e2e.md`）は #756 の「`ERROR:` 前置が chunk 単位
-だったので ERROR 件数が**構造的に過小**だった」までを書いていたが、**その裏返し**を
-書いていなかった。行単位になったということは「engine の stderr に出た行はすべて `ERROR:`」
-であり、**正常系の `warn!` 1 行で件数テストが巻き添えになる**。#861 はまさにそれで、
-`query_note_port_index` の warn が `default-baseline cycle must add no ERROR: lines`
-（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）を落としていた。
-
-ja / en の両方に節を追加（STYLE_GUIDE のバイリンガル必須）。ERROR 会計という 1 本の
-計測系に**測定器の側**（前置の粒度）と**被測定側**（engine のログレベル）の 2 つの入口が
-あり、**直す場所が正反対**であることを本文に残した。
-
-`verified-against` は据え置き。1 節の追記であって章本文の書き直しではなく、STYLE_GUIDE
-§4「小規模 cross-link / 体裁修正のみは更新しない」と「実質的に書き直したとき」の中間に
-あたるため、章冒頭の Note（この章が従来から追従履歴を書いている場所）に #861 を追記する
-方式を採った。
-
-検証: `npm run docs:build`（user / dev）緑 / `npm run docs:check` 緑。
-
-### docs: follow PR #852 in the user site and the diagnostics chapter (Sep 11, 2026)
-
-マージ済み PR [#852](https://github.com/signalcompose/orbitscore/pull/852)（束 B・`611-dsl-surface` →
-main・merge commit `ded9709`）の追従。**ドキュメントのみ**の変更で、`packages/` `rust/` `tests/` は触っていない。
-
-#852 は core spec（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 / MX.3 / MX.4 / MX.5）と
-specs-v2（`SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4）を自分で更新していたが、**ユーザー向けの 3 ファイルが
-旧仕様のまま残っていた** — いずれも「dB 化は決まったが未実装」「send は post-fader 固定」と書いており、
-実装済みの今は**読んだ人が逆の行動を取る**記述になっていた。
-
-## 直したもの
-
-| ファイル | 何が古かったか |
-|---|---|
-| `sites/user/mixing/routing.md` / `en/` | `send(name, amount)` が線形・dB 化は未実装・post-fader 固定 |
-| `sites/user/reference/methods.md` / `en/` | 同上 + `output()` の宛先が sum のみ・`thru:` / `db:` 不在 |
-| `docs/user/ja/USER_MANUAL.md` | `output()` / `send()` の宛先を「sum バス」と書いていた |
-| `sites/dev/editor/execution-feedback.md` / `en/` | 診断 6 がミキサー宛先を除外するようになったこと（#852 の `diagnostics-analysis.ts:257-262`）が未記載 |
-
-追記した利用者から見える表面（すべて #852 の差分から読み取れるもの）:
-
-- `send(aux, db)` の単位が **dB**（線形 `0.3` 相当は `-10.5`）。`amount:` は loud に throw
-- `send(aux, db, enabled: false)` はチェーン上の位置を保持したまま送出を止める
-- `output(dest, thru:, db:)`。`thru: false`（既定）が終端・`thru: true` がタップ
-- `send(name, db)` ≡ `output(name, thru: true, db: db)`
-- 宛先の解決順: 解決済みノード → `"master"` → 宣言済み sum/aux → `"L,R"` → LinkAudio channel
-- `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線**に並ぶ
-- `sum` / `aux` バスも `output()` / `send()` / `gain()` / `pan()` を受ける（`BUS_DSL_METHODS`）
-- `master` はミキサーノード名として予約・`mix.output(1, 2)` はデバイスであって master ではない
-- `mix.output(n)` の 1 引数形はモノラル（L+R マージ）
-
-## 書かなかったこと（PR 本文の「確認してほしい点」へ回した）
-
-- core spec MX.5 の「sum ネスト不可」と、同 PR が MX.2.2 に書いた「sum が別の sum へ出せる ✅」が
-  **食い違って見える**。どちらが正しいかは仕様の判断なので追従作業では直さない
-- `gain()` / `pan()` の固定値が**バス未確保の audio シーケンスでは発音側に留まる**という条件分岐は、
-  ユーザー向けページには書いていない（内部の割り当て事情で、書くと「位置が効かない場合がある」と
-  読めてしまう）
-
-検証: `npm run docs:build -w @orbitscore/user-site` 緑 / `-w @orbitscore/dev-site` 緑 /
-`npm run docs:check` **938 citations verified, 0 failed**。
-
-### docs(sites): follow PR #857 — a benign warn is an input to the release gate (#855) (Sep 11, 2026)
-
-マージ済み PR [#857](https://github.com/signalcompose/orbitscore/pull/857)（merge commit `a6e1f13`）への
-ドキュメント追従。**実装とテストは変更していない。**
-
-## 追従先
-
-**`sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`**（ja/en 両方）。
-
-この PR が直したのは engine 内部の TOCTOU だが、**観測可能な表面は ERROR 件数**である。
-IV-3 の「`get_log` とリングバッファ」節は、この計数が信用できない理由を 2 つ挙げていた
-（固定窓による false green・#756 以前の chunk 単位前置による**構造的な過小**）。#855 は
-その 3 つ目で、向きが逆の**構造的な過大**にあたるので、同じ節に並べて書いた。
-
-- `temp-file-manager.ts:98-118` を引用し、per-entry の `try` が ENOENT だけを飲む形を示す
-- #840 のマージ前ゲートで `expected 9 to be less than or equal to 8` として出た実測を明記
-- ループ全体を囲む `try` だと ENOENT 1 件で残りが掃除されない副次問題も残す
-- 一般則を #756 と対にして締める:
-  **engine のどこかの `console.warn` 1 行が、そのままリリース可否ゲートの入力になる**
-
-frontmatter は `verified-against: a6e1f13` / `verified-at: 2026-09-11` へ更新し、
-冒頭 Note の追従リストにも #855 を足した。
-
-## WORK_LOG の並びを直した
-
-#857 の WORK_LOG エントリ（Sep 11）が、マージ時のコンフリクト解消（`1c3056a`）で
-**Sep 10 の #611 エントリ群の間**に入っていた。本文は変えず、位置だけ Recent Work の
-先頭へ移した。#857 は #860 / #852 より後のマージなので、そこが時系列上の正しい位置になる。
-
-## 追従不要と判断したもの
-
-| 対象 | 理由 |
-|---|---|
-| `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論・`.orbslog` 形式に変更が無い |
-| `sites/user/` `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語に変更が無い。temp 掃除は DSL から不可視 |
-| `rust/` 側の章 | diff は TypeScript の engine のみ。MCP ツールの引数・返り値・エラー挙動は不変 |
-| `sites/dev/audio/audio-file-playback.md` | slicing 章だが SC 経路の歴史的読解で、`TempFileManager` を扱っていない |
-
-### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
-
-#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
-
-```
-AssertionError: expected 9 to be less than or equal to 8
-ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
-       stat '.../T/orbitscore_1789065642138_xx52jsw'
-```
-
-**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
-する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
-エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
-
-`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
-engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
-**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
-
-**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
-いた。孤児が溜まる。
-
-## 🔴 変異検証が別の穴を見つけた
-
-修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
-この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
-接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
-
-| 変異 | 結果 |
-|---|---|
-| ENOENT も含め全部握り潰す | 1 failed |
-| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
-| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
-| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
-| restore | 5 passed・baseline とバイト一致 |
-
-## テストはモックを使わず実物のファイルシステム条件で書いた
-
-`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
-最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
-
-| 条件 | 作り方 | Node が出すもの |
-|---|---|---|
-| レース | dangling symlink | 本物の `ENOENT` |
-| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
-| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
-
-`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
-
-捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
-結果的に良い方向へ転んだ。
-
-`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
-
-Closes #855
-
-### docs(sites): re-anchor the release.yml line references shifted by #853 (Sep 11, 2026)
-
-PR [#853](https://github.com/signalcompose/orbitscore/pull/853)（タグと `.vsix` の版を照合する
-release ガード）が `.github/workflows/release.yml` の `Setup Node.js` の直後に **10 行**挿入した。
-旧 58 行目以降がすべて **+10** ずれている。
-
-## #853 が直したもの・残したもの
-
-| 種別 | 追従状況 |
-|---|---|
-| ` ```yaml // .github/workflows/release.yml:84-90` 形式の引用ブロック 2 箇所 | ✅ #853 が `94-100` / `184-193` へ更新済み（`docs:check` が突合するため) |
-| 本文中の散文的な行参照 | ❌ 取り残された。`docs:check` はフェンス付き引用しか見ないので red にならない |
-
-## 直した 4 行
-
-| ファイル | 変更 | 参照先の実体（現行 release.yml） |
-|---|---|---|
-| `sites/dev/rust-engine/index.md:329` | `:88` → `:90` | `cargo build ... --features outproc-effect,outproc-instrument` |
-| `sites/dev/en/rust-engine/index.md:338` | 同上 | 同上 |
-| `sites/dev/signal-chain/index.md:1616` | `:86-98,191-200` → `:88-100,184-193` | 実 Gain テストのステップ / `.vsix` 内 `std-plugins/Gain.clap` の同梱ゲート |
-| `sites/dev/en/signal-chain/index.md:1653` | 同上 | 同上 |
-
-いずれも**執筆時点では正しかった**（`28606fa` 時点で `release.yml:88` は features 行、
-`84a29a5` 時点で `86-98` / `191-200` は当該ステップ）。行ドリフトで腐っただけで、
-記述の内容そのものは変わっていない。したがって章の `verified-against` / `verified-at` は
-**更新していない** — 章全体を検証し直してはいないため。
-
-## 追従不要と判断したもの
-
-- `docs/design/656-release-design.md` の行参照（`:114` `:224` `:245-248` 等）も +10 ずれているが、
-  **設計書は起案時点のスナップショット**なので書き換えない（routine 規則）。報告のみ
-- `docs/planning/IMPLEMENTATION_PLAN_2026-09.md:239` の `release.yml:116-207` も同様に +10 ずれ（→ `126-217`）。計画文書なので報告のみ
-- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #853 は DSL の構文も意味論も
-  変えていない（`packages/engine/` に差分なし）
-- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語に変更なし
-
-### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
-
-束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
-
-```
-AssertionError: default-baseline cycle must add no ERROR: lines
-  → expected 10 to be less than or equal to 9
-
-[daemon] WARN orbit_clap_host::controller: [orbit-clap-host] NotePortsExtension なし; port 0 を使用
-```
-
-## 正常系で警報が鳴っていた
-
-`query_note_port_index`（`controller.rs:400`）は **すべての CLAP ロードで無条件に**
-呼ばれる（`:246`）。**エフェクトが note ポートを持たないのは正常**で、port 0 という
-フォールバックも CLAP の慣習どおり機能する。それを `warn!` で報せていた。
-
-## なぜ ERROR 件数に乗るか
-
-拡張は engine の stderr を**全行 `ERROR:` として**出力する（`extension.ts:1453`）。
-これは**意図的な設計**で、#756 の記録が理由を書いている:
-
-> `outputChannel.append('ERROR: ' + chunk)` と chunk 単位で前置していた。1 つの chunk に
-> 複数行入ると 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が**構造的に
-> 過小カウント**する（= 偽緑）
-
-つまり「実エラーを取りこぼさない」ために全行前置している。**分類側を緩めるのは筋が悪い**
-（取りこぼす方向へ戻る）。
-
-🔴 したがって**ノイズは源で止める**。`warn!` → `debug!`。
-memory `stderr-is-classified-as-error` は「engine の warn は全部 ERROR 行」を
-**4 回目の再発**として記録しているが、これまでの対処はテスト側だった。今回は発生源を直した。
-
-## 失う情報
-
-instrument が note ポートを持たない場合も debug になる。ただし port 0 のフォールバックは
-機能するので、これは「動かない」ではなく「既定を使った」の報告であり、debug が妥当。
-
-検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
-`cargo test -p orbit-clap-host --lib` **29 passed**。
-
-### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
-
-owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって
-オラクルの欠陥ではなかった。
-
-## 何が壊れていたか
-
-ゲインは**ブロックあたりスカラー 1 個**として掛かっていた。`ramp_frames` は 5 ms = 240 で、
-実機のブロック長は **512**。`frac = min(512/240, 1.0) = 1.0` なので
-**ランプが 1 ブロックで完了する**（= ブロック境界の段差）。
-
-`gain(-40)` → `gain(0)` は振幅が 0.01 → 1.0 に**1 サンプルで跳ぶ**。
-実測: 切替時の一次差分 `0.6996` vs 信号自身の最大スルー `0.0407` → **17 倍**。
-
-`advance_ramped_gain` の doc は "One block of the **click-free** gain ramp" と書いていたが、
-**出荷時のバッファ長ではこの記述は偽**だった。
-
-## 🔴 私の最初の推奨（案 D）は誤りだった
-
-「出力バッファ長を env 化して E2E-7 を 64 フレームで回す」を推奨していたが、owner の
-「rampの粒度がそれでいい根拠を説明して」で一次ソースを読み直し、**2 つの理由で撤回**した。
-
-1. **出荷される振る舞いを何も変えない。** 512 で走るユーザーには段差が残る
-2. **E2E-7 すら通らない見込み。** 64 でも `frac = 64/240 = 0.2667` で 4 段の階段になり、
-   最大段差 0.264 × ピーク振幅 0.707 = **0.187** > 閾値 `4 × 0.0407 = 0.163`
-
-推奨する前にこの算数をやるべきだった。
-
-## 案 A の要点: ブロック終端をビット一致させる
-
-現行式 `current += (target - current) × min(frames/ramp_frames, 1)` は
-「ブロック先頭の距離を `ramp_frames` で割った固定ステップ」と等価なので:
-
-```
-step  = (target - start) / ramp_frames
-at(f) = end                if f >= min(frames, ramp_frames)
-        start + step * f   otherwise
-```
-
-`end` は**現行式をそのままの演算順序で 1 回だけ**計算した値。したがって
-`at(frames) == end` がブロックの長短どちらでも成り立ち、**既存の実機 goldens
-（E2E-2/3/6/G/P/S/10）は動かない**。これが検算そのもの。
-
-## コスト
-
-| 状態 | 現在 | 案 A |
-|---|---|---|
-| 定常（圧倒的多数） | 乗算 1（`gain == 1.0` なら省略） | **同じ**（`is_settled()` で同じ経路へ） |
-| ランプ中 | 乗算 1 | 乗算 1 + 加算 1 を 240 サンプル分だけ |
-
-pan は**位置ではなく L/R 係数**を線形補間する（位置を補間すると `equal_power_pan` の
-cos/sin が毎サンプルになる）。`pan == 0.0` → `(1.0, 1.0)` の unity 早道は維持したので、
-中央 pan と pan 無指定のビット一致も保たれる。
-
-## 検証（🔴 main が sandbox 外で実行）
-
-`cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑 /
-`cargo test -p orbit-audio-native --lib` **88 passed** /
-`cargo test -p orbit-audio-daemon --features outproc-effect --lib` **220 passed**。
-
-実機 E2E-7 は束 B と合わせて main が本ツリーで確認する。
-
-Closes #859
-### fix(dsl): separate the master track from the device it outputs to (#611) (Sep 11, 2026)
-
-🔴 **owner の訂正（2026-09-11）**。私が「1,2 ch は master の領分だから `mix.output(1,2)` は
-master として扱う」と裁定を仰ぎ、owner が「master であり、それはつまりデバイスの 1,2 に
-なるのでは」と応じた後、**その実装が概念を取り違えている**ことを owner が指摘した。
-
-> マスタートラックとデバイスっていう概念を、トラックなのかデバイスなのかっていうのを
-> ちゃんと分けた方がいいんじゃないですか。
->
-> マスターっていうのは要するにシーケンスのトラックやサミング、オグジュアリーのトラックとかと
-> 同じように、マスターのトラックですよね。
-
-## 正しいモデル
-
-```
-kick ──┐
-snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
-hat  ──┘                    ↑ ここに合流する
-
-pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
-```
-
-- `output(master)` は **master トラックの頭に合流**する。その後 master のラックと
-  `global.gain()` を通り、master が自分の出口として持っているデバイスへ出る
-- `mix.output(1, 2)` は **デバイスの 1,2 ch を名指す**。トラックではない
-
-**実装も元からそうだった**（`default_master_line_program()` は bus と同じ形の
-`[Rack, Gain, Output]`）。混同していたのは **DSL の側**だった。
-
-## 何が焼き付いていたか（直した順）
-
-| 場所 | 旧 | 新 |
-|---|---|---|
-| `process-statement.ts` の糖衣 | `(1,2)` を `{kind:'master'}` に読み替え | `physicalOutputDest()` で**常にデバイス** |
-| 同・引数経路 | `(1,2)` の特例が**無い**（糖衣と食い違い） | 同じヘルパを通す |
-| `MixerRuntimeNode` | master = `{kind:'output', channels:[1,2]}` = **デバイスノード** | **`{kind:'master'}` = 第 3 の種類** |
-| `registerMixerNode` | `var master = mix.output(...)` は**合法**（#523 IMPORTANT 6） | **拒否**（sum/aux と同じ理由） |
-| `resolveMixerNode` | 明示ノードが 1 つでもあれば master を解決**しない** | 常に解決する |
-
-🔴 **最後の行が一番効いている。** 旧実装には「この Global に明示ノードが 1 つでもあれば
-`master` を解決しない」というガードがあった。これは master が**デバイスノードだった時代の
-名前衝突対策**で、`var master = mix.output(...)` が宣言されうる前提だった。
-`master` を予約語にした今は衝突が起きず、ガードは
-**「sum を 1 つ宣言した瞬間に `kick.master` が壊れる」という宣言順依存**だけを残していた。
-
-## master の出口は 1,2 固定のまま（owner 2026-09-11）
-
-> マスターが1、2固定にしておかないと、一般的な DAW の操作とか設定で 1、2 じゃなくなって
-> しまっているみたいなことが起こると、デバイスの変更で困ってしまうので
-
-**固定であることと、「1,2 という名前が master を意味する」ことは別**。
-master トラックの DSL ハンドル（`master.output(...)` / `master.effect(...)`）は
-凍結線に入れない — 下の配線（daemon の `SetBusLine("master", ...)`）は既に通っているので、
-新ラインで表面だけ足せる。
-
-## 旧モデルを固定していたテスト 9 件を書き直した
-
-`signal-chain-dispatch.spec.ts` 5 件 + `mixer-runtime.spec.ts` 4 件。
-うち 1 件はテスト名自体が混同を記録していた:
-「sum/aux を master と名付けるのは拒否するが、**output を master と名付けるのは合法に保つ**」。
-
-## 変異検証
-
-| 変異 | 結果 |
-|---|---|
-| `master` の予約を外す | 1 failed |
-| `master` を解決しない（旧ガード相当） | **6 failed** |
-| `(1,2)` の特例を復活させる | 1 failed |
-| restore | 32 passed・baseline とバイト一致 |
-
-`npm test` **2,325 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
-引用 936 / 0 failed。
-
-Part of #611
-
 ---
 
 ## Archived sections
@@ -1947,4 +1861,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-10）](../archive/WORK_LOG_2026-09.md)
+- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md)

@@ -164,7 +164,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2196-2209
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:436-449
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -175,10 +175,10 @@ pub const DEFAULT_SUM_BUS_POOL_PREFIX: &str = "sum-bus-";
 pub const DEFAULT_AUX_BUS_POOL_PREFIX: &str = "aux-bus-";
 /// `ORBIT_SUM_BUS_POOL` の既定サイズ（未設定時）。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
+pub(super) const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
 /// `ORBIT_AUX_BUS_POOL` の既定サイズ（未設定時）。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
+pub(super) const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
 ```
 
 In other words, when you write `global.sum("drum")`, the name `"drum"` never reaches the daemon.
@@ -360,7 +360,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7223-7243
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:287-307
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -393,7 +393,7 @@ Since #611 PR-O3a, this function **publishes one line program** after validation
 matters too.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7269-7284
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:333-348
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -880,7 +880,7 @@ has — an output target must be a sum bus, a send target must be an aux bus —
 `SetBusLine`**. An outlet only has to be a later stage; whether it is sum or aux is not asked.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7113-7128
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:177-192
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -903,7 +903,7 @@ The assembly — resolve everything, then publish exactly once — is the same a
 one element fails midway the publish is never reached, so **the previous line survives intact**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7146-7177
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:210-241
         let installer = self
             .bus_line_programs
             .lock()

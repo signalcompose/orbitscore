@@ -161,7 +161,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2196-2209
+// rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:436-449
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -172,10 +172,10 @@ pub const DEFAULT_SUM_BUS_POOL_PREFIX: &str = "sum-bus-";
 pub const DEFAULT_AUX_BUS_POOL_PREFIX: &str = "aux-bus-";
 /// `ORBIT_SUM_BUS_POOL` の既定サイズ（未設定時）。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
+pub(super) const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
 /// `ORBIT_AUX_BUS_POOL` の既定サイズ（未設定時）。
 #[cfg(feature = "outproc-effect")]
-const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
+pub(super) const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
 ```
 
 つまり `global.sum("drum")` と書いたとき、daemon には `"drum"` という名前は届きません。
@@ -350,7 +350,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7223-7243
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:287-307
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -383,7 +383,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 **受理済みの値をミラーするだけ**になりました。ハンドルの解決順にも意味があります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7269-7284
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:333-348
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -854,7 +854,7 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 出口は「先の段のバス」であればよく、それが sum か aux かは問われません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7113-7128
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:177-192
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -877,7 +877,7 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 途中の 1 要素が失敗したら publish には到達しないので、**前のラインがそのまま生き残ります**。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7146-7177
+// rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:210-241
         let installer = self
             .bus_line_programs
             .lock()

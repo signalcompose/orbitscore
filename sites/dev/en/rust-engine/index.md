@@ -777,7 +777,7 @@ satisfy the serialization contract named in the doc comment on `LineControl::cur
 (`rust/crates/orbit-audio-native/src/output.rs:1254-1293`).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9765-9774
+// rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:225-234
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ

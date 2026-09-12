@@ -1,8 +1,388 @@
-# WORK_LOG Archive — 2026-09（前半・09-01〜09-10）
+# WORK_LOG Archive — 2026-09（前半・09-01〜09-11）
 
 ## 09-08 以前の移設（本体の 2,000 行上限・2026-09-11）
 
 ### 09-11 分の移設（本体の 2,000 行上限・2026-09-12）
+
+### 09-11 分の追加移設（本体の 2,000 行上限・2026-09-12・#888 子 1 の追記で超過）
+
+### 09-11/09-12 分の追加移設（#888 子 1 の第 5〜8 束で超過・2026-09-12）
+
+### docs(sites): follow PR #861 — record the mirror-image consequence of line-wise ERROR prefixing (Sep 11, 2026)
+
+PR [#861](https://github.com/signalcompose/orbitscore/pull/861)（#860・merge `5ed3ce5`）の追従。
+
+IV-3 章（`sites/dev/editor/mcp-and-gated-e2e.md`）は #756 の「`ERROR:` 前置が chunk 単位
+だったので ERROR 件数が**構造的に過小**だった」までを書いていたが、**その裏返し**を
+書いていなかった。行単位になったということは「engine の stderr に出た行はすべて `ERROR:`」
+であり、**正常系の `warn!` 1 行で件数テストが巻き添えになる**。#861 はまさにそれで、
+`query_note_port_index` の warn が `default-baseline cycle must add no ERROR: lines`
+（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）を落としていた。
+
+ja / en の両方に節を追加（STYLE_GUIDE のバイリンガル必須）。ERROR 会計という 1 本の
+計測系に**測定器の側**（前置の粒度）と**被測定側**（engine のログレベル）の 2 つの入口が
+あり、**直す場所が正反対**であることを本文に残した。
+
+`verified-against` は据え置き。1 節の追記であって章本文の書き直しではなく、STYLE_GUIDE
+§4「小規模 cross-link / 体裁修正のみは更新しない」と「実質的に書き直したとき」の中間に
+あたるため、章冒頭の Note（この章が従来から追従履歴を書いている場所）に #861 を追記する
+方式を採った。
+
+検証: `npm run docs:build`（user / dev）緑 / `npm run docs:check` 緑。
+
+### docs: follow PR #852 in the user site and the diagnostics chapter (Sep 11, 2026)
+
+マージ済み PR [#852](https://github.com/signalcompose/orbitscore/pull/852)（束 B・`611-dsl-surface` →
+main・merge commit `ded9709`）の追従。**ドキュメントのみ**の変更で、`packages/` `rust/` `tests/` は触っていない。
+
+#852 は core spec（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 / MX.3 / MX.4 / MX.5）と
+specs-v2（`SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4）を自分で更新していたが、**ユーザー向けの 3 ファイルが
+旧仕様のまま残っていた** — いずれも「dB 化は決まったが未実装」「send は post-fader 固定」と書いており、
+実装済みの今は**読んだ人が逆の行動を取る**記述になっていた。
+
+## 直したもの
+
+| ファイル | 何が古かったか |
+|---|---|
+| `sites/user/mixing/routing.md` / `en/` | `send(name, amount)` が線形・dB 化は未実装・post-fader 固定 |
+| `sites/user/reference/methods.md` / `en/` | 同上 + `output()` の宛先が sum のみ・`thru:` / `db:` 不在 |
+| `docs/user/ja/USER_MANUAL.md` | `output()` / `send()` の宛先を「sum バス」と書いていた |
+| `sites/dev/editor/execution-feedback.md` / `en/` | 診断 6 がミキサー宛先を除外するようになったこと（#852 の `diagnostics-analysis.ts:257-262`）が未記載 |
+
+追記した利用者から見える表面（すべて #852 の差分から読み取れるもの）:
+
+- `send(aux, db)` の単位が **dB**（線形 `0.3` 相当は `-10.5`）。`amount:` は loud に throw
+- `send(aux, db, enabled: false)` はチェーン上の位置を保持したまま送出を止める
+- `output(dest, thru:, db:)`。`thru: false`（既定）が終端・`thru: true` がタップ
+- `send(name, db)` ≡ `output(name, thru: true, db: db)`
+- 宛先の解決順: 解決済みノード → `"master"` → 宣言済み sum/aux → `"L,R"` → LinkAudio channel
+- `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線**に並ぶ
+- `sum` / `aux` バスも `output()` / `send()` / `gain()` / `pan()` を受ける（`BUS_DSL_METHODS`）
+- `master` はミキサーノード名として予約・`mix.output(1, 2)` はデバイスであって master ではない
+- `mix.output(n)` の 1 引数形はモノラル（L+R マージ）
+
+## 書かなかったこと（PR 本文の「確認してほしい点」へ回した）
+
+- core spec MX.5 の「sum ネスト不可」と、同 PR が MX.2.2 に書いた「sum が別の sum へ出せる ✅」が
+  **食い違って見える**。どちらが正しいかは仕様の判断なので追従作業では直さない
+- `gain()` / `pan()` の固定値が**バス未確保の audio シーケンスでは発音側に留まる**という条件分岐は、
+  ユーザー向けページには書いていない（内部の割り当て事情で、書くと「位置が効かない場合がある」と
+  読めてしまう）
+
+検証: `npm run docs:build -w @orbitscore/user-site` 緑 / `-w @orbitscore/dev-site` 緑 /
+`npm run docs:check` **938 citations verified, 0 failed**。
+
+### docs(sites): follow PR #857 — a benign warn is an input to the release gate (#855) (Sep 11, 2026)
+
+マージ済み PR [#857](https://github.com/signalcompose/orbitscore/pull/857)（merge commit `a6e1f13`）への
+ドキュメント追従。**実装とテストは変更していない。**
+
+## 追従先
+
+**`sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`**（ja/en 両方）。
+
+この PR が直したのは engine 内部の TOCTOU だが、**観測可能な表面は ERROR 件数**である。
+IV-3 の「`get_log` とリングバッファ」節は、この計数が信用できない理由を 2 つ挙げていた
+（固定窓による false green・#756 以前の chunk 単位前置による**構造的な過小**）。#855 は
+その 3 つ目で、向きが逆の**構造的な過大**にあたるので、同じ節に並べて書いた。
+
+- `temp-file-manager.ts:98-118` を引用し、per-entry の `try` が ENOENT だけを飲む形を示す
+- #840 のマージ前ゲートで `expected 9 to be less than or equal to 8` として出た実測を明記
+- ループ全体を囲む `try` だと ENOENT 1 件で残りが掃除されない副次問題も残す
+- 一般則を #756 と対にして締める:
+  **engine のどこかの `console.warn` 1 行が、そのままリリース可否ゲートの入力になる**
+
+frontmatter は `verified-against: a6e1f13` / `verified-at: 2026-09-11` へ更新し、
+冒頭 Note の追従リストにも #855 を足した。
+
+## WORK_LOG の並びを直した
+
+#857 の WORK_LOG エントリ（Sep 11）が、マージ時のコンフリクト解消（`1c3056a`）で
+**Sep 10 の #611 エントリ群の間**に入っていた。本文は変えず、位置だけ Recent Work の
+先頭へ移した。#857 は #860 / #852 より後のマージなので、そこが時系列上の正しい位置になる。
+
+## 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論・`.orbslog` 形式に変更が無い |
+| `sites/user/` `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語に変更が無い。temp 掃除は DSL から不可視 |
+| `rust/` 側の章 | diff は TypeScript の engine のみ。MCP ツールの引数・返り値・エラー挙動は不変 |
+| `sites/dev/audio/audio-file-playback.md` | slicing 章だが SC 経路の歴史的読解で、`TempFileManager` を扱っていない |
+
+### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
+
+#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
+
+```
+AssertionError: expected 9 to be less than or equal to 8
+ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
+       stat '.../T/orbitscore_1789065642138_xx52jsw'
+```
+
+**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
+する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
+エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
+
+`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
+engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
+**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
+
+**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
+いた。孤児が溜まる。
+
+## 🔴 変異検証が別の穴を見つけた
+
+修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
+この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
+接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
+
+| 変異 | 結果 |
+|---|---|
+| ENOENT も含め全部握り潰す | 1 failed |
+| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
+| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
+| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
+| restore | 5 passed・baseline とバイト一致 |
+
+## テストはモックを使わず実物のファイルシステム条件で書いた
+
+`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
+最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
+
+| 条件 | 作り方 | Node が出すもの |
+|---|---|---|
+| レース | dangling symlink | 本物の `ENOENT` |
+| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
+| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
+
+`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
+
+捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
+結果的に良い方向へ転んだ。
+
+`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
+
+Closes #855
+
+---
+
+### docs(sites): re-anchor the release.yml line references shifted by #853 (Sep 11, 2026)
+
+PR [#853](https://github.com/signalcompose/orbitscore/pull/853)（タグと `.vsix` の版を照合する
+release ガード）が `.github/workflows/release.yml` の `Setup Node.js` の直後に **10 行**挿入した。
+旧 58 行目以降がすべて **+10** ずれている。
+
+## #853 が直したもの・残したもの
+
+| 種別 | 追従状況 |
+|---|---|
+| ` ```yaml // .github/workflows/release.yml:84-90` 形式の引用ブロック 2 箇所 | ✅ #853 が `94-100` / `184-193` へ更新済み（`docs:check` が突合するため) |
+| 本文中の散文的な行参照 | ❌ 取り残された。`docs:check` はフェンス付き引用しか見ないので red にならない |
+
+## 直した 4 行
+
+| ファイル | 変更 | 参照先の実体（現行 release.yml） |
+|---|---|---|
+| `sites/dev/rust-engine/index.md:329` | `:88` → `:90` | `cargo build ... --features outproc-effect,outproc-instrument` |
+| `sites/dev/en/rust-engine/index.md:338` | 同上 | 同上 |
+| `sites/dev/signal-chain/index.md:1616` | `:86-98,191-200` → `:88-100,184-193` | 実 Gain テストのステップ / `.vsix` 内 `std-plugins/Gain.clap` の同梱ゲート |
+| `sites/dev/en/signal-chain/index.md:1653` | 同上 | 同上 |
+
+いずれも**執筆時点では正しかった**（`28606fa` 時点で `release.yml:88` は features 行、
+`84a29a5` 時点で `86-98` / `191-200` は当該ステップ）。行ドリフトで腐っただけで、
+記述の内容そのものは変わっていない。したがって章の `verified-against` / `verified-at` は
+**更新していない** — 章全体を検証し直してはいないため。
+
+## 追従不要と判断したもの
+
+- `docs/design/656-release-design.md` の行参照（`:114` `:224` `:245-248` 等）も +10 ずれているが、
+  **設計書は起案時点のスナップショット**なので書き換えない（routine 規則）。報告のみ
+- `docs/planning/IMPLEMENTATION_PLAN_2026-09.md:239` の `release.yml:116-207` も同様に +10 ずれ（→ `126-217`）。計画文書なので報告のみ
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #853 は DSL の構文も意味論も
+  変えていない（`packages/engine/` に差分なし）
+- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語に変更なし
+
+### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
+
+束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
+
+```
+AssertionError: default-baseline cycle must add no ERROR: lines
+  → expected 10 to be less than or equal to 9
+
+[daemon] WARN orbit_clap_host::controller: [orbit-clap-host] NotePortsExtension なし; port 0 を使用
+```
+
+## 正常系で警報が鳴っていた
+
+`query_note_port_index`（`controller.rs:400`）は **すべての CLAP ロードで無条件に**
+呼ばれる（`:246`）。**エフェクトが note ポートを持たないのは正常**で、port 0 という
+フォールバックも CLAP の慣習どおり機能する。それを `warn!` で報せていた。
+
+## なぜ ERROR 件数に乗るか
+
+拡張は engine の stderr を**全行 `ERROR:` として**出力する（`extension.ts:1453`）。
+これは**意図的な設計**で、#756 の記録が理由を書いている:
+
+> `outputChannel.append('ERROR: ' + chunk)` と chunk 単位で前置していた。1 つの chunk に
+> 複数行入ると 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が**構造的に
+> 過小カウント**する（= 偽緑）
+
+つまり「実エラーを取りこぼさない」ために全行前置している。**分類側を緩めるのは筋が悪い**
+（取りこぼす方向へ戻る）。
+
+🔴 したがって**ノイズは源で止める**。`warn!` → `debug!`。
+memory `stderr-is-classified-as-error` は「engine の warn は全部 ERROR 行」を
+**4 回目の再発**として記録しているが、これまでの対処はテスト側だった。今回は発生源を直した。
+
+## 失う情報
+
+instrument が note ポートを持たない場合も debug になる。ただし port 0 のフォールバックは
+機能するので、これは「動かない」ではなく「既定を使った」の報告であり、debug が妥当。
+
+検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
+`cargo test -p orbit-clap-host --lib` **29 passed**。
+
+### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
+
+owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって
+オラクルの欠陥ではなかった。
+
+## 何が壊れていたか
+
+ゲインは**ブロックあたりスカラー 1 個**として掛かっていた。`ramp_frames` は 5 ms = 240 で、
+実機のブロック長は **512**。`frac = min(512/240, 1.0) = 1.0` なので
+**ランプが 1 ブロックで完了する**（= ブロック境界の段差）。
+
+`gain(-40)` → `gain(0)` は振幅が 0.01 → 1.0 に**1 サンプルで跳ぶ**。
+実測: 切替時の一次差分 `0.6996` vs 信号自身の最大スルー `0.0407` → **17 倍**。
+
+`advance_ramped_gain` の doc は "One block of the **click-free** gain ramp" と書いていたが、
+**出荷時のバッファ長ではこの記述は偽**だった。
+
+## 🔴 私の最初の推奨（案 D）は誤りだった
+
+「出力バッファ長を env 化して E2E-7 を 64 フレームで回す」を推奨していたが、owner の
+「rampの粒度がそれでいい根拠を説明して」で一次ソースを読み直し、**2 つの理由で撤回**した。
+
+1. **出荷される振る舞いを何も変えない。** 512 で走るユーザーには段差が残る
+2. **E2E-7 すら通らない見込み。** 64 でも `frac = 64/240 = 0.2667` で 4 段の階段になり、
+   最大段差 0.264 × ピーク振幅 0.707 = **0.187** > 閾値 `4 × 0.0407 = 0.163`
+
+推奨する前にこの算数をやるべきだった。
+
+## 案 A の要点: ブロック終端をビット一致させる
+
+現行式 `current += (target - current) × min(frames/ramp_frames, 1)` は
+「ブロック先頭の距離を `ramp_frames` で割った固定ステップ」と等価なので:
+
+```
+step  = (target - start) / ramp_frames
+at(f) = end                if f >= min(frames, ramp_frames)
+        start + step * f   otherwise
+```
+
+`end` は**現行式をそのままの演算順序で 1 回だけ**計算した値。したがって
+`at(frames) == end` がブロックの長短どちらでも成り立ち、**既存の実機 goldens
+（E2E-2/3/6/G/P/S/10）は動かない**。これが検算そのもの。
+
+## コスト
+
+| 状態 | 現在 | 案 A |
+|---|---|---|
+| 定常（圧倒的多数） | 乗算 1（`gain == 1.0` なら省略） | **同じ**（`is_settled()` で同じ経路へ） |
+| ランプ中 | 乗算 1 | 乗算 1 + 加算 1 を 240 サンプル分だけ |
+
+pan は**位置ではなく L/R 係数**を線形補間する（位置を補間すると `equal_power_pan` の
+cos/sin が毎サンプルになる）。`pan == 0.0` → `(1.0, 1.0)` の unity 早道は維持したので、
+中央 pan と pan 無指定のビット一致も保たれる。
+
+## 検証（🔴 main が sandbox 外で実行）
+
+`cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑 /
+`cargo test -p orbit-audio-native --lib` **88 passed** /
+`cargo test -p orbit-audio-daemon --features outproc-effect --lib` **220 passed**。
+
+実機 E2E-7 は束 B と合わせて main が本ツリーで確認する。
+
+Closes #859
+### fix(dsl): separate the master track from the device it outputs to (#611) (Sep 11, 2026)
+
+🔴 **owner の訂正（2026-09-11）**。私が「1,2 ch は master の領分だから `mix.output(1,2)` は
+master として扱う」と裁定を仰ぎ、owner が「master であり、それはつまりデバイスの 1,2 に
+なるのでは」と応じた後、**その実装が概念を取り違えている**ことを owner が指摘した。
+
+> マスタートラックとデバイスっていう概念を、トラックなのかデバイスなのかっていうのを
+> ちゃんと分けた方がいいんじゃないですか。
+>
+> マスターっていうのは要するにシーケンスのトラックやサミング、オグジュアリーのトラックとかと
+> 同じように、マスターのトラックですよね。
+
+## 正しいモデル
+
+```
+kick ──┐
+snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
+hat  ──┘                    ↑ ここに合流する
+
+pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
+```
+
+- `output(master)` は **master トラックの頭に合流**する。その後 master のラックと
+  `global.gain()` を通り、master が自分の出口として持っているデバイスへ出る
+- `mix.output(1, 2)` は **デバイスの 1,2 ch を名指す**。トラックではない
+
+**実装も元からそうだった**（`default_master_line_program()` は bus と同じ形の
+`[Rack, Gain, Output]`）。混同していたのは **DSL の側**だった。
+
+## 何が焼き付いていたか（直した順）
+
+| 場所 | 旧 | 新 |
+|---|---|---|
+| `process-statement.ts` の糖衣 | `(1,2)` を `{kind:'master'}` に読み替え | `physicalOutputDest()` で**常にデバイス** |
+| 同・引数経路 | `(1,2)` の特例が**無い**（糖衣と食い違い） | 同じヘルパを通す |
+| `MixerRuntimeNode` | master = `{kind:'output', channels:[1,2]}` = **デバイスノード** | **`{kind:'master'}` = 第 3 の種類** |
+| `registerMixerNode` | `var master = mix.output(...)` は**合法**（#523 IMPORTANT 6） | **拒否**（sum/aux と同じ理由） |
+| `resolveMixerNode` | 明示ノードが 1 つでもあれば master を解決**しない** | 常に解決する |
+
+🔴 **最後の行が一番効いている。** 旧実装には「この Global に明示ノードが 1 つでもあれば
+`master` を解決しない」というガードがあった。これは master が**デバイスノードだった時代の
+名前衝突対策**で、`var master = mix.output(...)` が宣言されうる前提だった。
+`master` を予約語にした今は衝突が起きず、ガードは
+**「sum を 1 つ宣言した瞬間に `kick.master` が壊れる」という宣言順依存**だけを残していた。
+
+## master の出口は 1,2 固定のまま（owner 2026-09-11）
+
+> マスターが1、2固定にしておかないと、一般的な DAW の操作とか設定で 1、2 じゃなくなって
+> しまっているみたいなことが起こると、デバイスの変更で困ってしまうので
+
+**固定であることと、「1,2 という名前が master を意味する」ことは別**。
+master トラックの DSL ハンドル（`master.output(...)` / `master.effect(...)`）は
+凍結線に入れない — 下の配線（daemon の `SetBusLine("master", ...)`）は既に通っているので、
+新ラインで表面だけ足せる。
+
+## 旧モデルを固定していたテスト 9 件を書き直した
+
+`signal-chain-dispatch.spec.ts` 5 件 + `mixer-runtime.spec.ts` 4 件。
+うち 1 件はテスト名自体が混同を記録していた:
+「sum/aux を master と名付けるのは拒否するが、**output を master と名付けるのは合法に保つ**」。
+
+## 変異検証
+
+| 変異 | 結果 |
+|---|---|
+| `master` の予約を外す | 1 failed |
+| `master` を解決しない（旧ガード相当） | **6 failed** |
+| `(1,2)` の特例を復活させる | 1 failed |
+| restore | 32 passed・baseline とバイト一致 |
+
+`npm test` **2,325 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
+引用 936 / 0 failed。
+
+Part of #611
+
+---
 
 ### fix(dsl): keep the instrument reschedule off the push-success path (#611) (Sep 11, 2026)
 
@@ -9581,3 +9961,175 @@ gated env 未設定で spec の 39 件すべて skip。
 `send` を経路張りにだけ使っている 3 箇所（`fx625` / `fx628`）は送出量を判定していない
 （oracle は ERROR 件数と child プロセスの有無）ので値は変えず、**dB として読むこと**を
 先頭の 1 箇所に注記した。
+
+### さらなる移設（#888 子 1 のレビュー追記で超過・2026-09-12）
+
+### test(core): freeze the clock in the loop-quantize mock (#869) (Sep 11, 2026)
+
+`tests/core/loop-quantize.spec.ts` の「snaps to the same boundary already crossed when
+currentTime equals a boundary」が CI で間欠的に落ちていた（PR #847 の `code-review` ジョブ・
+run 34560570537）。**#847 は docs 7 ファイルのみ**で、コードに触れていない。
+
+#### 原因は `Date.now()` を 2 回呼んでいたこと
+
+モックの `startTime` が getter で、アクセスのたびに `Date.now() - elapsedMs` を再計算していた。
+呼ぶ側（`prepare-playback.ts:73-75`）はその直後に**別の `Date.now()`** を呼ぶ。この 2 回の間に
+ミリ秒が繰り上がると `currentTime = elapsedMs + 1` になる。
+
+このテストだけが **`elapsedMs = 2000`（小節境界ちょうど）** を突くので、+1ms で
+`nextQuantizedTime` が「境界を過ぎた」と判定し、次の境界 **4000** を返す。他のテストは境界の
+途中（1500 等）なので 1ms では判定が変わらない。
+
+**プロダクションコードの欠陥ではない。** 実機の `startTime` は保存された数値で、読むたびに
+動いたりしない。壊れていたのはモックの側。
+
+#### 4000 には犯人候補が 2 つあった
+
+`expected 4000 to be close to 2000` は、**(a) +1ms で次の小節**でも
+**(b) 直前のテストの `global.quantize('2bar')` が漏れた**でも同じ値になる。(b) を潰してある:
+`QuantizeManager._value` は private なインスタンスフィールド（既定 `'bar'`）で、`beforeEach` が
+`Global` ごと作り直すため漏れる経路が無い（`packages/engine/src/core/global/quantize-manager.ts:75-76`）。
+
+#### 機構の実測
+
+旧モックと同じ 2 回読みを 500 万回回すと、**109 回**（0.0022%）で
+`currentTime !== elapsedMs` になった。手元ではこの頻度だが、負荷のかかった CI runner では
+2 回の `Date.now()` の間隔が広がるので、実際の発火率はこれより高い。
+
+#### 直したもの
+
+describe 全体で `Date.now` を固定値に固定し、`startTime` の getter も同じ定数から引く。
+**両方が揃って初めて成立する** — getter だけ定数にして `Date.now` を生かすと、
+`currentTime` が巨大な値になる。`afterEach` の `vi.restoreAllMocks()` が復元する。
+
+検証: `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
+引用 938 / 0 failed。
+
+Closes #869
+
+### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
+
+owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。
+
+## 🔴 動かしたのは 1 つだけ — 正本は拡張の package.json
+
+`docs/design/656-release-design.md` §4.4 が版の所在を確定させている:
+
+| 場所 | 規則 | 今回 |
+|---|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ | **2.1.0 → 3.0.0** |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。同期しない | **2.0.0 のまま** |
+| `DSL_VERSION` | **別軸**（spec 版）。同期しない | 1.1 → **1.2**（別軸の理由で動かす） |
+| ルート `package.json` | `private: true` で配布物にならない | 触らない（裁定待ち (7)） |
+
+`DSL_VERSION` を上げたのは「拡張が 3.0.0 になったから」ではなく、**DSL の表面が変わったから**
+（`send` の dB 化・`output(dest, thru, db)` の導入・`pan` のライン要素化）。理由が別なので
+数字も揃わない。
+
+🔴 **私は一度これを間違えた。** 「拡張 package.json・`ENGINE_VERSION`・`DSL_VERSION` の 3 つを
+揃える」と報告し、`/simplify` の Altitude が §4.4 を示して正した。
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+## なぜ major か
+
+- `ORBITSCORE_ENGINE` 環境変数・`orbitscore.engine` / `scsynthPath` 設定・
+  `Force Kill scsynth` コマンド・MCP `force_kill_scsynth` を**削除**した（#502）
+- `send` が**線形係数から dB へ**変わり、既存の譜面の意味が変わる
+
+## 追従した記述
+
+root `README.md`（2 箇所）・`CLAUDE.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2 箇所）・
+dev サイトの `version.ts` 引用 4 箇所。いずれも「3 つは別軸」と明記して、
+次に読む人が同じ取り違えをしないようにした。
+
+
+#### owner 裁定（2026-09-11）と、リリース直前の README 2 件
+
+正本 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.7 が **未決**として残していた 2 件に
+裁定が出た。
+
+| 未決だったもの | 裁定 |
+|---|---|
+| バージョン番号 | **3.0.0 / DSL 1.2**（`send()` の dB 化で既存譜面の意味が変わるので semver では major） |
+| タグ名前空間 | **`v3.0.0`**。`ext-v*` / `app-v*` の分離はネイティブ版の新ラインで行う（§12.3）。`release.yml` のトリガーは `v*` のままでよく、ワークフローの変更は不要 |
+
+残り 3 件は裁定待ちではなく既に解消済み: SC 削除 = #840 / gated ハーネス = #831 /
+README の導線 = #842。Marketplace publish は「行わない」（owner 2026-09-10）で、
+リポジトリ変数 `PUBLISH_MARKETPLACE` が未設定のため publish ステップは skip される（実測）。
+
+**ついでに直した README 2 件** — どちらも「これから打つタグが何をするか」と食い違っていた:
+
+- `tag push で全 channel に自動 publish` → 当時の計画である旨と、現在は GitHub Release だけが
+  作られることを明記
+- 「ICMC v1.1.0 bundle release」節の見出しに historical を付け、表が挙げている scsynth 同梱は
+  #502 で削除済みで**現在の `.vsix` に scsynth は入っていない**という注記を足した
+
+出荷される `packages/vscode-extension/README.md` は元から SC 参照 0 件で、Marketplace 非公開も
+正しく書かれている（実測）。直したのはリポジトリ表紙の側。
+
+ガードの実測: `checkTagAgainstVersion('v3.0.0', '3.0.0', 'darwin-arm64')` → `{ok: true}` /
+`('v3.0.0', '2.1.0')` → 版が食い違うと fail（#853）。**バージョンバンプがタグより前に入る必要がある**
+ことをこのガードが担保している。
+
+検証: `npm test` 2,338 passed / 0 failed・`npm run lint` 緑・引用 944 / 0 failed。
+
+### docs: land the nine routine docs-sync PRs as one roundup (#867) (Sep 11, 2026)
+
+凍結版リリース（#827）のタグを打つ前に、溜まっていたルーティン docs 追従 PR **9 本**
+（#837 / #844 / #847 / #856 / #858 / #862 / #864 / #865 / #866）を統合ブランチ
+`867-docs-sync-roundup` で 1 本にまとめて main へ入れた。**docs のみ**で `packages/` `rust/`
+`tests/` `.github/` は触っていない。学習サイトはリリースの一部なので、タグ前に反映させる必要がある
+（owner 2026-09-11）。
+
+#### なぜ 1 本にまとめたか — 逐次マージだと兄弟の内容が消える
+
+9 本すべてが `WORK_LOG.md` を触り、#844 と #856 は 13 ファイルを共有、#837 / #862 / #865 は
+`sites/dev/editor/mcp-and-gated-e2e.md` の**同じ Note 行と同じ節**に追記していた。1 本ずつ main へ
+入れると残り 8 本を毎回再同期することになり、しかも従来の解決規則「WORK_LOG は両側・他は追従側を
+採る」は、**main 側に兄弟 PR の内容が入った後では兄弟の内容を落とす**（規則が前提にしていた
+「main 側 = 古い baseline」が成り立たなくなるため）。
+
+#### 衝突の解決（全 22 hunk・いずれも同じ事実の別表現か、同じアンカーへの独立追記）
+
+| 種別 | 解決 |
+|---|---|
+| WORK_LOG の同一アンカーへの独立エントリ（4 箇所） | 両方残す |
+| #844 × #856 の SC 削除記述（11 ファイル・18 hunk） | hunk ごとに**情報量の多い側**を採る。`glossary.md` の Sources 一覧（ja/en）と `index.md` の Part VII 行（ja/en）は #844 側（#836 / #838 の粒度と `daemon-client.ts` の行がある）、残りは #856 側 |
+| `mcp-and-gated-e2e.md` の Note 追従リスト（ja/en） | #830・#860・#855 の 3 件を**合併**。frontmatter は最新の `a6e1f13` / 2026-09-11 |
+| 同じ章の新設節（#862 の `###` 節 × #865 の散文） | 両方残す。#865 の散文を先（直前の #756 段落から続く）、#862 の `###` 節を後 |
+
+🔴 **1 件だけ「両方残す」では壊れた**: #865 は #857 の WORK_LOG エントリを Recent Work の先頭へ
+**移動**していたので、素朴に両側を残すと同じエントリが 2 箇所に出る。移動先を残して旧位置
+（54 行）を削除した。**「両側を残す」は追記には正しく、移動には正しくない。**
+
+#### 検証
+
+`node sites/dev/scripts/check-citations.mjs` **944 citations verified / 0 failed**（`--fix` は
+使わず素で実行）/ `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
+`docs:build` dev・user 両方緑。
+
+Closes #867
+
+### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
+
+PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
+#860 自身が `34e12b3` で dev サイトを更新しているが、**引用の再アンカーが 3 箇所ずれていた**。
+`check-citations.mjs` は「引用文字列が実ファイルと一致するか」しか見ないので、
+**別の関数に一致してしまった引用は緑のまま通る**。
+
+| 箇所 | 何が起きていたか |
+|---|---|
+| `sites/dev{,/en}/signal-chain/mixer-audio-line.md` | bus post-loop の `LineOp::Output` 腕を引用していたはずが、`execute_master_line`（master 側）の `LineOp::Output` 腕に再アンカーされていた。直後の本文「`Output` として実行されるのは `Master` / `Bus` / `Device` の 3 つ」と引用が食い違う（master 側は `Device` 以外を `debug_assert!(false)` で落とす）。`output.rs:2566-2592` へ戻した |
+| 同上（pan 節） | `apply_line_pan` の引用が切り詰められ、直後の本文が指す **`√2`** が引用内に無くなっていた。`√2` は #859 で `line_pan_coefficients` へ切り出されたので、その関数（`output.rs:2227-2243`）の引用を足した |
+| `sites/dev{,/en}/rust-engine/index.md` | `render_block_with_sources` の引用が 4 行はみ出して `execute_master_line` のシグネチャを含んでいた。`1846-1932`（関数の閉じ括弧）で止めた |
+
+あわせて、#859 が**コード引用だけ更新して本文を更新しなかった**箇所を直した
+（`sites/dev{,/en}/rust-engine/index.md` の `advance_gain` 節）。旧本文の
+「block が ramp より長ければ 1 回で目標へ到達」は、いまはブロック**終端**の値の話であって、
+ブロック内は `ramp_frames` サンプルかけて補間される。これは #859 が直した欠陥そのものなので、
+そのまま残すと修正前の振る舞いを説明する文が残ることになる。
+
+4 章の `verified-against` / `verified-at` を `e4d4199` / 2026-09-11 に更新。
+
+検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
+---
