@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化と PR-O3b（[#823](https://github.com/signalcompose/orbitscore/pull/823)）の `SetBusLine` wire まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）のバス上 `Pan`・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化と PR-O3b（[#823](https://github.com/signalcompose/orbitscore/pull/823)）の `SetBusLine` wire まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）のバス上 `Pan`・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -314,6 +314,138 @@ fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線�
 `_line`（`AudioLine`）が要素をキー（宛先 + 出現序数）で管理する点は覚えておいてください。
 #649 の設計が「メソッドは完全に独立したスライスを更新する」と確認した根拠が、旧 `_auxSends`
 （`Map<string, number>`）から `AudioLine` の同一性キーへ引き継がれています。
+
+### 宛先の省略と「実現の省略」（#883 束 C・PR #884）
+
+`output()` の第 1 引数は **省略できます**。省略形 `.output()` は `output("master")` と同じ
+`{ kind: 'master' }` に解決され、**暗黙の要素ではなく既定引数**です（core spec MX.2 /
+`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4 規範 (2)）。だから要素はラインに現れ、
+「出口が譜面に書かれている」状態になります — `.master`（裸形）≡ `.output()` ≡ `.output("master")`。
+
+省略した `output()` と、オプションだけを渡した `output(db: -6)` を見分ける実行時判定は 1 箇所です。
+「解決済みの宛先は必ず `kind` を持ち、オプションは決して持たない」という 1 点に賭けています。
+
+```typescript
+// packages/engine/src/core/sequence/audio-line.ts:15-21
+/**
+ * The single runtime discriminator between a resolved destination and an options bag.
+ * Every OutputDest has `kind`; output/send options deliberately never do.
+ */
+export function isOutputDest(value: unknown): value is OutputDest {
+  return typeof value === 'object' && value !== null && 'kind' in value
+}
+```
+
+`send()` は違って、**宛先を省略できません**。ガードは 1 関数に集約されていて、
+`Sequence.send()` と `MixerBusHandle.send()` の**両方の契約**をこれが持ちます。
+
+```typescript
+// packages/engine/src/core/sequence/audio-line.ts:46-65
+/**
+ * 🔴 `send()` の宛先は**必須**（`output()` と違い省略できない — どこにも送らない send は無い）。
+ *
+ * **この 1 関数が両方の `send()` の契約**（`Sequence.send()` と `MixerBusHandle.send()`）。
+ * 片方にだけガードを書くと、パーサが名前付き引数だけの `send(db: -6)` を
+ * `[undefined, {db:-6}]` に整形した時、ガードの無い側が `undefined` を master に解決して
+ * **master への thru 出力を黙って 1 本増やす**（既存の直結と二重に鳴る）。
+ * 実際にレビューで再現した（PR #884 ラウンド 2）。
+ *
+ * 文言は**実際に来た型を出す** — 常に "null" と決め打ちすると、数値や真偽値を渡した人に
+ * 嘘の情報を与えることになる。
+ */
+export function assertSendDestination(value: unknown, call: string): void {
+  if (typeof value === 'string' || isOutputDest(value)) return
+  const actual = value === null ? 'null' : typeof value
+  throw new Error(
+    `${call}(aux, db) requires a destination; received ${actual}. ` +
+      `Unlike output(), send() has no default — name an aux/sum bus or pass a resolved destination.`,
+  )
+}
+```
+
+片方にだけ書くと、名前付き引数だけの `send(db: -6)` — パーサーが `[undefined, {db: -6}]` に
+整形するもの（[II-3. 評価パイプライン](/pipeline/evaluation)の `processArguments()` 参照）— が
+ガードの無い側で `undefined` を master へ解決し、**master への thru 出口を黙って 1 本増やします**
+（既存の直結と二重に鳴る）。PR #884 のレビューで実際に再現した経路です。
+
+#### 実現の省略 — 素の master 出口はバスを確保しない
+
+`.output()` の必須化は、**譜面の全ラインが出口を書く**ことを意味します。素直に実装すると
+`output()` を書いた瞬間に insert bus を確保してしまい、**8 本のプールを食い潰します**
+（同梱 example は 4 本が 8 を超える）。
+
+そこで、ラインが**直接経路では実現できないもの**を要求した時にだけ確保します。述語は
+`audio-line.ts` の 1 箇所にあります。「素の master 出口」の定義そのものは、のちに
+`isPlainMasterOutput()` として名前を与えられました（instrument 経路と共有するため・束 S。
+本ページはまだ束 S を扱っていません）。
+
+```typescript
+// packages/engine/src/core/sequence/audio-line.ts:254-284
+/**
+ * #883 §2.3「実現の省略」: a line needs a daemon bus only when it asks for something the
+ * direct engine path cannot realize — a rack, or an exit that is not a plain master exit.
+ *
+ * 🔴 **This is the single definition.** 束 S の instrument 経路（設計 §2.2.1）は
+ * `SetSourceRouting` の宛先（`none` / `master` / `bus`）を**同じ述語**で選ぶ。ここに
+ * 置かずに呼び出し側へ書き写すと、audio 経路と instrument 経路の判定がドリフトする。
+ */
+/**
+ * 🔴 **「素の master 出口」とは何か — その定義はここだけにある。**
+ *
+ * 直接経路が実現できる唯一の形（master 宛て・分岐なし・減衰なし）。この 3 条件のどれか 1 つでも
+ * 外れたらラインは daemon のバスを要する。
+ *
+ * **呼び出し側へ書き写さないこと。** `lineNeedsBus()`（audio 経路）と
+ * `Sequence.instrumentSourceRoutingTarget()`（instrument 経路）の**両方**がこれを使う —
+ * 片方にだけ書くと 2 経路の判定がドリフトする。同じ型の事故を PR #884 ラウンド 2 で
+ * 実際に起こしている（`assertSendDestination` のコメント参照）。
+ */
+export function isPlainMasterOutput(element: LineElement): boolean {
+  return (
+    element.kind === 'output' && element.dest.kind === 'master' && !element.thru && element.db === 0
+  )
+}
+
+export function lineNeedsBus(elements: readonly LineElement[]): boolean {
+  return elements.some(
+    (element) =>
+      element.kind === 'rack' || (element.kind === 'output' && !isPlainMasterOutput(element)),
+  )
+}
+```
+
+呼び出し側（`stageOutputElement()`）はこれを見るだけです。
+
+```typescript
+// packages/engine/src/core/sequence.ts:481-498
+  private stageOutputElement(
+    name: string,
+    dest: OutputDest,
+    thru: boolean,
+    db: number,
+    sugar: 'output' | 'send',
+  ): void {
+    this._renderBus = undefined
+    this.upsertLine({ kind: 'output', dest, thru, db, sugar })
+    // #883 Bundle C realization elision: an explicit default master destination is score
+    // truth, but it is equivalent to today's direct path and therefore must not consume one
+    // of the eight sequence buses. Allocate only when the declared line needs processing or
+    // routing that the direct path cannot realize. Fixed gain/pan remain event-side until then.
+    // 🔴 述語の定義は `AudioLine.needsBus()` 側にある（束 S の instrument 経路が同じものを使う）。
+    if (!this._insertBus && this._line.needsBus()) {
+      this._insertBus = this.global.ensureSequenceInsertBus(name)
+    }
+  }
+```
+
+🔴 この述語を**呼び出し側へ書き写さない**のは、束 S の instrument 経路（`SetSourceRouting` の
+`none` / `master` / `bus`）が**同じ述語**を使うからです。写すと audio 経路と instrument 経路の
+判定がドリフトします。
+
+副作用として、`seq.gain(固定値)` / `seq.pan(固定値)` の「バスが無いうちは発音側で適用し、
+バスを確保した瞬間にラインへ引き継ぐ」経路（core spec MX.1 の注記）は、**素の master 出口を
+書いただけでは引き継がれません**。引き継ぎが起きるのは `rack` / 非 master 宛て / `thru` /
+`db ≠ 0` のいずれかが現れた時です。
 
 ## routing を daemon へ届ける: `SetBusRouting`（🔴 #611 PR-B2 以降は歴史的経路）
 

@@ -6,7 +6,7 @@ verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12, and **only the engine / daemon spawn sections** brought up to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889) — starting the engine on VS Code's bundled Node and not passing `ELECTRON_RUN_AS_NODE` on to the daemon) on the same day. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # 0-2. Architecture Overview
 
@@ -57,7 +57,7 @@ graph TD
 
   AGENT["external agent\n(Claude Code etc.)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv carries only the debug flag and the capture seam"| CLI
+  EXT -->|"child_process.spawn(process.execPath, [cli-audio.js, 'repl'])\nborrows VS Code's bundled Node via ELECTRON_RUN_AS_NODE=1"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
@@ -129,7 +129,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 
 What is interesting is that the resolved path is not handed to the engine via env. The spawned engine CLI runs the same `resolveDaemonBinaryPath()` itself, so the result is deterministically identical and there is no reason to re-inject it.
 
-Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
+Only the debug flag and the capture seam (#307) go into this `env` variable (two more are added right before the spawn; they show up in a moment). **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:1985-1999
@@ -150,7 +150,7 @@ Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_E
   outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 ```
 
-The engine process itself is then started with `child_process.spawn` running Node.js.
+The engine process itself is then started with `child_process.spawn` running Node.js. The question that matters here is **which** Node.js. On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) the extension **stopped looking up `node` on PATH and started borrowing the Node that VS Code itself bundles**. A VS Code launched from Finder or launchd has the minimal PATH from `/etc/paths`, and on machines where node is installed through nodenv or Homebrew there is no `node` there. The engine then fails to start with `spawn node ENOENT`, and because the only visible symptom is "the engine does not start", the user has no way to tell that PATH is the cause. The extension host is Electron, so `process.execPath` does not run as Node on its own; it becomes Node only once `ELECTRON_RUN_AS_NODE=1` is passed.
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:2001-2034
@@ -189,6 +189,8 @@ The engine process itself is then started with `child_process.spawn` running Nod
       env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
     })
 ```
+
+The two env vars added here enter the engine process. The process tree continues extension host → engine → daemon → plugin child, so **a variable added here flows all the way to the leaves unless something stops it**. That stopping point appears below, at the daemon spawn.
 
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
@@ -415,6 +417,20 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
     })
     this.child = child
 ```
+
+`env: daemonEnv(process.env)` is the stopping point mentioned earlier. `daemonEnv()` is a pure function that drops only `ELECTRON_RUN_AS_NODE` and passes everything else through (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)).
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-client.ts:75-78
+export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source
+  return rest
+}
+```
+
+The reason for dropping it is "**undo at your own exit what you added yourself**". The extension added this variable so that it could start the engine on VS Code's bundled Node, and its job is over once Electron has read it during process initialization. Without the drop, the Rust daemon inherits it as-is, and since the daemon does not narrow the env when it starts its out-of-process plugin children, the variable **reaches third-party plugin hosts**.
+
+The general rule "do not hand host-derived variables to third parties" is deliberately *not* the justification. If it were, `VSCODE_*` and the other `ELECTRON_*` vars riding on the extension host's env would have to be dropped as well, and this function does not go that far.
 
 ```typescript
 // packages/engine/src/audio/rust-engine/daemon-client.ts:986-1000
@@ -673,6 +689,7 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1-39` — design comment of the Rust backend adapter (timing model, clock mapping, feature gaps)
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:548-555` — `boot()`
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:1-13` — DaemonClient's five steps (spawn → ready line → ws → request/response → events)
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:58-78` — `daemonEnv()`: the exit point that keeps `ELECTRON_RUN_AS_NODE` away from the daemon's children (#878)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-257` — `resolveDaemonBinaryPath()`: search order and fail-loud
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:294-342` — `doStart()`: spawn / connect / handshake
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr routing and ready-line reading

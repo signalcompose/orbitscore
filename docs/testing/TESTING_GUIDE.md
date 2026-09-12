@@ -1,6 +1,6 @@
 # OrbitScore Testing Guide
 
-**Last Updated**: 2026-09-02
+**Last Updated**: 2026-09-12
 **Test Status**: `npm test` → 2165 passed | 68 skipped (2233 total、2026-09-02 実測・macOS 通常ユーザー。skip は macOS 実機・real daemon 依存)
 
 > 🔴 **件数は「緑の実行」から採ること。** 2026-09-01 に記録された 2162 passed は
@@ -12,6 +12,8 @@
 > SuperCollider opt-out 経路と `ORBITSCORE_ENGINE` は #502（2026-09-10）で削除）。実機検証の正本は
 > [E2E_HARNESS_SPEC.md](E2E_HARNESS_SPEC.md) と `npm run test:e2e:gated`（`ORBIT_GATED_ORBITSTUDIO=1`・
 > stock VS Code を MCP で駆動・capture WAV アサーション）、および CLAUDE.md「マージ前ゲート」。
+> 出荷 `.vsix` をインストールした状態でしか通らない層は `npm run test:e2e:cold-install`
+> （`ORBIT_GATED_COLD_INSTALL=1`・2026-09-12 追加・#878 / PR #889）が見る（後述）。
 
 ## 📚 Overview
 
@@ -122,6 +124,42 @@ cargo test -p orbit-audio-daemon --features outproc-instrument \
   がテスト内部（`package_oracle()`）から呼び出されビルドされる。
 - 期待値: oracle が鳴らす note の `post_mix_peak` が `0.25 ± 0.01`（既知の音量応答）。
 - `--test-threads=1` は実機オーディオデバイスの排他利用のため必須。
+
+---
+
+## 📦 出荷 `.vsix` の cold install ゲート（#878 / #873）
+
+`--extensionDevelopmentPath` で起動する dev host は、**出荷する `.vsix` をインストールした
+ときにしか走らない経路を構造的に一度も通らない**。通らないのは 3 つ:
+
+- daemon バイナリの解決先（dev host は `monorepo-release`、cold install は `extension-bundle`）
+- 拡張自身の同梱依存
+- **engine を起動する Node ランタイムの選び方**（#878）
+
+v3.0.0 では `activate()` すら走らない `.vsix` が凍結タグの直前まで残った（#873）。
+どちらも `npm test` と `npm run test:e2e:gated` が全件緑の状態で起きている。
+
+**実行**:
+```bash
+npm run test:e2e:cold-install
+```
+
+`pretest` が古い `.vsix` を消してから `npm run build` → `vsce package --target darwin-arm64` を
+回すので、手動でパッケージングする必要はない。
+
+**2 本の構成**（`tests/e2e/vsix-cold-install-gated.spec.ts`）:
+
+| 構成 | 起動のしかた | 何を守るか |
+|---|---|---|
+| **strict** | `Contents/Resources/app/bin/code`（CLI ラッパ）+ node の無い最小 PATH + `SHELL` 無し | **#878**。VS Code のシェル環境解決に救われない条件 |
+| **finder** | `Contents/MacOS/Code`（app 本体）を直接起動 | **#873**。利用者の通常経路で `.vsix` を入れただけで音が出ること |
+
+- 実機の output device と macOS（Apple Silicon）が必須。ゲート env が無ければ describe ごと skip。
+- オラクルは `ok` ではなく **capture WAV の RMS**（`> 0.01`）と、`get_log` に
+  `Cannot find module` が出ていないこと。
+- **CI には任せられない**: GitHub の macOS runner には VS Code が入っておらず、音声デバイスも
+  無い。`release.yml` は `.vsix` を作れるが、**インストールして鳴らす**ことはできない。
+  `test:e2e:gated` と同じく手元がこのテストの唯一の実行経路である。
 
 ---
 

@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: a2ac724
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08, and to #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874), bundling the extension's own runtime dependencies) and #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871), the bump to extension 3.0.0 — **the package-version wording only**) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08, and to #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874), bundling the extension's own runtime dependencies) and #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871), the bump to extension 3.0.0 — **the package-version wording only**) on 2026-09-11, and — **in the engine spawn section only** — to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889), starting the engine on VS Code's bundled Node) on 2026-09-12. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
@@ -389,11 +389,78 @@ The semantics of clicking a device is "selection = power": clicking the same dev
 
 ## IntelliSense and Diagnostics Registration
 
-`registerCompletionProviders(context)` and `registerHoverProvider(context)` handle IntelliSense. Completion has grown to three families.
+`registerCompletionProviders(context)` and `registerHoverProvider(context)` handle IntelliSense. Completion has grown to four families.
 
 1. **Method-chain contextual completion**: `analyzeMethodChain()` and `getContextualCompletions()` in `completion-context.ts`. Triggered by `.`, it looks at which stage of the chain we are in and reorders candidates
 2. **Pitch-scope completion**: when `).` is typed at a position where the parentheses of `.play(` are still open, it switches to `getPitchScopeCompletions()` (`extension.ts:3652-3672`)
 3. **Plugin catalog name completion**: inside the string argument of `effect(` / `instrument(`, triggered by `"`, it offers names from the catalog (#463 C3, `extension.ts:3689-` onward). For depth, see [PH-3. The Plugin Catalog and Replacement](/en/plugin-hosting/catalog)
+4. **`.output(` destination completion**: candidates appear as soon as `.output(` is typed (#883 bundle C, PR #884). Inside the string argument (the `"` trigger) it offers `master` plus the declared sum / aux names; at the identifier position right after the paren (the `(` trigger) it offers `master` plus the declared mixer-node variables (`mix.sum` / `mix.aux` / `mix.output(...)`)
+
+The `.output(` destination completion splits into two contexts. `detectDslCompletionContext()` in
+`dsl-completion-context.ts` returns `output-string` inside a string and `output-node` at a code
+position.
+
+```typescript
+// packages/vscode-extension/src/dsl-completion-context.ts:86-97
+  if (state !== 'code') return null
+
+  // `.output(` accepts the reserved `master` identifier and any declared mixer-node
+  // variable (`mix.sum`, `mix.aux`, or `mix.output(...)`). Stop at the first argument:
+  // options after a comma are a different completion surface.
+  const outputNode = /\.output\(\s*([A-Za-z_$][\w$]*)?$/.exec(prefix)
+  // A mixer-node declaration uses numeric channel arguments, not routing destinations. Reuse
+  // the receiver-aware declaration pattern below so `var cue = mix.output(` cannot be mistaken
+  // for a Sequence/MixerBusHandle output call.
+  if (outputNode && !VAR_NODE_PATTERNS.mixerNode.test(prefix)) {
+    return { kind: 'output-node', typed: outputNode[1] ?? '' }
+  }
+```
+
+🔴 The `VAR_NODE_PATTERNS.mixerNode.test(prefix)` exclusion matters because the `output(` in
+`var cue = mix.output(3, 4)` is **a physical-output node declaration, not the destination-taking
+`output()`**. Without the exclusion, `master` would be offered where a channel number belongs.
+
+Assembling the candidates happens on the `extension.ts` side.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3624-3637
+      case 'output-string':
+        return makeItems(
+          [
+            'master',
+            ...extractDeclaredBusNames(document.getText(), 'sum'),
+            ...extractDeclaredBusNames(document.getText(), 'aux'),
+          ],
+          vscode.CompletionItemKind.Value,
+        )
+      case 'output-node':
+        return makeItems(
+          ['master', ...extractDeclaredMixerNodeNames(document.getText())],
+          vscode.CompletionItemKind.Variable,
+        )
+```
+
+`output-string` offers sum **and** aux because `output()` can name an aux as well (`send` is sugar
+over it) — see the destination table in `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2. By
+contrast `aux-name` (inside `.send("`) offers only aux names.
+
+One trigger character was added too. Without `(`, nothing appears right after `.output(` unless
+completion is invoked explicitly.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3494-3504
+  const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    dslCompletionItemProvider,
+    '"',
+    '{',
+    // #495 第1段: `<receiver>.` の後のメソッド補完を出すためのトリガー。
+    // これが無いと、明示的に補完を呼び出さない限り出てこない。
+    '.',
+    // #883: destination completion starts as soon as `.output(` is typed.
+    '(',
+  )
+```
 
 `MethodChainContext` has gained three flags since 2026-05.
 
@@ -471,6 +538,18 @@ Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` 
 ```
 
 There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For details, see [IV-2](/en/editor/execution-feedback#real-time-diagnostics-updatediagnostics).
+
+#883 added one more line next to the diagnostic registration: **the quick fix**. `registerOutputCodeActionProvider(context)` returns an "add `<name>.output()`" CodeAction for the two diagnostic codes `output-missing` and `dry-not-routed`.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:394-397
+  // Register IntelliSense providers
+  registerCompletionProviders(context)
+  registerHoverProvider(context)
+  registerOutputCodeActionProvider(context)
+```
+
+The provider itself lives at `extension.ts:3482-3520` and pushes the return value of `vscode.languages.registerCodeActionsProvider` onto `context.subscriptions`. Its body is covered in [IV-2](/en/editor/execution-feedback).
 
 ---
 
@@ -603,7 +682,11 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
     })
 ```
 
-**The 2026-09-10 ruling (#827 / #502) removed the `engineKind` branch entirely, along with the explicit `ORBITSCORE_ENGINE` set and the `ORBIT_SCSYNTH_PATH` hand-off.** For the sole remaining backend (the Rust daemon), only the debug flag and the capture seam (#307) are pushed into env before spawning.
+**The 2026-09-10 ruling (#827 / #502) removed the `engineKind` branch entirely, along with the explicit `ORBITSCORE_ENGINE` set and the `ORBIT_SCSYNTH_PATH` hand-off.** For the sole remaining backend (the Rust daemon), only the debug flag and the capture seam (#307) are pushed into the `env` variable.
+
+That is not, however, everything the spawn receives. **On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) the spawn arguments themselves changed.** The extension stopped looking up `node` on PATH and now uses **the Node that VS Code itself bundles** (`process.execPath`), because a VS Code launched from Finder or launchd has the minimal PATH from `/etc/paths` and there is no `node` there on machines where node comes from nodenv or Homebrew. The extension host is Electron, so `process.execPath` does not run as Node on its own; it becomes Node only once `ELECTRON_RUN_AS_NODE=1` is passed. `ELECTRON_NO_ASAR=1` is set alongside it because Electron's asar hook stays alive in that child, making `fs` treat a directory whose name ends in `.asar` as an archive — a difference from plain node that would only show up if such a path appeared in what the user passed to `global.audioPath(...)`.
+
+Both variables enter the engine process, so they would also flow on to the daemon the engine starts unless something stopped them. The exit point on the engine side (`daemonEnv()`) drops `ELECTRON_RUN_AS_NODE` only (see [0-2 Architecture Overview](/en/orientation/architecture-overview)).
 
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 

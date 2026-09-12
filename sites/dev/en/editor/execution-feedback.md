@@ -1,8 +1,8 @@
 ---
 title: "IV-2. Inline Execution and Feedback"
 chapter-id: "IV-2"
-verified-against: ded9709
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -573,7 +573,7 @@ There are 9 kinds of diagnostic checks in total:
 | 4 | `global` state-setter once-per-file | `analyzeGlobalOncePerFile` | Warning |
 | 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
 | 6 | `.output()` before / without `global.linkAudio()` (mixer destinations excluded — #611) | `analyzeOutputWithoutLinkAudio` | Warning |
-| 7 | Sounding sequence without `.output()` in a LinkAudio file | `analyzeLinkAudioMissingOutput` | **Error** |
+| 7 | Sounding sequence with no output at all (`output-missing`) / dry that only sends to an aux (`dry-not-routed`) | `analyzeMissingOutput` | Warning / Information |
 | 8 | Empty argument `.output("")` | `analyzeEmptyOutputArg` | **Error** |
 | 9 | Plugin name absent from the catalog (#638) | `analyzeUnknownPluginNames` | Warning |
 
@@ -641,7 +641,9 @@ The background of when this rule was introduced relates to "environment-independ
 
 ### 6-8. The Edit-Time Counterpart of LinkAudio Strict Mode
 
-The contract in DSL spec §8.1.2 — "in a LinkAudio file every sounding sequence declares `.output()`; hardware and LinkAudio cannot mix within one file" — shows up at runtime as the dispatch target that `Sequence.resolveDispatchChannel()` returns. Diagnostics 6-8 are its edit-time counterpart. 7 excludes sequences that have `.midi()` / `.instrument()`, and the comment cites decision #14 (MIDI and SC audio may run side by side).
+The contract in DSL spec §8.1.2 — "in a LinkAudio file every sounding sequence declares `.output()`; hardware and LinkAudio cannot mix within one file" — shows up at runtime as the dispatch target that `Sequence.resolveDispatchChannel()` returns. Diagnostics 6-8 are its edit-time counterpart.
+
+The reach of 7 widened to the **whole file** in #883 (DSL 2.0). The implicit `output(master)` terminal was dropped, so a line with no output at all is silent in any file, and there is no longer a reason to scope the check to whether `linkAudio()` is declared. The only exemption left is a sequence that declares `.midi()` (MIDI goes to external gear, so it has no mixer output); **instruments are in scope**, because an instrument with no output is silent too.
 
 The runtime side of this changed in #645 (PR-D0). It used to throw for a sounding sequence with no `.output()`, but **this method is also called from the playback scheduling path** — `scheduleEventsFromTime()`, which the loop timer drives once per bar, and `seamlessParameterUpdate()`, which a mid-loop `.gain()` goes through. A throw there breaks the awaited call chain, so **every other sequence written in the same evaluation block stops as well**. In practice that means the kick stops during a live-coding set.
 
@@ -659,7 +661,84 @@ What is interesting is that `undefined` is deliberately left out of this union. 
 
 A skip does not vanish quietly either: `logSkipOnce()` prints `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。`. A looping sequence re-resolves its dispatch target every bar, so the same reason is deduped to a single line (`_dispatchSkipLoggedFor` holds the previous reason and is reset when `.output()` sets a channel).
 
-Diagnostics 7 and 8 stay at **Error** severity, not because the runtime throws, but because **that sequence will not sound at all in a LinkAudio session**. Missing it at edit time means hunting for the reason for the silence in the log.
+Diagnostic 8 stays at **Error** severity, not because the runtime throws, but because **that sequence will not sound at all**. Missing it at edit time means hunting for the reason for the silence in the log.
+
+#### Diagnostic 7 Now Returns Two Codes (#883)
+
+`analyzeMissingOutput()` tags every issue it returns with a `code`. That `code` is the branch point for severity, for the quick fix, and for MCP's `get_diagnostics` alike.
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:322-325
+export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
+  code: 'output-missing' | 'dry-not-routed'
+  sequenceName: string
+}
+```
+
+The decision itself is a three-way branch.
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:423-428
+    const code = !hasDestination
+      ? 'output-missing'
+      : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
+        ? 'dry-not-routed'
+        : undefined
+    if (!code) continue
+```
+
+`output-missing` means "no output anywhere"; `dry-not-routed` means "there is a `send()` to an aux, but the main (dry) path has no terminal". The latter stays at Information because **it can also be exactly what the author meant**. Dropping the dry signal to hear only the reverb is a legitimate choice, a single send to a `sum` counts as an output (`sumTargets`), and a send to a name that was never declared (`hasUnknownSend`) leaves too little to judge on, so the check stays quiet.
+
+The mapping to severity happens in `updateDiagnostics()`, which also puts the `code` straight onto the `vscode.Diagnostic`.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3858-3869
+  for (const issue of analyzeMissingOutput(text)) {
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+      issue.message,
+      issue.code === 'output-missing'
+        ? vscode.DiagnosticSeverity.Warning
+        : vscode.DiagnosticSeverity.Information,
+    )
+    diagnostic.code = issue.code
+    diagnostic.source = 'OrbitScore'
+    diagnostics.push(diagnostic)
+  }
+```
+
+What is interesting here is that `output-missing` settled on **Warning rather than Error**. The runtime consequence is silence, and silence is a state the author is allowed to choose. "Does not sound" and "is wrong" are different claims, so its severity differs from 8 (`.output("")`), which always fails.
+
+Putting the `code` on the `vscode.Diagnostic` has a side effect: MCP's `get_diagnostics` now carries `code` as well ([IV-3](/en/editor/mcp-and-gated-e2e)). An agent can branch on an identifier instead of on wording.
+
+#### The Quick Fix (`registerOutputCodeActionProvider`)
+
+The diagnostic does not only report; it offers a way out. A CodeActionProvider registered by `activate()` offers an "add `<name>.output()`" action for both codes.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3513-3530
+      provideCodeActions(document, _range, actionContext) {
+        const source = document.getText()
+        const issues = analyzeMissingOutput(source)
+        const actions: vscode.CodeAction[] = []
+        for (const diagnostic of actionContext.diagnostics) {
+          if (diagnostic.code !== 'output-missing' && diagnostic.code !== 'dry-not-routed') continue
+          const issue = issues.find(
+            (candidate) =>
+              candidate.code === diagnostic.code && candidate.line === diagnostic.range.start.line,
+          )
+          if (!issue) continue
+          const insertion = missingOutputQuickFixEdit(source, issue)
+          const action = new vscode.CodeAction(
+            `Add ${issue.sequenceName}.output()`,
+            vscode.CodeActionKind.QuickFix,
+          )
+          action.diagnostics = [diagnostic]
+          action.isPreferred = diagnostic.code === 'output-missing'
+          // ...
+```
+
+The point is that `isPreferred` is true only for `output-missing`. `dry-not-routed` is the "you may have meant this" side, so it is deliberately **not** the action Cmd+. picks by default. The insertion goes at the end of the line the diagnostic landed on, adding `\n<indent><name>.output()` with the original line's indentation (`missingOutputQuickFixEdit`).
 
 #### The Destinations Diagnostic 6 Now Skips (#611)
 
@@ -764,6 +843,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 | Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:3048-3077` / `:1501-1509` |
 | Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `extension.ts:4095-4112` |
 | The runtime counterpart of diagnostics 6-8 became a **silent skip plus a log line** instead of a throw (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587` (PR [#737](https://github.com/signalcompose/orbitscore/pull/737)) |
+| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`, `extension.ts:3482-3520` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
 
 ---
 
@@ -788,7 +868,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - Engine-side `[STEP]` generation (`rust-engine-player.ts`) and argPath tagging — the relationship between lookahead and `atEpochMs` (`docs/archive/WORK_LOG_2026-07.md` §6.194 / §6.196)
 - `configureFlash` command — a mechanism that interactively sets flashCount / flashDuration / flashColor via a Quick Pick UI
 - Candidates for improving diagnostic accuracy — parenthesis matching that follows entire multi-line statements (single-line only)
-- The precompiled per-sequence regexes in `analyzeLinkAudioMissingOutput` — the design that avoids recompiling on every keystroke, and the word boundary that keeps `kicker.output()` from matching `kick`
+- How `analyzeMissingOutput` builds its regexes — splitting "does this line belong to this sequence" from "which method is it", and why the bus-name patterns are compiled **once per document** (diagnostics run on every keystroke)
 - The REPL-side `//#evalMark` handling (`packages/engine/src/cli/repl-mode.ts`) — how diagnostics are accumulated and returned, and the relationship to the #608 stall reporter
 
 ---
@@ -805,11 +885,13 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`: MCP evaluate and `//#evalMark`
 - `packages/vscode-extension/src/extension.ts:1501-1509` — the independent `{"evalMark"` branch on stdout
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead decoration management and `handleStepLine()`
-- `packages/vscode-extension/src/extension.ts:3965-4115` — `updateDiagnostics()`: 3 per-line + 6 cross-line
+- `packages/vscode-extension/src/extension.ts:3725-3875` — `updateDiagnostics()`: 3 per-line + 6 cross-line
+- `packages/vscode-extension/src/extension.ts:3482-3520` — `registerOutputCodeActionProvider()`: the quick fix for `output-missing` / `dry-not-routed`
 - `packages/vscode-extension/src/playhead.ts:39-54` — the `[STEP]` line grammar and `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
-- `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — the 5 cross-line analysis functions
+- `packages/vscode-extension/src/diagnostics-analysis.ts:110-468` — the cross-line analysis functions
+- `packages/vscode-extension/src/diagnostics-analysis.ts:322-468` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — background of the audioPath ordering diagnostic

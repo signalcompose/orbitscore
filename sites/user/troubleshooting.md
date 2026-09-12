@@ -9,6 +9,19 @@ description: OrbitScore を使う上でよく起こる問題と、その解決�
 
 ## 音が鳴らない
 
+### `output()` を書いていますか？
+
+出口を 1 つも書かない線は無音になります（#883 / DSL 2.0）。暗黙の `output("master")` は付かないので、`play()` まで書いても `output()` が無ければ何も聞こえません。
+
+```text
+kick.audio("kick.wav").play(1, 0, 1, 0)             // 🔴 無音（出口が無い）
+kick.audio("kick.wav").play(1, 0, 1, 0).output()    // master へ
+```
+
+同じ規則が `sum` / `aux` バスと instrument にも掛かります。`global.sum("drum")` にシーケンスを集めただけでは、そのバス自身の出口が無いので音はどこにも出ません（`sum("drum").output()` が要ります）。
+
+出口の無い発音シーケンスには、エディタが `output-missing` の警告と「`<名前>.output()` を足す」クイックフィックスを出します。電球アイコンが出ていないか確認してください。詳しくは [sum と aux/send](/mixing/routing) を参照してください。
+
 ### `global.start()` を呼んでいますか？
 
 OrbitScore では、シーケンスを実行する前に必ずスケジューラー（タイミングを管理する仕組み）を起動しておく必要があります。`global.start()` を書き忘れると、コードを実行しても音が出ません。

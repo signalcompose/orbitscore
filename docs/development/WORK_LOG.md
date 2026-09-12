@@ -17,6 +17,208 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: land the four routine docs-sync PRs as one roundup (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `893-docs-sync-roundup`
+
+#882 / #891 / #892 / #893 を 1 本に畳んだ。**4 本とも CONFLICTING** で、#888 の分割が main に
+入った直後だったため放置すれば腐る一方だった（owner の指摘で着手）。前例は #867（9 本の roundup）。
+
+衝突は 2 種類:
+
+- **WORK_LOG**（4 本とも Recent Work へ追記）— 両方残す
+- **`vscode-architecture.md` の「どの PR まで追従したか」の Note 行** — #884 / #885 / #889 の
+  3 本すべてを反映した 1 文にまとめた。HEAD 側に残っていた「束 S（#885）はまだ反映していません」は
+  **#885 を取り込んだ時点で古くなっていた**（2 段目の取り込みで前段の宣言が嘘になる型）
+
+🔴 引用は 8 件壊れていたが、**すべて `extension.ts`** で #888 の Rust 分割とは無関係だった
+（PR の base が古かったための一様な **+27 行**シフト）。`--fix` の着地先 4 件は散文と突き合わせて
+確認済み — `updateDiagnostics` の `analyzeMissingOutput` ループ / `registerOutputCodeActionProvider`
+の `provideCodeActions` / 補完候補の組み立て / トリガ文字の登録。
+
+検証: `npm test` 2,450 passed / `npm run lint` / `npm run docs:check` **982 引用**（4 本が +34 件）。
+
+### docs: follow PR #889 into the chapters and guides that still said `spawn('node')` (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr889`
+**担当**: docs 追従ルーティン（マージ済み PR [#889](https://github.com/signalcompose/orbitscore/pull/889) を追う）
+
+PR #889（#878・engine を VS Code 同梱の Node で起動）は dev サイトの引用ブロックを追従させたが、
+**引用を囲む本文と図が古いまま**だった。`docs:check` は引用のアンカーしか見ないので red にならない
+（`docs/core/PROJECT_RULES.md` の「ルーティンは機械が見ていない層を見ている」）。
+
+#### 1. `spawn('node')` と言い続けていた本文・図
+
+| 場所 | 何が古かったか |
+|---|---|
+| `sites/dev/orientation/architecture-overview.md:60` | mermaid のラベルが `child_process.spawn('node', ...)` / `env は debug フラグと capture seam のみ` |
+| `sites/dev/editor/vscode-architecture.md:606` | 「debug フラグと capture seam（#307）だけを env へ積んで spawn します」 |
+
+どちらも spawn の第 1 引数が `process.execPath` になり、env に `ELECTRON_RUN_AS_NODE` /
+`ELECTRON_NO_ASAR` が加わった時点で事実でなくなっている。
+
+#### 2. `daemonEnv()` が説明なしで引用に現れていた
+
+`architecture-overview.md` の `spawnDaemon()` 引用には PR #889 で `env: daemonEnv(process.env)` が
+入ったが、**`daemonEnv()` が何かを述べる本文が 1 行も無かった**。関数本体の引用と、
+「自分が足したものを自分の出口で戻す」という根拠（および「ホスト由来の変数を第三者へ渡さない」を
+根拠にしていない理由）を書いた。
+
+#### 3. cold install ゲートがどの doc にも無かった
+
+`npm run test:e2e:cold-install`（`ORBIT_GATED_COLD_INSTALL=1`）は CLAUDE.md のマージ前ゲートには
+入ったが、**gated E2E を説明する章**（`sites/dev/editor/mcp-and-gated-e2e.md`）と
+**テスト手順の doc**（`docs/testing/TESTING_GUIDE.md`）には無かった。前者に 1 節
+（dev host が構造的に通らない 3 経路・strict / finder の差・オラクルが `ok` でなく RMS）を、
+後者に実行手順を足した。
+
+日英とも同一ターンで更新。`node sites/dev/scripts/check-citations.mjs` は 956 citations / 0 failed。
+
+---
+
+### docs: follow PR #885 in the user site, the manual and the editor chapters (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr885`
+**担当**: docs-sync ルーチン（追従元 = PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・マージ commit `f575f27`）
+
+PR #885（暗黙 master 終端の廃止・#883 束 S）に、**ドキュメントだけ**を追従させた。実装・テストは
+一切触っていない。
+
+#### 1. ユーザー向けの記述が仕様と正反対のまま残っていた
+
+#885 は `AudioLine.program()` の暗黙 `output(master)` 合成を削除したが、**ユーザーサイトは
+「`output()` を 1 つも書かなかった場合は、線の最後に `output("master")` があるものとして
+扱われます」と書いたまま**だった。ja / en の 4 箇所:
+
+| ファイル | 旧記述 |
+|---|---|
+| `sites/user/mixing/routing.md:97` | 「これは今までどおりの動きです」 |
+| `sites/user/en/mixing/routing.md:97` | 同上（en） |
+| `sites/user/reference/methods.md:443` | 「線の最後に `output("master")` があるものとして扱われます」 |
+| `sites/user/en/reference/methods.md:399` | 同上（en） |
+
+いずれも「出口の無い線は無音」へ書き換え、`routing.md` には**出口を書き忘れたときの節**を新設した
+（`output-missing` / `dry-not-routed` の 2 診断と quick fix、sum / aux バス自身にも出口が要ること）。
+「音が鳴らない」は `troubleshooting.md` の先頭カテゴリなので、そこにも原因 1 件として足した。
+
+同じ章の**譜面例そのもの**も 2 件古かった。`routing.md` の `send()` 節は「元の音自体は消えず、
+そのまま master（または sum）へ流れ続けます」と書いており、これは #883 X3 が塞いだ挙動の説明に
+なっていた。`send()` は今も分岐（`thru: true`）だが、その先に出口が無ければ dry はどこにも
+届かない。`sum` の最初の例と `projects/import.md` の例も、バス自身の `output()` が無いため
+**そのまま写すと無音**になる状態だった。
+
+`docs/user/ja/USER_MANUAL.md` の instrument 節は「instrument の音は master へ直接ミックス
+されます」と**無条件に**書いていた。#885 以降は出口を書いたときだけなので条件付きに直し、
+「音が出ない」の原因リストにも出口の書き忘れを先頭で足した。
+
+#### 2. dev サイトの診断章が旧仕様（LinkAudio 限定の Error）のままだった
+
+#885 は `analyzeLinkAudioMissingOutput`（LinkAudio ファイル限定・Error・instrument 除外）を
+`analyzeMissingOutput`（全ファイル・Warning + Information・**instrument は対象**・quick fix 付き）へ
+置き換えたが、`sites/dev/editor/execution-feedback.md` の診断 6-8 節と 9 種の表は旧記述のまま
+だった。表の行・守備範囲・severity の理由を書き換え、`code` の 3 分岐・severity 写像・
+CodeActionProvider の節を足した（ja / en）。
+
+- `sites/dev/editor/vscode-architecture.md`: `activate()` に増えた
+  `registerOutputCodeActionProvider(context)` の 1 行を IntelliSense / 診断の登録節へ
+- `sites/dev/editor/mcp-and-gated-e2e.md`: `get_diagnostics` が返す `DiagnosticEntry` に
+  `code?` が増えたこと（エージェントが文言でなく識別子で分岐できる）
+
+3 章とも `verified-against` を `f575f27` へ、`verified-at` を 2026-09-12 へ更新した。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` / `DESIGN_DISCUSSION_RECORD.md`（決定 #78 / #79）は
+  **束 S より前に更新済み**で、#885 の振る舞いと一致している
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` は #885 自身が更新済み（診断の「⏳ 未実装」→「✅ 実装済み」）
+- `sites/dev/signal-chain/mixer-audio-line.md` ほか dev サイトの 20 章は #885 自身が更新済み
+  （`SourceDest::None` / `FeedDest::Discard` / `PROTOCOL_VERSION 0.3` まで反映されている）
+- `docs/design/883-explicit-output-routing-design.md` は起案時点のスナップショットなので触らない
+
+#### 検証
+
+`npm run docs:build`（user / dev）と `npm run docs:check` を通した。結果は PR 本文に貼ってある。
+
+---
+
+### docs(dev-site): follow PR #884 in the dev site and repair a mangled citation (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr884`（docs 追従ルーチン・main 宛 draft）
+**対象**: PR [#884](https://github.com/signalcompose/orbitscore/pull/884)（#883 束 0+C・マージコミット `82acaa3`）
+
+マージ済み PR #884 に dev 学習サイトを追従させた。**実装とテストは一切変更していない。**
+
+#### 1. `sites/dev/pipeline/evaluation.md` の引用が壊れていた（🔴 docs:check は緑だった）
+
+PR #884 で `check-citations.mjs --fix` が `evaluate-method.ts:58-145` を再アンカーした際、
+**直前の別 docblock の末尾（` * ``` ` / ` */ `）を引用の先頭に取り込み、末尾は
+`if (sawNamedArg) {` で切れていた**。引用は実ファイルと**文字単位で一致していた**ので
+`docs:check` は 0 failed のまま通る — **この検査は「引用が意味のある単位か」を見ない。**
+
+実ファイルを読み直し、`60-159`（`NAMED_ARG_SCHEMA` の docblock から `processArguments()` の
+閉じ括弧まで）へ引用し直した。
+
+#### 2. 追従した内容
+
+| 章 | 足したもの |
+|---|---|
+| `pipeline/evaluation.md` | 名前付き引数だけの `output(db: -6)` で options 袋が**宛先の位置に座る**問題と、`output` / `send` に限って `undefined` を unshift して宛先位置を空ける処理（`evaluate-method.ts:145-158`）。判定に使う `isOutputDest()` が core 側と同一関数であること |
+| `signal-chain/mixer-audio-line.md` | 新節「宛先の省略と『実現の省略』」— `output()` の宛先省略（既定引数であって暗黙要素ではない）/ `isOutputDest()` の 1 点賭け / `assertSendDestination()` が両 `send()` の契約であること / `lineNeedsBus()` による実現の省略と `gain`・`pan` 引き継ぎへの副作用 |
+| `editor/vscode-architecture.md` | 補完を **3 系統 → 4 系統**に更新。`.output(` の宛先補完（`output-string` / `output-node` の 2 コンテキスト・`mixerNode` 除外の理由・トリガ文字 `(` の追加） |
+
+ja / en 両方（STYLE_GUIDE のバイリンガル要件）。3 章の frontmatter の
+`verified-against` / `verified-at` を `f575f27` / `2026-09-12` に更新した。
+
+#### 3. 🔴 引用は `f575f27`（#885 マージ後の main）基準である
+
+追従の起点は #884 だが、**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）が
+既に main へ入っている**ため、branch を main から切った時点で `sequence.ts` /
+`audio-line.ts` / `extension.ts` の行番号が動いていた。行ずれだけのものは `--fix` で再アンカーし、
+**内容が変わっていた `lineNeedsBus()`（#885 が `isPlainMasterOutput()` を切り出した）は
+実ファイルを読み直して引用し直した**。束 S 自身の追従（`AudioLine.program()` からの
+暗黙 master 撤去・診断 2 種・版 4.0.0）は**このコミットには入っていない**。
+
+#### 4. 追従できていない点（PR 本文に書き出しただけ・直していない）
+
+- `.output()`（宛先省略）は E2E カバレッジのラチェットに**見えない** — 走査が
+  `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/` なので `.output()` と `.output("drum")` が同じ 1 語に潰れる
+- `output(db: -6)` / `send(db: -6)`（名前付き引数だけの形）は unit のみ。**実機 gated E2E に無い**
+- 実現の省略の目的（`.output()` 必須化で 8 本のプールを食い潰さない）を押さえる E2E が無い —
+  X2 は 1 シーケンスの等価性しか測っていない
+
+### docs: carry the install-route fix into the legacy ja manual (PR #880 追従) (Sep 11, 2026)
+
+ルーティン docs 追従。追従元は PR [#880](https://github.com/signalcompose/orbitscore/pull/880)
+（マージコミット `4e661467b0ff8997fc67b4b9bd6f31f1ef33e8d5`・docs のみ・CI 4/4 緑）。
+
+#### 追従した 1 点
+
+PR #880 は資産名の実物合わせ（`orbitscore-<version>.vsix` → `orbitscore-darwin-arm64-<version>.vsix`）を
+**4 箇所**に入れたが、**`docs/user/ja/USER_MANUAL.md` が漏れていた**。
+
+| 直した箇所 | 旧 | 新 |
+|---|---|---|
+| `docs/user/ja/USER_MANUAL.md:59` | `orbitscore-*.vsix` | `orbitscore-darwin-arm64-*.vsix` + Assets / releases/latest の導線 |
+| 同 `:63`（CLI） | `code --install-extension orbitscore-*.vsix` | 同上のファイル名 |
+| 同 `:65` | 「将来は VS Code Marketplace と Open VSX からも install 可能になる予定」 | **公開しない**（owner 2026-09-10・#880 の WORK_LOG に記録） |
+
+接尾辞 `darwin-arm64` は `release.yml:45` の `VSIX_TARGET` を `vsce package --target` へ渡した結果であり
+（`release.yml:118`）、**リリース資産にのみ付く**。版番号は #880 の方針どおり固定していない。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/user/{ja,en}/GETTING_STARTED.md:72` の `orbitscore-0.0.1.vsix` | **ローカルビルドの `.vsix`**（直前が `npm run build`）。`--target` を渡さない `vsce package` には接尾辞が付かないので #880 の資産名は当たらない。版が古いのは別件 |
+| `docs/user/en/USER_MANUAL.md` | `.vsix` のダウンロード導線を**そもそも持たない**（build-from-source のみ）。ja と対になる記述が無い |
+| `docs/user/ja/USER_MANUAL.md:55` の scsynth 同梱 | #502 の失効範囲。冒頭バナーが既にカバーしており、#880 の差分ではない |
+| `sites/user/**`・`README.md`・`packages/vscode-extension/README.md` | #880 が ja / en とも更新済み |
+| DSL / ランタイム / OrbitStudio の各層 | #880 は **docs のみ**（5 ファイル）。構文・意味論・MCP・評価経路のいずれも触っていない |
+
+検証: `docs:build`（user / dev）緑・`docs:check` 944 / 0 failed。
 ### fix(plugin-scan): re-export vst3_scan publicly — my sed excluded digits (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`

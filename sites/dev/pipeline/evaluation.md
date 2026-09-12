@@ -1,12 +1,12 @@
 ---
 title: "I-2. AST 評価モデル"
 chapter-id: "I-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。
 
 # I-2. AST 評価モデル
 
@@ -444,9 +444,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 引数の多くはそのまま渡されますが、いくつか特別な変換が入ります。
 
 ```typescript
-// packages/engine/src/interpreter/evaluate-method.ts:58-145
- * ```
- */
+// packages/engine/src/interpreter/evaluate-method.ts:60-159
 /**
  * #611 §3.8: methods that fold one or more `name:` arguments into a single trailing options
  * object instead of the staged-error path below. `output`/`send` are the only ones today
@@ -533,11 +531,29 @@ export async function processArguments(methodName: string, args: any[]): Promise
   }
 
   if (sawNamedArg) {
+    processed.push(options)
+    // output/send receive `(destination, options)`. With named arguments only, the parser's
+    // options bag would otherwise occupy the destination slot. Use the same `kind`-field
+    // discriminator as the runtime call sites so the two layers cannot disagree.
+    if (
+      (methodName === 'output' || methodName === 'send') &&
+      processed.length === 1 &&
+      !isOutputDest(processed[0])
+    ) {
+      processed.unshift(undefined)
+    }
+  }
+  return processed
+}
 ```
 
 特筆すべきは `beat` メソッドの処理です。パーサーは `beat(4 by 4)` をメーター表記オブジェクト `{ numerator: 4, denominator: 4 }` として出力しますが、`processArguments()` がそれを `[4, 4]` という 2 つの引数に展開します。`beat(4)` のように `n by m` を省略して書くとエラーを投げる設計になっていて、ポリメーターのサポートに不可欠な表記の強制があります。
 
 先頭の `named_arg` の分岐は Signal Chain DSL (SC.3) の名前付き引数のためのもので、プラグイン名ディスパッチで消費されなかった名前付き引数が DSL メソッドに届いた場合、「どの段階で使えるようになるか」を明示したエラーを投げます。黙って無視することを SC.3.3 が禁じているためです。
+
+末尾の `if (sawNamedArg)` は #883（束 C・PR #884）で 1 段増えました。`output()` / `send()` は `(destination, options)` の順で引数を取るので、`kick.output(db: -6)` のように**名前付き引数だけ**を書くと、パーサーが畳んだ options オブジェクトが**宛先の位置に座ってしまいます**。そこで `output` / `send` に限り、畳んだ結果が 1 個だけで、しかもそれが解決済みの宛先（`kind` フィールドを持つ `OutputDest`）でないときは、先頭に `undefined` を差し込んで宛先の位置を空けます。
+
+判定に使う `isOutputDest()` は core 側の `audio-line.ts` から import した**実行時の呼び出し側と同じ関数**で、インタプリタ層と core 層で「これは宛先かオプションか」の判定がずれないようにしてあります。空いた宛先は `Sequence.output()` 側で `{ kind: 'master' }` に解決されます（`output()` の既定引数 = master・#883 / DSL 2.0）。`send()` には既定が無いので、同じ `undefined` が届いたら `assertSendDestination()` が loud エラーにします — 詳細は [SC-2. ミキサーと AudioLine](/signal-chain/mixer-audio-line) の該当節に置きました。
 
 ## トランスポートの意味論
 
