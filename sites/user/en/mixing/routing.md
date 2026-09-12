@@ -16,6 +16,8 @@ global.sum("drum")
 
 kick.output("drum")
 snare.output("drum")
+
+sum("drum").output()    // 🔴 the bus needs its own output too (#883 / DSL 2.0)
 ```
 
 You can insert an effect on a group bus too — for example, applying a single compressor after grouping several sequences together.
@@ -36,13 +38,13 @@ The processing order is "per-sequence insert (`seq.effect()`) then group bus" �
 
 ## aux / send — Send Audio Down a Separate Path
 
-Declare a return bus with `global.aux(name)`, then send audio to it from each sequence with `send(name, db)`. `send` copies the audio, so **the original signal is not removed** — it continues on to master (or its sum) as usual.
+Declare a return bus with `global.aux(name)`, then send audio to it from each sequence with `send(name, db)`. `send` copies the audio and **the line continues past it**. Since #883 / DSL 2.0, though, the main (dry) path reaches nothing unless an output is written after it — a line with only `send()` sounds the wet signal alone, so add `output()` if you want the dry as well (the editor flags this as `dry-not-routed`).
 
 ```text
 global.aux("rev")
 aux("rev").effect("TAL Reverb 4")
 
-kick.send("rev", -12)
+kick.send("rev", -12).output()    // wet to rev, dry to master
 ```
 
 Inserting something like a reverb on a return bus (`aux`) is a typical use case. The second argument to `send()` is **how much signal is sent, written in decibels (dB)**. `0` matches the original level; `-12` is roughly a quarter of the amplitude.
@@ -66,6 +68,7 @@ A single sequence can send to multiple `aux` buses at once.
 ```text
 kick.send("rev", -12)
 kick.send("delay", -6)
+kick.output()                     // keep the dry as well (without it, only the wet sounds)
 ```
 
 ::: warning send() is not available on MIDI sequences
@@ -94,7 +97,14 @@ Both `output()` and `send()` can appear more than once on one line.
 kick.output("rev", thru: true, db: -12).output("master")
 ```
 
-If you write no `output()` at all, the line is treated as if `output("master")` were written at its end — the behavior you already know.
+🔴 **A line with no `output()` anywhere is silent.** No implicit `output("master")` is appended (#883 / DSL 2.0). The outputs are exactly the ones the text spells out.
+
+```text
+kick.audio("k.wav").play()             // 🔴 silent (no output)
+kick.audio("k.wav").play().output()    // to master
+```
+
+The editor warns about a sounding sequence whose output you forgot before you even evaluate it — see "When You Forget to Write an Output" at the end of this chapter.
 
 ### Destinations you can pass to output()
 
@@ -122,6 +132,32 @@ A `sum` or `aux` bus has its own audio line, just like a sequence. Alongside `ef
 sum("drum").gain(-3).output("master")
 sum("drum").send("rev", -18)
 ```
+
+## When You Forget to Write an Output
+
+A line with no output at all is silent, so "I forgot to write it" and "I meant it to be silent" sound exactly the same. The editor therefore tells you before you evaluate.
+
+| What you get | When | Severity |
+|---|---|---|
+| `output-missing` | A sounding sequence has no `output()`, no `send()`, and no bus-name reference at all | Warning |
+| `dry-not-routed` | Every `send()` goes to an aux, and the main (dry) path has no output | Information |
+
+Both come with an "add `<name>.output()`" quick fix (the light bulb). The one on `output-missing` is the preferred action.
+
+A sequence that declares `midi()` is exempt: MIDI goes to external gear, so it has no mixer output.
+
+::: warning sum / aux buses need an output too
+The same rule applies to buses. Declaring `global.sum("drum")` and routing sequences into it is not enough — **the bus itself goes nowhere**.
+
+```text
+global.sum("drum")
+
+kick.output("drum")
+snare.output("drum")
+
+sum("drum").output()        // 🔴 without this, the drum bus is silent
+```
+:::
 
 ## Honest v1 Constraints
 

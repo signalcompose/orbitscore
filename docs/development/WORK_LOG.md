@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #885 in the user site, the manual and the editor chapters (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr885`
+**担当**: docs-sync ルーチン（追従元 = PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・マージ commit `f575f27`）
+
+PR #885（暗黙 master 終端の廃止・#883 束 S）に、**ドキュメントだけ**を追従させた。実装・テストは
+一切触っていない。
+
+#### 1. ユーザー向けの記述が仕様と正反対のまま残っていた
+
+#885 は `AudioLine.program()` の暗黙 `output(master)` 合成を削除したが、**ユーザーサイトは
+「`output()` を 1 つも書かなかった場合は、線の最後に `output("master")` があるものとして
+扱われます」と書いたまま**だった。ja / en の 4 箇所:
+
+| ファイル | 旧記述 |
+|---|---|
+| `sites/user/mixing/routing.md:97` | 「これは今までどおりの動きです」 |
+| `sites/user/en/mixing/routing.md:97` | 同上（en） |
+| `sites/user/reference/methods.md:443` | 「線の最後に `output("master")` があるものとして扱われます」 |
+| `sites/user/en/reference/methods.md:399` | 同上（en） |
+
+いずれも「出口の無い線は無音」へ書き換え、`routing.md` には**出口を書き忘れたときの節**を新設した
+（`output-missing` / `dry-not-routed` の 2 診断と quick fix、sum / aux バス自身にも出口が要ること）。
+「音が鳴らない」は `troubleshooting.md` の先頭カテゴリなので、そこにも原因 1 件として足した。
+
+同じ章の**譜面例そのもの**も 2 件古かった。`routing.md` の `send()` 節は「元の音自体は消えず、
+そのまま master（または sum）へ流れ続けます」と書いており、これは #883 X3 が塞いだ挙動の説明に
+なっていた。`send()` は今も分岐（`thru: true`）だが、その先に出口が無ければ dry はどこにも
+届かない。`sum` の最初の例と `projects/import.md` の例も、バス自身の `output()` が無いため
+**そのまま写すと無音**になる状態だった。
+
+`docs/user/ja/USER_MANUAL.md` の instrument 節は「instrument の音は master へ直接ミックス
+されます」と**無条件に**書いていた。#885 以降は出口を書いたときだけなので条件付きに直し、
+「音が出ない」の原因リストにも出口の書き忘れを先頭で足した。
+
+#### 2. dev サイトの診断章が旧仕様（LinkAudio 限定の Error）のままだった
+
+#885 は `analyzeLinkAudioMissingOutput`（LinkAudio ファイル限定・Error・instrument 除外）を
+`analyzeMissingOutput`（全ファイル・Warning + Information・**instrument は対象**・quick fix 付き）へ
+置き換えたが、`sites/dev/editor/execution-feedback.md` の診断 6-8 節と 9 種の表は旧記述のまま
+だった。表の行・守備範囲・severity の理由を書き換え、`code` の 3 分岐・severity 写像・
+CodeActionProvider の節を足した（ja / en）。
+
+- `sites/dev/editor/vscode-architecture.md`: `activate()` に増えた
+  `registerOutputCodeActionProvider(context)` の 1 行を IntelliSense / 診断の登録節へ
+- `sites/dev/editor/mcp-and-gated-e2e.md`: `get_diagnostics` が返す `DiagnosticEntry` に
+  `code?` が増えたこと（エージェントが文言でなく識別子で分岐できる）
+
+3 章とも `verified-against` を `f575f27` へ、`verified-at` を 2026-09-12 へ更新した。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` / `DESIGN_DISCUSSION_RECORD.md`（決定 #78 / #79）は
+  **束 S より前に更新済み**で、#885 の振る舞いと一致している
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` は #885 自身が更新済み（診断の「⏳ 未実装」→「✅ 実装済み」）
+- `sites/dev/signal-chain/mixer-audio-line.md` ほか dev サイトの 20 章は #885 自身が更新済み
+  （`SourceDest::None` / `FeedDest::Discard` / `PROTOCOL_VERSION 0.3` まで反映されている）
+- `docs/design/883-explicit-output-routing-design.md` は起案時点のスナップショットなので触らない
+
+#### 検証
+
+`npm run docs:build`（user / dev）と `npm run docs:check` を通した。結果は PR 本文に貼ってある。
+
+---
+
 ### fix(dsl): make the missing-output diagnostic read the whole chain (#883 束 S・レビュー round 1) (Sep 12, 2026)
 
 **Date**: 2026-09-12

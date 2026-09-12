@@ -1,8 +1,8 @@
 ---
 title: "IV-2. インライン実行とフィードバック"
 chapter-id: "IV-2"
-verified-against: ded9709
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -573,7 +573,7 @@ async function updateDiagnostics(
 | 4 | `global` state-setter の once-per-file | `analyzeGlobalOncePerFile` | Warning |
 | 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
 | 6 | `.output()` が `global.linkAudio()` より前 / 不在 (ミキサー宛先は除外・#611) | `analyzeOutputWithoutLinkAudio` | Warning |
-| 7 | LinkAudio ファイルで `.output()` を持たない発音 sequence | `analyzeLinkAudioMissingOutput` | **Error** |
+| 7 | 出口を 1 つも書かない発音 sequence (`output-missing`) / aux にしか送らない dry (`dry-not-routed`) | `analyzeMissingOutput` | Warning / Information |
 | 8 | `.output("")` の空引数 | `analyzeEmptyOutputArg` | **Error** |
 | 9 | catalog に無い plugin 名 (#638) | `analyzeUnknownPluginNames` | Warning |
 
@@ -641,7 +641,9 @@ export const GLOBAL_ONCE_METHODS = new Set([
 
 ### 6-8. LinkAudio strict mode の編集時カウンターパート
 
-DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべてが `.output()` を宣言する。hardware と LinkAudio は 1 ファイル内で混在できない」という契約は、runtime では `Sequence.resolveDispatchChannel()` が返す dispatch 先として現れます。診断 6-8 はその編集時カウンターパートです。7 は `.midi()` / `.instrument()` を持つ sequence を対象外にしていて、コメントが decision #14 (MIDI と SC オーディオは併走可) を引いています。
+DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべてが `.output()` を宣言する。hardware と LinkAudio は 1 ファイル内で混在できない」という契約は、runtime では `Sequence.resolveDispatchChannel()` が返す dispatch 先として現れます。診断 6-8 はその編集時カウンターパートです。
+
+7 の守備範囲は #883 (DSL 2.0) で**ファイル全体**へ広がりました。暗黙の `output(master)` 終端が廃止され、出口を 1 つも書かない線はどのファイルでも無音になったので、`linkAudio()` の有無で対象を絞る理由がなくなったためです。対象外になるのは `.midi()` を書いた sequence だけで (MIDI は外部機器へ送るのでミキサーの出口を持ちません)、**instrument は対象に含まれます** — instrument も出口を書かなければ無音だからです。
 
 runtime 側の扱いは #645 (PR-D0) で変わりました。以前は `.output()` の無い発音 sequence に対して `resolveDispatchChannel()` が例外を投げていたのですが、**このメソッドは演奏中の schedule 経路からも呼ばれます** — loop timer が小節ごとに叩く `scheduleEventsFromTime()` や、演奏中の `.gain()` が通る `seamlessParameterUpdate()` がそれです。そこで throw すると await 連鎖が切れて、**同じ評価ブロックに書いた他の sequence まで巻き添えで止まります**。ライブコーディング中に kick が止まる、という壊れ方です。
 
@@ -659,7 +661,84 @@ export type DispatchTarget =
 
 スキップは黙って消えるわけではなく、`logSkipOnce()` が `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。` を出します。ループしている sequence は小節ごとに dispatch 先を解決し直すので、同じ理由のログは 1 回だけに dedup されます (`_dispatchSkipLoggedFor` が直前の reason を持ち、`.output()` が channel を設定したときにリセットされます)。
 
-診断 7 と 8 が **Error** 相当のままなのは、runtime が throw するからではなく、**LinkAudio セッションでその sequence が鳴らないから**です。編集時に気づけないと、無音の理由をログから探すことになります。
+診断 8 が **Error** のままなのは、runtime が throw するからではなく、**その sequence が鳴らないから**です。編集時に気づけないと、無音の理由をログから探すことになります。
+
+#### 7 が 2 つの code を返すようになりました (#883)
+
+`analyzeMissingOutput()` は診断ごとに `code` を付けて返します。この `code` が severity・quick fix・MCP の `get_diagnostics` すべての分岐点になります。
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:322-325
+export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
+  code: 'output-missing' | 'dry-not-routed'
+  sequenceName: string
+}
+```
+
+判定そのものは 3 分岐です。
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:423-428
+    const code = !hasDestination
+      ? 'output-missing'
+      : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
+        ? 'dry-not-routed'
+        : undefined
+    if (!code) continue
+```
+
+`output-missing` は「出口が 1 つも無い」、`dry-not-routed` は「aux への `send()` はあるが本流 (dry) の終端が無い」です。後者が Information 止まりなのは、**それが意図した書き方でもありうる**からです。リバーブだけを鳴らしたいときに dry を切るのは正当な選択で、`sum` 宛ての send が 1 つでもあれば (`sumTargets`) 出口として数えられますし、宣言されていない名前への send があれば (`hasUnknownSend`) 判断材料が足りないので黙ります。
+
+severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagnostic` にそのまま載せます。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3831-3842
+  for (const issue of analyzeMissingOutput(text)) {
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+      issue.message,
+      issue.code === 'output-missing'
+        ? vscode.DiagnosticSeverity.Warning
+        : vscode.DiagnosticSeverity.Information,
+    )
+    diagnostic.code = issue.code
+    diagnostic.source = 'OrbitScore'
+    diagnostics.push(diagnostic)
+  }
+```
+
+面白いのは、`output-missing` が **Error ではなく Warning** に落ち着いた点です。runtime の帰結は「無音」で、それは書き手が選べる正当な状態でもあります。「鳴らない」と「間違っている」は別物なので、`.output("")` のように必ず失敗する 8 とは重さを変えています。
+
+`code` を `vscode.Diagnostic` に載せたことの副作用として、MCP の `get_diagnostics` にも `code` が出るようになりました ([IV-3](/editor/mcp-and-gated-e2e))。エージェントが文言ではなく識別子で分岐できます。
+
+#### quick fix (`registerOutputCodeActionProvider`)
+
+診断を出すだけでなく、直す手段も付いています。`activate()` が登録する CodeActionProvider が、2 つの code の両方に「`<名前>.output()` を足す」アクションを出します。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3486-3503
+      provideCodeActions(document, _range, actionContext) {
+        const source = document.getText()
+        const issues = analyzeMissingOutput(source)
+        const actions: vscode.CodeAction[] = []
+        for (const diagnostic of actionContext.diagnostics) {
+          if (diagnostic.code !== 'output-missing' && diagnostic.code !== 'dry-not-routed') continue
+          const issue = issues.find(
+            (candidate) =>
+              candidate.code === diagnostic.code && candidate.line === diagnostic.range.start.line,
+          )
+          if (!issue) continue
+          const insertion = missingOutputQuickFixEdit(source, issue)
+          const action = new vscode.CodeAction(
+            `Add ${issue.sequenceName}.output()`,
+            vscode.CodeActionKind.QuickFix,
+          )
+          action.diagnostics = [diagnostic]
+          action.isPreferred = diagnostic.code === 'output-missing'
+          // ...
+```
+
+`isPreferred` が `output-missing` のときだけ true になっているのがポイントです。`dry-not-routed` は「意図しているかもしれない」側なので、Cmd+. を押したときに既定で選ばれる手には**しません**。挿入位置は診断が出た行の行末で、元の行のインデントを引き継いだ `\n<indent><名前>.output()` を足します (`missingOutputQuickFixEdit`)。
 
 #### 6 が除外する宛先 (#611)
 
@@ -764,6 +843,7 @@ flowchart TD
 | `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:3048-3077` / `:1501-1509` |
 | 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`extension.ts:4095-4112` |
 | 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
+| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`、`extension.ts:3482-3520` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
 
 ---
 
@@ -788,7 +868,7 @@ flowchart TD
 - engine 側の `[STEP]` 生成 (`rust-engine-player.ts`) と argPath の付与 — lookahead と `atEpochMs` の関係 (`docs/archive/WORK_LOG_2026-07.md` §6.194 / §6.196)
 - `configureFlash` コマンド — Quick Pick UI で flashCount / flashDuration / flashColor をインタラクティブに設定する仕組み
 - 診断の精度向上候補 — 複数行全体を追いかけた括弧対応チェック (単一行のみ)
-- `analyzeLinkAudioMissingOutput` の per-sequence 正規表現の事前コンパイル — keystroke ごとの再コンパイルを避ける設計と、`kicker.output()` が `kick` にマッチしない word boundary
+- `analyzeMissingOutput` の正規表現の組み立て — 「行がこのシーケンスのものか」と「どのメソッドか」を 2 本に分ける設計と、バス名パターンを**文書ごとに 1 度だけ**組む理由 (診断は打鍵ごとに走る)
 - REPL 側の `//#evalMark` 処理 (`packages/engine/src/cli/repl-mode.ts`) — 診断をどう溜めてどう返すか、#608 の stall reporter との関係
 
 ---
@@ -805,11 +885,13 @@ flowchart TD
 - `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`: MCP evaluate と `//#evalMark`
 - `packages/vscode-extension/src/extension.ts:1501-1509` — stdout の `{"evalMark"` 独立分岐
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead の decoration 管理と `handleStepLine()`
-- `packages/vscode-extension/src/extension.ts:3965-4115` — `updateDiagnostics()`: 行内 3 種 + 横断 6 種
+- `packages/vscode-extension/src/extension.ts:3725-3875` — `updateDiagnostics()`: 行内 3 種 + 横断 6 種
+- `packages/vscode-extension/src/extension.ts:3482-3520` — `registerOutputCodeActionProvider()`: `output-missing` / `dry-not-routed` の quick fix
 - `packages/vscode-extension/src/playhead.ts:39-54` — `[STEP]` 行の文法と `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
-- `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — 横断解析 5 関数
+- `packages/vscode-extension/src/diagnostics-analysis.ts:110-468` — 横断解析の関数群
+- `packages/vscode-extension/src/diagnostics-analysis.ts:322-468` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — audioPath ordering 診断の背景

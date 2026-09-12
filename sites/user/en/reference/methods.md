@@ -396,7 +396,7 @@ Features for grouping sequences into buses. For a full walkthrough, see [sum and
 
 - `output(name)` / `send(name, db)` work on **audio and instrument** sequences (not with `midi()`).
 - `effect()`, `gain()`, `pan()`, `send()` and `output()` **line up in the order you write them**. A different position gives a different result — see [sum and aux/send](../mixing/routing.md).
-- If you write no `output()` at all, the line is treated as if `output("master")` were written at its end.
+- 🔴 **A line with no `output()`, no `send()` and no bus-name reference is silent** (#883 / DSL 2.0). No implicit `output("master")` is appended — the rule is the same for sequences, for sum / aux buses and for instruments. Write `output()` with no argument to reach master. The editor raises an `output-missing` warning, with a quick fix, on a sounding sequence that has none.
 - `master` is a reserved word for the master track, so naming a mixer node `master` (`var master = mix.output(1, 2)`) is an error. `mix.output(1, 2)` names physical device channels 1 and 2, not the master track.
 - Writing a single channel — `mix.output(n)` — gives a mono output (L+R are merged).
 - `global.linkAudio()` cannot be combined with mixer features (sum/aux/plugin effects in general).

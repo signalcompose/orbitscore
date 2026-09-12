@@ -32,6 +32,7 @@ global.sum("bus")
 global.start()
 
 drums.output("bus")
+sum("bus").output()    // the bus needs its own output (#883 / DSL 2.0)
 
 RUN(drums)
 ```

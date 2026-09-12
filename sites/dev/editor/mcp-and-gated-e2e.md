@@ -1,8 +1,8 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: a6e1f13
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -209,7 +209,7 @@ export function buildMcpServerUrl(port: number): string {
 | | `save_file` | `document.save()`（`edit_replace` は保存しないため必要） |
 | | `get_editor_state` / `get_document_text` | アクティブエディタのメタ情報 / 全文 |
 | | `configure_flash` | flash の回数・長さ・色 |
-| **観測** | `get_diagnostics` | `vscode.languages.getDiagnostics` の結果 |
+| **観測** | `get_diagnostics` | `vscode.languages.getDiagnostics` の結果（#883 から診断 `code` も返す） |
 | | `get_log` | 出力チャネルの末尾 N 行（既定 50・上限 1000） |
 | | `analyze_audio` | WAV を解析して peak / RMS / onset を返す（`window_ms` で時系列も） |
 | **プラグイン** | `list_plugins` / `rescan_plugins` | プラグインカタログの読み出し / 再スキャン（#463） |
@@ -221,6 +221,23 @@ export function buildMcpServerUrl(port: number): string {
 `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` はハンドラが optional で、無いホストでは登録されません。WCTM の pi ハーネスのような「別ホスト」がこの seam を再利用するときに、既存のスタブ suite を壊さないための配慮です。
 
 面白いのは、このカタログの大半が「人間がコマンドパレットや設定から到達できる操作」の写しであることです。`start_engine` は "Start Engine" コマンド、`configure_flash` は "Configure Flash"、`rescan_plugins` は "Rescan Plugin Catalog" — 各 description が対応するコマンド名を明示しています。**新しい観測手段を増やすときも MCP のツール面を増やさない**、という方針が E2E 側のヘルパにも見えます（`tests/e2e/helpers/rack-child-pid.ts` の `rackChildPidsFromLog` に付いたコメント: 「**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある」）。
+
+### `get_diagnostics` が返す `code`（#883）
+
+`get_diagnostics` の 1 件はこの形です。`code` は #883 で足された optional フィールドで、`vscode.Diagnostic.code` が文字列か数値のときだけ載ります。
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:177-183
+export interface DiagnosticEntry {
+  line: number
+  character: number
+  severity: DiagnosticSeverityLabel
+  message: string
+  code?: string | number
+}
+```
+
+これが効くのは、**エージェントが文言ではなく識別子で分岐できる**ようになるからです。出口の書き忘れ（`output-missing`）と、aux にしか送っていない dry（`dry-not-routed`）は severity も違えば取るべき手も違いますが、以前は `message` の部分一致でしか見分けられませんでした。文言を直すたびにテストが壊れる形です。診断の内容は [IV-2](/editor/execution-feedback) を参照してください。
 
 ---
 

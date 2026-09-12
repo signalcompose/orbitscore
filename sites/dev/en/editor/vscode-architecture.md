@@ -1,8 +1,8 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: a2ac724
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -471,6 +471,18 @@ Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` 
 ```
 
 There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For details, see [IV-2](/en/editor/execution-feedback#real-time-diagnostics-updatediagnostics).
+
+#883 added one more line next to the diagnostic registration: **the quick fix**. `registerOutputCodeActionProvider(context)` returns an "add `<name>.output()`" CodeAction for the two diagnostic codes `output-missing` and `dry-not-routed`.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:394-397
+  // Register IntelliSense providers
+  registerCompletionProviders(context)
+  registerHoverProvider(context)
+  registerOutputCodeActionProvider(context)
+```
+
+The provider itself lives at `extension.ts:3482-3520` and pushes the return value of `vscode.languages.registerCodeActionsProvider` onto `context.subscriptions`. Its body is covered in [IV-2](/en/editor/execution-feedback).
 
 ---
 

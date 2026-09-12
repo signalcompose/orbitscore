@@ -440,7 +440,7 @@ drums.effect([])                                        // 全部外す（削除
 
 - `output(name)` / `send(name, db)` は **audio と instrument** で使えます（`midi()` では使えません）。
 - `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線に並びます**。書く位置が違えば結果が変わります。詳しくは [sum と aux/send](../mixing/routing.md) を参照してください。
-- `output()` を 1 つも書かなかった場合は、線の最後に `output("master")` があるものとして扱われます。
+- 🔴 **`output()` / `send()` / バス名の参照を 1 つも書かなかった線は無音になります**（#883 / DSL 2.0）。暗黙の `output("master")` は付きません。sequence も sum / aux バスも instrument も同じ規則です。master へ出したいなら `output()`（引数省略）を書きます。書き忘れた発音シーケンスにはエディタが `output-missing` の警告とクイックフィックスを出します。
 - `master` はマスタートラックを指す予約語なので、`var master = mix.output(1, 2)` のようにミキサーノードへ付けるとエラーになります。`mix.output(1, 2)` は物理デバイスの 1ch・2ch であって、マスタートラックではありません。
 - `mix.output(n)` のように 1 チャンネルだけ書くとモノラル出力になります（L+R がマージされます）。
 - `global.linkAudio()` とミキサー機能（sum/aux/プラグインエフェクト全般）は同時に使えません。

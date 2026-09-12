@@ -1,8 +1,8 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: a6e1f13
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -209,7 +209,7 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 | | `save_file` | `document.save()` (needed because `edit_replace` does not persist) |
 | | `get_editor_state` / `get_document_text` | Metadata / full text of the active editor |
 | | `configure_flash` | Flash count, duration, colour |
-| **Observation** | `get_diagnostics` | The result of `vscode.languages.getDiagnostics` |
+| **Observation** | `get_diagnostics` | The result of `vscode.languages.getDiagnostics` (it also returns the diagnostic `code` as of #883) |
 | | `get_log` | The last N lines of the output channel (default 50, cap 1000) |
 | | `analyze_audio` | Parse a WAV and return peak / RMS / onsets (`window_ms` adds a time series) |
 | **Plugins** | `list_plugins` / `rescan_plugins` | Read / rescan the plugin catalogue (#463) |
@@ -221,6 +221,23 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` have optional handlers and are not registered on hosts that lack them. This keeps existing stub suites valid when a "different host" such as the WCTM pi harness reuses the seam.
 
 What is interesting is that most of this catalogue mirrors "operations a human can reach from the command palette or settings". `start_engine` is the "Start Engine" command, `configure_flash` is "Configure Flash", `rescan_plugins` is "Rescan Plugin Catalog" — each description names its counterpart command. The policy of **not widening the MCP tool surface even when a new observation is needed** is visible on the E2E helper side too (the comment on `rackChildPidsFromLog` in `tests/e2e/helpers/rack-child-pid.ts`: "**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある").
+
+### The `code` that `get_diagnostics` returns (#883)
+
+One entry from `get_diagnostics` has this shape. `code` is the optional field #883 added; it is present only when `vscode.Diagnostic.code` is a string or a number.
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:177-183
+export interface DiagnosticEntry {
+  line: number
+  character: number
+  severity: DiagnosticSeverityLabel
+  message: string
+  code?: string | number
+}
+```
+
+What this buys is that **an agent can branch on an identifier instead of on wording**. A forgotten output (`output-missing`) and a dry path that only feeds an aux (`dry-not-routed`) differ both in severity and in what to do about them, yet the only way to tell them apart used to be a substring match on `message` — the kind of test that breaks every time the wording is improved. For the diagnostics themselves, see [IV-2](/en/editor/execution-feedback).
 
 ---
 
