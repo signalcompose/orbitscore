@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
+**担当**: 設計 = Fable / 実装・検証 = main
+
+#888 子 1 の**第 1 束**。設計は `docs/design/888-child1-first-extraction.md`。
+🔴 **純粋な移動**（本文は 1 行も書き換えていない）。
+
+- `impl EngineWrap` の 40 メソッド（`clap_post_peak` 〜 `output_channels`・元 8972-9550）を
+  **子モジュール** `src/engine_wrap/stats.rs` へ。`use super::*;` + `impl EngineWrap { … }` で包む
+- 🔴 **可視性の変更 0 件**。子モジュールは親の private フィールド・private `use` に到達できる
+  （兄弟モジュールにすると `pub(crate)` 化が多数必要で、それは「移動」ではなく「変更」）
+- **インラインテスト mod は動かさない**（コード行に数えられず目標に寄与しない）。`excluded` は 7,730 で不変
+- `mod stats;` は**先頭ではなく impl の閉じ括弧の直後**に置いた。先頭だと行番号が +2 ずれて
+  dev サイトの引用が約 20 箇所動く
+
+**結果**: `engine_wrap.rs` **6,418 → 6,014** コード行 / `stats.rs` 408（500 以下なので baseline 無し）。
+
+**residual**（§5.1a の新ルールで初の実測）:
+
+```
+素の変更行 1,176  →  moved+ 579 == moved− 579  →  residual 18
+```
+
+うち 11 行は新設モジュールの doc コメントなので**実質 7 行**。移動した 579 行は 1 行も residual に出ていない。
+ゲート (i) `moved+ == moved−` 通過。
+
+**検証**（main が sandbox 外で実行）: `cargo fmt --check` / `clippy --all-targets -D warnings` /
+**`scripts/check-cfg-matrix.sh` 4 象限緑** + `clap-host` 単独 / `cargo test -p orbit-audio-daemon` /
+`npm test` **2,445 passed**（前と同数 = 期待値不変）/ lint / `docs:check` 948 引用 0 failed。
+
+🔴 **`docs:check` は一度落ちた**（4 件 = 引用 2 箇所 ×2 言語）。ソースを動かすと引用が必ず動く。
+`--fix` は行番号を合わせるだけなので、**新しい行を grep で探し、着地先の中身を目視で照合してから**
+書き換えた（構造体が `}` で閉じ、メソッドが `}` で閉じることを確認）。
+ずれ幅が −578 と −580 の 2 種類あるのは、`mod stats;` の挿入位置の前後で変わるため。
+
+🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
+しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
+CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
+
+
 ### test: add a file-size ratchet for Rust and TS sources (Sep 12, 2026)
 
 **Date**: 2026-09-12
@@ -1743,221 +1784,6 @@ engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classi
 
 Closes #855
 
-### docs(sites): re-anchor the release.yml line references shifted by #853 (Sep 11, 2026)
-
-PR [#853](https://github.com/signalcompose/orbitscore/pull/853)（タグと `.vsix` の版を照合する
-release ガード）が `.github/workflows/release.yml` の `Setup Node.js` の直後に **10 行**挿入した。
-旧 58 行目以降がすべて **+10** ずれている。
-
-## #853 が直したもの・残したもの
-
-| 種別 | 追従状況 |
-|---|---|
-| ` ```yaml // .github/workflows/release.yml:84-90` 形式の引用ブロック 2 箇所 | ✅ #853 が `94-100` / `184-193` へ更新済み（`docs:check` が突合するため) |
-| 本文中の散文的な行参照 | ❌ 取り残された。`docs:check` はフェンス付き引用しか見ないので red にならない |
-
-## 直した 4 行
-
-| ファイル | 変更 | 参照先の実体（現行 release.yml） |
-|---|---|---|
-| `sites/dev/rust-engine/index.md:329` | `:88` → `:90` | `cargo build ... --features outproc-effect,outproc-instrument` |
-| `sites/dev/en/rust-engine/index.md:338` | 同上 | 同上 |
-| `sites/dev/signal-chain/index.md:1616` | `:86-98,191-200` → `:88-100,184-193` | 実 Gain テストのステップ / `.vsix` 内 `std-plugins/Gain.clap` の同梱ゲート |
-| `sites/dev/en/signal-chain/index.md:1653` | 同上 | 同上 |
-
-いずれも**執筆時点では正しかった**（`28606fa` 時点で `release.yml:88` は features 行、
-`84a29a5` 時点で `86-98` / `191-200` は当該ステップ）。行ドリフトで腐っただけで、
-記述の内容そのものは変わっていない。したがって章の `verified-against` / `verified-at` は
-**更新していない** — 章全体を検証し直してはいないため。
-
-## 追従不要と判断したもの
-
-- `docs/design/656-release-design.md` の行参照（`:114` `:224` `:245-248` 等）も +10 ずれているが、
-  **設計書は起案時点のスナップショット**なので書き換えない（routine 規則）。報告のみ
-- `docs/planning/IMPLEMENTATION_PLAN_2026-09.md:239` の `release.yml:116-207` も同様に +10 ずれ（→ `126-217`）。計画文書なので報告のみ
-- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #853 は DSL の構文も意味論も
-  変えていない（`packages/engine/` に差分なし）
-- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語に変更なし
-
-### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
-
-束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
-
-```
-AssertionError: default-baseline cycle must add no ERROR: lines
-  → expected 10 to be less than or equal to 9
-
-[daemon] WARN orbit_clap_host::controller: [orbit-clap-host] NotePortsExtension なし; port 0 を使用
-```
-
-## 正常系で警報が鳴っていた
-
-`query_note_port_index`（`controller.rs:400`）は **すべての CLAP ロードで無条件に**
-呼ばれる（`:246`）。**エフェクトが note ポートを持たないのは正常**で、port 0 という
-フォールバックも CLAP の慣習どおり機能する。それを `warn!` で報せていた。
-
-## なぜ ERROR 件数に乗るか
-
-拡張は engine の stderr を**全行 `ERROR:` として**出力する（`extension.ts:1453`）。
-これは**意図的な設計**で、#756 の記録が理由を書いている:
-
-> `outputChannel.append('ERROR: ' + chunk)` と chunk 単位で前置していた。1 つの chunk に
-> 複数行入ると 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が**構造的に
-> 過小カウント**する（= 偽緑）
-
-つまり「実エラーを取りこぼさない」ために全行前置している。**分類側を緩めるのは筋が悪い**
-（取りこぼす方向へ戻る）。
-
-🔴 したがって**ノイズは源で止める**。`warn!` → `debug!`。
-memory `stderr-is-classified-as-error` は「engine の warn は全部 ERROR 行」を
-**4 回目の再発**として記録しているが、これまでの対処はテスト側だった。今回は発生源を直した。
-
-## 失う情報
-
-instrument が note ポートを持たない場合も debug になる。ただし port 0 のフォールバックは
-機能するので、これは「動かない」ではなく「既定を使った」の報告であり、debug が妥当。
-
-検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
-`cargo test -p orbit-clap-host --lib` **29 passed**。
-
-### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
-
-owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって
-オラクルの欠陥ではなかった。
-
-## 何が壊れていたか
-
-ゲインは**ブロックあたりスカラー 1 個**として掛かっていた。`ramp_frames` は 5 ms = 240 で、
-実機のブロック長は **512**。`frac = min(512/240, 1.0) = 1.0` なので
-**ランプが 1 ブロックで完了する**（= ブロック境界の段差）。
-
-`gain(-40)` → `gain(0)` は振幅が 0.01 → 1.0 に**1 サンプルで跳ぶ**。
-実測: 切替時の一次差分 `0.6996` vs 信号自身の最大スルー `0.0407` → **17 倍**。
-
-`advance_ramped_gain` の doc は "One block of the **click-free** gain ramp" と書いていたが、
-**出荷時のバッファ長ではこの記述は偽**だった。
-
-## 🔴 私の最初の推奨（案 D）は誤りだった
-
-「出力バッファ長を env 化して E2E-7 を 64 フレームで回す」を推奨していたが、owner の
-「rampの粒度がそれでいい根拠を説明して」で一次ソースを読み直し、**2 つの理由で撤回**した。
-
-1. **出荷される振る舞いを何も変えない。** 512 で走るユーザーには段差が残る
-2. **E2E-7 すら通らない見込み。** 64 でも `frac = 64/240 = 0.2667` で 4 段の階段になり、
-   最大段差 0.264 × ピーク振幅 0.707 = **0.187** > 閾値 `4 × 0.0407 = 0.163`
-
-推奨する前にこの算数をやるべきだった。
-
-## 案 A の要点: ブロック終端をビット一致させる
-
-現行式 `current += (target - current) × min(frames/ramp_frames, 1)` は
-「ブロック先頭の距離を `ramp_frames` で割った固定ステップ」と等価なので:
-
-```
-step  = (target - start) / ramp_frames
-at(f) = end                if f >= min(frames, ramp_frames)
-        start + step * f   otherwise
-```
-
-`end` は**現行式をそのままの演算順序で 1 回だけ**計算した値。したがって
-`at(frames) == end` がブロックの長短どちらでも成り立ち、**既存の実機 goldens
-（E2E-2/3/6/G/P/S/10）は動かない**。これが検算そのもの。
-
-## コスト
-
-| 状態 | 現在 | 案 A |
-|---|---|---|
-| 定常（圧倒的多数） | 乗算 1（`gain == 1.0` なら省略） | **同じ**（`is_settled()` で同じ経路へ） |
-| ランプ中 | 乗算 1 | 乗算 1 + 加算 1 を 240 サンプル分だけ |
-
-pan は**位置ではなく L/R 係数**を線形補間する（位置を補間すると `equal_power_pan` の
-cos/sin が毎サンプルになる）。`pan == 0.0` → `(1.0, 1.0)` の unity 早道は維持したので、
-中央 pan と pan 無指定のビット一致も保たれる。
-
-## 検証（🔴 main が sandbox 外で実行）
-
-`cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑 /
-`cargo test -p orbit-audio-native --lib` **88 passed** /
-`cargo test -p orbit-audio-daemon --features outproc-effect --lib` **220 passed**。
-
-実機 E2E-7 は束 B と合わせて main が本ツリーで確認する。
-
-Closes #859
-### fix(dsl): separate the master track from the device it outputs to (#611) (Sep 11, 2026)
-
-🔴 **owner の訂正（2026-09-11）**。私が「1,2 ch は master の領分だから `mix.output(1,2)` は
-master として扱う」と裁定を仰ぎ、owner が「master であり、それはつまりデバイスの 1,2 に
-なるのでは」と応じた後、**その実装が概念を取り違えている**ことを owner が指摘した。
-
-> マスタートラックとデバイスっていう概念を、トラックなのかデバイスなのかっていうのを
-> ちゃんと分けた方がいいんじゃないですか。
->
-> マスターっていうのは要するにシーケンスのトラックやサミング、オグジュアリーのトラックとかと
-> 同じように、マスターのトラックですよね。
-
-## 正しいモデル
-
-```
-kick ──┐
-snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
-hat  ──┘                    ↑ ここに合流する
-
-pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
-```
-
-- `output(master)` は **master トラックの頭に合流**する。その後 master のラックと
-  `global.gain()` を通り、master が自分の出口として持っているデバイスへ出る
-- `mix.output(1, 2)` は **デバイスの 1,2 ch を名指す**。トラックではない
-
-**実装も元からそうだった**（`default_master_line_program()` は bus と同じ形の
-`[Rack, Gain, Output]`）。混同していたのは **DSL の側**だった。
-
-## 何が焼き付いていたか（直した順）
-
-| 場所 | 旧 | 新 |
-|---|---|---|
-| `process-statement.ts` の糖衣 | `(1,2)` を `{kind:'master'}` に読み替え | `physicalOutputDest()` で**常にデバイス** |
-| 同・引数経路 | `(1,2)` の特例が**無い**（糖衣と食い違い） | 同じヘルパを通す |
-| `MixerRuntimeNode` | master = `{kind:'output', channels:[1,2]}` = **デバイスノード** | **`{kind:'master'}` = 第 3 の種類** |
-| `registerMixerNode` | `var master = mix.output(...)` は**合法**（#523 IMPORTANT 6） | **拒否**（sum/aux と同じ理由） |
-| `resolveMixerNode` | 明示ノードが 1 つでもあれば master を解決**しない** | 常に解決する |
-
-🔴 **最後の行が一番効いている。** 旧実装には「この Global に明示ノードが 1 つでもあれば
-`master` を解決しない」というガードがあった。これは master が**デバイスノードだった時代の
-名前衝突対策**で、`var master = mix.output(...)` が宣言されうる前提だった。
-`master` を予約語にした今は衝突が起きず、ガードは
-**「sum を 1 つ宣言した瞬間に `kick.master` が壊れる」という宣言順依存**だけを残していた。
-
-## master の出口は 1,2 固定のまま（owner 2026-09-11）
-
-> マスターが1、2固定にしておかないと、一般的な DAW の操作とか設定で 1、2 じゃなくなって
-> しまっているみたいなことが起こると、デバイスの変更で困ってしまうので
-
-**固定であることと、「1,2 という名前が master を意味する」ことは別**。
-master トラックの DSL ハンドル（`master.output(...)` / `master.effect(...)`）は
-凍結線に入れない — 下の配線（daemon の `SetBusLine("master", ...)`）は既に通っているので、
-新ラインで表面だけ足せる。
-
-## 旧モデルを固定していたテスト 9 件を書き直した
-
-`signal-chain-dispatch.spec.ts` 5 件 + `mixer-runtime.spec.ts` 4 件。
-うち 1 件はテスト名自体が混同を記録していた:
-「sum/aux を master と名付けるのは拒否するが、**output を master と名付けるのは合法に保つ**」。
-
-## 変異検証
-
-| 変異 | 結果 |
-|---|---|
-| `master` の予約を外す | 1 failed |
-| `master` を解決しない（旧ガード相当） | **6 failed** |
-| `(1,2)` の特例を復活させる | 1 failed |
-| restore | 32 passed・baseline とバイト一致 |
-
-`npm test` **2,325 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
-引用 936 / 0 failed。
-
-Part of #611
-
 ---
 
 ## Archived sections
@@ -1972,4 +1798,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-10）](../archive/WORK_LOG_2026-09.md)
+- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md)

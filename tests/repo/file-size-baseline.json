@@ -11,7 +11,7 @@
     "packages/engine/src/parser/parse-statement.ts": 648,
     "packages/vscode-extension/src/extension.ts": 2779,
     "packages/vscode-extension/src/mcp-server.ts": 1161,
-    "rust/crates/orbit-audio-daemon/src/engine_wrap.rs": 6418,
+    "rust/crates/orbit-audio-daemon/src/engine_wrap.rs": 6014,
     "rust/crates/orbit-audio-daemon/src/outproc_effect.rs": 812,
     "rust/crates/orbit-audio-daemon/src/outproc_instrument.rs": 705,
     "rust/crates/orbit-audio-daemon/src/session.rs": 2605,
