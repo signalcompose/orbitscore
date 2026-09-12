@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(hooks): follow PR #914 in the hook docs (Sep 13, 2026)
+
+PR [#914](https://github.com/signalcompose/orbitscore/pull/914)（merge commit `7061245`）が
+`.claude/hooks/pre-edit-check.sh` の判定を「ブランチ名だけ」から
+「ブランチ名 + **編集先が repo 配下か**」に変えたので、フックの挙動を書いている
+ドキュメント 2 箇所を実装に追従させた（ドキュメントのみ・実装とテストは変更なし）。
+
+#### 変更内容
+
+- `.claude/hooks/README.md` §1: 「対象外 / 判定できない入力の倒し方」の表を追加。
+  plan file（#153）と **repo 外の絶対パス**（#913）が allow、相対パス・`..` を含む絶対パス・
+  `file_path` 無しは deny 側へ倒れることを明記。テストの所在（`tests/repo/pre-edit-hook.spec.ts`）も追記
+- `CLAUDE.md` "Hook Protection": `pre-edit-check.sh` の説明に「**リポジトリ配下のみ**」を追記
+
+#### 差分外だが同じ節にあった誤り（併せて訂正）
+
+`.claude/hooks/README.md` はブロック方式を **exit 2** と書いていたが、実装は
+Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して **exit 0** である
+（`.claude/hooks/pre-edit-check.sh:91-92`）。#914 の差分ではないが、書き換えた同じ箇条書きの
+中にあったため放置せず訂正した。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: DSL の構文・意味論は無変更
+- `sites/user/` / `sites/dev/`: 両サイトとも `pre-edit-check` / Claude Code hooks に言及していない
+  （`grep -rl "pre-edit" sites/` が 0 件）。バイリンガル追従の対象も発生しない
+- `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
+  退避した既存エントリ。過去ログなので触らない
+
 ### fix(hooks): let pre-edit-check.sh allow writes outside the repo on main (Sep 13, 2026)
 
 owner 指摘:
