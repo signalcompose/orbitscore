@@ -22,6 +22,7 @@ global.start()   // ← do not forget this
 
 var drum = init global.seq
 drum.audio("kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)
 
 LOOP(drum)
@@ -99,6 +100,7 @@ Even without setting `audioPath`, you can pass an absolute path directly to `aud
 ```text
 var drum = init global.seq
 drum.audio("/Users/yourname/audio/kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)
 ```
 

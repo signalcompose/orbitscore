@@ -29,6 +29,7 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav").chop(1)
+kick.output()
 kick.play(1, 0, 1, 0)
 ```
 
@@ -104,16 +105,19 @@ global.start()
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav").chop(1)
+kick.output()
 kick.play(1, 0, 1, 0)
 
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav").chop(1)
+snare.output()
 snare.play(0, 0, 1, 0)
 
 var hihat = init global.seq
 hihat.beat(4 by 4).length(1)
 hihat.audio("hihat_closed.wav").chop(1)
+hihat.output()
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 ```
 

@@ -29,6 +29,7 @@ global.start()
 
 var drum = init global.seq
 drum.audio("kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)  // 4 拍すべてで kick.wav を鳴らす
 
 LOOP(drum)
@@ -53,10 +54,12 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)  // 1・3 拍目に kick
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 1, 0, 1)  // 2・4 拍目に snare
 
 LOOP(kick, snare)
@@ -71,6 +74,7 @@ LOOP(kick, snare)
 ```text
 var hihat = init global.seq
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1)  // 8 分音符でハイハットを刻む
 ```
 
@@ -102,6 +106,7 @@ global.start()
 var kick = init global.seq
 kick.audio("kick.wav")
 kick.length(2)
+kick.output()
 kick.play(
   1, 0, 0, 0,   // 1 小節目
   1, 0, 1, 0,   // 2 小節目（少し変化をつける）

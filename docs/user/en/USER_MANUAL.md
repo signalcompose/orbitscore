@@ -100,6 +100,7 @@ global.start()
 // Create kick sequence
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)
 
 // Run kick
@@ -216,7 +217,7 @@ All methods return `this`, enabling fluent syntax:
 
 ```osc
 var kick = init global.seq
-kick.audio("kick.wav").chop(4).play(1, 2, 3, 4).gain(-6)
+kick.audio("kick.wav").chop(4).play(1, 2, 3, 4).gain(-6).output()
 ```
 
 ### 5. Underscore Prefix Pattern
@@ -279,13 +280,13 @@ This design simplifies the DSL and makes state explicit.
 ```osc
 // 1. Define sequences
 var kick = init global.seq
-kick.audio("kick.wav").play(1, 0, 1, 0)
+kick.audio("kick.wav").play(1, 0, 1, 0).output()
 
 var snare = init global.seq
-snare.audio("snare.wav").play(0, 1, 0, 1)
+snare.audio("snare.wav").play(0, 1, 0, 1).output()
 
 var hat = init global.seq
-hat.audio("hihat.wav").play(1, 1, 1, 1)
+hat.audio("hihat.wav").play(1, 1, 1, 1).output()
 
 // 2. Start global
 global.start()
@@ -318,15 +319,15 @@ Different time signatures per sequence:
 ```osc
 // 4/4 kick
 var kick = init global.seq
-kick.beat(4 by 4).audio("kick.wav").play(1, 0, 1, 0)
+kick.beat(4 by 4).audio("kick.wav").play(1, 0, 1, 0).output()
 
 // 5/4 sequence
 var poly5 = init global.seq
-poly5.beat(5 by 4).audio("synth.wav").play(1, 0, 0, 1, 0)
+poly5.beat(5 by 4).audio("synth.wav").play(1, 0, 0, 1, 0).output()
 
 // 7/8 sequence
 var poly7 = init global.seq
-poly7.beat(7 by 8).audio("hat.wav").play(1, 1, 0, 1, 1, 0, 1)
+poly7.beat(7 by 8).audio("hat.wav").play(1, 1, 0, 1, 1, 0, 1).output()
 
 // Loop all with independent timing
 LOOP(kick, poly5, poly7)
@@ -337,6 +338,7 @@ LOOP(kick, poly5, poly7)
 ```osc
 // Divide into 8 slices
 bass.audio("bass.wav").chop(8)
+bass.output()
 
 // Play slices in custom order
 bass.play(1, 0, 3, 0, 5, 0, 7, 0)

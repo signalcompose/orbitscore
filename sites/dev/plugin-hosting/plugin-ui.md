@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:859-879
+// packages/engine/src/core/sequence.ts:885-905
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -1045,7 +1045,7 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1287-1291
+// packages/vscode-extension/src/extension.ts:1288-1292
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2435-2457
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2446-2468
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

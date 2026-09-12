@@ -77,6 +77,7 @@ import {
 import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
+  extractDeclaredMixerNodeNames,
   extractTopLevelDeclaredNames,
   filterDslCandidates,
   extractDeclaredGlobalNames,
@@ -3468,6 +3469,8 @@ export function registerCompletionProviders(context: vscode.ExtensionContext) {
     // #495 第1段: `<receiver>.` の後のメソッド補完を出すためのトリガー。
     // これが無いと、明示的に補完を呼び出さない限り出てこない。
     '.',
+    // #883: destination completion starts as soon as `.output(` is typed.
+    '(',
   )
   context.subscriptions.push(dslCompletionProvider)
 }
@@ -3548,10 +3551,19 @@ export const dslCompletionItemProvider: vscode.CompletionItemProvider = {
           vscode.CompletionItemKind.Method,
         )
       }
-      case 'sum-name':
+      case 'output-string':
         return makeItems(
-          extractDeclaredBusNames(document.getText(), 'sum'),
+          [
+            'master',
+            ...extractDeclaredBusNames(document.getText(), 'sum'),
+            ...extractDeclaredBusNames(document.getText(), 'aux'),
+          ],
           vscode.CompletionItemKind.Value,
+        )
+      case 'output-node':
+        return makeItems(
+          ['master', ...extractDeclaredMixerNodeNames(document.getText())],
+          vscode.CompletionItemKind.Variable,
         )
       case 'aux-name':
         return makeItems(

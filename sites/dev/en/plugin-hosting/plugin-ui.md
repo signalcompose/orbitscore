@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:859-879
+// packages/engine/src/core/sequence.ts:885-905
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -1063,7 +1063,7 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `extension.ts` picks up this result line by the `{"pluginUi"` prefix. Since #773 ([#811](https://github.com/signalcompose/orbitscore/pull/811)) these four branches live inside the callback of `createLinePrefixer`, so **a line split at a chunk boundary is no longer lost** (see [IV-1](/en/editor/vscode-architecture#the-stdout-bridge-envelopes-are-reassembled-into-lines-too-773)).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1287-1291
+// packages/vscode-extension/src/extension.ts:1288-1292
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2435-2457
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2446-2468
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

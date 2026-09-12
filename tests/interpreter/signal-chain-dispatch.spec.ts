@@ -354,7 +354,19 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
 
     await run('kick.master', state)
 
-    expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(false)])
+    // #883 Bundle C realization elision keeps the declaration as score truth while the
+    // default master path remains direct and consumes no sequence bus.
+    expect(routing).not.toHaveBeenCalled()
+    expect(state.sequences.get('kick')?.getState().line).toEqual([
+      {
+        kind: 'output',
+        dest: { kind: 'master' },
+        thru: false,
+        db: 0,
+        sugar: 'output',
+      },
+    ])
+    expect(state.sequences.get('kick')?.getInsertBus()).toBeUndefined()
   })
 
   it('rejects declaring a mixer node named master', async () => {
@@ -511,6 +523,26 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(scheduler.setBusLine).toHaveBeenCalledTimes(1)
   })
 
+  it('preserves named output options when the destination is omitted', async () => {
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      setBusLine: ReturnType<typeof vi.fn>
+    }
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await run('kick.output(db: -6)', state)
+
+    expect(state.sequences.get('kick')?.getInsertBus()).toBe('seq-bus-0')
+    expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { ...masterOutput(false), gain: 10 ** (-6 / 20) },
+    ])
+
+    await expect(run('kick.send(db: -6)', state)).rejects.toThrow(/requires a destination/)
+  })
+
   it('keeps bare DSL methods on callMethod while rejecting bare plugin and kind mismatches', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
@@ -618,11 +650,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(routing).not.toHaveBeenCalled()
   })
 
-  it('lets a string-form bus declaration coexist with the implicit master', async () => {
-    // The implicit master(1,2) is suppressed only by an EXPLICIT mixer node
-    // (SC.2 norm 6). Counting string-form declarations as "explicit" would make
-    // `global.sum("drums")` silently remove `master` from the chain vocabulary
-    // of a file that never declared a mixer — a compatibility break.
+  it('lets a string-form bus declaration coexist with the reserved master node', async () => {
+    // `master` exists as a reserved node without an explicit mixer declaration. Counting
+    // string-form declarations as mixer-node declarations must not remove `master` from the
+    // chain vocabulary of a file that never declared a mixer.
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq\nglobal.sum("drums")', state)

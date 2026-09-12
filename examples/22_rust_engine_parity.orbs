@@ -18,18 +18,21 @@ var kick = init global.seq
 kick.length(1)
 kick.audio("../test-assets/audio/kick.wav").chop(1)
 kick.defaultGain(-3).defaultPan(-60)
+kick.output()
 kick.play(1, 0, 1, 0)
 
 var snare = init global.seq
 snare.length(1)
 snare.audio("../test-assets/audio/snare.wav").chop(1)
 snare.defaultGain(-6).defaultPan(60)
+snare.output()
 snare.play(0, 1, 0, 1)
 
 var hat = init global.seq
 hat.length(1)
 hat.audio("../test-assets/audio/hihat_closed.wav").chop(1)
 hat.defaultGain(-9).defaultPan(0)
+hat.output()
 hat.play(1, 1, 1, 1)
 
 // === chop 領域再生（grid 一致 → rate=1.0）===
@@ -40,6 +43,7 @@ var chopd = init global.seq
 chopd.beat(4 by 4).length(1)
 chopd.audio("../test-assets/audio/arpeggio_c.wav").chop(2)
 chopd.defaultGain(-4).defaultPan(20)
+chopd.output()
 chopd.play(1, 2, 1, 2)
 
 global.start()

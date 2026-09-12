@@ -4,6 +4,8 @@ import { createStatePathFallback } from '../project-state-store'
 import {
   assertOutputOptions,
   AudioLine,
+  isOutputDest,
+  assertSendDestination,
   resolveNamedOutputDest,
   resolveSendLevel,
   toWire,
@@ -96,7 +98,10 @@ export interface MixerBusHandle {
   ui(name?: string, open?: boolean): Promise<MixerBusHandle>
   /** #611 §2.1/§3.6: same resolution/semantics as `Sequence.output()` (minus the LinkAudio
    * fallback and the numeric render-bus branch, which are Sequence-only concepts). */
-  output(dest: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
+  output(
+    destOrOptions?: string | OutputDest | MixerOutputOptions,
+    opts?: MixerOutputOptions,
+  ): Promise<MixerBusHandle>
   /** #611 §2.3/§3.6: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })`. */
   send(
     aux: string | OutputDest,
@@ -333,13 +338,25 @@ export class MixerManager {
         await this.pluginUiHandler(formatReceiverId(kind, name), catalogName, open)
         return this.makeHandle(kind, name, bus)
       },
-      output: async (dest: string | OutputDest, opts: MixerOutputOptions = {}) => {
-        assertOutputOptions(opts, `Mixer bus '${formatReceiverId(kind, name)}': output`)
+      output: async (
+        destOrOptions?: string | OutputDest | MixerOutputOptions,
+        opts: MixerOutputOptions = {},
+      ) => {
+        const call = `Mixer bus '${formatReceiverId(kind, name)}': output`
+        let dest: string | OutputDest | undefined = destOrOptions as string | OutputDest | undefined
+        let options = opts
+        if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
+          assertOutputOptions(destOrOptions, call)
+          dest = undefined
+          options = destOrOptions
+        } else {
+          assertOutputOptions(options, call)
+        }
         await this.applyLineElement(bus, {
           kind: 'output',
           dest: this.resolveDest(dest),
-          thru: opts.thru ?? false,
-          db: opts.db ?? 0,
+          thru: options.thru ?? false,
+          db: options.db ?? 0,
           sugar: 'output',
         })
         return this.makeHandle(kind, name, bus)
@@ -349,6 +366,7 @@ export class MixerManager {
         dbOrOptions?: number | MixerSendOptions,
         opts: MixerSendOptions = {},
       ) => {
+        assertSendDestination(aux, `Mixer bus '${formatReceiverId(kind, name)}': send`)
         const level = resolveSendLevel(
           dbOrOptions,
           opts,
@@ -377,8 +395,20 @@ export class MixerManager {
   /** §2.1/§3.3 resolution (minus the LinkAudio/render-bus branches, which do not apply to a
    * bus-to-bus route): an already-resolved `OutputDest`, the `"master"` reserved word, a
    * declared sum/aux bus name, or an `"L,R"` physical-channel-pair shorthand. */
-  private resolveDest(value: string | OutputDest): OutputDest {
-    if (typeof value === 'object') return value
+  private resolveDest(value?: string | OutputDest): OutputDest {
+    // #883 §4: an omitted destination IS `output("master")` — keep that knowledge here with
+    // the rest of the destination resolution instead of leaking it into each call site.
+    if (value === undefined) return { kind: 'master' }
+    if (isOutputDest(value)) return value
+    if (typeof value !== 'string') {
+      // 🔴 実際に来た型を出す。常に "null" と決め打ちすると、数値や真偽値を渡した人に
+      // 嘘の情報を与える（PR #884 ラウンド 2）。
+      throw new Error(
+        `Mixer bus routing received ${value === null ? 'null' : typeof value}. ` +
+          `Only undefined omits the destination (= master); otherwise pass "master", ` +
+          `a declared sum/aux name, an "L,R" pair, or a resolved destination.`,
+      )
+    }
     const resolved = resolveNamedOutputDest(value, (name) => this.resolveNode(name))
     if (resolved) return resolved
     throw new Error(

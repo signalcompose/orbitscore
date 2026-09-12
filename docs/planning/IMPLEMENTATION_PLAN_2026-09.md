@@ -337,6 +337,8 @@
 | **O-wire** 🔴 | `611-line-wire` | **PR-O3a** + **#773** + **#801** | 🔴 **実測 3,080 変更行**（うち code 2,061）。検証は「**goldens が 1 つも動かないこと**」+ cargo。**振る舞いを変えない配線の入れ替えなので、この検算はここでしか使えない**。🔴 **2026-09-08 に PR-O3 を O3a / O3b へ割った**（下記）|
 | **O-wire-b** 🔴 | `611-line-wire-b` | **PR-O3b**（`SetBusLine` wire + TS クライアント）| 約 400 行。🔴 **一方通行（wire 契約）**。**O3a と同じ検算（goldens が動かない）を共有する**ので、分けても検算の機会は失われない |
 | **O-surface** 🔴 | `611-output-line` | PR-O4 + **daemon 台数のアサーション** | 約 1,200 行（変更行）。検証は **E2E-2〜7 + E2E-10**。🔴 **一方通行**（DSL 表面） |
+| **X-compat** 🔴 | `883-explicit-output-routing` | **#883 束 0**（spec 先行）+ **束 C**（振る舞いを変えない: `.output()` 既定引数・補完・全譜面と fixture に `.output()` 明示） | 約 770 行（変更行）。🔴 **検証は「既存 golden が 1 つも動かないこと」**（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)）|
+| **X-semantics** 🔴 | （未作成） | **#883 束 S**（暗黙 master の **4 実体** + `SetSourceRouting` を明示 3 値へ + 診断 2 種 + 版 **4.0.0 / DSL_VERSION 2.0**） | 未見積。🔴 **一方通行**（wire 契約 + DSL の破壊的変更）。**X-compat のマージ後**に着手 — 混ぜると X-compat の検算（golden が動かない）が永久に失われる |
 | **O-multiout** | `611-multiout` | PR-O5・PR-O6 | 約 650 行（変更行）。検証は **E2E-9 + 全件緑**。🔴 **O6 は旧経路の撤去＝逃げ道を塞ぐので、O4 が実機で確かめられた後に置く** |
 | L-record | `694-session-log` | PR-L1a・L1b・L2・L3・L7・L8・L9 | 約 1,500 行 |
 | L-replay | `241-replay` | PR-L4・L5・L6 | 約 900 行 |

@@ -15,11 +15,13 @@ global.audioPath("test-assets/audio")
 var kick4by4 = init global.seq
 kick4by4.audio("kick.wav")
 kick4by4.beat(4 by 4)      // Standard 4/4
+kick4by4.output()
 kick4by4.play(1, 0, 1, 0)
 
 var snare5by4 = init global.seq
 snare5by4.audio("snare.wav")
 snare5by4.beat(5 by 4)     // 5/4 - creates phasing effect
+snare5by4.output()
 snare5by4.play(1, 0, 1, 0, 1)
 
 // Result: Kick and snare gradually shift relative to each other
@@ -38,16 +40,19 @@ snare5by4.play(1, 0, 1, 0, 1)
 var fast = init global.seq
 fast.audio("hihat.wav")
 fast.tempo(160)            // Fast: 160 BPM
+fast.output()
 fast.play(1, 1, 1, 1)
 
 var medium = init global.seq
 medium.audio("snare.wav")
 medium.tempo(120)          // Medium: 120 BPM (global tempo)
+medium.output()
 medium.play(1, 0, 1, 0)
 
 var slow = init global.seq
 slow.audio("kick.wav")
 slow.tempo(80)             // Slow: 80 BPM
+slow.output()
 slow.play(1, 0, 0, 0)
 
 // Result: Three independent tempos running simultaneously
@@ -66,26 +71,31 @@ slow.play(1, 0, 0, 0)
 // 3.1 Binary subdivision (8th notes)
 var binary = init global.seq
 binary.audio("hihat.wav")
+binary.output()
 binary.play(1, (2, 2))     // Quarter, eighth, eighth
 
 // 3.2 Triplet subdivision
 var triplet = init global.seq
 triplet.audio("hihat.wav")
+triplet.output()
 triplet.play(1, (2, 2, 2)) // Quarter, triplet, triplet, triplet
 
 // 3.3 Deep nesting (3 levels)
 var deep = init global.seq
 deep.audio("hihat.wav")
+deep.output()
 deep.play(1, (2, (3, 3)))  // Quarter -> half -> triplets
 
 // 3.4 Complex pattern
 var complex = init global.seq
 complex.audio("kick.wav")
+complex.output()
 complex.play((1, 1), (2, (3, 3)))  // Mixed nested pattern
 
 // 3.5 Extreme nesting (4 levels)
 var extreme = init global.seq
 extreme.audio("snare.wav")
+extreme.output()
 extreme.play(1, (2, (3, (4, 4))))  // 4 levels deep
 
 // Commands:
@@ -102,6 +112,7 @@ extreme.play(1, (2, (3, (4, 4))))  // 4 levels deep
 
 var insane = init global.seq
 insane.audio("hihat.wav")
+insane.output()
 insane.play(1, (2, (2, (2, (2, (2, (2, (2, (2, (2, (2, 2)))))))))))
 
 // Result: ✅ SuperCollider handles this perfectly!
@@ -125,26 +136,31 @@ insane.play(1, (2, (2, (2, (2, (2, (2, (2, (2, (2, (2, 2)))))))))))
 var track1 = init global.seq
 track1.beat(3 by 4).tempo(140).length(1)
 track1.audio("kick.wav")
+track1.output()
 track1.play(1, (2, (3, (4, 4))))
 
 var track2 = init global.seq
 track2.beat(5 by 4).tempo(100).length(2)
 track2.audio("snare.wav")
+track2.output()
 track2.play((1, 1), (2, (3, 3)))
 
 var track3 = init global.seq
 track3.beat(7 by 4).tempo(80).length(1)
 track3.audio("hihat.wav")
+track3.output()
 track3.play(1, (2, (2, 2)))
 
 var track4 = init global.seq
 track4.beat(4 by 4).tempo(120).length(3)
 track4.audio("kick.wav")
+track4.output()
 track4.play((1, 1, 1), (2, 2))
 
 var track5 = init global.seq
 track5.beat(6 by 4).tempo(160).length(2)
 track5.audio("snare.wav")
+track5.output()
 track5.play(1, (2, (3, (4, 4))))
 
 // Result: ✅ All tracks synchronized perfectly!

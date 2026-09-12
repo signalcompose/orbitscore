@@ -32,49 +32,49 @@ var sine2 = init global.seq
 // --- Drum Section ---
 
 // Kick - Foundation
-kick.audio("kick.wav").chop(1).play(0, 0, 0, 0)
+kick.audio("kick.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Snare - Backbeat
-snare.audio("snare.wav").chop(1).play(0, 0, 0, 0)
+snare.audio("snare.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Hi-hat Closed - 16th notes
-hatc.audio("hihat_closed.wav").chop(1).play(0, 0, 0, 0)
+hatc.audio("hihat_closed.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Hi-hat Open - Accents
-hato.audio("hihat_open.wav").chop(1).play(0, 0, 0, 0)
+hato.audio("hihat_open.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Generic Hi-hat - Variations
-hat.audio("hihat.wav").chop(1).play(0, 0, 0, 0)
+hat.audio("hihat.wav").chop(1).play(0, 0, 0, 0).output()
 
 // --- Bass Section ---
 
 // Bass C1 - Root note
-bassc.audio("bass_c1.wav").chop(1).play(0, 0, 0, 0)
+bassc.audio("bass_c1.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Bass E1 - Third
-basse.audio("bass_e1.wav").chop(1).play(0, 0, 0, 0)
+basse.audio("bass_e1.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Bass G1 - Fifth
-bassg.audio("bass_g1.wav").chop(1).play(0, 0, 0, 0)
+bassg.audio("bass_g1.wav").chop(1).play(0, 0, 0, 0).output()
 
 // --- Melodic Section ---
 
 // Arpeggio
-arp.audio("arpeggio_c.wav").chop(1).play(0, 0, 0, 0)
+arp.audio("arpeggio_c.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Chord C Major - Pads
-chordc.audio("chord_c_major.wav").chop(1).play(0, 0, 0, 0).length(4)
+chordc.audio("chord_c_major.wav").chop(1).play(0, 0, 0, 0).length(4).output()
 
 // Chord A Minor - Pads
-chorda.audio("chord_a_minor.wav").chop(1).play(0, 0, 0, 0).length(4)
+chorda.audio("chord_a_minor.wav").chop(1).play(0, 0, 0, 0).length(4).output()
 
 // --- Sine Wave Section (for testing/effects) ---
 
 // Sine 440Hz
-sine1.audio("sine_440.wav").chop(1).play(0, 0, 0, 0)
+sine1.audio("sine_440.wav").chop(1).play(0, 0, 0, 0).output()
 
 // Sine 880Hz
-sine2.audio("sine_880.wav").chop(1).play(0, 0, 0, 0)
+sine2.audio("sine_880.wav").chop(1).play(0, 0, 0, 0).output()
 
 // ========================================
 // Live Coding Commands (use Cmd+Enter)

@@ -47,6 +47,7 @@ global.start()
 
 var drum = init global.seq
 drum.audio("kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)
 
 LOOP(drum)
@@ -113,6 +114,7 @@ Detailed explanations come in the following chapters, but in short:
 - `global.start()` — Tells the conductor to start
 - `var drum = init global.seq` — Creates a sequence (one unit of a sound pattern) named `drum`
 - `drum.audio("kick.wav")` — Tells this sequence to play `kick.wav`
+- `drum.output()` — Routes the sequence to the master track
 - `drum.play(1, 1, 1, 1)` — Defines a four-beat pattern that plays `kick.wav` on every beat
 - `LOOP(drum)` — Starts the loop playback of `drum`
 

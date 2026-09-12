@@ -32,12 +32,14 @@ global.start()
 var kick = init global.seq
 kick.audio("kick.wav")
 kick.beat(4 by 4)
+kick.output()
 kick.play(1, 0, 0, 1)  // beats 1 and 4
 
 // snare in 5/4 (the cycle drifts against the 4-beat cycle)
 var snare = init global.seq
 snare.audio("snare.wav")
 snare.beat(5 by 4)
+snare.output()
 snare.play(0, 0, 1, 0, 1)  // beats 3 and 5
 
 LOOP(kick, snare)
@@ -62,12 +64,14 @@ global.start()
 var three = init global.seq
 three.audio("hihat.wav")
 three.length(1)
+three.output()
 three.play((1, 0, 1), (0, 1, 0))  // 1 bar = 2 groups × 3-way split
 
 // 1 bar split into 4 (quarter-note feel)
 var four = init global.seq
 four.audio("snare.wav")
 four.length(1)
+four.output()
 four.play(0, 1, 0, 1)  // beats 2 and 4
 
 LOOP(three, four)
@@ -91,6 +95,7 @@ global.start()
 // kick that runs at the global tempo (120 BPM)
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)
 
 // a slower sequence at half speed (60 BPM)
@@ -99,6 +104,7 @@ slow.tempo(60)  // setting an individual tempo detaches it from the global one
 slow.audio("snare.wav")
 slow.beat(4 by 4)
 slow.length(2)
+slow.output()
 slow.play(1, 0, 0, 0, 0, 0, 1, 0)
 
 // a faster, finer sequence at double speed (240 BPM)
@@ -106,6 +112,7 @@ var fast = init global.seq
 fast.tempo(240)
 fast.audio("hihat.wav")
 fast.beat(4 by 4)
+fast.output()
 fast.play(1, 0, 1, 0, 1, 0, 1, 0)
 
 LOOP(kick, slow, fast)

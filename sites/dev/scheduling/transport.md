@@ -287,7 +287,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 `Cmd+Enter` を押すと、VS Code extension はカーソル位置のブロック (または選択範囲) のテキストだけを stdin に書き込みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2744-2744
+// packages/vscode-extension/src/extension.ts:2745-2745
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -502,7 +502,7 @@ stateDiagram-v2
 `clearRunTimer()` が先に走るようになっています。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2049-2077
+// packages/engine/src/core/sequence.ts:2075-2103
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

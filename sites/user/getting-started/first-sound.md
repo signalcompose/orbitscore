@@ -47,6 +47,7 @@ global.start()
 
 var drum = init global.seq
 drum.audio("kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)
 
 LOOP(drum)
@@ -113,6 +114,7 @@ OS のオーディオ出力先が、聞きたいデバイスになっている�
 - `global.start()` — 指揮者にスタートの合図を出しています
 - `var drum = init global.seq` — `drum` という名前のシーケンス（音のパターンの 1 まとまり）を作っています
 - `drum.audio("kick.wav")` — このシーケンスで `kick.wav` を鳴らすことを指示しています
+- `drum.output()` — 音をマスタートラックへ送る出口を指定しています
 - `drum.play(1, 1, 1, 1)` — 4 拍ぶん、毎回 `kick.wav` を鳴らすパターンを書いています
 - `LOOP(drum)` — `drum` を繰り返し再生開始する命令です
 

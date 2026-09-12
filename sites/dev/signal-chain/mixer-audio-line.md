@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1816-1820
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1841-1845
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1907-1909
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1932-1934
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -100,7 +100,7 @@ TS 側の司令塔は `packages/engine/src/core/global/mixer-manager.ts` の `Mi
 並びます。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:289-309
+// packages/engine/src/core/global/mixer-manager.ts:294-314
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -141,7 +141,7 @@ prefix と上限は TS 側の定数として置かれていて、コメントが
 明言しています。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:31-44
+// packages/engine/src/core/global/mixer-manager.ts:33-46
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -208,8 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:534-563
-
+// packages/engine/src/core/sequence.ts:544-589
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -224,11 +223,28 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
    *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
    *    resolution order)
    */
-  output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
+  output(
+    destOrOptions?: string | number | OutputDest | OutputOptions,
+    opts: OutputOptions = {},
+  ): this {
     const name = this.stateManager.getName() || 'sequence'
-    assertOutputOptions(opts, `Sequence '${name}': output`)
-    if (typeof dest === 'object') {
-      return this.applyOutputElement(dest, opts, 'output')
+    let dest: string | number | OutputDest | undefined = destOrOptions as
+      | string
+      | number
+      | OutputDest
+      | undefined
+    let options = opts
+    if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
+      assertOutputOptions(destOrOptions, `Sequence '${name}': output`)
+      dest = undefined
+      options = destOrOptions
+    } else {
+      assertOutputOptions(options, `Sequence '${name}': output`)
+    }
+    // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
+    // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
+    if (dest === undefined || isOutputDest(dest)) {
+      return this.applyOutputElement(dest ?? { kind: 'master' }, options, 'output')
     }
     const destinationName = typeof dest === 'number' ? String(dest) : dest
     if (!destinationName || !destinationName.trim()) {
@@ -276,7 +292,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:643-656
+// packages/engine/src/core/sequence.ts:669-690
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -287,10 +303,18 @@ fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線�
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    assertSendDestination(aux, `Sequence '${name}': send`)
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
     const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
+    const dest = isOutputDest(aux)
+      ? aux
+      : (this.resolveLineDest(aux) ??
+        (() => {
+          throw new Error(
+            `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+              `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
 ```
 
 `_line`（`AudioLine`）が要素をキー（宛先 + 出現序数）で管理する点は覚えておいてください。
@@ -1084,7 +1108,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:960-987
+// packages/engine/src/core/sequence.ts:986-1013
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -1338,7 +1362,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2070-2106
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2070-2107
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1354,6 +1378,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
           'global.start()',
           'var gain643 = init global.seq',
           `gain643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'gain643.output()',
           'gain643.gate(1)',
           'gain643.play(1, 1, 1, 1)',
           'LOOP(gain643)',
@@ -1389,7 +1414,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2210-2232
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2214-2239
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -1397,9 +1422,12 @@ DSL 部分を引用します。
           'global.beat(4 by 4)',
           'global.sum("sum643")',
           'global.aux("aux643")',
+          'sum("sum643").output()',
+          'aux("aux643").output()',
           'global.start()',
           'var routeDry643 = init global.seq',
           `routeDry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'routeDry643.output()',
           'routeDry643.gate(1)',
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',

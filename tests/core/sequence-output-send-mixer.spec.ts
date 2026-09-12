@@ -114,6 +114,69 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     expect(seq.output('drum')).toBe(seq)
   })
 
+  it('treats an omitted destination exactly like explicit master without allocating a bus', () => {
+    const omitted = harness()
+    const explicit = harness()
+
+    expect(omitted.seq.output()).toBe(omitted.seq)
+    expect(explicit.seq.output('master')).toBe(explicit.seq)
+
+    expect(omitted.seq.getState().line).toEqual(explicit.seq.getState().line)
+    expect(omitted.seq.getInsertBus()).toBeUndefined()
+    expect(explicit.seq.getInsertBus()).toBeUndefined()
+    expect(omitted.setBusLine).not.toHaveBeenCalled()
+    expect(explicit.setBusLine).not.toHaveBeenCalled()
+  })
+
+  it('allocates a bus for master output when db or thru needs line processing', async () => {
+    const attenuated = harness()
+    const thru = harness()
+
+    attenuated.seq.output('master', { db: -6 })
+    thru.seq.output(undefined, { thru: true })
+
+    await vi.waitFor(() => expect(attenuated.setBusLine).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(thru.setBusLine).toHaveBeenCalledTimes(1))
+    expect(attenuated.seq.getInsertBus()).toBe('seq-bus-0')
+    expect(thru.seq.getInsertBus()).toBe('seq-bus-0')
+    expect(attenuated.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { ...masterOutput(false), gain: 10 ** (-6 / 20) },
+    ])
+    expect(thru.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      masterOutput(true),
+      masterOutput(false),
+    ])
+  })
+
+  it('treats a first-argument options bag as an omitted sequence output destination', async () => {
+    const { seq, setBusLine } = harness()
+
+    seq.output({ db: -6 })
+
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
+    expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { ...masterOutput(false), gain: 10 ** (-6 / 20) },
+    ])
+  })
+
+  it('rejects null destinations explicitly for sequence and mixer output/send calls', async () => {
+    const { global, seq } = harness()
+    const handle = global.sum('drum')
+
+    expect(() => seq.output(null as any)).toThrow(/received null.*Only undefined omits/s)
+    expect(() => seq.send(null as any, -6)).toThrow(/requires a destination; received null/)
+    await expect(handle.output(null as any)).rejects.toThrow(/received null.*Only undefined omits/s)
+    // 🔴 `send()` は `output()` と文言が違う — 宛先が**必須**で既定が無いため（共有ガード
+    // `assertSendDestination`）。両 `send()` が同じ文言で落ちることが、片翼だけにガードが
+    // 付いていた PR #884 ラウンド 2 の Critical への回帰検査になる。
+    await expect(handle.send(null as any, -6)).rejects.toThrow(
+      /requires a destination; received null/,
+    )
+  })
+
   it('rejects sum routing on a note (midi) sequence', () => {
     const { global, seq } = harness()
     global.sum('drum')
@@ -131,6 +194,17 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
     expect(setSourceRouting).toHaveBeenCalledTimes(1)
     expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
+  })
+
+  it('keeps instrument-only output() on the direct master path without source routing', async () => {
+    const { seq, setBusLine, setSourceRouting } = harness()
+
+    await seq.instrument('synth.clap')
+    seq.output()
+
+    expect(seq.getInsertBus()).toBeUndefined()
+    expect(setBusLine).not.toHaveBeenCalled()
+    expect(setSourceRouting).not.toHaveBeenCalled()
   })
 
   it('logs a transient warning (not error) and does not throw when SetBusLine fails at transport', async () => {

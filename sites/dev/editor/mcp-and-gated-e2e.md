@@ -132,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:431-442
+// packages/vscode-extension/src/extension.ts:432-443
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -253,7 +253,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2754-2791
+// packages/vscode-extension/src/extension.ts:2755-2792
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -312,7 +312,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1292-1300
+// packages/vscode-extension/src/extension.ts:1293-1301
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -379,7 +379,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2884-2895
+// packages/vscode-extension/src/extension.ts:2885-2896
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -403,7 +403,7 @@ const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
 拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:142-152
+// packages/vscode-extension/src/extension.ts:143-153
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -418,7 +418,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:305-316
+// packages/vscode-extension/src/extension.ts:306-317
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -1209,7 +1209,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1624-1634
+// packages/engine/src/core/sequence.ts:1650-1660
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1259,7 +1259,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 `handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:239-250
+// packages/vscode-extension/src/extension.ts:240-251
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1277,7 +1277,7 @@ function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:252-271
+// packages/vscode-extension/src/extension.ts:253-272
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1305,7 +1305,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:953-977
+// packages/vscode-extension/src/extension.ts:954-978
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1336,28 +1336,29 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2719-2729
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2730-2741
       const dslLines = [
         'var global = init GLOBAL',
+        // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
+        // 全部 `global.key("C")` を持っているが、ここだけ欠けており、**共有アプリに残った key を
+        // 継承して偶然通っていた**（#883 束 C で先行譜面を変えたら露見した）。譜面が自分の前提を
+        // 書いていない状態そのものが #883 が消そうとしているものなので、ここで自足させる。
+        'global.key("C")',
         'global.tempo(120)',
         'var ph654 = init global.seq',
         'ph654.beat(4 by 4).length(1)',
         `ph654.instrument(${JSON.stringify(catalog.clapSynthName)})`,
-        'ph654.octave(4)',
-        'ph654.play(1, 0, 3, 0)',
-        'global.start()',
-        'ph654.run()',
-      ]
+        'ph654.output()',
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2732-2733
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2749-2750
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2789-2791
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2806-2808
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

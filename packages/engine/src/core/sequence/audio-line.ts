@@ -12,6 +12,35 @@ export type OutputDest =
   | { readonly kind: 'render'; readonly id: string }
   | { readonly kind: 'link'; readonly channel: string }
 
+/**
+ * The single runtime discriminator between a resolved destination and an options bag.
+ * Every OutputDest has `kind`; output/send options deliberately never do.
+ */
+export function isOutputDest(value: unknown): value is OutputDest {
+  return typeof value === 'object' && value !== null && 'kind' in value
+}
+
+/**
+ * 🔴 `send()` の宛先は**必須**（`output()` と違い省略できない — どこにも送らない send は無い）。
+ *
+ * **この 1 関数が両方の `send()` の契約**（`Sequence.send()` と `MixerBusHandle.send()`）。
+ * 片方にだけガードを書くと、パーサが名前付き引数だけの `send(db: -6)` を
+ * `[undefined, {db:-6}]` に整形した時、ガードの無い側が `undefined` を master に解決して
+ * **master への thru 出力を黙って 1 本増やす**（既存の直結と二重に鳴る）。
+ * 実際にレビューで再現した（PR #884 ラウンド 2）。
+ *
+ * 文言は**実際に来た型を出す** — 常に "null" と決め打ちすると、数値や真偽値を渡した人に
+ * 嘘の情報を与えることになる。
+ */
+export function assertSendDestination(value: unknown, call: string): void {
+  if (typeof value === 'string' || isOutputDest(value)) return
+  const actual = value === null ? 'null' : typeof value
+  throw new Error(
+    `${call}(aux, db) requires a destination; received ${actual}. ` +
+      `Unlike output(), send() has no default — name an aux/sum bus or pass a resolved destination.`,
+  )
+}
+
 export function destKey(dest: OutputDest): string {
   switch (dest.kind) {
     case 'master':
@@ -61,6 +90,12 @@ export function assertOutputOptions(
   call = 'output',
 ): asserts value is OutputOptions {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) return
+  if (value === null) {
+    throw new Error(
+      `${call}() received null. Only undefined omits the destination; ` +
+        `null is not a valid destination or options object.`,
+    )
+  }
   throw new Error(
     `${call}() expects an options object as its second argument. ` +
       `Did you mean output(dest, { db: -12 }) or send(dest, -12)?`,
@@ -192,6 +227,23 @@ function forEachLiveLine(visit: (line: AudioLine) => void): void {
  * the common case.
  */
 let frameOpen = false
+
+/**
+ * #883 §2.3「実現の省略」: a line needs a daemon bus only when it asks for something the
+ * direct engine path cannot realize — a rack, or an exit that is not a plain master exit.
+ *
+ * 🔴 **This is the single definition.** 束 S の instrument 経路（設計 §2.2.1）は
+ * `SetSourceRouting` の宛先（`none` / `master` / `bus`）を**同じ述語**で選ぶ。ここに
+ * 置かずに呼び出し側へ書き写すと、audio 経路と instrument 経路の判定がドリフトする。
+ */
+export function lineNeedsBus(elements: readonly LineElement[]): boolean {
+  return elements.some(
+    (element) =>
+      element.kind === 'rack' ||
+      (element.kind === 'output' &&
+        !(element.dest.kind === 'master' && !element.thru && element.db === 0)),
+  )
+}
 
 /** One ordered audio line, including the evaluation-batch cursor rules. */
 export class AudioLine {
@@ -349,6 +401,17 @@ export class AudioLine {
 
   snapshot(): readonly LineElement[] {
     return [...this.elements]
+  }
+
+  /**
+   * #883 §2.3: does this line need a daemon bus, or can the direct engine path realize it?
+   *
+   * Reads `elements` directly instead of going through `snapshot()` — the predicate only
+   * scans, and `snapshot()` copies the whole array on every `output()` / `send()`, which
+   * live coding re-evaluates constantly.
+   */
+  needsBus(): boolean {
+    return lineNeedsBus(this.elements)
   }
 
   private nextOrdinal(element: LineElement): number {

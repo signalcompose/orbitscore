@@ -287,7 +287,7 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2744-2744
+// packages/vscode-extension/src/extension.ts:2745-2745
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2049-2077
+// packages/engine/src/core/sequence.ts:2075-2103
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

@@ -85,6 +85,7 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)
 
 LOOP(kick)

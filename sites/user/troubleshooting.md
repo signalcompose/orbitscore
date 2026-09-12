@@ -22,6 +22,7 @@ global.start()   // ← これを忘れずに
 
 var drum = init global.seq
 drum.audio("kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)
 
 LOOP(drum)
@@ -99,6 +100,7 @@ seq.play(1, 0, 0, 0)      // 1 拍目だけ鳴らす
 ```text
 var drum = init global.seq
 drum.audio("/Users/yourname/audio/kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)
 ```
 

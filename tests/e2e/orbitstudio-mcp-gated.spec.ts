@@ -2082,6 +2082,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'global.start()',
           'var gain643 = init global.seq',
           `gain643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'gain643.output()',
           'gain643.gate(1)',
           'gain643.play(1, 1, 1, 1)',
           'LOOP(gain643)',
@@ -2119,11 +2120,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'global.start()',
           'var dry643 = init global.seq',
           `dry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'dry643.output()',
           'dry643.gate(1)',
           'dry643.play(1, 1, 1, 1)',
           'var wet643 = init global.seq',
           'wet643.effect([Gain(db: -6)])',
           `wet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'wet643.output()',
           'wet643.gate(1)',
           'wet643.play(1, 1, 1, 1)',
           'LOOP(dry643)',
@@ -2160,6 +2163,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'global.start()',
           'var live643 = init global.seq',
           `live643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'live643.output()',
           'live643.gate(1)',
           'live643.play(1, 1, 1, 1)',
           'LOOP(live643)',
@@ -2214,9 +2218,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'global.beat(4 by 4)',
           'global.sum("sum643")',
           'global.aux("aux643")',
+          'sum("sum643").output()',
+          'aux("aux643").output()',
           'global.start()',
           'var routeDry643 = init global.seq',
           `routeDry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'routeDry643.output()',
           'routeDry643.gate(1)',
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',
@@ -2269,6 +2276,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'var replace643 = init global.seq',
           'replace643.effect([Gain(db: -6)])',
           `replace643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'replace643.output()',
           'replace643.gate(1)',
           'replace643.play(1, 1, 1, 1)',
           'LOOP(replace643)',
@@ -2312,6 +2320,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'var oldTenant643 = init global.seq',
           'oldTenant643.effect([Gain(db: -6)])',
           `oldTenant643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'oldTenant643.output()',
           'oldTenant643.gate(1)',
           'oldTenant643.play(1, 1, 1, 1)',
           'LOOP(oldTenant643)',
@@ -2324,6 +2333,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
               'oldTenant643.stop()',
               'var nextTenant643 = init global.seq',
               `nextTenant643.instrument(${JSON.stringify(activeCatalog.clapSynthName)})`,
+              'nextTenant643.output()',
               'nextTenant643.gate(1)',
               'nextTenant643.play(1, 1, 1, 1)',
               'LOOP(nextTenant643)',
@@ -2360,6 +2370,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'global.start()',
           'var default643 = init global.seq',
           `default643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'default643.output()',
           'default643.gate(1)',
           'default643.play(1, 1, 1, 1)',
           'LOOP(default643)',
@@ -2718,10 +2729,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // otherwise the highlight hops between notes instead of keeping time.
       const dslLines = [
         'var global = init GLOBAL',
+        // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
+        // 全部 `global.key("C")` を持っているが、ここだけ欠けており、**共有アプリに残った key を
+        // 継承して偶然通っていた**（#883 束 C で先行譜面を変えたら露見した）。譜面が自分の前提を
+        // 書いていない状態そのものが #883 が消そうとしているものなので、ここで自足させる。
+        'global.key("C")',
         'global.tempo(120)',
         'var ph654 = init global.seq',
         'ph654.beat(4 by 4).length(1)',
         `ph654.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+        'ph654.output()',
         'ph654.octave(4)',
         'ph654.play(1, 0, 3, 0)',
         'global.start()',
@@ -2860,7 +2877,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
       ).text
       const attachShifted = await activeClient.call('evaluate_orbitscore', {
-        code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)}, ${JSON.stringify(handStatePath)})`,
+        code: [
+          `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)}, ${JSON.stringify(handStatePath)})`,
+          'stSeq.output()',
+        ].join('\n'),
       })
       expect(attachShifted.isError, attachShifted.text).toBe(false)
       await sleep(6000)
@@ -2959,7 +2979,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
       ).text
       const attachRestored = await activeClient.call('evaluate_orbitscore', {
-        code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+        code: [`stSeq.instrument(${JSON.stringify(catalog.clapSynthName)})`, 'stSeq.output()'].join(
+          '\n',
+        ),
       })
       expect(attachRestored.isError, attachRestored.text).toBe(false)
       await sleep(6000)
@@ -3310,7 +3332,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         `autoSnapshotInstrument/instrument/${catalog.clapSynthName}/0`,
       ] as const
 
-      const instrumentDeclaration = `autoSnapshotInstrument.instrument(${JSON.stringify(catalog.clapSynthName)})`
+      const instrumentDeclaration = `autoSnapshotInstrument.instrument(${JSON.stringify(catalog.clapSynthName)}).output()`
       const dslLines = [
         'var global = init GLOBAL',
         // The solo segment plays `autoSnapshotInstrument.play(1)`, a MIDI
@@ -3884,6 +3906,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             'global.start()',
             'var cb618 = init global.seq',
             `cb618.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+            'cb618.output()',
             'cb618.play(1, 1, 1, 1)',
             'LOOP(cb618)',
           ].join('\n'),
@@ -4276,6 +4299,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             `global.audioPath(${JSON.stringify(audioDir)})`,
             'global.sum("fx625out")',
             'global.aux("fx625send")',
+            'sum("fx625out").output()',
+            'aux("fx625send").output()',
             'global.start()',
             'var fx625 = init global.seq',
             'fx625.audio("kick.wav").chop(1)',
@@ -4836,6 +4861,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             `global.audioPath(${JSON.stringify(audioDir)})`,
             'global.sum("fx628out")',
             'global.aux("fx628send")',
+            'sum("fx628out").output()',
+            'aux("fx628send").output()',
             'global.start()',
             'var fx628 = init global.seq',
             'fx628.audio("kick.wav").chop(1)',
@@ -5492,6 +5519,48 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         `O0-1 no-bus RMS must stay at ${OUTPUT_LINE_GOLDENS.noBus.rms}; actual=${firstRms}`,
       ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-1')
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#883 X2 makes output() and output("master") audibly equivalent to the no-bus path',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const captureFixture = async (slug: string, fixturePath: string) => {
+        const result = await runScore(
+          session,
+          { slug, fixturePath },
+          async (ctx) => captureSteady(ctx, 'steady'),
+          { capture: true },
+        )
+        expect(result, `${slug} must return captured windows`).toBeDefined()
+        if (!result) throw new Error(`${slug} did not return captured windows`)
+        return result
+      }
+
+      const omitted = await captureFixture(
+        '883-x2-output-default-master-omitted',
+        'tests/fixtures/mcp-e2e/output_default_master_omitted.orbs',
+      )
+      const explicit = await captureFixture(
+        '883-x2-output-default-master-explicit',
+        'tests/fixtures/mcp-e2e/output_default_master_explicit.orbs',
+      )
+      const omittedRms = steadyRms(omitted, 'steady', STEADY_CAPTURE)
+      const explicitRms = steadyRms(explicit, 'steady', STEADY_CAPTURE)
+      // eslint-disable-next-line no-console
+      console.log('[#883 X2] default-master RMS:', JSON.stringify({ omittedRms, explicitRms }))
+      expect(
+        relativeDelta(omittedRms, explicitRms),
+        `X2 output()/output("master") RMS must agree; omitted=${omittedRms} explicit=${explicitRms}`,
+      ).toBeLessThanOrEqual(0.02)
+      expect(
+        relativeDelta(omittedRms, OUTPUT_LINE_GOLDENS.noBus.rms),
+        `X2 output() RMS must stay at noBus=${OUTPUT_LINE_GOLDENS.noBus.rms}; actual=${omittedRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#883 X2')
     },
     TEST_TIMEOUT_MS * 2,
   )
@@ -6184,6 +6253,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     'global.start()',
     `var ${receiver} = init global.seq`,
     `${receiver}.instrument(${JSON.stringify(instrumentName)})`,
+    `${receiver}.output()`,
     `${receiver}.play(1, 1, 1, 1)`,
     `${run}(${receiver})`,
   ]

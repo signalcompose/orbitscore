@@ -67,10 +67,12 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 1, 0, 1)
 
 // LOOP を起動。次の小節頭でグリッドに揃って始まる

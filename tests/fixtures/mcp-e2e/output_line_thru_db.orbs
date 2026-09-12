@@ -10,10 +10,12 @@ global.start()
 
 var mix = init global.mixer
 var verb = mix.aux
+verb.output()
 
 var dry = init global.seq
 dry.beat(4 by 4).length(1)
 dry.audio("kick.wav").chop(1)
+dry.output()
 dry.play(1, 1, 1, 1)
 
 var kick = init global.seq

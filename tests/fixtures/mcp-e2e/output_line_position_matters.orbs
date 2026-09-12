@@ -31,22 +31,24 @@ global.start()
 
 var mix = init global.mixer
 var verb611e6 = mix.aux
+verb611e6.output()
 
 var kickA = init global.seq
 kickA.beat(4 by 4).length(1)
 kickA.audio("kick.wav").chop(1)
-kickA.output(verb611e6, thru: true).effect([Gain(db: -12)])
+kickA.output(verb611e6, thru: true).effect([Gain(db: -12)]).output()
 kickA.play(1, 1, 1, 1)
 
 var kickB = init global.seq
 kickB.beat(4 by 4).length(1)
 kickB.audio("kick.wav").chop(1)
-kickB.effect([Gain(db: -12)]).output(verb611e6, thru: true)
+kickB.effect([Gain(db: -12)]).output(verb611e6, thru: true).output()
 kickB.play(1, 1, 1, 1)
 
 var kickC = init global.seq
 kickC.beat(4 by 4).length(1)
 kickC.audio("kick.wav").chop(1)
+kickC.output()
 kickC.play(1, 1, 1, 1)
 
 LOOP(kickA)

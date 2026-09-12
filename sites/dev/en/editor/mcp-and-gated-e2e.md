@@ -132,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:431-442
+// packages/vscode-extension/src/extension.ts:432-443
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -253,7 +253,7 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2754-2791
+// packages/vscode-extension/src/extension.ts:2755-2792
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -312,7 +312,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1292-1300
+// packages/vscode-extension/src/extension.ts:1293-1301
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -379,7 +379,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2884-2895
+// packages/vscode-extension/src/extension.ts:2885-2896
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -403,7 +403,7 @@ So `statusError` does not necessarily mean "the daemon is broken" — it can equ
 The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` to push the same lines into a ring buffer.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:142-152
+// packages/vscode-extension/src/extension.ts:143-153
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -418,7 +418,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:305-316
+// packages/vscode-extension/src/extension.ts:306-317
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -1219,7 +1219,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1624-1634
+// packages/engine/src/core/sequence.ts:1650-1660
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1269,7 +1269,7 @@ State mutations are guarded by `isCurrent` (whether the process that produced th
 The real `handleStep` is in `extension.ts`, and it **waits until the grid time** before moving the highlight.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:239-250
+// packages/vscode-extension/src/extension.ts:240-251
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1287,7 +1287,7 @@ function handleStepLine(step: StepEvent): void {
 Dispatch runs a lookahead early, so lighting the highlight the moment the line arrives would move it ahead of the sound. Lines more than one second late (replayed buffered output, for example) are dropped.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:252-271
+// packages/vscode-extension/src/extension.ts:253-272
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1315,7 +1315,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` is invisible in normal mode
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:953-977
+// packages/vscode-extension/src/extension.ts:954-978
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1346,28 +1346,29 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2719-2729
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2730-2741
       const dslLines = [
         'var global = init GLOBAL',
+        // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
+        // 全部 `global.key("C")` を持っているが、ここだけ欠けており、**共有アプリに残った key を
+        // 継承して偶然通っていた**（#883 束 C で先行譜面を変えたら露見した）。譜面が自分の前提を
+        // 書いていない状態そのものが #883 が消そうとしているものなので、ここで自足させる。
+        'global.key("C")',
         'global.tempo(120)',
         'var ph654 = init global.seq',
         'ph654.beat(4 by 4).length(1)',
         `ph654.instrument(${JSON.stringify(catalog.clapSynthName)})`,
-        'ph654.octave(4)',
-        'ph654.play(1, 0, 3, 0)',
-        'global.start()',
-        'ph654.run()',
-      ]
+        'ph654.output()',
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2732-2733
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2749-2750
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2789-2791
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2806-2808
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
