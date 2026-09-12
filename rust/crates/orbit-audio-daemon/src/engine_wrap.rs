@@ -1957,7 +1957,7 @@ mod notes;
 mod outproc_effect_chain;
 mod outproc_effect_replace;
 mod outproc_effect_slots;
-mod outproc_instrument;
+mod outproc_instrument_slots;
 mod playback;
 mod slot_errors;
 mod slot_helpers;
@@ -1968,16 +1968,23 @@ mod slot_helpers;
 #[allow(unused_imports)]
 use bus_stages::*;
 #[allow(unused_imports)]
+use device_link::*;
+#[allow(unused_imports)]
 use effect_slot_types::*;
 #[allow(unused_imports)]
 use instrument_slot_types::*;
 #[allow(unused_imports)]
 use plugin_ui_wiring::*;
+// 🔴 default 象限では unused に見えるが、`outproc-*` 象限のインラインテストと
+// 兄弟モジュールが `super::ChildSlot` 等でここ経由の名前に到達する。単一象限の
+// unused 警告だけで消すと `check-cfg-matrix.sh` の両 feature 象限が E0432 で落ちる。
 #[allow(unused_imports)]
 use role::*;
 // 🔴 `main.rs` が `orbit_audio_daemon::engine_wrap::DeviceSwitchRequest` を import している。
-pub use role::{ClapPluginRole, DeviceSwitchRequest};
+pub use device_link::DeviceSwitchRequest;
+pub use role::ClapPluginRole;
 // 🔴 第 12 束: wire に載る公開型は `session.rs` / `main.rs` から名前で参照されるので再エクスポート。
+pub use playback::LoadedSample;
 pub use wire_types::*;
 // 🔴 `session.rs` のテストが `crate::engine_wrap::test_wrap_with_three_stage_topology` を
 // 名前で import している。
@@ -2021,13 +2028,6 @@ pub(crate) fn record_latest_state_after_save(
         WrapError::PluginStateProtocol("latest-state mutex poisoned after save".into())
     })? = Some(final_path);
     Ok(())
-}
-
-pub struct LoadedSample {
-    pub sample_id: String,
-    pub frames: usize,
-    pub channels: u16,
-    pub sample_rate: u32,
 }
 
 #[cfg(feature = "clap-host")]

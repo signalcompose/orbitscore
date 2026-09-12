@@ -1,5 +1,9 @@
 //! `EngineWrap` のオーディオデバイス切替と Link テンポ（#888 子 1・第 6 束）。
 //!
+//! ストリーム/デバイスのライフサイクル型（`StreamGuard` / `StreamConfigSnapshot` /
+//! `DeviceSwitchRequest`）と capture パス解決も**このモジュールの主題**なので、
+//! レビュー（altitude）を受けて `role.rs` から移してある（ファイル後半）。
+//!
 //! 🔴 **2 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
 //! そのまま移した。変更したのは `record_stream_config` と `record_device_switch_result` の
 //! 可視性（`fn` → `pub(super) fn`）だけで、どちらも `engine_wrap.rs` に残る側
@@ -327,4 +331,174 @@ impl EngineWrap {
             "engine built without 'link-audio' feature".into(),
         ))
     }
+}
+
+// ── 以下は #888 子 1 のレビュー（altitude）を受けて `role.rs` から移した。
+// ストリーム/デバイスのライフサイクルと capture パス解決は「OOP role」ではなく
+// このモジュールの主題である。🔴 純粋な移動で、本文は 1 行も書き換えていない。
+
+/// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
+///
+/// ## `link-audio` ビルド時（`_stream` → `_link`）
+/// **この 2 フィールドの順は UB 安全だが意図的**（advisor #2）: `_stream` を先に drop して cpal
+/// callback（ring の push 元）を止めてから `_link`（consumer thread を signal+join）を drop する。
+/// rtrb はどちらの順でも UB にならない（逆順なら callback が undrained ring に push して drop
+/// カウントするだけ）が、teardown 時の無駄な drop を避けるためこの順にしてある。reorder 禁止。
+///
+/// ## `clap-host` ビルド時（`_clap_teardown` → `_stream` → `_clap_thread`・carry-forward #1）
+/// **この順は load-bearing**（UB 回避・上の link-audio とは性質が異なる）:
+/// - `_clap_teardown` が先 = audio thread の callback で `stop_processing()` を済ませてから stream を
+///   止める。逆順だと `StartedPluginAudioProcessor` が stream（callback）停止後に残り、wrong-thread
+///   での暗黙 stop_processing/drop = CLAP 仕様違反（strict plugin で UB）。
+/// - `_clap_thread` が後 = stream 停止後に専用スレッドを join し、instance の home thread で deactivate。
+///
+/// ## `outproc-effect` ビルド時（`_outproc_teardown` → `_stream` → `_child_guard`・γ M1 PR-C）
+/// clap-host と同型の load-bearing 順:
+/// - `_outproc_teardown` が先 = audio thread の adapter を quiesce（transport submit 停止）してから stream を止める。
+/// - `_child_guard` が後 = stream 停止後に watchdog を止め child を QUIT/reap し shm を unlink する。
+///
+/// `outproc-instrument` も同じ teardown ordering を専用 guard/supervisor で維持する。
+///
+/// `clap-host` / `link-audio` は outproc family と引き続き `compile_error!` で排他である。一方
+/// `outproc-effect` と `outproc-instrument` は both build で共存でき、その場合は両 child guard が
+/// 同時に存在する。
+pub struct StreamGuard {
+    /// carry-forward #1（clap-host）: stream 停止 **前** に drop され、audio thread で `stop_processing`
+    /// を済ませる（`ClapTeardownGuard::drop` が teardown_requested を立て teardown_done を待つ）。
+    /// **field 順は load-bearing**: これは `_stream` より前に宣言する（Rust の field drop 順 = 宣言順）。
+    #[cfg(feature = "clap-host")]
+    pub(super) _clap_teardown: crate::clap_host::ClapTeardownGuard,
+    /// γ M1 PR-C（outproc-effect）: stream 停止 **前** に drop され、audio thread の adapter を quiesce
+    /// させる（transport への submit を止めて dry 素通しに入る）。**field 順は load-bearing**: `_stream`
+    /// より前に宣言する（clap-host とは feature 排他なので同時には存在しない）。
+    #[cfg(feature = "outproc-effect")]
+    pub(super) _outproc_teardown: crate::outproc_effect::OutProcTeardownGuard,
+    #[cfg(feature = "outproc-effect")]
+    pub(super) _outproc_bus_teardowns: Vec<crate::outproc_effect::OutProcTeardownGuard>,
+    /// outproc-instrument: stream 前に audio-thread adapter を quiesce する（#540 P1 で
+    /// slot pool 化に伴い Vec。guard 間に共有状態は無く順序は load-bearing ではない）。
+    /// both build における `_outproc_teardown` との相対順序も load-bearing ではない
+    /// （各 guard は自 role 専用の requested/done atomic のみを操作し共有状態がない。
+    /// stream 停止後の child guard 2つと同じ独立性）。
+    #[cfg(feature = "outproc-instrument")]
+    pub(super) _outproc_instrument_teardowns:
+        Vec<crate::outproc_instrument::OutProcInstrumentTeardownGuard>,
+    /// device switch（#484 D2）: `cpal::Stream`（`OutputStream` 内部）は `!Send` のため、`EngineWrap`
+    /// （`Arc` 共有・tokio task を跨ぐため `Send + Sync` 必須）には一切保持させない。`StreamGuard` は
+    /// 従来どおり単一の "audio owner thread"（`main.rs` が spawn する専用 OS thread）だけがローカル
+    /// 変数として所有し続け、switch は `mpsc` 経由でその thread 上に処理を委譲する
+    /// （[`EngineWrap::apply_device_switch`]）。**field 順は変わらず load-bearing**（従来の `_stream`
+    /// と同じ位置）。
+    pub(super) stream: OutputStream,
+    #[cfg(feature = "link-audio")]
+    pub(super) _link: Option<crate::link_audio::LinkAudioGuard>,
+    /// clap-host: stream 停止 **後** に drop され、専用スレッドを停止 → `ClapHost::shutdown()` で
+    /// instance を deactivate（instance の home thread）。**field 順は load-bearing**: `_stream` より
+    /// 後に宣言する。
+    #[cfg(feature = "clap-host")]
+    pub(super) _clap_thread: crate::clap_host::ClapThreadGuard,
+    /// γ M1 PR-C（outproc-effect）: stream 停止 **後** に drop され、watchdog を止めて（respawn 停止）
+    /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
+    #[cfg(feature = "outproc-effect")]
+    pub(super) _child_guard: Arc<Mutex<ChildSlot>>,
+    #[cfg(feature = "outproc-effect")]
+    pub(super) _bus_child_guards: Vec<Arc<Mutex<ChildSlot>>>,
+    /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。別々の
+    /// child process / shm region を持ち supervisor 間に共有状態が無いため、独立に teardown できる。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub(super) _instrument_child_guards: Vec<Arc<Mutex<ChildSlot<InstrumentRole>>>>,
+    #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+    pub(super) _child_guards: Vec<Arc<Mutex<ChildSlot>>>,
+}
+
+/// 現在の出力 stream から得た実効構成と、直近の device switch 失敗理由。
+/// 実効構成は switch 成功時だけ差し替え、失敗時は旧構成を保ったまま理由だけを更新する。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamConfigSnapshot {
+    pub device_name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub device_requested: Option<String>,
+    pub device_fell_back: bool,
+    pub fallback_reason: Option<String>,
+    pub first_callback_ms: u64,
+    pub last_switch_failure: Option<String>,
+    pub(super) output_fault: OutputFault,
+}
+
+impl StreamConfigSnapshot {
+    pub(super) fn from_output_stream(stream: &OutputStream) -> Self {
+        Self {
+            device_name: stream.device_name.clone(),
+            sample_rate: stream.sample_rate,
+            channels: stream.channels,
+            device_requested: stream.device_requested.clone(),
+            device_fell_back: stream.device_fallback.is_some(),
+            fallback_reason: stream
+                .device_fallback
+                .as_ref()
+                .map(|fallback| fallback.reason.clone()),
+            first_callback_ms: stream.first_callback_ms,
+            last_switch_failure: None,
+            output_fault: stream.fault(),
+        }
+    }
+}
+
+impl StreamGuard {
+    /// capture seam（#307 realtime）: capture 有効時のみ producer-side drop 累積を返す（無効は `None`）。
+    /// `Some(0)` は録音健全・`> 0` は録音破損（検証 invalid）。gated 検証ハーネスが teardown 前に
+    /// assert する（`stream: OutputStream` へ委譲）。全 feature variant が `stream` を持つので共通。
+    pub fn capture_drops(&self) -> Option<u64> {
+        self.stream.capture_drops()
+    }
+}
+
+/// device switch（#484 D2）: `EngineWrap::select_audio_device`（任意スレッド・`Send`）から
+/// audio owner thread（`StreamGuard` を所有する専用 OS thread）へ送る要求。`reply` は
+/// `std::sync::mpsc::Sender` なので、要求元は対応する `Receiver::recv()` で同期的に結果を待てる。
+pub struct DeviceSwitchRequest {
+    pub device: Option<String>,
+    pub reply: std::sync::mpsc::Sender<Result<String, WrapError>>,
+}
+
+/// 生の env 値（`Some(raw)`）を capture 出力先 [`PathBuf`] へ解決する純関数（`capture_path_from_env`
+/// の testable コア）。未設定 / 空 / 空白のみは `None`（capture 無効）。trim した値から `PathBuf` を
+/// 組む（`"  /tmp/x.wav  "` のような前後空白を含む env でも正しいパスになる）。
+pub(super) fn resolve_capture_path(raw: Option<String>) -> Option<PathBuf> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+/// capture seam（#307）: 環境変数 `ORBIT_CAPTURE_WAV` を解決して whole-stream WAV 録音の出力先を
+/// 返す（未設定 / 空文字列なら `None` = capture 無効）。**env 読取りは daemon 層に集約**し、解決済み
+/// パスを `orbit-audio-native` の `start_default_output*` へ typed で渡す（`OutProcEffectConfig` /
+/// `buffer_frames` と同じ層分け＝native の公開 API に隠れた ambient env 依存を作らない）。
+pub(super) fn capture_path_from_env() -> Option<PathBuf> {
+    match std::env::var("ORBIT_CAPTURE_WAV") {
+        Ok(raw) => resolve_capture_path(Some(raw)),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            // 非 UTF-8 の値を握り潰すと「capture したつもりが無効」になるので operator に報告する。
+            // 🔴 #612: `eprintln!` は書き込み失敗で panic する。panic hook が `exit(1)` する
+            // ようになった今、**この警告が書けないだけで daemon 全体が終了する**。
+            crate::best_effort_stderr::write_line_best_effort(
+                "[capture] ORBIT_CAPTURE_WAV が非 UTF-8 のため無視した（capture 無効）",
+            );
+            None
+        }
+    }
+}
+pub(super) fn probe_then_pause_old<T>(
+    probe: impl FnOnce() -> Result<T, OutputError>,
+    pause_old: impl FnOnce() -> Result<(), OutputError>,
+) -> Result<T, OutputError> {
+    let live = probe()?;
+    pause_old()?;
+    Ok(live)
 }

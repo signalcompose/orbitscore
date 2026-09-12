@@ -1,4 +1,6 @@
-//! `EngineWrap` の out-of-process エフェクトの load / replace / unload（#888 子 1・第 4 束）。
+//! `EngineWrap` の out-of-process エフェクトの **load 経路**（#888 子 1・第 4 束）。
+//!
+//! replace / unload は同じ束の中で 500 行に収めるため `outproc_effect_replace.rs` にある。
 //!
 //! 🔴 **1 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
 //! そのまま移した。唯一の変更は `apply_outproc_effect_chain_with_timeout` の可視性で、

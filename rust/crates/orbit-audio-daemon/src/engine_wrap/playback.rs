@@ -271,3 +271,14 @@ impl EngineWrap {
             .map_err(|_| WrapError::Scheduler("samples mutex poisoned".to_string()))
     }
 }
+
+// ── #888 子 1 のレビュー（altitude）を受けて `engine_wrap.rs` から移した。
+// 生成元（`load_sample`）がこのモジュールなので、親に置く理由が無い。純粋な移動である。
+// 🔴 `session.rs` が型名を書かずに（型推論で）使っているため `pub` のまま親から
+// 再エクスポートする。名前での grep には掛からない消費者がいる。
+pub struct LoadedSample {
+    pub sample_id: String,
+    pub frames: usize,
+    pub channels: u16,
+    pub sample_rate: u32,
+}

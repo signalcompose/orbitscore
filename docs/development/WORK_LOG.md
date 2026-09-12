@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): re-cut role.rs after the simplify review (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
+
+`/simplify` の altitude 指摘に対応。`role.rs` に同居していた**ストリーム/デバイスの
+ライフサイクル型**（`StreamGuard` / `StreamConfigSnapshot` / `DeviceSwitchRequest` /
+capture パス解決）166 行を、その主題そのものである `device_link.rs` へ移した。
+併せて `engine_wrap/outproc_instrument.rs` を `outproc_instrument_slots.rs` へ改名
+（crate 直下の同名 supervisor との衝突解消）、実態とずれた module doc 3 件を訂正、
+`LoadedSample` を生成元の `playback.rs` へ移した。
+
+🔴 **単一象限の unused 警告で import を消してはいけない。** デバイス群を移した後
+`use role::*;` が default 象限で unused になったので消したところ、`outproc-*` 両 feature
+象限が **E0432 で落ちた**（他象限のインラインテストが `super::ChildSlot` 等でこの glob 経由の
+名前に到達している）。`#[allow(unused_imports)]` で戻し、理由をコメントに残した。
+この赤は `check-cfg-matrix.sh ... | tail -2` で**終了コードが隠れて**おり、出力を読んで気づいた。
+
+🔴 レビュー指摘の前提が誤っていた例: 「`LoadedSample` の消費者は `playback.rs` だけ」は
+**`session.rs` が型名を書かずに（型推論で）使っている**ため誤り。名前の grep には掛からない。
+
 ### refactor(daemon): finish splitting engine_wrap.rs — 6,418 to 424 code lines (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-ui-types`
@@ -1795,174 +1815,6 @@ resolved from extension/dist/mcp-server.js in the packaged .vsix
 **教訓**: `gh pr checks` が「no checks reported」と言う時は、待つのではなく
 `gh pr view --json mergeStateStatus` を見る。
 
-### test(core): freeze the clock in the loop-quantize mock (#869) (Sep 11, 2026)
-
-`tests/core/loop-quantize.spec.ts` の「snaps to the same boundary already crossed when
-currentTime equals a boundary」が CI で間欠的に落ちていた（PR #847 の `code-review` ジョブ・
-run 34560570537）。**#847 は docs 7 ファイルのみ**で、コードに触れていない。
-
-#### 原因は `Date.now()` を 2 回呼んでいたこと
-
-モックの `startTime` が getter で、アクセスのたびに `Date.now() - elapsedMs` を再計算していた。
-呼ぶ側（`prepare-playback.ts:73-75`）はその直後に**別の `Date.now()`** を呼ぶ。この 2 回の間に
-ミリ秒が繰り上がると `currentTime = elapsedMs + 1` になる。
-
-このテストだけが **`elapsedMs = 2000`（小節境界ちょうど）** を突くので、+1ms で
-`nextQuantizedTime` が「境界を過ぎた」と判定し、次の境界 **4000** を返す。他のテストは境界の
-途中（1500 等）なので 1ms では判定が変わらない。
-
-**プロダクションコードの欠陥ではない。** 実機の `startTime` は保存された数値で、読むたびに
-動いたりしない。壊れていたのはモックの側。
-
-#### 4000 には犯人候補が 2 つあった
-
-`expected 4000 to be close to 2000` は、**(a) +1ms で次の小節**でも
-**(b) 直前のテストの `global.quantize('2bar')` が漏れた**でも同じ値になる。(b) を潰してある:
-`QuantizeManager._value` は private なインスタンスフィールド（既定 `'bar'`）で、`beforeEach` が
-`Global` ごと作り直すため漏れる経路が無い（`packages/engine/src/core/global/quantize-manager.ts:75-76`）。
-
-#### 機構の実測
-
-旧モックと同じ 2 回読みを 500 万回回すと、**109 回**（0.0022%）で
-`currentTime !== elapsedMs` になった。手元ではこの頻度だが、負荷のかかった CI runner では
-2 回の `Date.now()` の間隔が広がるので、実際の発火率はこれより高い。
-
-#### 直したもの
-
-describe 全体で `Date.now` を固定値に固定し、`startTime` の getter も同じ定数から引く。
-**両方が揃って初めて成立する** — getter だけ定数にして `Date.now` を生かすと、
-`currentTime` が巨大な値になる。`afterEach` の `vi.restoreAllMocks()` が復元する。
-
-検証: `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
-引用 938 / 0 failed。
-
-Closes #869
-
-### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
-
-owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。
-
-## 🔴 動かしたのは 1 つだけ — 正本は拡張の package.json
-
-`docs/design/656-release-design.md` §4.4 が版の所在を確定させている:
-
-| 場所 | 規則 | 今回 |
-|---|---|---|
-| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ | **2.1.0 → 3.0.0** |
-| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。同期しない | **2.0.0 のまま** |
-| `DSL_VERSION` | **別軸**（spec 版）。同期しない | 1.1 → **1.2**（別軸の理由で動かす） |
-| ルート `package.json` | `private: true` で配布物にならない | 触らない（裁定待ち (7)） |
-
-`DSL_VERSION` を上げたのは「拡張が 3.0.0 になったから」ではなく、**DSL の表面が変わったから**
-（`send` の dB 化・`output(dest, thru, db)` の導入・`pan` のライン要素化）。理由が別なので
-数字も揃わない。
-
-🔴 **私は一度これを間違えた。** 「拡張 package.json・`ENGINE_VERSION`・`DSL_VERSION` の 3 つを
-揃える」と報告し、`/simplify` の Altitude が §4.4 を示して正した。
-`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
-
-## なぜ major か
-
-- `ORBITSCORE_ENGINE` 環境変数・`orbitscore.engine` / `scsynthPath` 設定・
-  `Force Kill scsynth` コマンド・MCP `force_kill_scsynth` を**削除**した（#502）
-- `send` が**線形係数から dB へ**変わり、既存の譜面の意味が変わる
-
-## 追従した記述
-
-root `README.md`（2 箇所）・`CLAUDE.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2 箇所）・
-dev サイトの `version.ts` 引用 4 箇所。いずれも「3 つは別軸」と明記して、
-次に読む人が同じ取り違えをしないようにした。
-
-
-#### owner 裁定（2026-09-11）と、リリース直前の README 2 件
-
-正本 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.7 が **未決**として残していた 2 件に
-裁定が出た。
-
-| 未決だったもの | 裁定 |
-|---|---|
-| バージョン番号 | **3.0.0 / DSL 1.2**（`send()` の dB 化で既存譜面の意味が変わるので semver では major） |
-| タグ名前空間 | **`v3.0.0`**。`ext-v*` / `app-v*` の分離はネイティブ版の新ラインで行う（§12.3）。`release.yml` のトリガーは `v*` のままでよく、ワークフローの変更は不要 |
-
-残り 3 件は裁定待ちではなく既に解消済み: SC 削除 = #840 / gated ハーネス = #831 /
-README の導線 = #842。Marketplace publish は「行わない」（owner 2026-09-10）で、
-リポジトリ変数 `PUBLISH_MARKETPLACE` が未設定のため publish ステップは skip される（実測）。
-
-**ついでに直した README 2 件** — どちらも「これから打つタグが何をするか」と食い違っていた:
-
-- `tag push で全 channel に自動 publish` → 当時の計画である旨と、現在は GitHub Release だけが
-  作られることを明記
-- 「ICMC v1.1.0 bundle release」節の見出しに historical を付け、表が挙げている scsynth 同梱は
-  #502 で削除済みで**現在の `.vsix` に scsynth は入っていない**という注記を足した
-
-出荷される `packages/vscode-extension/README.md` は元から SC 参照 0 件で、Marketplace 非公開も
-正しく書かれている（実測）。直したのはリポジトリ表紙の側。
-
-ガードの実測: `checkTagAgainstVersion('v3.0.0', '3.0.0', 'darwin-arm64')` → `{ok: true}` /
-`('v3.0.0', '2.1.0')` → 版が食い違うと fail（#853）。**バージョンバンプがタグより前に入る必要がある**
-ことをこのガードが担保している。
-
-検証: `npm test` 2,338 passed / 0 failed・`npm run lint` 緑・引用 944 / 0 failed。
-
-### docs: land the nine routine docs-sync PRs as one roundup (#867) (Sep 11, 2026)
-
-凍結版リリース（#827）のタグを打つ前に、溜まっていたルーティン docs 追従 PR **9 本**
-（#837 / #844 / #847 / #856 / #858 / #862 / #864 / #865 / #866）を統合ブランチ
-`867-docs-sync-roundup` で 1 本にまとめて main へ入れた。**docs のみ**で `packages/` `rust/`
-`tests/` `.github/` は触っていない。学習サイトはリリースの一部なので、タグ前に反映させる必要がある
-（owner 2026-09-11）。
-
-#### なぜ 1 本にまとめたか — 逐次マージだと兄弟の内容が消える
-
-9 本すべてが `WORK_LOG.md` を触り、#844 と #856 は 13 ファイルを共有、#837 / #862 / #865 は
-`sites/dev/editor/mcp-and-gated-e2e.md` の**同じ Note 行と同じ節**に追記していた。1 本ずつ main へ
-入れると残り 8 本を毎回再同期することになり、しかも従来の解決規則「WORK_LOG は両側・他は追従側を
-採る」は、**main 側に兄弟 PR の内容が入った後では兄弟の内容を落とす**（規則が前提にしていた
-「main 側 = 古い baseline」が成り立たなくなるため）。
-
-#### 衝突の解決（全 22 hunk・いずれも同じ事実の別表現か、同じアンカーへの独立追記）
-
-| 種別 | 解決 |
-|---|---|
-| WORK_LOG の同一アンカーへの独立エントリ（4 箇所） | 両方残す |
-| #844 × #856 の SC 削除記述（11 ファイル・18 hunk） | hunk ごとに**情報量の多い側**を採る。`glossary.md` の Sources 一覧（ja/en）と `index.md` の Part VII 行（ja/en）は #844 側（#836 / #838 の粒度と `daemon-client.ts` の行がある）、残りは #856 側 |
-| `mcp-and-gated-e2e.md` の Note 追従リスト（ja/en） | #830・#860・#855 の 3 件を**合併**。frontmatter は最新の `a6e1f13` / 2026-09-11 |
-| 同じ章の新設節（#862 の `###` 節 × #865 の散文） | 両方残す。#865 の散文を先（直前の #756 段落から続く）、#862 の `###` 節を後 |
-
-🔴 **1 件だけ「両方残す」では壊れた**: #865 は #857 の WORK_LOG エントリを Recent Work の先頭へ
-**移動**していたので、素朴に両側を残すと同じエントリが 2 箇所に出る。移動先を残して旧位置
-（54 行）を削除した。**「両側を残す」は追記には正しく、移動には正しくない。**
-
-#### 検証
-
-`node sites/dev/scripts/check-citations.mjs` **944 citations verified / 0 failed**（`--fix` は
-使わず素で実行）/ `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
-`docs:build` dev・user 両方緑。
-
-Closes #867
-
-### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
-
-PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
-#860 自身が `34e12b3` で dev サイトを更新しているが、**引用の再アンカーが 3 箇所ずれていた**。
-`check-citations.mjs` は「引用文字列が実ファイルと一致するか」しか見ないので、
-**別の関数に一致してしまった引用は緑のまま通る**。
-
-| 箇所 | 何が起きていたか |
-|---|---|
-| `sites/dev{,/en}/signal-chain/mixer-audio-line.md` | bus post-loop の `LineOp::Output` 腕を引用していたはずが、`execute_master_line`（master 側）の `LineOp::Output` 腕に再アンカーされていた。直後の本文「`Output` として実行されるのは `Master` / `Bus` / `Device` の 3 つ」と引用が食い違う（master 側は `Device` 以外を `debug_assert!(false)` で落とす）。`output.rs:2566-2592` へ戻した |
-| 同上（pan 節） | `apply_line_pan` の引用が切り詰められ、直後の本文が指す **`√2`** が引用内に無くなっていた。`√2` は #859 で `line_pan_coefficients` へ切り出されたので、その関数（`output.rs:2227-2243`）の引用を足した |
-| `sites/dev{,/en}/rust-engine/index.md` | `render_block_with_sources` の引用が 4 行はみ出して `execute_master_line` のシグネチャを含んでいた。`1846-1932`（関数の閉じ括弧）で止めた |
-
-あわせて、#859 が**コード引用だけ更新して本文を更新しなかった**箇所を直した
-（`sites/dev{,/en}/rust-engine/index.md` の `advance_gain` 節）。旧本文の
-「block が ramp より長ければ 1 回で目標へ到達」は、いまはブロック**終端**の値の話であって、
-ブロック内は `ramp_frames` サンプルかけて補間される。これは #859 が直した欠陥そのものなので、
-そのまま残すと修正前の振る舞いを説明する文が残ることになる。
-
-4 章の `verified-against` / `verified-at` を `e4d4199` / 2026-09-11 に更新。
-
-検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
 ---
 
 ## Archived sections

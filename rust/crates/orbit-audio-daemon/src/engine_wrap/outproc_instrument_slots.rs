@@ -1,4 +1,8 @@
-//! `EngineWrap` の out-of-process インストゥルメントとプラグイン UI（#888 子 1・第 5 束）。
+//! `EngineWrap` の out-of-process インストゥルメントの slot 操作（#888 子 1・第 5 束）。
+//!
+//! プラグイン UI のメソッドは同じ束の中で 500 行に収めるため `plugin_ui.rs` にある。
+//! 🔴 ファイル名は `outproc_instrument_slots` である（`crate::outproc_instrument` —
+//! 子プロセスの supervisor 本体 — と取り違えないため。レビュー（altitude）の指摘）。
 //!
 //! 🔴 **1 行を除いて純粋な移動である。** `engine_wrap.rs` の `impl EngineWrap` から
 //! そのまま移した。唯一の変更は `teardown_outproc_instrument_resources` の可視性で、
