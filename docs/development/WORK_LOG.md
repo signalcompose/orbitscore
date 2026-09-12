@@ -17,6 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): finish splitting engine_wrap.rs — 6,418 to 424 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-ui-types`
+
+🎯 **#888 子 1 完了。`engine_wrap.rs` が 6,418 → 424 コード行（閾値 500 以下）。**
+baseline から削除した。子モジュール **21 本**、いずれも 500 以下。
+
+第 12 束（最終）で移したもの: wire に載る公開型（`wire_types.rs` 130）/ `EngineWrap` の構築と
+OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクトバス stage の構築（`bus_stages.rs`）。
+
+### 子 1 の全経過
+
+```
+6,418 → 6,014 → 5,585 → 5,127 → 4,409 → 3,655
+      → 3,417 → 2,857 → 2,362 → 1,989 → 1,468 → 995 → 424
+```
+
+### 🔴 12 束を通して分かったこと
+
+1. **「純粋な移動」は目標ではなく性質。** 相互依存があれば可視性の変更は避けられない。
+   大事なのは**変更を最小に留め、それが residual に見えること**（第 4 束以降）
+2. **必要な作業は対象の種類で変わる。** メソッド（1〜7 束）→ 自由関数（8 束）→
+   構造体フィールド（9 束）→ トレイト（11 束）と、`pub(super)` を付ける対象が深くなった。
+   元が 1 つの巨大モジュールだったので、内部の結合が可視化されていなかっただけ
+3. 🔴 **境界の失敗には検出可能性の差がある。** 属性の分断は**コンパイルエラー**になるが、
+   doc コメントの分断は **`cargo fmt --check` しか捕まえない**（第 4 束で実際に残った）
+4. 🔴 **構文を正規表現で判定するのをやめ、コンパイラの指摘行を使う**方式に切り替えたら速くなった
+   （第 11 束）。子 0 の **D9**（heuristic を改良せず基準を言語の正規実装に置く）と同じ転換
+5. **cfg は定義側と一致させる** — 第 9・10 束で 2 度同じ誤りをした。
+   毎回 `check-cfg-matrix.sh` を回していたので 2 回とも即座に検出できた
+
+**検証**（全 12 束で毎回実施）: cfg 4 象限 + `clap-host` 単独 / `cargo fmt --check` /
+`cargo test` / `npm test` **2,445 passed**（**12 束を通して 1 件も変わっていない**）/ lint /
+`docs:check` 948 引用。
+
+
 ### refactor(daemon): move the OOP role abstraction into a child module (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-role-traits`
