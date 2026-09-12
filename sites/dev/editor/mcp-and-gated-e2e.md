@@ -42,17 +42,17 @@ status: draft
 ファイル冒頭のコメントが出自を語っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:9-18
+// packages/vscode-extension/src/mcp-server.ts:28-37
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
  * Hosts an MCP server (Streamable HTTP) inside the extension host so an external
- * agent (e.g. Claude Code via `.mcp.json`) can drive OrbitScore operations for
- * E2E testing. The same tool surface is intended for reuse by the WCTM
- * performance runtime (pi harness — spec §4.2 "Bridge は harness-neutral").
+ * agent can drive OrbitScore operations for E2E testing. The same tool surface
+ * is intended for reuse by the WCTM performance runtime.
  *
- * Only started when `orbitscore.mcpServer.port` is a nonzero port (see
- * extension.ts activate()). Binds 127.0.0.1 only.
+ * Only started when `orbitscore.mcpServer.port` is a nonzero port. Binds
+ * 127.0.0.1 only.
+ */
 ```
 
 出発点は WCTM（コンサートシステム）仕様の §3「Agent Bridge — 脳のない MCP サーバー」です。Bridge は「配管のみを担う。考える主体（ランタイム）を持たない」と定義されていて、`evaluate_orbitscore(code)` や `get_session_tail(n)` のようなツールを LLM ランタイムへ差し出す役でした。その配管を **VS Code 拡張の中に置いた**のが本ファイルです。
@@ -119,7 +119,7 @@ export function handleStepLine(step: StepEvent): void {
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1178-1183
+// packages/vscode-extension/src/mcp-server.ts:116-121
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -133,7 +133,7 @@ HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を 
 ローカル bind だけでは足りない、という判断も入っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1197-1204
+// packages/vscode-extension/src/mcp-server.ts:135-142
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -194,7 +194,7 @@ export function buildMcpServerUrl(port: number): string {
 `get_diagnostics` の 1 件はこの形です。`code` は #883 で足された optional フィールドで、`vscode.Diagnostic.code` が文字列か数値のときだけ載ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:177-183
+// packages/vscode-extension/src/mcp-types.ts:91-97
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -213,7 +213,7 @@ export interface DiagnosticEntry {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:545-562
+// packages/vscode-extension/src/mcp-tools-engine.ts:5-22
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -289,7 +289,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 `{"engineState"` の分岐が `{"evalMark"` の隣にあるのは偶然ではありません。#661 で `get_engine_state` は「拡張のプロセスが生きているか」だけを答えるツールから、**daemon が実際にどのデバイスへ音を出しているか**を答えるツールになりました。返り値の型がそのまま変化を語っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:106-113
+// packages/vscode-extension/src/mcp-types.ts:20-27
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -1394,7 +1394,7 @@ npm run test:e2e:cold-install
 
 ## 次の深掘り候補
 
-- `mcp-server.ts` の docs 配信部（`/orbitscore/dev/` / `isDocsDistStale`）と `get_dev_doc` / `search_dev_docs` — 学習サイトがエージェントの文脈に乗るまでの経路
+- `mcp-docs.ts` の docs 配信部（`/orbitscore/dev/` / `isDocsDistStale`）と `get_dev_doc` / `search_dev_docs` — 学習サイトがエージェントの文脈に乗るまでの経路
 - `EvalMarkBridge` の timeout（120 秒）と `#608` stall reporter の連携 — 詰まったキューが「塞いでいる行」を名指しするまで
 - `findPlayArgRangeForPath()` のネスト解決（`"1.0"` の descend 条件と group run の扱い）と、`#391` で予定されている `seq.color()` の seam（`PlayheadColorConfig.seqColors`）
 - `tests/e2e/dsl-coverage-ledger.ts` の台帳 2（実装 ↔ テスト）が #671 段階 3 で生成器による導出に変わったあと、手書きの行とラチェットの関係がどうなるか（`E2E_HARNESS_SPEC.md` §2.1）
@@ -1406,7 +1406,7 @@ npm run test:e2e:cold-install
 
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — ファイルヘッダ（Agent Bridge の出自・SDK を `require` で読む理由）
 - `packages/vscode-extension/src/mcp-server.ts:233-286` — `OrbitScoreToolHandlers` seam
-- `packages/vscode-extension/src/mcp-server.ts:538-1147` — `buildServer()` の `registerTool` 群（ツールカタログの出典）
+- `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — `registerTool` 群（#887 束 F で `buildServer()` から 3 ファイルへ切り出した。ツールカタログの出典）
 - `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` マージと URL 組み立て
 - `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — 出力チャネルのリングバッファと monkey-patch

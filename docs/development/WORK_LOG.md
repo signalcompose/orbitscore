@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): split mcp-server.ts — the TS split is complete (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 F（最終）**。**`packages/vscode-extension/src/` の全ファイルが 500 コード行以下**に
+なった（超過 **0 件**）。
+
+| ファイル | コード行 |
+|---|---|
+| `mcp-server.ts` | 1,161 → **271** |
+| `mcp-tools-editor.ts` | 251 |
+| `mcp-tools-plugins.ts` | 217 |
+| `mcp-types.ts` | 148 |
+| `mcp-tools-engine.ts` | 140 |
+| `mcp-docs.ts` | 129 |
+| `mcp-sdk.ts` | 96 |
+
+### `buildServer` は 616 コード行の単一関数だった
+
+ファイルを分けても 1 つの式なので閾値を満たせない。`session.rs` の `handle_command`
+（1,028 行の単一 `match`）と同じ問題で、**owner 裁定（#888 子 2）に倣い中身を引数付きの
+`register*Tools` へ切った**。`registerTool` の本文はインデントも含めて不変。
+
+Codex が **ツール名 25 本の一覧が diff ゼロ**であること、および条件付き登録の 3 群
+（`save_plugin_state` / `open_plugin_ui`・`close_plugin_ui` / `register_mcp_server`）の
+述語が byte 単位で一致することを確認した。
+
+### #887 全体の成果
+
+| ファイル | 前 | 後 |
+|---|---|---|
+| `extension.ts` | 2,779 | **301**（89% 削減） |
+| `mcp-server.ts` | 1,161 | **271**（77% 削減） |
+
+新設 **19 モジュール**。ラチェットの baseline は 19 → **17 件**（`packages/vscode-extension/src/`
+からは 1 件も残っていない）。
+
+🔴 **`npm test` は 7 束すべてで 2,488 passed。既存テストの期待値の変更は 0 件。**
+これが分割の検算そのものである。
+
+### 引用と散文
+
+引用は束ごとに壊れ、合計 **約 300 件**を直した。手順は
+`--fix`（行番号）→ 本文一致で再アンカー → 本文をソースから再生成、の 3 段。
+
+🔴 **散文の帰属は 4 束連続で腐っていた**（`extension.ts` の…と書いてあるものが別モジュールへ移った）。
+`docs:check` は行が合っているかしか見ない。束 F では `buildServer` の `registerTool` 群と
+docs 配信部の帰属を直した。
+
 ### refactor(extension): extension.ts is under 500 code lines (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`

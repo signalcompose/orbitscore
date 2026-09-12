@@ -627,16 +627,22 @@ MCP の `list_plugins` / `rescan_plugins` も同じ `loadPluginCatalog()` / `run
 共有しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1030-1040
+// packages/vscode-extension/src/mcp-tools-engine.ts:53-69
   server.registerTool(
-    'list_plugins',
+    'stop_engine',
     {
-      title: 'List Plugins',
+      title: 'Stop Engine',
+      description: 'Stop the OrbitScore audio engine. Equivalent to the "Stop Engine" command.',
+    },
+    async () => toToolResult(await handlers.stopEngine()),
+  )
+
+  server.registerTool(
+    'get_engine_state',
+    {
+      title: 'Get Engine State',
       description:
-        'List the installed CLAP/VST3 plugin catalog (#463 PC.1) — name, vendor, format, ' +
-        'and roles (effect/instrument) for each entry — so an agent can pick real ' +
-        'plugin names when composing effect()/instrument() calls. Returns an error ' +
-        '(with a rescan hint) if the catalog has not been scanned yet.',
+        'Report engine process state plus the daemon GetStatus output and callback snapshots.',
     },
     async () => {
 ```

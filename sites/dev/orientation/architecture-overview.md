@@ -206,17 +206,17 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 2026-07-07 の #388 (WORK_LOG 6.188-6.192) から、extension は MCP (Model Context Protocol) サーバーを Extension Host の中でホストするようになりました。外部の agent (Claude Code 等) が `evaluate_orbitscore` / `start_engine` / `get_log` といったツールで、エディタのユーザーと同じ動線を通って OrbitScore を操作できます。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:9-18
+// packages/vscode-extension/src/mcp-server.ts:28-37
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
  * Hosts an MCP server (Streamable HTTP) inside the extension host so an external
- * agent (e.g. Claude Code via `.mcp.json`) can drive OrbitScore operations for
- * E2E testing. The same tool surface is intended for reuse by the WCTM
- * performance runtime (pi harness — spec §4.2 "Bridge は harness-neutral").
+ * agent can drive OrbitScore operations for E2E testing. The same tool surface
+ * is intended for reuse by the WCTM performance runtime.
  *
- * Only started when `orbitscore.mcpServer.port` is a nonzero port (see
- * extension.ts activate()). Binds 127.0.0.1 only.
+ * Only started when `orbitscore.mcpServer.port` is a nonzero port. Binds
+ * 127.0.0.1 only.
+ */
 ```
 
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
@@ -234,7 +234,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 サーバーは loopback にしか bind しません。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1351-1355
+// packages/vscode-extension/src/mcp-server.ts:289-293
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())

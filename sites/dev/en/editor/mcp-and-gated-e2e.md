@@ -42,17 +42,17 @@ They look like three independent features, but a single line — the engine's st
 The comment at the top of the file explains where it comes from.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:9-18
+// packages/vscode-extension/src/mcp-server.ts:28-37
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
  * Hosts an MCP server (Streamable HTTP) inside the extension host so an external
- * agent (e.g. Claude Code via `.mcp.json`) can drive OrbitScore operations for
- * E2E testing. The same tool surface is intended for reuse by the WCTM
- * performance runtime (pi harness — spec §4.2 "Bridge は harness-neutral").
+ * agent can drive OrbitScore operations for E2E testing. The same tool surface
+ * is intended for reuse by the WCTM performance runtime.
  *
- * Only started when `orbitscore.mcpServer.port` is a nonzero port (see
- * extension.ts activate()). Binds 127.0.0.1 only.
+ * Only started when `orbitscore.mcpServer.port` is a nonzero port. Binds
+ * 127.0.0.1 only.
+ */
 ```
 
 The starting point is §3 of the WCTM (concert system) spec, "Agent Bridge — an MCP server without a brain". The Bridge is defined as "plumbing only; it has no thinking subject (runtime)", and its job was to hand tools such as `evaluate_orbitscore(code)` and `get_session_tail(n)` to an LLM runtime. This file is that plumbing, **placed inside the VS Code extension**.
@@ -119,7 +119,7 @@ The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1178-1183
+// packages/vscode-extension/src/mcp-server.ts:116-121
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -133,7 +133,7 @@ A `McpServer` instance is created per session, but the handlers are shared. Whic
 There is also a judgement that a loopback bind alone is not enough.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1197-1204
+// packages/vscode-extension/src/mcp-server.ts:135-142
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -194,7 +194,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 One entry from `get_diagnostics` has this shape. `code` is the optional field #883 added; it is present only when `vscode.Diagnostic.code` is a string or a number.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:177-183
+// packages/vscode-extension/src/mcp-types.ts:91-97
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -213,7 +213,7 @@ What this buys is that **an agent can branch on an identifier instead of on word
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:545-562
+// packages/vscode-extension/src/mcp-tools-engine.ts:5-22
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -289,7 +289,7 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:106-113
+// packages/vscode-extension/src/mcp-types.ts:20-27
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -1404,7 +1404,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 
 ## Next exploration candidates
 
-- The docs-serving part of `mcp-server.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
+- The docs-serving part, now `mcp-docs.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
 - The `EvalMarkBridge` timeout (120 seconds) and its coordination with the `#608` stall reporter — how a blocked queue gets its "blocking line" named
 - Nested resolution in `findPlayArgRangeForPath()` (the descend condition for `"1.0"` and the handling of group runs), and the seam for the planned `seq.color()` in `#391` (`PlayheadColorConfig.seqColors`)
 - What happens to the hand-written rows of ledger 2 (implementation ↔ test) in `tests/e2e/dsl-coverage-ledger.ts`, and to the ratchet, once #671 stage 3 turns that ledger into something a generator derives (`E2E_HARNESS_SPEC.md` §2.1)
@@ -1416,7 +1416,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — file header (Agent Bridge origin; why the SDK is loaded via `require`)
 - `packages/vscode-extension/src/mcp-server.ts:233-286` — the `OrbitScoreToolHandlers` seam
-- `packages/vscode-extension/src/mcp-server.ts:538-1147` — the `registerTool` calls in `buildServer()` (source of the tool catalogue)
+- `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — the `registerTool` calls (split out of `buildServer()` into three files in #887 bundle F) ()` (source of the tool catalogue)
 - `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing)
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` merge and URL construction
 - `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — output-channel ring buffer and monkey-patch

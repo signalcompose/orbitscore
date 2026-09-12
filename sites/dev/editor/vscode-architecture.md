@@ -266,12 +266,12 @@ Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
 なぜ読み込みの時点なのでしょうか。`extension.ts` は `./mcp-server` から import していて (`extension.ts:43`)、その `mcp-server.ts` は MCP SDK をトップレベルの `require` で読み込むからです。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:52-58
+// packages/vscode-extension/src/mcp-sdk.ts:30-36
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
-const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js') as {
+export const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js') as {
   McpServer: new (info: { name: string; version: string }) => McpServerLike
 }
-const { StreamableHTTPServerTransport } =
+export const { StreamableHTTPServerTransport } =
   require('@modelcontextprotocol/sdk/server/streamableHttp.js') as {
     StreamableHTTPServerTransport: new (opts: {
 ```
