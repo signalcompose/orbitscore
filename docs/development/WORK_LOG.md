@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test: add a file-size ratchet for Rust and TS sources (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `888-file-size-ratchet`
+**担当**: 設計 = Fable / 実装 = Sonnet subagent（🔴 **Codex CLI は一度も起動していない**。
+`codex:rescue` のラッパが自分で実装した。`codex-companion status` の `recent` が空で
+`latestFinished` が null であることで確認）/ 検証・裁定 = main
+
+#888 子タスク 0「仕組みだけ入れる（振る舞い不変）」。設計は
+`docs/design/888-file-size-ratchet-design.md`。ソースは1行も変えていない。
+
+**やったこと**:
+
+- `tests/repo/code-lines.ts`: 「コード行」を数える純関数 `countCodeLines`。行単位の状態機械
+  （通常 / 文字列 / raw 文字列 / テンプレートリテラル / ブロックコメント）で、空行・コメント
+  専用行を除き、複数行の文字列やテンプレートリテラルの内側は中身に関わらず数える。Rust の
+  `#[cfg(test)] mod`（`#[cfg(all(test, ...))]` を含む）はブロックごと除外する。終端で異常状態
+  （閉じていない文字列・test mod）のまま終わったら例外を投げる（迷ったら数える側に倒す）。
+- `tests/repo/file-size-targets.ts`: `git ls-files -z`（`:(glob)` magic 付き）で測定対象を列挙。
+  Rust は `rust/crates/**/*.rs` から `tests/` `examples/` `benches/` `build.rs` `src/**/tests.rs`
+  を除いたもの、TS は `packages/*/src/**/*.ts`。真空防止（除外適用前の生の列挙件数で判定）。
+- `tests/repo/file-size-baseline.json`: 閾値超過ファイルだけを列挙した baseline（25件・Rust 15 /
+  TS 10）。**実装のカウンタが出した現寸をそのまま登録**した。
+- `tests/repo/file-size-ratchet.spec.ts`: 既存3本（`worklog-size.spec.ts` /
+  `dsl-e2e-coverage.spec.ts` / `planning-issue-state.spec.ts`）と同型のラチェット+honesty。
+  baseline を超えた成長は red、baseline が古くなった（消えた・実際より緩い）ら red。
+- `tests/repo/code-lines.spec.ts`: `countCodeLines` の機能テスト（設計 §9.1 の F-1〜F-19 相当）。
+- `tests/repo/file-size-targets.spec.ts`: 列挙そのもののテスト（設計 §9.2 の L-1 / L-2）。
+  **レビューで未実装が判明して後から足した**（下記）。
+
+**設計からの逸脱・補足**:
+
+- 真空防止の閾値判定は、`tests/` 等の除外を適用した**後**の件数ではなく、`git ls-files` の
+  **生の**結果に対して行うよう修正した。除外後の件数（Rust 95件）で判定すると、正当な除外で
+  100件を割り、真空防止が誤って発火する。
+- `listMeasuredFiles` に既定値付きの第2引数（pathspec 差し替え口）を足した。L-2 が真空防止の
+  発火そのものを確かめるための注入口で、既定の挙動は変わらない。
+- 🔴 **baseline の数値は設計文書 §5.1 の試作値と 25 件中 8 件で食い違い、main が「実装側が正しい」と
+  裁定した**（設計 §11 の反証条件がそのまま発火したケース。設計文書の表は実装値に差し替え済み）。根拠:
+  - **TS 10 件**: TypeScript 自身の**パーサ**を独立オラクルにして測り（`ts.createSourceFile` の葉
+    トークンが占める文字を印し、JSDoc ノードは除外）、**実装の値と 10/10 完全一致**。
+    `extension.ts` は **2,779**（試作の 3,004 は正規表現リテラル未対応による過大）
+  - **Rust**: main が独立に `#[cfg(test)] mod` の除外レンジを列挙し 4 件中 3 件で一致。唯一ずれた
+    `engine_wrap.rs` は **main の列挙の側のバグ**だった（Rust のフォーマット文字列の中の `{` `}` を
+    brace として数え、`mod outproc_load_error_test_support` を 12279 行で早期終了。実際の終端は
+    12557 行で、差の 278 行が実装との差と正確に一致した）
+
+**🔴 レビューで塞いだ穴 — 「仕事が成功した時に開く」型**:
+
+初回実装には設計 §4.1・§9.2 が名指しで要求していた **L-1（列挙に既知の代表ファイルが含まれることの
+検査）が無かった**。真空防止のしきい値（Rust/TS とも 100 件）だけでは、pathspec が `:(glob)` magic を
+欠いて `src/` 直下を落とす事故を**検出できない** — TS は非 glob でも 109 件（> 100）返るためである。
+
+いまは `extension.ts` が baseline にあるため honesty 検査が偶然 red にするが、**子 4/5 でそのファイルを
+分割して baseline から外した瞬間にその防御は消える。** main が再現した fail-before: baseline から 2 件を
+外し（= 分割後の姿）`:(glob)` を落とすと、**23 ファイルが黙って測定対象から消えたままスイートは緑**
+だった。L-1 を足した後は、同じ条件で red（exit=1）になることを main が確認している。
+
+**検証**（すべて main が sandbox 外で実行。委譲先の緑は根拠にしていない）:
+`npx vitest run --dir tests --config vitest.config.ts tests/repo`（**36件緑**）/
+`npm test`（**166 files・2424 passed / 76 skipped**）/ `npm run lint`（緑）/
+`npm run docs:check`（948 引用・0 failed）。**既存テストの期待値は 1 つも変えていない。**
+
+変異検証（main が実行・5 件すべて red → restore 後 緑・baseline は byte 一致）: baseline 値の
++1 / −1 / エントリ削除 / 架空パス追加 / `threshold` を 600 へ。
+
 ### refactor/test(engine): fold the #889 review rounds — env containment, wiring coverage, a trigger (Sep 12, 2026)
 
 **Date**: 2026-09-12
