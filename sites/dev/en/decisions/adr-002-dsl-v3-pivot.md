@@ -14,7 +14,7 @@ The OrbitScore DSL went through three major versions to reach v3.0. These versio
 
 **Important**: Although the ADR title says "v1 → v3 pivot," there are actually three stages of change. **v1 → v2 is the largest pivot (MIDI → Audio)**, and v2 → v3 is a refinement of DSL syntax. This chapter covers all three changes.
 
-Incidentally, this v3.0 is still maintained as the "audio engine line," with the Pitch DSL (MIDI output) stacked on top of it as a **separate axis**. `DSL_VERSION` refers to the DSL specification rather than the audio line's v3.0, and #883's removal of implicit terminals takes it to **2.0**. The extension — the version the `.vsix` and the git tag carry — is **4.0.0**, while `ENGINE_VERSION` stays at **2.0.0**: the three are separate axes and are not synced (`docs/design/656-release-design.md` §4.4). This ADR is about the audio line.
+Incidentally, this v3.0 is still maintained as the "audio engine line," with the Pitch DSL (MIDI output) stacked on top of it as a **separate axis**. `DSL_VERSION` refers to the DSL specification rather than the audio line's v3.0, and #883's removal of implicit terminals takes it to **2.0**. The extension — the version the `.vsix` and the git tag carry — is **4.0.1**, while `ENGINE_VERSION` stays at **2.0.0**: the three are separate axes and are not synced (`docs/design/656-release-design.md` §4.4). This ADR is about the audio line.
 
 ```typescript
 // packages/engine/src/version.ts:15-18

@@ -10489,3 +10489,201 @@ resolved from extension/dist/mcp-server.js in the packaged .vsix
 
 **教訓**: `gh pr checks` が「no checks reported」と言う時は、待つのではなく
 `gh pr view --json mergeStateStatus` を見る。
+
+### 4.0.1 リリース時の移設（本体の 2,000 行上限・2026-09-12）
+
+### release: tag v3.0.0 — the extension line is frozen as stable (#827) (Sep 11, 2026)
+
+owner 裁定 2026-09-10（#827・正本 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12）の凍結線に到達した。
+以降のネイティブ OrbitStudio.app は新ライン。
+
+#### 裁定（2026-09-11）— §12.7 が未決として残していた 2 件
+
+| 未決だったもの | 裁定 |
+|---|---|
+| バージョン | **3.0.0 / DSL 1.2**（`send()` の dB 化で既存譜面の意味が変わるので semver では major） |
+| タグ名前空間 | **`v3.0.0`**。`ext-v*` / `app-v*` の分離は新ラインで（§12.3）。`release.yml` は `v*` トリガーのままで変更不要 |
+
+残り 3 件は裁定待ちではなく解消済み: SC 削除 = #840 / gated ハーネス = #831 / README = #842。
+Marketplace publish は「行わない」（owner 2026-09-10）で、`PUBLISH_MARKETPLACE` 未設定のため
+publish ステップは skip される（`gh variable list` で実測）。
+
+#### タグ直前の実測（main `61f947d7`）
+
+| 確認 | 結果 |
+|---|---|
+| `npm test` | **2,347 passed / 67 skipped / 0 failed** |
+| `npm run lint` | 緑 |
+| `check-citations.mjs`（素で実行） | **944 / 0 failed** |
+| `.vsix` の依存ゲート | engine 5/5・extension 2 宣言 + **3 specifier 解決** |
+| 出荷物の `scsynth` / `supercollider` 参照 | **0** |
+| タグ照合ガード（#853） | `v3.0.0` vs `3.0.0` → `{ok: true}` |
+| マージ前ゲート（`orbit-effect-rack-child`） | `--ignored` **3 passed** / 通常 **16 passed** |
+
+#### 🔴 凍結は 1 日延びた — cold install がブロッカーを出した
+
+タグを打つ直前に cold install を回したところ、**`.vsix` が activate すらできなかった**（#873）。
+
+```
+Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
+```
+
+**この時点でビルド・ユニット 2,338 件・lint・引用・`release.yml` の post-package ゲート全項目が
+緑だった。** npm workspaces が拡張の実行時依存をルートへ hoist し、`vsce package` が同梱する
+`extension/node_modules` には `@types` と `undici-types` しか入っていなかった。engine 側には
+同型の事故が 2 回あり対策もあったのに（WORK_LOG 6.119 / 6.422）、**拡張自身の依存だけ無防備**だった。
+MCP サーバ（#388）が入った時点から壊れていた可能性が高い。
+
+**dev host は構造的にここを見ない**:
+
+| 経路 | dev host（`--extensionDevelopmentPath`） | cold install |
+|---|---|---|
+| daemon の解決 | `monorepo-release`（リポジトリの `rust/target/release`） | **`extension-bundle`** |
+| 拡張の実行時依存 | ルートに hoist されたものが walk-up で見つかる | **`.vsix` に入っているものだけ** |
+
+#874 で直し、**ゲートを「宣言を数える」から「出荷物の中で実際に解決する」へ変えた**。
+同一の壊れたツリー（sdk の推移依存 `express` を削除）に対して旧ゲートは exit 0、新ゲートは exit 1。
+
+#### 今日 main に入ったもの
+
+| PR | 内容 |
+|---|---|
+| #868 | ルーティン docs 追従 **9 本**を 1 本に統合（#837 / #844 / #847 / #856 / #858 / #862 / #864 / #865 / #866） |
+| #870 | `loop-quantize` の 1ms レース（CI を間欠的に赤くしていた真因） |
+| #871 | 拡張 3.0.0 / DSL 1.2 + リリース直前の README 2 件 |
+| **#874** | **`.vsix` が activate できなかったブロッカー** + それを守るゲートとテスト |
+| #876 / #872 | 上記の docs 追従 |
+
+#### 新ラインへ送ったもの
+
+| # | 内容 |
+|---|---|
+| #875 | esbuild でバンドルし、copy-a-node_modules の機構ごと退役させる |
+| #877 | cold install を再実行できる gated spec にする（#138 を #656 から切り離す） |
+| #878 | `extension.ts:2000` の `spawn('node', …)` が PATH 依存で `process.execPath` のフォールバックが無い |
+| #849 | ネイティブ macOS OrbitStudio の設計 |
+
+
+#### 収束条件の最終確認 — **公開された資産**で cold install
+
+ローカルビルドではなく **GitHub Release からダウンロードした `.vsix`**（利用者が受け取るもの）で検証した。
+
+| 検証 | 結果 |
+|---|---|
+| 資産の版 vs タグ | `3.0.0` = `v3.0.0` |
+| 依存ゲート（`check-vsix-bundled-deps.mjs`） | engine 5/5・extension 2 宣言 + **3 specifier 解決** |
+| `scsynth` / `supercollider` の参照 | **0** |
+| activate | `Cannot find module` **0 件** |
+| MCP サーバ | **4 秒**で listen |
+| engine ログ | `ERROR:` **0 行** |
+| **音** | capture **34.09 s**・非ゼロ **24.2%**・**RMS 0.038183**・peak 1.133490 |
+
+🔴 **起動は Finder 相当の最小 PATH で行った**
+（`/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin`）。
+`extension.ts:2000` の `spawn('node', …)` が PATH 依存なので（#878）、シェルから起動すると
+この条件を検証したことにならない。
+
+**`--extensionDevelopmentPath` は使っていない。** dev host はリポジトリの
+`rust/target/release` から daemon を引き、依存もルートの hoist 先から walk-up で見つけるため、
+**`extension-bundle` 解決と同梱依存のどちらも通らない**。#873 はまさにそこに隠れていた。
+
+#### 🔴 署名・公証の実測（#881 を起票）
+
+同梱ネイティブバイナリ 8 個は **ad-hoc 署名のみ**（`linker-signed` / `TeamIdentifier=not set`）。
+
+| 確認 | 結果 |
+|---|---|
+| `spctl -a -vv -t execute` | **rejected** |
+| quarantine を付けて実行 | **exit 137（SIGKILL）**+ 「Apple は…検証できませんでした」ダイアログ |
+| VS Code の `--install-extension` 後の `xattr` | **0 件** → 実行 exit 0 |
+| `ditto -x -k` / `/usr/bin/unzip` で展開 | **quarantine が伝播する** |
+
+**動いているのは、VS Code の `.vsix` 展開が quarantine を付けないから**であって、署名が
+通っているからではない。他社実装への暗黙の依存で、#878（`spawn('node')` が VS Code の
+シェル環境解決に救われている）と同じ形。ネイティブ `.app` のラインでは逃げ道が無く必須になる。
+
+
+#### インストール導線の実物合わせ
+
+リリース後、**利用者が実際に辿る経路**を上から見て 2 件直した。
+
+**1. GitHub Release の本文が空だった。** `release.yml` は `gh release create --generate-notes` を
+使うので、出るのは **v2.0.0 以降の全 PR 一覧（279 行）**だけだった。**利用者が最初に見る場所**が
+それでは使えないので、本文を書き直した:
+
+- 動作環境の表（arm64 専用・Intel 非対応・VS Code 1.99.0 以上）
+- インストール 3 方式（ダブルクリック / コマンドパレット / CLI）+ 更新手順
+- 最初の音を出すまでの 4 ステップ + Walkthrough への導線
+- 3 軸のバージョン（拡張 3.0.0 / `DSL_VERSION` 1.2 / `ENGINE_VERSION` 2.0.0）が同期しないこと
+- **既知の制限**（LinkAudio は出荷ビルドで無効 / `compressor()` 等は no-op / `.time()` `.fixpitch()` は未実装）
+- 変更履歴は `<details>` に畳んだ
+
+**2. ドキュメントのファイル名が実物と違った。** 資産名は `orbitscore-darwin-arm64-3.0.0.vsix` だが、
+README 2 本は `orbitscore-<version>.vsix`、ユーザーサイトは `orbitscore-*.vsix` と書いていた。
+**ターゲット接尾辞が抜けている**のが原因なので、版番号は固定せず `darwin-arm64` だけ足した
+（`orbitscore-darwin-arm64-<version>.vsix`）。版を書き込むと次のリリースで腐る。
+
+併せてユーザーサイトに [releases/latest](https://github.com/signalcompose/orbitscore/releases/latest)
+への導線と「Assets の中にある」の一言を足した。
+
+#### 実測で確かめたこと（記述が現行実装と合っているか）
+
+- 出荷 README の「Audio Engine Settings で出力デバイスを選ぶ」は**正しい**。
+  `orbit-audio-daemon --list-audio-devices` は実環境で 2 件返す（`MacBook Proのスピーカー` /
+  `Pro Tools Aggregate I/O`）。🔴 **サンドボックス内では `{"devices":[]}` を返す**ので、
+  ここを検証する時はサンドボックスを外すこと
+- MCP の `list_audio_devices` が「not supported with the Rust engine」を返すのは**別の話**で、
+  こちらは意図的な未実装（`extension.ts:2950-2956`・doc 662 §6 / #660）。UI の経路とは違う
+
+検証: 引用 944 / 0 failed・`npm test` 2,347 passed / 0 failed・lint 緑・
+`docs:build -w @orbitscore/user-site` 緑。
+
+### docs: follow the 3.0.0 / DSL 1.2 bump into the docs the bump missed (PR #871 追従) (Sep 11, 2026)
+
+ルーティン docs 追従。追従元は PR [#871](https://github.com/signalcompose/orbitscore/pull/871)
+（マージコミット `56c34c3`・head `d5decc2`）。**実装とテストは触っていない**（docs と dev サイトのみ）。
+
+#871 は正本 3 箇所（`packages/vscode-extension/package.json` = 3.0.0 /
+`packages/engine/src/version.ts` の `DSL_VERSION` = 1.2 / `ENGINE_VERSION` は据え置き）を動かし、
+`CLAUDE.md`・root `README.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・dev サイトの
+`version.ts` 引用 4 箇所を追従させた。**引用ブロックは更新されたが、その引用を説明している
+散文が 1.1 / 2.1.0 のまま残っていた**ページがある。
+
+| 直した箇所 | 何が食い違っていたか |
+|---|---|
+| `docs/core/INDEX.md:5` | 表紙が `DSL_VERSION 1.1` / 拡張 `2.1.0` を名乗ったまま |
+| `README.md:55` | `Post-2.0 (shipped on main, extension 2.1.0)` |
+| `sites/dev{,/en}/orientation/architecture-overview.md` | 引用ブロックは `1.2` なのに、直下の箇条書きが `DSL spec 1.1` / 拡張 `2.1.0` |
+| `sites/dev{,/en}/decisions/adr-002-dsl-v3-pivot.md` | 同上（Sources 行が `DSL_VERSION = '1.1'`・導入の「ちなみに」段落が v1.1 / product 2.0.0） |
+| `sites/dev{,/en}/editor/vscode-architecture.md` | 冒頭と Sources の `package version 2.1.0` |
+
+いずれも「3 つは別軸で同期しない」（`docs/design/656-release-design.md` §4.4）を本文に書き足して、
+次に読む人が #871 と同じ取り違え（WORK_LOG の「私は一度これを間違えた」）を繰り返さないようにした。
+dev サイトは日英両方。frontmatter の `verified-against` / `verified-at` を更新した 3 章（6 ファイル）は、
+Note 行に「**バージョン節だけ**追従した」と明記して、章全体を再検証したと読まれないようにしてある。
+
+**直さずに報告に回したもの**（仕様の判断であって追従作業ではない）:
+
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md:5` の docmeta が `"version":"1.1"`。`DSL_VERSION` は 1.2 に
+  なったが、**1.2 の spec 文書は存在しない**。spec 正本をどう扱うかは owner 裁定事項
+- `docs/specs-v2/SESSION_LOG_SPEC_v1.md:51` のメタヘッダ例が `"dslVersion":"1.1"`。同じ行の
+  `"engineVersion":"1.1.0"` は #871 と無関係に古く（§5-5 で version 自動同期は #276 deferred と明記）、
+  片方だけ直すと実在しないサンプルになる
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:3,5` の `Product version: OrbitScore 2.0.0`。#871 で
+  `CLAUDE.md` は「Product: 拡張 3.0.0」に変わったので、「product version」という軸を残すのかが未決
+
+### docs: PR #870 のドキュメント追従レビュー — 追従不要（Sep 11, 2026）
+
+マージ済み PR #870（`f56e02e7d03306f7d811b2d2edac9814baa38ee5`）に対するドキュメント追従レビュー。
+
+**ドキュメントの追従は不要**と分類した。差分 2 ファイルの内訳は
+`tests/core/loop-quantize.spec.ts`（モックの時計を固定するテストのみの変更）と
+`docs/development/WORK_LOG.md`（PR 自身が記載済み）で、出荷物・DSL の意味論・MCP の表面・
+OrbitStudio の評価経路のいずれにも差分が無い。`nextQuantizedTime()` の実装は無変更で、
+`sites/dev/scheduling/transport.md:388-410` の記述と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:316-354`
+は現行実装と一致している。
+
+ただし**実機 E2E の穴**は残っている。この PR が固定した LOOP quantize の起動境界は、
+`tests/e2e/dsl-e2e-coverage.spec.ts` の baseline 上で今も未カバーである
+（`loop`/`quantize` が seq・global 両方に、`transport-loop` が構文側に載ったまま）。
+詳細と再現手順は本コミットの PR 本文に記載した。**baseline は編集していない。**

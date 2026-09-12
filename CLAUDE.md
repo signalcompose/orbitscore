@@ -162,7 +162,7 @@ git branch --show-current
 
 ### Project Overview
 **OrbitScore** - Audio-based live coding DSL for modern music production
-- Product: 拡張 **4.0.0**（`.vsix` と git タグが担う版・正本は `packages/vscode-extension/package.json`）。
+- Product: 拡張 **4.0.1**（`.vsix` と git タグが担う版・正本は `packages/vscode-extension/package.json`）。
   `ENGINE_VERSION 2.0.0`（セッションログの meta ヘッダ）と `DSL_VERSION 2.0`（spec 版）は
   **別軸で同期しない**（`docs/design/656-release-design.md` §4.4）
 - Audio Backend: Rust `orbit-audio-daemon`（唯一のバックエンド。cutover #108 で既定化・SuperCollider opt-out 経路は #502 で削除）

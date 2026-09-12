@@ -14,7 +14,7 @@ OrbitScore DSL は 3 回のメジャーバージョンを経て v3.0 に至り�
 
 **重要**: ADR のタイトルが "v1 → v3 pivot" と書かれていますが、実際には 3 段階の変化です。**v1 → v2 が最大の pivot (MIDI → Audio)** であり、v2 → v3 は DSL 構文の洗練です。この章では 3 つすべての変化を扱います。
 
-ちなみに現在も、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL (MIDI 出力) が **別軸** で積まれています。`DSL_VERSION` は audio line の v3.0 ではなく DSL spec の版を指し、#883 の暗黙終端廃止で **2.0** になりました。拡張 (`.vsix` と git タグが名乗る版) は **4.0.0**、`ENGINE_VERSION` は **2.0.0** のままです — 3 つは同期しない別軸です (`docs/design/656-release-design.md` §4.4)。本 ADR は audio line の話です。
+ちなみに現在も、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL (MIDI 出力) が **別軸** で積まれています。`DSL_VERSION` は audio line の v3.0 ではなく DSL spec の版を指し、#883 の暗黙終端廃止で **2.0** になりました。拡張 (`.vsix` と git タグが名乗る版) は **4.0.1**、`ENGINE_VERSION` は **2.0.0** のままです — 3 つは同期しない別軸です (`docs/design/656-release-design.md` §4.4)。本 ADR は audio line の話です。
 
 ```typescript
 // packages/engine/src/version.ts:15-18

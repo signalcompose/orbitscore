@@ -615,10 +615,10 @@ export const DSL_VERSION = '2.0'
 
 - **`ENGINE_VERSION`**: `2.0.0` — `.orbslog` の meta ヘッダが名乗る版。MIDI 出力 + Pitch DSL + session log を含む WCTM milestone
 - **DSL spec バージョン**: `2.0` — DSL spec の軸 (`ENGINE_VERSION` とも拡張の版とも別)
-- **VS Code 拡張の package version**: `4.0.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
+- **VS Code 拡張の package version**: `4.0.1` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.0.0` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
+上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.0.1` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
 
 なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '2.0'` (DSL spec 版) とは軸が違います。
 

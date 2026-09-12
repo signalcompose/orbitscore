@@ -615,10 +615,10 @@ export const DSL_VERSION = '2.0'
 
 - **`ENGINE_VERSION`**: `2.0.0` — the version the `.orbslog` meta header carries; the WCTM milestone including MIDI output + Pitch DSL + session log
 - **DSL spec version**: `2.0` — the DSL spec axis (separate from both `ENGINE_VERSION` and the extension version)
-- **VS Code extension package version**: `4.0.0` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
+- **VS Code extension package version**: `4.0.1` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `4.0.0` is by design, not an accident. In #883, removing implicit terminals is the incompatible change that takes the extension to 4.0.0 and `DSL_VERSION` to 2.0.
+Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `4.0.1` is by design, not an accident. In #883, removing implicit terminals is the incompatible change that takes the extension to 4.0.0 and `DSL_VERSION` to 2.0.
 
 Note that the "DSL v3.0" that appears in CLAUDE.md and the glossary names the syntax generation (the `sequence` → `init` pivot, [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)); it is a different axis from `DSL_VERSION = '2.0'` (the DSL spec version).
 
