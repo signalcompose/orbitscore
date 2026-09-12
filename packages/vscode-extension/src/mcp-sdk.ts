@@ -1,3 +1,10 @@
+/**
+ * MCP SDK と `zod` のトップレベル require と、ツール結果の整形（#887 束 F・`mcp-server.ts` から移した）。
+ *
+ * 🔴 **ここの require は `activate()` より前に評価される。** 同梱漏れは
+ * activation 全体を落とす（#873 で実測・`.vsix` が activate すらできなかった）。
+ * `dist/` に出ないモジュールをここへ足してはいけない。
+ */
 import * as http from 'http'
 
 import type { CommandResult } from './mcp-types'

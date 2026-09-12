@@ -1,3 +1,11 @@
+/**
+ * editor 系の MCP ツール 9 本と、docs 系 3 本（#887 束 F・`buildServer` から移した）。
+ *
+ * 🔴 **`registerTool` の呼び出し本文は 1 行も書き換えていない。**
+ *
+ * 🔴 **このファイルは `register*Tools` を 2 本持つ。** 理由は下の
+ * `registerDocsTools` の doc に書いた（分割前の `tools/list` の順序を再現するため）。
+ */
 import { readDevDoc, searchDevDocs } from './mcp-docs'
 import { errorResult, type McpServerLike, toToolResult, z } from './mcp-sdk'
 import type { OrbitScoreToolHandlers } from './mcp-types'

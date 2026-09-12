@@ -194,7 +194,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 One entry from `get_diagnostics` has this shape. `code` is the optional field #883 added; it is present only when `vscode.Diagnostic.code` is a string or a number.
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:91-97
+// packages/vscode-extension/src/mcp-types.ts:98-104
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -213,7 +213,7 @@ What this buys is that **an agent can branch on an identifier instead of on word
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:5-22
+// packages/vscode-extension/src/mcp-tools-engine.ts:16-33
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -289,7 +289,7 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:20-27
+// packages/vscode-extension/src/mcp-types.ts:27-34
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean

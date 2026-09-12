@@ -1,3 +1,13 @@
+/**
+ * plugin 系の MCP ツール 6 本（#887 束 F・`mcp-server.ts` の `buildServer` から移した）。
+ *
+ * 🔴 **`registerTool` の呼び出し本文と、条件付き登録の述語は 1 行も書き換えていない。**
+ * `save_plugin_state` は `handlers.savePluginState` の有無で、
+ * `open_plugin_ui` / `close_plugin_ui` は両方が揃っているかで登録される（分割前と同じ条件式）。
+ *
+ * 🔴 **editor 系より後・docs 系より前**に登録されること。
+ * 順序は `tools/list` に出るので変えられない（`mcp-tools-editor.ts` の `registerDocsTools` の doc）。
+ */
 import {
   errorResult,
   type McpServerLike,

@@ -627,7 +627,7 @@ MCP の `list_plugins` / `rescan_plugins` も同じ `loadPluginCatalog()` / `run
 共有しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:53-69
+// packages/vscode-extension/src/mcp-tools-engine.ts:64-80
   server.registerTool(
     'stop_engine',
     {

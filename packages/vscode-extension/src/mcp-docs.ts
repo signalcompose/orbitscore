@@ -1,3 +1,9 @@
+/**
+ * dev / user サイトの静的配信と Markdown の読み出し（#887 束 F・`mcp-server.ts` から移した）。
+ *
+ * `DOCS_PUBLIC_BASE` / `USER_DOCS_PUBLIC_BASE` の**定義元はここ**で、
+ * `mcp-server.ts` は再輸出しているだけである。
+ */
 import * as fs from 'fs'
 import * as path from 'path'
 

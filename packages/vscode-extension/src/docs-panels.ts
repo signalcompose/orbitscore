@@ -10,7 +10,8 @@ import { devDocsPanel, mcpServerHandle, outputChannel, setDevDocsPanel } from '.
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
  * entry point (browser command, webview panel) — the site is served at the
- * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
+ * VitePress base `/orbitscore/dev/` (mcp-docs.ts DOCS_PUBLIC_BASE — `mcp-server.ts` は
+ * 再輸出しているだけ。#887 束 F で定義元が移った; `/docs`
  * is only a redirect kept for muscle memory).
  */
 function resolveDevDocsUrl(): string | null {

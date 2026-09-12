@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
+
+`/code:peer-review-team` の comment-analyzer が出した 2 件。**コメントのみの変更**で、
+差分にコメント行以外の追加 / 削除が 1 件も無いことを機械的に確認した。
+
+#### 🔴 同じ PR 内で偽になったコメント
+
+`docs-panels.ts` の `resolveDevDocsUrl` の doc が「`mcp-server.ts` の `DOCS_PUBLIC_BASE`」と
+書いていたが、**定義元は `mcp-docs.ts:12`** で `mcp-server.ts` は再輸出しているだけ。
+
+このコメントは `docs-panels.ts` を作った束 C（`9143a233`）の時点では**正しかった**。
+束 F（`d8bda308`）で `mcp-docs.ts` を新設して定義元が移った時に、
+**この横参照だけが追随しなかった。**
+
+**束をまたいだ相互参照は自動では追随しない。** import なら型チェッカが捕まえるが、
+**地の文の参照は誰も見ていない。**
+
+#### 新設 19 モジュールのうち doc の無かった 6 本に module doc を足した
+
+`mcp-sdk` / `mcp-types` / `mcp-docs` / `mcp-tools-engine` / `mcp-tools-editor` / `mcp-tools-plugins`。
+
+🔴 **comment-analyzer の「他 16 ファイルには必ずある」は不正確だった** — doc が無いのは
+40 ファイル中 12 件で、`completion-context.ts` / `plugin-state-bridge.ts` 等**分割前から
+無いもの**も含まれる。「3 ファイルが普遍的な規約を破っている」わけではない。
+
+ただし**設計 D5 の分割意図がコード側に一切残っていなかった**のは事実なので、
+6 本に足した。特に `mcp-tools-*` には **`tools/list` の順序の制約**を書いた
+（これが今日の退行の原因だった）。
+
+#### 検証
+
+差分がコメントのみ（機械確認）/ `npm test` 2,491 passed / lint 緑 / `tsc --noEmit` 緑 /
+`typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 / リポジトリのラチェット 64 passed。
+
+**実機 gated は再実行していない。** コメントは出荷物の振る舞いに届かないので、
+先の全件緑（`45 passed | 1 skipped`・`ratio 1.000015`）が有効なままである。
+
+---
+
 ### fix(mcp): restore the tool registration order the split had changed (Sep 13, 2026)
 
 Fable 監査が、Sonnet レビュアー 8 体が全員通した後に **MCP ツール一覧の順序の変化**を検出した。

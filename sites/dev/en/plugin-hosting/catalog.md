@@ -637,7 +637,7 @@ fresh catalog.
 MCP's `list_plugins` / `rescan_plugins` share the same `loadPluginCatalog()` / `runPluginScan()`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:53-69
+// packages/vscode-extension/src/mcp-tools-engine.ts:64-80
   server.registerTool(
     'stop_engine',
     {

@@ -266,7 +266,7 @@ Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
 Why at load time? Because `extension.ts` imports from `./mcp-server` (`extension.ts:43`), and `mcp-server.ts` loads the MCP SDK with a top-level `require`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-sdk.ts:30-36
+// packages/vscode-extension/src/mcp-sdk.ts:37-43
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 export const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js') as {
   McpServer: new (info: { name: string; version: string }) => McpServerLike

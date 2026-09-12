@@ -1,3 +1,10 @@
+/**
+ * MCP の wire 型と `OrbitScoreToolHandlers`（#887 束 F・`mcp-server.ts` から移した）。
+ *
+ * 🔴 **`mcp-server.ts` が `export type { … } from './mcp-types'` で再輸出しているので、
+ * import 先は変えていない**（設計 `887-extension-split-design.md` §5.2）。
+ * `extension.ts` / spec / `engine-state-bridge` / `daemon-client` は今も `mcp-server` から取る。
+ */
 import type { PluginScanFailure, PluginScanSummary } from './plugin-catalog-reader'
 import type { WavAnalysis } from './wav-analysis'
 

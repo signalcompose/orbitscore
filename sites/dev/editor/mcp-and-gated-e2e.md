@@ -194,7 +194,7 @@ export function buildMcpServerUrl(port: number): string {
 `get_diagnostics` の 1 件はこの形です。`code` は #883 で足された optional フィールドで、`vscode.Diagnostic.code` が文字列か数値のときだけ載ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:91-97
+// packages/vscode-extension/src/mcp-types.ts:98-104
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -213,7 +213,7 @@ export interface DiagnosticEntry {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:5-22
+// packages/vscode-extension/src/mcp-tools-engine.ts:16-33
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -289,7 +289,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 `{"engineState"` の分岐が `{"evalMark"` の隣にあるのは偶然ではありません。#661 で `get_engine_state` は「拡張のプロセスが生きているか」だけを答えるツールから、**daemon が実際にどのデバイスへ音を出しているか**を答えるツールになりました。返り値の型がそのまま変化を語っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:20-27
+// packages/vscode-extension/src/mcp-types.ts:27-34
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean

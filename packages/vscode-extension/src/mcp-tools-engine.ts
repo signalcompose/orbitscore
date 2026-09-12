@@ -1,3 +1,14 @@
+/**
+ * engine 系の MCP ツール 7 本（#887 束 F・`mcp-server.ts` の `buildServer` から移した）。
+ *
+ * 🔴 **`registerTool` の呼び出し本文は 1 行も書き換えていない。**
+ * `buildServer` が 616 コード行の単一関数で 500 の閾値を満たせなかったため、
+ * `session.rs` の前例に倣ってドメイン単位の `register*Tools` へ切った（設計 §5.2 / D5）。
+ *
+ * 🔴 **呼ばれる順序が MCP の `tools/list` の順序である。**
+ * `buildServer` は engine → editor → plugins → docs の順で呼ぶこと
+ * （理由は `mcp-tools-editor.ts` の `registerDocsTools` の doc）。
+ */
 import { errorResult, type McpServerLike, toToolResult, z } from './mcp-sdk'
 import type { OrbitScoreToolHandlers } from './mcp-types'
 
