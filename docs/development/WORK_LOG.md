@@ -17,6 +17,63 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(hooks): let pre-edit-check.sh allow writes outside the repo on main (Sep 13, 2026)
+
+owner 指摘:
+
+> メモリ書くためだけにブランチ作るの良くないのでmainからでもメモリは書けるように出来んの？
+
+#### 何が問題だったか
+
+`.claude/hooks/pre-edit-check.sh` は `main` にいる時 Edit / Write を一律に deny していた。
+判定は**ブランチ名だけ**で、**編集先のパスを見ていなかった**
+（例外は `*/.claude/plans/*` のホワイトリスト 1 件）。
+
+そのため**リポジトリの外**（`~/.claude/projects/<project>/memory/` / scratchpad / `~/.cvi`）も
+巻き込まれ、**memory を 1 ファイル書くためだけに差分 0 のブランチを作って消す**という
+運用が発生した（本日実際にやった）。
+
+**このフックが守っているのは「main に直接実装を積まない」こと**で、repo の外は保護対象ではない。
+
+#### 直し方
+
+**リポジトリ外の絶対パスを一律に対象外にする。** 個別ホワイトリストは増やさない
+（次に別の外部パスで同じことが起きる）。判定は「repo 配下かどうか」の 1 本。
+
+**安全側の倒し方**: 相対パスは repo 相対なので repo 内扱い。
+`..` を含む絶対パスは解決せず repo 内扱い（fail closed）。`file_path` 無しも deny へ落ちる。
+
+#### 🔴 最初に書いたテストが 2 回続けて何も検査していなかった
+
+**1 回目**: 「今 main にいるなら検査する」形にしたので、**feature ブランチと CI では
+主要な検査が全部 skip され、空で緑**になった（memory `a-test-that-exists-may-never-run`）。
+→ 使い捨ての git repo を 2 つ作り、HEAD を `main` / `1-feature` に固定して
+`CLAUDE_PROJECT_DIR` で指す形に変えた。どのブランチから走らせても同じ判定を検査できる。
+
+**2 回目**: fail-closed の検査に `${REPO}/../evil.ts` を使っていたが、これは
+`"$PROJECT_DIR"/*` のグロブに `../evil.ts` が一致するので **`*..*` ガードが無くても deny** =
+何も検査していなかった。**変異を当てて緑のまま通ったので判明した。**
+→ **prefix から外れて `..` で repo 内へ戻る**形（`${REPO}-decoy/../${basename}/secret.ts`）に変えた。
+これは `*..*` ガードが無いと allow に倒れるが、実際には repo 内へ着地する。
+
+#### 変異検証（3 種・実出力を確認）
+
+| 変異 | 結果 |
+|---|---|
+| `*..*` の fail-closed を外す | red（「判定できない入力は deny」が `expected 'allow' to be 'deny'`） |
+| repo 内/外の判定を反転 | red（「repo 外は allow」と「repo 内は deny」の**両方**） |
+| ガードを丸ごと無効化 | red（「repo 外は allow」） |
+
+restore 後はいずれも 6 passed。
+
+🔴 **`.claude/hooks/` は Bash の sandbox 書き込み拒否対象**なので、変異は Edit ツールで当てた。
+最初は `python3` / `cp` で当てようとして**3 回とも書き込みが失敗しており、
+「6 passed」は何も証明していなかった**（`git diff --stat` が無変更だったので気づいた）。
+
+Closes #913
+
+---
+
 ### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
 
 `/code:peer-review-team` の comment-analyzer が出した 2 件。**コメントのみの変更**で、
@@ -1873,91 +1930,6 @@ Tests  45 passed | 1 skipped (46) | 0 failed
 
 この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
 `ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
-
-### fix: make send() require a destination in both implementations (#883 round 2) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: ✅ ラウンド 2 収束（PR #884）
-
-#### 🔴 縮小レビューが **fix 起因の Critical** を捕まえた
-
-ラウンド 1 で置いたポリシーを、main が**片翼にしか適用していなかった**。
-
-| | ガード |
-|---|---|
-| `Sequence.send()` | ✅ あり |
-| `MixerBusHandle.send()` | ❌ **無い** |
-
-レビュアーが実際に走らせて wire の中身まで示した:
-
-```
-mix.sum('drum').send(db: -6)
-  → processArguments が [undefined, {db:-6}] に整形（ラウンド 1 の修正）
-  → MixerBusHandle.send(undefined, ...) → resolveDest(undefined) → {kind:'master'}
-  → setBusLine に output(master, thru:true, -6dB) が**追加で 1 本**
-  → 既存の直結と合わせて **master へ二重に鳴る**
-```
-
-🔴 **#883 が消そうとしている「dry が master へ漏れる」の派生形を、修正が自分で作っていた。**
-
-#### 直し方 — 契約を 1 関数へ
-
-```ts
-// audio-line.ts — この 1 関数が両方の send() の契約
-export function assertSendDestination(value: unknown, call: string): void
-```
-
-`send()` の宛先は **`output()` と違い必須**（どこにも送らない send は無い）。両方の `send()` が
-これを呼ぶので、**片翼だけに書けるコードでなくなった**。
-
-あわせて `resolveDest` / `send` のエラー文言が常に「null」と決め打ちしていたのを、
-**実際に来た型**を出すよう直した（数値や真偽値を渡した人に嘘の情報を与えていた）。
-
-#### 変異検証（main が実走）
-
-| 変異 | 結果 |
-|---|---|
-| `MixerBusHandle` のガードを削除 | **red**（1 件） |
-| 文言を "null" 決め打ちに戻す | **red**（3 件） |
-| restore | **green**（4 件） |
-
-#### 波及
-
-Codex がラウンド 1 で書いたテスト 2 箇所が**旧文言**を期待していたので整合させ、
-「なぜ `send()` は `output()` と文言が違うのか」と**この Critical への回帰検査であること**を
-コメントに残した。
-
-#### 🔴 実機 gated が 1 回 flake した（規律どおり再実行して確定させた）
-
-1 回目: `#611 E2E-3` が **`ENGINE_LOCK_CONTENTION`** で落ちた。
-
-```
-[warning] ENGINE_LOCK_CONTENTION: engine lock contention (1 total);
-          a block was silently zero-filled — this self-heals next block
-```
-
-これは **`severity=warning` として設計された事象**（`rust/crates/orbit-audio-daemon/tests/protocol.rs:1204`）
-だが、`mem:stderr-is-classified-as-error`（engine の warn は全部 ERROR 行）により
-`expectNoNewErrors` が ERROR として数える。
-
-**`mem:implementation-right-oracle-wrong`（赤を実装のせいにする前に同じテストを走らせる）に従い、
-断定せず再実行** — load 5.62 → 2.76 で**緑**。孤児 daemon 0 / 残存 dev host 0 も確認済み。
-
-🔴 **残る論点（この束とは独立）**: `expectNoNewErrors` は「新規 ERROR が 0」を要求するが、
-CLAUDE.md の規律は「ERROR 件数は固定 500 行窓なので**厳密等価にしない**（`<=`）」。
-`ENGINE_LOCK_CONTENTION` は負荷次第で正当に発生するので、**分類器が warning を ERROR へ畳んでいる**
-ことを別途扱う余地がある。
-
-#### 検証（すべて main が sandbox 外で実測）
-
-```
-npm test    2364 passed | 68 skipped | 0 failed
-lint 緑 / docs:check 948 引用 0 failed
-実機 gated  39 passed | 1 skipped | 0 failed
-[#883 X2] omittedRms=0.08701663329564219  explicitRms=0.08701663329564278
-```
-
----
 
 ## Archived sections
 
