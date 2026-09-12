@@ -11,6 +11,7 @@ global.beat(4 by 4)  // 4/4 time
 var simple = init global.seq
 simple.length(1)
 simple.audio("../test-assets/audio/hihat_closed.wav").chop(4)
+simple.output()
 simple.play(1, (2, 3))  // X - - (X X) pattern
 
 // === Example 2: Triplet Feel ===
@@ -18,6 +19,7 @@ simple.play(1, (2, 3))  // X - - (X X) pattern
 var triplets = init global.seq
 triplets.length(1)
 triplets.audio("../test-assets/audio/snare.wav").chop(8)
+triplets.output()
 triplets.play((1, 2, 3), (4, 5, 6))  // Two groups of triplets
 
 // === Example 3: 5-Tuplet Pattern ===
@@ -25,6 +27,7 @@ triplets.play((1, 2, 3), (4, 5, 6))  // Two groups of triplets
 var tuplet = init global.seq
 tuplet.length(1)
 tuplet.audio("../test-assets/audio/kick.wav").chop(5)
+tuplet.output()
 tuplet.play(1, (0, 1, 2, 3, 4))  // Kick, then silence + 4 rapid kicks
 
 // === Example 4: Complex Nested Rhythm ===
@@ -32,6 +35,7 @@ tuplet.play(1, (0, 1, 2, 3, 4))  // Kick, then silence + 4 rapid kicks
 var complex = init global.seq
 complex.length(2)  // 2 bars
 complex.audio("../test-assets/audio/arpeggio_c.wav").chop(16)
+complex.output()
 complex.play(
   // Bar 1: increasingly complex subdivisions
   1,                    // Quarter note
@@ -51,6 +55,7 @@ complex.play(
 var deep = init global.seq
 deep.length(1)
 deep.audio("../test-assets/audio/sine_440.wav").chop(8)
+deep.output()
 deep.play(
   1,                    // First half
   (2,                   // Third quarter split:
@@ -65,6 +70,7 @@ deep.play(
 var syncopated = init global.seq
 syncopated.length(1)
 syncopated.audio("../test-assets/audio/bass_c1.wav").chop(8)
+syncopated.output()
 syncopated.play(
   (1, 0),              // On-beat, rest
   (0, 2),              // Rest, off-beat
@@ -77,6 +83,7 @@ syncopated.play(
 var flam = init global.seq
 flam.length(1)
 flam.audio("../test-assets/audio/snare.wav").chop(8)
+flam.output()
 flam.play(
   1,                    // Single hit
   ((2, 3)),            // Flam (very close together)

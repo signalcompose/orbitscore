@@ -29,6 +29,7 @@ global.start()
 
 var mix = init global.mixer
 var drums611e7 = mix.sum
+drums611e7.output()
 
 var tone = init global.seq
 tone.beat(4 by 4).length(1)

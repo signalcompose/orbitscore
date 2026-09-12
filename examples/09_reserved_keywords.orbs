@@ -19,21 +19,25 @@ global.audioPath("../test-assets/audio")
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)
 
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 1, 0, 1)
 
 var hihat = init global.seq
 hihat.beat(4 by 4).length(1)
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1)
 
 var bass = init global.seq
 bass.beat(4 by 4).length(2)
 bass.audio("bass.wav").chop(8)
+bass.output()
 bass.play(1, 0, 3, 0, 1, 0, 5, 0)
 
 // Start the global transport

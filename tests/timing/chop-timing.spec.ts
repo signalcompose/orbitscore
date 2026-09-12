@@ -23,6 +23,7 @@ describe('Chop Timing', () => {
     global.setDocumentDirectory('/tmp/test')
     sequence = new Sequence(global, player as any)
     sequence.setName('test')
+    sequence.output()
   })
 
   describe('Timing Calculation', () => {

@@ -9,22 +9,25 @@ global.start()
 var mix = init global.mixer
 var vA = mix.aux
 var vB = mix.aux
+vA.output()
+vB.output()
 
 var dry = init global.seq
 dry.beat(4 by 4).length(1)
 dry.audio("kick.wav").chop(1)
+dry.output()
 dry.play(1, 1, 1, 1)
 
 var kickA = init global.seq
 kickA.beat(4 by 4).length(1)
 kickA.audio("kick.wav").chop(1)
-kickA.send(vA, -12)
+kickA.send(vA, -12).output()
 kickA.play(1, 1, 1, 1)
 
 var kickB = init global.seq
 kickB.beat(4 by 4).length(1)
 kickB.audio("kick.wav").chop(1)
-kickB.output(vB, thru: true, db: -12)
+kickB.output(vB, thru: true, db: -12).output()
 kickB.play(1, 1, 1, 1)
 
 LOOP(dry)

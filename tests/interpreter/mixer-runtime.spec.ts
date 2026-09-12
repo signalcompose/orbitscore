@@ -216,7 +216,7 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     ])
   })
 
-  it('refuses to use any output endpoint as a receiver, including the implicit master', async () => {
+  it('refuses to use any output endpoint as a receiver, including reserved master', async () => {
     // SC.3.3 forbids swallowing what the user wrote: an output endpoint has no
     // receiver surface until #484 D4, so it must throw rather than resolve to an
     // inert object that callMethod would silently no-op on.

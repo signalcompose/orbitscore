@@ -496,16 +496,20 @@ describe('DaemonClient with mock server', () => {
       SetSourceRouting: () => ({ status: 'routed' }),
     })
     await client.start({ wsUrlOverride: url })
-    await client.setSourceRouting('plugin:kick', 0, 'seq-bus-0')
-    await client.setSourceRouting('plugin:kick', 0, null)
+    await client.setSourceRouting('plugin:kick', 0, { kind: 'bus', name: 'seq-bus-0' })
+    await client.setSourceRouting('plugin:kick', 0, { kind: 'none' })
     const routings = server.received.filter((r) => r.method === 'SetSourceRouting')
     expect(routings).toHaveLength(2)
     expect(routings[0]?.params).toEqual({
       source: 'plugin:kick',
       unit: 0,
-      target: 'seq-bus-0',
+      target: { kind: 'bus', name: 'seq-bus-0' },
     })
-    expect(routings[1]?.params).toEqual({ source: 'plugin:kick', unit: 0, target: null })
+    expect(routings[1]?.params).toEqual({
+      source: 'plugin:kick',
+      unit: 0,
+      target: { kind: 'none' },
+    })
   })
 
   it('Stop は status=stopped を true に変換する', async () => {

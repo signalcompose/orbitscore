@@ -10,6 +10,7 @@ global.start()
 
 var mix = init global.mixer
 var drms = mix.sum
+drms.output()
 
 var noPan = init global.seq
 noPan.beat(4 by 4).length(1)

@@ -29,6 +29,7 @@ import type {
   PluginUnloadResult,
   PluginStateSaveResult,
   PluginStateSaveTarget,
+  SourceRoutingTarget,
   WireLineOp,
 } from '../types'
 
@@ -729,8 +730,8 @@ export class DaemonClient extends EventEmitter {
     await this.request('SetBusLine', { bus, line })
   }
 
-  /** Route one opaque premaster source output to a named insert bus or Master (`null`). */
-  async setSourceRouting(source: string, unit: number, target: string | null): Promise<void> {
+  /** Route one opaque premaster source output to an explicit destination. */
+  async setSourceRouting(source: string, unit: number, target: SourceRoutingTarget): Promise<void> {
     await this.request('SetSourceRouting', { source, unit, target })
   }
 

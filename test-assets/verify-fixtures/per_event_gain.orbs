@@ -11,12 +11,14 @@ var loud = init global.seq
 loud.length(1)
 loud.audio("../audio/kick.wav")
 loud.defaultGain(-3).defaultPan(0)
+loud.output()
 loud.play(1, 0, 0, 0)
 
 var quiet = init global.seq
 quiet.length(1)
 quiet.audio("../audio/kick.wav")
 quiet.defaultGain(-9).defaultPan(0)
+quiet.output()
 quiet.play(0, 0, 0, 1)
 
 global.start()

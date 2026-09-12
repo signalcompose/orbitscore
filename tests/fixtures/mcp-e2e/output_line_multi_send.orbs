@@ -9,22 +9,25 @@ global.start()
 var mix = init global.mixer
 var vrb = mix.aux
 var dly = mix.aux
+vrb.output()
+dly.output()
 
 var dry = init global.seq
 dry.beat(4 by 4).length(1)
 dry.audio("kick.wav").chop(1)
+dry.output()
 dry.play(1, 1, 1, 1)
 
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav").chop(1)
-kick.send(vrb, -12).send(dly, -6)
+kick.send(vrb, -12).send(dly, -6).output()
 kick.play(1, 1, 1, 1)
 
 var off = init global.seq
 off.beat(4 by 4).length(1)
 off.audio("kick.wav").chop(1)
-off.send(vrb, -12, enabled: false)
+off.send(vrb, -12, enabled: false).output()
 off.play(1, 1, 1, 1)
 
 LOOP(dry)

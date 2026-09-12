@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1816-1820
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1842-1846
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1907-1909
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1933-1935
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -100,7 +100,7 @@ TS 側の司令塔は `packages/engine/src/core/global/mixer-manager.ts` の `Mi
 並びます。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:289-309
+// packages/engine/src/core/global/mixer-manager.ts:294-314
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -141,7 +141,7 @@ prefix と上限は TS 側の定数として置かれていて、コメントが
 明言しています。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:31-44
+// packages/engine/src/core/global/mixer-manager.ts:33-46
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -161,7 +161,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2186-2199
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2196-2209
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -208,8 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:534-563
-
+// packages/engine/src/core/sequence.ts:541-580
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -224,11 +223,20 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
    *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
    *    resolution order)
    */
-  output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
+  output(
+    destOrOptions?: string | number | OutputDest | OutputOptions,
+    opts: OutputOptions = {},
+  ): this {
     const name = this.stateManager.getName() || 'sequence'
-    assertOutputOptions(opts, `Sequence '${name}': output`)
-    if (typeof dest === 'object') {
-      return this.applyOutputElement(dest, opts, 'output')
+    const { dest, options } = resolveOutputArgs<string | number | OutputDest>(
+      destOrOptions,
+      opts,
+      `Sequence '${name}': output`,
+    )
+    // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
+    // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
+    if (dest === undefined || isOutputDest(dest)) {
+      return this.applyOutputElement(dest ?? { kind: 'master' }, options, 'output')
     }
     const destinationName = typeof dest === 'number' ? String(dest) : dest
     if (!destinationName || !destinationName.trim()) {
@@ -239,6 +247,8 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
     // number (e.g. `global.sum("3")` then `output(3)`) wins over the numeric render-bus
     // branch below — resolveLineDest's master/"L,R"-pair branches never match a bare digit
     // string, so this is effectively the sum/aux-name check alone for a numeric `dest`.
+    const resolved = this.resolveLineDest(destinationName)
+    if (resolved) return this.applyOutputElement(resolved, options, 'output')
 ```
 
 sum/aux 分岐で注目したいのは `applyOutputElement()`（`sequence.ts:485-495`）の中の
@@ -276,7 +286,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:643-656
+// packages/engine/src/core/sequence.ts:658-679
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -287,10 +297,18 @@ fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線�
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    assertSendDestination(aux, `Sequence '${name}': send`)
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
     const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
+    const dest = isOutputDest(aux)
+      ? aux
+      : (this.resolveLineDest(aux) ??
+        (() => {
+          throw new Error(
+            `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+              `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
 ```
 
 `_line`（`AudioLine`）が要素をキー（宛先 + 出現序数）で管理する点は覚えておいてください。
@@ -332,7 +350,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7200-7220
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7223-7243
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -365,7 +383,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 **受理済みの値をミラーするだけ**になりました。ハンドルの解決順にも意味があります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7246-7261
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7269-7284
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -400,7 +418,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2531-2557
+// rust/crates/orbit-audio-native/src/output.rs:2574-2600
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -455,7 +473,7 @@ post-loop の中身が「`effective_targets[i]` を見て 1 箇所に足す」�
 「stage ごとの命令列を頭から実行する」へ置き換わりました。命令の型はこの 3 つです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1052-1077
+// rust/crates/orbit-audio-native/src/output.rs:1077-1102
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,7 +512,7 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2566-2592
+// rust/crates/orbit-audio-native/src/output.rs:2609-2635
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -530,7 +548,7 @@ pub enum LineOp {
 詳しくは次の見出し）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1467-1479
+// rust/crates/orbit-audio-native/src/output.rs:1498-1510
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -557,7 +575,7 @@ pub enum LineOp {
 両方にある `LineOp::Pan(_)` 腕を、実際に L/R を掛ける処理へ置き換えます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2246-2265
+// rust/crates/orbit-audio-native/src/output.rs:2289-2308
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
     if ramp.is_settled() {
@@ -584,7 +602,7 @@ fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
 `apply_line_pan` はもうここを直接計算せず、**ランプの始点と終点でこの関数を呼ぶだけ**です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2227-2243
+// rust/crates/orbit-audio-native/src/output.rs:2270-2286
 #[inline]
 fn line_pan_coefficients(pan: f32) -> (f32, f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
@@ -635,7 +653,7 @@ golden は丸め誤差以外動かず**、動くのは「rack を挟んでから
 1 つめが `effective_line_output_dest` です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1509-1520
+// rust/crates/orbit-audio-native/src/output.rs:1540-1551
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -667,7 +685,7 @@ line program は control スレッドが作って RT スレッドが読むので
 回収は control 側」です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1224-1229
+// rust/crates/orbit-audio-native/src/output.rs:1255-1260
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -686,7 +704,7 @@ callback の最後に `finish_generation()` で世代を進めます。**alloc /
 共有している**点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2459-2476
+// rust/crates/orbit-audio-native/src/output.rs:2502-2519
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -751,7 +769,7 @@ export type WireLineOp =
 送信側は 1 行です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:727-730
+// packages/engine/src/audio/rust-engine/daemon-client.ts:728-731
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -765,7 +783,7 @@ export type WireLineOp =
 指していないこと）だけを見て、名前から RT の index への解決には立ち入りません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:304-316
+// rust/crates/orbit-audio-daemon/src/session.rs:306-318
 /// `SetBusLine` の一方通行 wire shape を完全に検証してから engine 用 vocabulary を返す。
 #[cfg(feature = "outproc-effect")]
 fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
@@ -785,7 +803,7 @@ dispatch はその 3 段（形の検証 → デバイスチャンネルの範囲
 feature が無いビルドには `UNSUPPORTED` を返す別腕が用意されています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2659-2682
+// rust/crates/orbit-audio-daemon/src/session.rs:2670-2693
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -836,7 +854,7 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 出口は「先の段のバス」であればよく、それが sum か aux かは問われません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7090-7105
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7113-7128
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -859,7 +877,7 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 途中の 1 要素が失敗したら publish には到達しないので、**前のラインがそのまま生き残ります**。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7123-7154
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7146-7177
         let installer = self
             .bus_line_programs
             .lock()
@@ -977,7 +995,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:900-913
+// rust/crates/orbit-audio-native/src/output.rs:900-915
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -987,47 +1005,52 @@ pub trait BlockSource: Send {
 /// Destination of one source output unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceDest {
+    /// Explicit silent sink: the source renders, but no output receives its signal.
     #[default]
+    None,
     Master,
     Bus(usize),
     Link(usize),
 }
 ```
 
-`SourceDest` が `Master / Bus / Link` の 3 値なのは、設計の「アドレスモデルは
+`SourceDest` が `None / Master / Bus / Link` の 4 値なのは、設計の「アドレスモデルは
 `(instance, unit)` で今決める」（owner 確定事項）に対応します。`SourceSlot.dests` が
-`Vec<SourceDestCell>` で、unit ごとに行き先を持てる形です。ただし 2026-09-01 時点の TS は
-`unit` を 0 固定で発行しています（後述）。
+`Vec<SourceDestCell>` で、unit ごとに行き先を持てる形です。`None` は #883 で加わった明示的な
+無音宛先で、未設定・範囲外・失われた routing を master へ倒しません。TS は現在も `unit` を
+0 固定で発行しています（後述）。
 
-feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、unit ごとの `SourceDest` を
+feed の収集は `collect_source_feeds`（`output.rs:2141-2173`）が行い、unit ごとの `SourceDest` を
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2140-2150
+// rust/crates/orbit-audio-native/src/output.rs:2180-2193
             let dest = match slot.dests[unit].load() {
+                SourceDest::None => FeedDest::Discard,
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
                     .get(index)
                     .copied()
                     .flatten()
-                    .map_or(FeedDest::Hardware, FeedDest::Channel),
-                // Link source routing is wired in PR-3. Until then it is a total hardware fallback.
-                SourceDest::Link(_) => FeedDest::Hardware,
+                    .map_or(FeedDest::Discard, FeedDest::Channel),
+                // Link source routing is not wired yet. Missing wiring is silence, never Master.
+                SourceDest::Link(_) => FeedDest::Discard,
             };
-            feeds.push((output, dest));
+            if dest != FeedDest::Discard {
+                feeds.push((output, dest));
+            }
 ```
 
-`SourceDest::Link(_) => FeedDest::Hardware` のコメントにあるとおり、instrument → LinkAudio の
-実配線は PR-3 として残されています。TS 側 `output()` の LinkAudio 分岐が instrument を
-拒否していたのは、この fallback が「黙って hardware に出る」ことを silent failure として
-封じるためです。
+instrument → LinkAudio の実配線は PR-3 として残されています。#883 以後は未配線の Link と
+消えた bus position を `Discard` に写し、feed を積みません。source 自体の `render()` は先に
+実行されるため transport は進みますが、信号はどこにも加算されません。
 
 core 側の `render_multi_feeds`（`scheduler.rs:375-460`）を見ると、zero-fill → event 混合 →
 feed 加算（`422-441`・`FeedDest::Hardware` なら `hardware_out`、`Channel(i)` なら該当 bus buffer に
 `*dst += *sample`）→ gain ramp、の順になっています。gain ramp の部分を引用します。
 
 ```rust
-// rust/crates/orbit-audio-core/src/scheduler.rs:447-460
+// rust/crates/orbit-audio-core/src/scheduler.rs:450-463
         // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
         // gain を適用する（バッファごとに進めると ramp が多重に進み desync するため frame ループは 1 つ）。
         for frame in 0..frames_to_render {
@@ -1079,16 +1102,17 @@ master ラインを通さないと実時間レンダと音が食い違う、と�
 
 ### TS 側: `SetSourceRouting` の choke point
 
-PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
-`SetSourceRouting { source: "plugin:<name>", unit: 0, target: <bus> }` を発行する経路を
-1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
+PR-2（TS 側）は instrument の `SetSourceRouting` 発行を 1 箇所に集約し、#883 は target を
+`none / master / bus` の明示 3 値へ広げました。宣言順にかかわらず、譜面から導いた最新の宛先だけが
+wire を通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:960-987
+// packages/engine/src/core/sequence.ts:1003-1037
   private ensureInstrumentSourceRouting(): Promise<void> {
-    if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
-    const bus = this._insertBus
-    if (this._instrumentSourceRoutingBus === bus) {
+    if (!this.isInstrument()) return Promise.resolve()
+    const target = this.instrumentSourceRoutingTarget()
+    const key = Sequence.sourceRoutingKey(target)
+    if (this._instrumentSourceRoutingKey === key) {
       return this._instrumentSourceRoutingPromise ?? Promise.resolve()
     }
     if (!this.audioEngine.setSourceRouting) {
@@ -1096,12 +1120,18 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
     }
 
     const name = this.stateManager.getName() || 'sequence'
-    this._instrumentSourceRoutingBus = bus
-    const pending = this.audioEngine
-      .setSourceRouting(`plugin:${name}`, 0, bus)
+    const previous = this._instrumentSourceRoutingPromise
+    this._instrumentSourceRoutingKey = key
+    const pending = (previous ? previous.catch(() => undefined) : Promise.resolve())
+      .then(() => {
+        // A newer declaration superseded this one before it reached the wire. Its queued request
+        // is the only one that should be sent; resolving this stale waiter is intentional.
+        if (this._instrumentSourceRoutingKey !== key) return
+        return this.audioEngine.setSourceRouting?.(`plugin:${name}`, 0, target)
+      })
       .catch((error) => {
-        if (this._instrumentSourceRoutingBus === bus) {
-          this._instrumentSourceRoutingBus = undefined
+        if (this._instrumentSourceRoutingKey === key) {
+          this._instrumentSourceRoutingKey = undefined
         }
         throw error
       })
@@ -1115,8 +1145,9 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
   }
 ```
 
-`_instrumentSourceRoutingBus` と `_instrumentSourceRoutingPromise` の 2 つで「同じ bus への
-二重発行」を防ぎつつ、失敗時にはマーカーを外して再試行できるようにしています。
+`_instrumentSourceRoutingKey` と `_instrumentSourceRoutingPromise` の 2 つで同じ宛先への
+二重発行を防ぎ、宛先変更を直列化して古い非同期要求が新しい譜面を上書きしないようにしています。
+失敗時にはマーカーを外すため再試行できます。
 `output()` / `send()` の末尾で呼ばれていた `syncInstrumentSourceRouting()` は、この
 Promise を fire-and-forget に包んだアダプタです。
 
@@ -1164,7 +1195,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 `RustEnginePlayer.setGlobalGain` は「daemon の状態に関わらず先に intent を記録する」のが要点です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1316-1328
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1317-1329
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。
@@ -1304,7 +1335,7 @@ master gain の**手前**に来ます。
 ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5221-5226
+// rust/crates/orbit-audio-native/src/output.rs:5321-5326
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(
@@ -1338,7 +1369,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2070-2106
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2071-2108
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1354,6 +1385,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
           'global.start()',
           'var gain643 = init global.seq',
           `gain643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'gain643.output()',
           'gain643.gate(1)',
           'gain643.play(1, 1, 1, 1)',
           'LOOP(gain643)',
@@ -1389,7 +1421,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2210-2232
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2215-2240
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -1397,9 +1429,12 @@ DSL 部分を引用します。
           'global.beat(4 by 4)',
           'global.sum("sum643")',
           'global.aux("aux643")',
+          'sum("sum643").output()',
+          'aux("aux643").output()',
           'global.start()',
           'var routeDry643 = init global.seq',
           `routeDry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'routeDry643.output()',
           'routeDry643.gate(1)',
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',
@@ -1563,7 +1598,7 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `packages/engine/src/core/sequence.ts:350-432` — `Sequence.output()` の 3 分岐
 - `packages/engine/src/core/sequence.ts:454-481` — `Sequence.send()`
 - `packages/engine/src/core/sequence.ts:522-570` — `pushBusRouting` / `syncBusRouting`
-- `packages/engine/src/core/sequence.ts:724-757` — `ensureInstrumentSourceRouting`（`SetSourceRouting` choke point）
+- `packages/engine/src/core/sequence.ts:976-1043` — target 選択と `ensureInstrumentSourceRouting`（`SetSourceRouting` choke point）
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain`（畳み込み除去・`-Infinity` 残置）
 - `packages/engine/src/audio/engine-backend.ts:45-46` — `setGlobalGain` 契約
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:949-969` — `setBusRouting`（intent-first キャッシュ）
@@ -1572,8 +1607,8 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum・aux pool prefix と既定サイズ
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing`（検証 → line program の 1 回 publish → 旧 atomic へのミラー・#611 PR-O3a）
 - `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` ハンドラ
-- `rust/crates/orbit-audio-native/src/output.rs:269-282` — `BlockSource` / `SourceDest`
-- `rust/crates/orbit-audio-native/src/output.rs:772-801` — `collect_source_feeds`
+- `rust/crates/orbit-audio-native/src/output.rs:900-915` — `BlockSource` / `SourceDest`
+- `rust/crates/orbit-audio-native/src/output.rs:2141-2173` — `collect_source_feeds`
 - `rust/crates/orbit-audio-native/src/output.rs:2119-2235` — `render_multi_feeds` 呼び出しと post-loop（line program 実行・#611 PR-O3a）
 - `rust/crates/orbit-audio-native/src/output.rs:914-939` — `OutputDest` / `LineOutput` / `LineOp`
 - `rust/crates/orbit-audio-native/src/output.rs:1043-1100` — `LineExchange`（AtomicPtr publish + 世代カウンタによる回収）

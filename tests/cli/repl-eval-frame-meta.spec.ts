@@ -52,9 +52,11 @@ describe('//#evalBegin / //#evalEnd REPL meta (#611 §5.7)', () => {
 
   it('a sequence line declared mid-frame is in batch mode from the moment it is constructed', async () => {
     let capturedLine: AudioLine | undefined
+    let joinedOpenFrame = false
     const execute = vi.fn().mockImplementation(async () => {
       if (!capturedLine) {
         capturedLine = new AudioLine()
+        joinedOpenFrame = capturedLine.isInBatch()
         capturedLine.upsert({ kind: 'rack' })
         capturedLine.upsert({ kind: 'gain', db: -6 })
       }
@@ -68,13 +70,9 @@ describe('//#evalBegin / //#evalEnd REPL meta (#611 §5.7)', () => {
     await session.idle()
 
     expect(capturedLine).toBeDefined()
-    // Constructed after beginBatchAll() already ran: it must still see the same terminal
-    // master the eval frame supplies, proving it joined the open frame instead of
-    // degenerating to the no-batch "value-only" behavior.
-    expect(capturedLine!.program()).toEqual([
-      { kind: 'rack' },
-      { kind: 'gain', db: -6 },
-      { kind: 'output', dest: { kind: 'master' }, thru: false, db: 0, sugar: 'output' },
-    ])
+    // Constructed after beginBatchAll() already ran: observe frame membership at construction
+    // time. #883 deliberately removed the old synthetic master terminal from program().
+    expect(joinedOpenFrame).toBe(true)
+    expect(capturedLine!.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -6 }])
   })
 })

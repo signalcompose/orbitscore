@@ -13,9 +13,10 @@ import {
   analyzeAudioPathOrdering,
   analyzeEmptyOutputArg,
   analyzeGlobalOncePerFile,
-  analyzeLinkAudioMissingOutput,
+  analyzeMissingOutput,
   analyzeOutputWithoutLinkAudio,
   isOrbitscoreDocument,
+  missingOutputQuickFixEdit,
 } from './diagnostics-analysis'
 import { analyzeUnknownPluginNames } from './plugin-name-diagnostics'
 import { buildMcpServerUrl, mergeMcpJson } from './mcp-registration'
@@ -77,6 +78,7 @@ import {
 import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
+  extractDeclaredMixerNodeNames,
   extractTopLevelDeclaredNames,
   filterDslCandidates,
   extractDeclaredGlobalNames,
@@ -392,6 +394,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)
+  registerOutputCodeActionProvider(context)
 
   // Register diagnostics
   const diagnosticCollection = vscode.languages.createDiagnosticCollection('orbitscore')
@@ -3294,6 +3297,7 @@ function getDiagnosticsForAgent(filePath?: string): FileDiagnostics[] {
       character: d.range.start.character + 1,
       severity: severityLabel(d.severity),
       message: d.message,
+      ...(typeof d.code === 'string' || typeof d.code === 'number' ? { code: d.code } : {}),
     }))
 
   if (filePath) {
@@ -3495,8 +3499,50 @@ export function registerCompletionProviders(context: vscode.ExtensionContext) {
     // #495 第1段: `<receiver>.` の後のメソッド補完を出すためのトリガー。
     // これが無いと、明示的に補完を呼び出さない限り出てこない。
     '.',
+    // #883: destination completion starts as soon as `.output(` is typed.
+    '(',
   )
   context.subscriptions.push(dslCompletionProvider)
+}
+
+/** Register the quick fix shared by output-missing and dry-not-routed diagnostics. */
+export function registerOutputCodeActionProvider(context: vscode.ExtensionContext) {
+  const provider = vscode.languages.registerCodeActionsProvider(
+    'orbitscore',
+    {
+      provideCodeActions(document, _range, actionContext) {
+        const source = document.getText()
+        const issues = analyzeMissingOutput(source)
+        const actions: vscode.CodeAction[] = []
+        for (const diagnostic of actionContext.diagnostics) {
+          if (diagnostic.code !== 'output-missing' && diagnostic.code !== 'dry-not-routed') continue
+          const issue = issues.find(
+            (candidate) =>
+              candidate.code === diagnostic.code && candidate.line === diagnostic.range.start.line,
+          )
+          if (!issue) continue
+          const insertion = missingOutputQuickFixEdit(source, issue)
+          const action = new vscode.CodeAction(
+            `Add ${issue.sequenceName}.output()`,
+            vscode.CodeActionKind.QuickFix,
+          )
+          action.diagnostics = [diagnostic]
+          action.isPreferred = diagnostic.code === 'output-missing'
+          action.edit = new vscode.WorkspaceEdit()
+          action.edit.insert(
+            document.uri,
+            new vscode.Position(insertion.line, document.lineAt(insertion.line).text.length),
+            insertion.insertText,
+          )
+          actions.push(action)
+        }
+        return actions
+      },
+    },
+    { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+  )
+  context.subscriptions.push(provider)
+  return provider
 }
 
 /**
@@ -3575,10 +3621,19 @@ export const dslCompletionItemProvider: vscode.CompletionItemProvider = {
           vscode.CompletionItemKind.Method,
         )
       }
-      case 'sum-name':
+      case 'output-string':
         return makeItems(
-          extractDeclaredBusNames(document.getText(), 'sum'),
+          [
+            'master',
+            ...extractDeclaredBusNames(document.getText(), 'sum'),
+            ...extractDeclaredBusNames(document.getText(), 'aux'),
+          ],
           vscode.CompletionItemKind.Value,
+        )
+      case 'output-node':
+        return makeItems(
+          ['master', ...extractDeclaredMixerNodeNames(document.getText())],
+          vscode.CompletionItemKind.Variable,
         )
       case 'aux-name':
         return makeItems(
@@ -3800,17 +3855,17 @@ async function updateDiagnostics(
       ),
     )
   }
-  // Strict-mode error: sequences without .output() under LinkAudio mode are
-  // flagged as Error (not Warning) — runtime will throw, so we surface it
-  // accordingly at edit time. See DSL spec §8.1.2.
-  for (const issue of analyzeLinkAudioMissingOutput(text)) {
-    diagnostics.push(
-      new vscode.Diagnostic(
-        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
-        issue.message,
-        vscode.DiagnosticSeverity.Error,
-      ),
+  for (const issue of analyzeMissingOutput(text)) {
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+      issue.message,
+      issue.code === 'output-missing'
+        ? vscode.DiagnosticSeverity.Warning
+        : vscode.DiagnosticSeverity.Information,
     )
+    diagnostic.code = issue.code
+    diagnostic.source = 'OrbitScore'
+    diagnostics.push(diagnostic)
   }
   // Same severity reasoning as the missing-output analyzer: an empty
   // .output("") argument throws at runtime regardless of LinkAudio mode.

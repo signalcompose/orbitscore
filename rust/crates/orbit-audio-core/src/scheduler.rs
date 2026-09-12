@@ -41,6 +41,8 @@ pub struct ScheduledSample {
 /// Destination of a premaster feed supplied alongside scheduled events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedDest {
+    /// The source was rendered (so its lifecycle advances) but is intentionally not summed.
+    Discard,
     Hardware,
     Channel(usize),
 }
@@ -430,6 +432,7 @@ impl Scheduler {
                 "render_multi_feeds: feed length must match hardware_out"
             );
             let out: &mut [f32] = match *dest {
+                FeedDest::Discard => continue,
                 FeedDest::Hardware => &mut *hardware_out,
                 FeedDest::Channel(index) => {
                     let Some((_, buffer)) = channels.get_mut(index) else {

@@ -31,6 +31,7 @@ global.start()
 
 var drum = init global.seq
 drum.audio("kick.wav").chop(1)
+drum.output()
 drum.play(1, 1, 1, 1)
 
 LOOP(drum)

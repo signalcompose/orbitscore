@@ -310,7 +310,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     // reordering the whole array around a fixed [output, sends...] shape.
     const auxGain = 10 ** (0.37 / 20)
     expect(routing.mock.calls).toEqual([
-      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
+      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain)]],
       ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), busOutput('sum-bus-0', false)]],
       ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
     ])
@@ -354,7 +354,19 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
 
     await run('kick.master', state)
 
-    expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(false)])
+    // #883 Bundle C realization elision keeps the declaration as score truth while the
+    // default master path remains direct and consumes no sequence bus.
+    expect(routing).not.toHaveBeenCalled()
+    expect(state.sequences.get('kick')?.getState().line).toEqual([
+      {
+        kind: 'output',
+        dest: { kind: 'master' },
+        thru: false,
+        db: 0,
+        sugar: 'output',
+      },
+    ])
+    expect(state.sequences.get('kick')?.getInsertBus()).toBeUndefined()
   })
 
   it('rejects declaring a mixer node named master', async () => {
@@ -474,11 +486,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await run('kick.verb(db: 0.8, enabled: false)\nverb.effect("TAL Reverb 4").master', state)
 
     // #611 §2.3: send() is always thru: true by definition; disabled means gain 0 (not a
-    // position-dependent thru flag). The implicit master terminal is appended after it.
+    // position-dependent thru flag). #883 leaves it send-only until an explicit terminal.
     expect(scheduler.setBusLine).toHaveBeenNthCalledWith(1, 'seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 0),
-      masterOutput(false),
     ])
     expect(scheduler.setBusLine).toHaveBeenNthCalledWith(2, 'aux-bus-0', [
       rack,
@@ -499,7 +510,6 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 10 ** (-12 / 20)),
-      masterOutput(false),
     ])
 
     await expect(run('kick.send(verb, -12, db: -6)', state)).rejects.toThrow(
@@ -509,6 +519,26 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       /output\(dest, \{ db: -12 \}\).*send\(dest, -12\)/,
     )
     expect(scheduler.setBusLine).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves named output options when the destination is omitted', async () => {
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      setBusLine: ReturnType<typeof vi.fn>
+    }
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await run('kick.output(db: -6)', state)
+
+    expect(state.sequences.get('kick')?.getInsertBus()).toBe('seq-bus-0')
+    expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { ...masterOutput(false), gain: 10 ** (-6 / 20) },
+    ])
+
+    await expect(run('kick.send(db: -6)', state)).rejects.toThrow(/requires a destination/)
   })
 
   it('keeps bare DSL methods on callMethod while rejecting bare plugin and kind mismatches', async () => {
@@ -618,11 +648,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(routing).not.toHaveBeenCalled()
   })
 
-  it('lets a string-form bus declaration coexist with the implicit master', async () => {
-    // The implicit master(1,2) is suppressed only by an EXPLICIT mixer node
-    // (SC.2 norm 6). Counting string-form declarations as "explicit" would make
-    // `global.sum("drums")` silently remove `master` from the chain vocabulary
-    // of a file that never declared a mixer — a compatibility break.
+  it('lets a string-form bus declaration coexist with the reserved master node', async () => {
+    // `master` exists as a reserved node without an explicit mixer declaration. Counting
+    // string-form declarations as mixer-node declarations must not remove `master` from the
+    // chain vocabulary of a file that never declared a mixer.
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq\nglobal.sum("drums")', state)
@@ -747,6 +776,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // 発行する choke point。**利用者が書く語彙ではない** — `effect()` / `output()` /
       // `instrument()` の各 DSL 表面から呼ばれる private な配線で、宣言順が両方向あり得るため
       // 「揃った時に発行」を両側に置いている。
+      'instrumentSourceRoutingTarget',
       'ensureInstrumentSourceRouting',
       // 同上の fire-and-forget 版（同期文脈の DSL 表面から呼ぶ）。
       'syncInstrumentSourceRouting',

@@ -20,14 +20,17 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 0, 0)  // 1 拍目だけ
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 0, 1, 0)  // 3 拍目だけ
 
 var hihat = init global.seq
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1)  // 4 拍すべて
 
 LOOP(kick, snare, hihat)
@@ -96,14 +99,17 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 0, 0)  // 1 拍目
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 0, 1, 0)  // 3 拍目
 
 var hihat = init global.seq
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1)  // 4 分音符で刻む
 
 LOOP(kick, snare, hihat)
@@ -131,11 +137,13 @@ global.start()
 var kick = init global.seq
 kick.audio("kick.wav")
 kick.length(1)
+kick.output()
 kick.play(1, 0, 1, 0)  // 1 小節パターン
 
 var snare = init global.seq
 snare.audio("snare.wav")
 snare.length(2)
+snare.output()
 snare.play(
   0, 0, 1, 0,       // 1 小節目
   0, 0, 1, (1, 1),  // 2 小節目（フィルあり）

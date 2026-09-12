@@ -153,9 +153,34 @@ describe('🔴 既存 provider との二重表示を出さない (#495)', () => 
 
 describe('補完 provider — 既存の面を壊していない (#495)', () => {
   it('output(" では宣言済み sum 名が出る', async () => {
-    const src = ['var global = init GLOBAL', 'global.sum("strings")', 'cb.output("'].join('\n')
-    const labels = await complete(src, 2, 11)
+    const src = [
+      'var global = init GLOBAL',
+      'global.sum("strings")',
+      'global.aux("reverb")',
+      'var drums = mix.sum',
+      'var delay = mix.aux',
+      'cb.output("',
+    ].join('\n')
+    const labels = await complete(src, 5, 11)
+    expect(labels).toContain('master')
     expect(labels).toContain('strings')
+    expect(labels).toContain('reverb')
+    expect(labels).toContain('drums')
+    expect(labels).toContain('delay')
+  })
+
+  it('output( では master と宣言済み mixer node（物理 output を含む）が出る', async () => {
+    const src = [
+      'var global = init GLOBAL',
+      'var mix = init global.mixer',
+      'var drums = mix.sum',
+      'var reverb = mix.aux',
+      'var cue = mix.output(3, 4)',
+      'var cb = init global.seq',
+      'cb.output(',
+    ].join('\n')
+    const labels = await complete(src, 6, 10)
+    expect(labels).toEqual(expect.arrayContaining(['master', 'drums', 'reverb', 'cue']))
   })
 
   it('補完対象でない位置では undefined を返す', async () => {
@@ -177,6 +202,7 @@ describe('補完プロバイダの登録内容 (#495)', () => {
     )
     expect(dsl, 'DSL 補完プロバイダが登録されていない').toBeDefined()
     expect(dsl!.triggers).toContain('.')
+    expect(dsl!.triggers).toContain('(')
     // 既存のトリガーも保つ（文字列系の面を壊さない）
     expect(dsl!.triggers).toContain('"')
     expect(dsl!.triggers).toContain('{')

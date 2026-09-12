@@ -12,6 +12,58 @@ export type OutputDest =
   | { readonly kind: 'render'; readonly id: string }
   | { readonly kind: 'link'; readonly channel: string }
 
+/**
+ * The single runtime discriminator between a resolved destination and an options bag.
+ * Every OutputDest has `kind`; output/send options deliberately never do.
+ */
+export function isOutputDest(value: unknown): value is OutputDest {
+  return typeof value === 'object' && value !== null && 'kind' in value
+}
+
+/**
+ * 🔴 `output()` の引数を「宛先（省略可）」と「オプション」へ振り分ける**唯一の実装**。
+ *
+ * パーサは名前付き引数だけの呼び出し（`output(db: -6)`）を `[undefined, options]` へ整形するが、
+ * TypeScript から直接 `output({db:-6})` と書かれる経路も残る。`OutputDest` は必ず `kind` を持ち、
+ * オプション袋は持たない — その 1 点で判別する。
+ *
+ * **`Sequence.output()` と `MixerBusHandle.output()` の両方がこれを呼ぶ。** 片方にだけ書くと
+ * 2 つの表面がずれる（PR #884 ラウンド 2 で `send()` に同じ事故を起こしている）。
+ */
+export function resolveOutputArgs<D>(
+  destOrOptions: D | OutputOptions | undefined,
+  opts: OutputOptions,
+  call: string,
+): { dest: D | undefined; options: OutputOptions } {
+  if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
+    assertOutputOptions(destOrOptions, call)
+    return { dest: undefined, options: destOrOptions as OutputOptions }
+  }
+  assertOutputOptions(opts, call)
+  return { dest: destOrOptions as D | undefined, options: opts }
+}
+
+/**
+ * 🔴 `send()` の宛先は**必須**（`output()` と違い省略できない — どこにも送らない send は無い）。
+ *
+ * **この 1 関数が両方の `send()` の契約**（`Sequence.send()` と `MixerBusHandle.send()`）。
+ * 片方にだけガードを書くと、パーサが名前付き引数だけの `send(db: -6)` を
+ * `[undefined, {db:-6}]` に整形した時、ガードの無い側が `undefined` を master に解決して
+ * **master への thru 出力を黙って 1 本増やす**（既存の直結と二重に鳴る）。
+ * 実際にレビューで再現した（PR #884 ラウンド 2）。
+ *
+ * 文言は**実際に来た型を出す** — 常に "null" と決め打ちすると、数値や真偽値を渡した人に
+ * 嘘の情報を与えることになる。
+ */
+export function assertSendDestination(value: unknown, call: string): void {
+  if (typeof value === 'string' || isOutputDest(value)) return
+  const actual = value === null ? 'null' : typeof value
+  throw new Error(
+    `${call}(aux, db) requires a destination; received ${actual}. ` +
+      `Unlike output(), send() has no default — name an aux/sum bus or pass a resolved destination.`,
+  )
+}
+
 export function destKey(dest: OutputDest): string {
   switch (dest.kind) {
     case 'master':
@@ -61,6 +113,12 @@ export function assertOutputOptions(
   call = 'output',
 ): asserts value is OutputOptions {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) return
+  if (value === null) {
+    throw new Error(
+      `${call}() received null. Only undefined omits the destination; ` +
+        `null is not a valid destination or options object.`,
+    )
+  }
   throw new Error(
     `${call}() expects an options object as its second argument. ` +
       `Did you mean output(dest, { db: -12 }) or send(dest, -12)?`,
@@ -192,6 +250,38 @@ function forEachLiveLine(visit: (line: AudioLine) => void): void {
  * the common case.
  */
 let frameOpen = false
+
+/**
+ * #883 §2.3「実現の省略」: a line needs a daemon bus only when it asks for something the
+ * direct engine path cannot realize — a rack, or an exit that is not a plain master exit.
+ *
+ * 🔴 **This is the single definition.** 束 S の instrument 経路（設計 §2.2.1）は
+ * `SetSourceRouting` の宛先（`none` / `master` / `bus`）を**同じ述語**で選ぶ。ここに
+ * 置かずに呼び出し側へ書き写すと、audio 経路と instrument 経路の判定がドリフトする。
+ */
+/**
+ * 🔴 **「素の master 出口」とは何か — その定義はここだけにある。**
+ *
+ * 直接経路が実現できる唯一の形（master 宛て・分岐なし・減衰なし）。この 3 条件のどれか 1 つでも
+ * 外れたらラインは daemon のバスを要する。
+ *
+ * **呼び出し側へ書き写さないこと。** `lineNeedsBus()`（audio 経路）と
+ * `Sequence.instrumentSourceRoutingTarget()`（instrument 経路）の**両方**がこれを使う —
+ * 片方にだけ書くと 2 経路の判定がドリフトする。同じ型の事故を PR #884 ラウンド 2 で
+ * 実際に起こしている（`assertSendDestination` のコメント参照）。
+ */
+export function isPlainMasterOutput(element: LineElement): boolean {
+  return (
+    element.kind === 'output' && element.dest.kind === 'master' && !element.thru && element.db === 0
+  )
+}
+
+export function lineNeedsBus(elements: readonly LineElement[]): boolean {
+  return elements.some(
+    (element) =>
+      element.kind === 'rack' || (element.kind === 'output' && !isPlainMasterOutput(element)),
+  )
+}
 
 /** One ordered audio line, including the evaluation-batch cursor rules. */
 export class AudioLine {
@@ -332,15 +422,6 @@ export class AudioLine {
   /** Return the complete program without mutating the declared elements. */
   program(): readonly LineElement[] {
     const program = [...this.elements]
-    if (!program.some((element) => element.kind === 'output' && !element.thru)) {
-      program.push({
-        kind: 'output',
-        dest: { kind: 'master' },
-        thru: false,
-        db: 0,
-        sugar: 'output',
-      })
-    }
     if (!program.some((element) => element.kind === 'rack')) {
       program.unshift({ kind: 'rack' })
     }
@@ -349,6 +430,22 @@ export class AudioLine {
 
   snapshot(): readonly LineElement[] {
     return [...this.elements]
+  }
+
+  /**
+   * #883 §2.3: does this line need a daemon bus, or can the direct engine path realize it?
+   *
+   * Reads `elements` directly instead of going through `snapshot()` — the predicate only
+   * scans, and `snapshot()` copies the whole array on every `output()` / `send()`, which
+   * live coding re-evaluates constantly.
+   */
+  needsBus(): boolean {
+    return lineNeedsBus(this.elements)
+  }
+
+  /** Whether score text declared any output/send/bare-bus destination on this line. */
+  hasOutputDestination(): boolean {
+    return this.elements.some((element) => element.kind === 'output')
   }
 
   private nextOrdinal(element: LineElement): number {

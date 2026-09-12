@@ -6,7 +6,7 @@
 
 import * as path from 'path'
 
-import { AudioEngine } from '../audio/types'
+import { AudioEngine, type SourceRoutingTarget } from '../audio/types'
 import { DaemonProtocolError } from '../audio/rust-engine/errors'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
@@ -34,8 +34,11 @@ import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 import {
   resolveNamedOutputDest,
-  assertOutputOptions,
   AudioLine,
+  isOutputDest,
+  isPlainMasterOutput,
+  resolveOutputArgs,
+  assertSendDestination,
   resolveSendLevel,
   toWire,
   type LineElement,
@@ -156,12 +159,8 @@ export class Sequence {
   private _midiPort?: string // resolved actual port name
   private _midiChannel?: number // 1..16
   private _instrumentDeclared = false
-  /**
-   * Source-routing choke point の冪等キー。bus 名は sequence lifetime 中は安定だが、宣言順
-   * (`instrument()` before/after insert allocation) は両方あるため、成功/進行中 intent をここで
-   * 共有して二重発行を防ぐ。
-   */
-  private _instrumentSourceRoutingBus?: string
+  /** Last successful/in-flight explicit source-routing intent (`none` / `master` / `bus`). */
+  private _instrumentSourceRoutingKey?: string
   private _instrumentSourceRoutingPromise?: Promise<void>
   private _instrumentDetuneWarned = false
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
@@ -472,7 +471,7 @@ export class Sequence {
    * must happen with it and in this order, whichever entry point was used:
    *
    * 1. clear a stale offline render-bus intent — §4.4.1: a live destination declaration wins
-   * 2. ensure this sequence has an insert bus
+   * 2. ensure this sequence has an insert bus when its declared line needs one
    * 3. let the successful full-program push adopt fixed gain/pan values onto that bus
    *
    * The three entries below (`applyOutputElement`, `routeOutputFromDsl`, `routeSendFromDsl`)
@@ -487,8 +486,15 @@ export class Sequence {
     sugar: 'output' | 'send',
   ): void {
     this._renderBus = undefined
-    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
     this.upsertLine({ kind: 'output', dest, thru, db, sugar })
+    // #883 Bundle C realization elision: an explicit default master destination is score
+    // truth, but it is equivalent to today's direct path and therefore must not consume one
+    // of the eight sequence buses. Allocate only when the declared line needs processing or
+    // routing that the direct path cannot realize. Fixed gain/pan remain event-side until then.
+    // 🔴 述語の定義は `AudioLine.needsBus()` 側にある（束 S の instrument 経路が同じものを使う）。
+    if (!this._insertBus && this._line.needsBus()) {
+      this._insertBus = this.global.ensureSequenceInsertBus(name)
+    }
   }
 
   /**
@@ -546,11 +552,20 @@ export class Sequence {
    *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
    *    resolution order)
    */
-  output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
+  output(
+    destOrOptions?: string | number | OutputDest | OutputOptions,
+    opts: OutputOptions = {},
+  ): this {
     const name = this.stateManager.getName() || 'sequence'
-    assertOutputOptions(opts, `Sequence '${name}': output`)
-    if (typeof dest === 'object') {
-      return this.applyOutputElement(dest, opts, 'output')
+    const { dest, options } = resolveOutputArgs<string | number | OutputDest>(
+      destOrOptions,
+      opts,
+      `Sequence '${name}': output`,
+    )
+    // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
+    // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
+    if (dest === undefined || isOutputDest(dest)) {
+      return this.applyOutputElement(dest ?? { kind: 'master' }, options, 'output')
     }
     const destinationName = typeof dest === 'number' ? String(dest) : dest
     if (!destinationName || !destinationName.trim()) {
@@ -562,7 +577,7 @@ export class Sequence {
     // branch below — resolveLineDest's master/"L,R"-pair branches never match a bare digit
     // string, so this is effectively the sum/aux-name check alone for a numeric `dest`.
     const resolved = this.resolveLineDest(destinationName)
-    if (resolved) return this.applyOutputElement(resolved, opts, 'output')
+    if (resolved) return this.applyOutputElement(resolved, options, 'output')
 
     if (typeof dest === 'number') {
       // 🔴 instrument の**オフラインレンダ先**は未設計（録音経路が別）なのでloudに拒否する
@@ -650,20 +665,20 @@ export class Sequence {
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    assertSendDestination(aux, `Sequence '${name}': send`)
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
     const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
-    const dest =
-      typeof aux === 'object'
-        ? aux
-        : (this.resolveLineDest(aux) ??
-          (() => {
-            throw new Error(
-              `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
-                `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
-            )
-          })())
+    const dest = isOutputDest(aux)
+      ? aux
+      : (this.resolveLineDest(aux) ??
+        (() => {
+          throw new Error(
+            `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+              `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
+          )
+        })())
     return this.applyOutputElement(
       dest,
       { thru: true, db: level.enabled === false ? -Infinity : level.db },
@@ -951,16 +966,45 @@ export class Sequence {
     }
   }
 
+  private instrumentSourceRoutingTarget(): SourceRoutingTarget {
+    // Use the same realization predicate as audio routing. A missing bus for a line that needs
+    // one is an inconsistent/lost route, so §2.6 makes it `none`, never implicit master.
+    if (this._line.needsBus()) {
+      if (this._insertBus) return { kind: 'bus', name: this._insertBus }
+      // 🔴 ここは「書かれていない無音」ではなく**不変条件違反**である。§2.6 どおり無音へ倒すが、
+      // 痕跡を残さないと「書き忘れ」と区別が付かない。今日は `needsBus()` を立てる全経路
+      // （`effect()` / `gain()` / `pan()` / `applyOutputElement()`）が同じ呼び出しの中で
+      // 同期的に `_insertBus` を確保するので到達しない — 到達したらその不変条件が壊れている。
+      this.logSkipOnce(
+        'needs an insert bus but has none — the route was lost. Routing the instrument to silence.',
+      )
+      return { kind: 'none' }
+    }
+    // Fixed instrument gain/pan is the one design-stated exception to lineNeedsBus: it has no
+    // event-side realization and `ensureInsertBusForInstrument()` (kept unchanged) allocates the
+    // bus. Once allocated it remains the source route for that control path.
+    if (this._insertBus) return { kind: 'bus', name: this._insertBus }
+    // 🔴 述語は `audio-line.ts` の `isPlainMasterOutput()` が唯一の定義。ここに書き写さない。
+    const hasPlainMasterOutput = this._line.snapshot().some(isPlainMasterOutput)
+    return hasPlainMasterOutput ? { kind: 'master' } : { kind: 'none' }
+  }
+
+  private static sourceRoutingKey(target: SourceRoutingTarget): string {
+    return target.kind === 'bus' ? `bus:${target.name}` : target.kind
+  }
+
   /**
-   * The sole instrument → insert routing choke point (#643). Both declaration orders call
-   * here; the marker is installed before the async send so concurrent calls share one request.
+   * The sole instrument source-routing choke point (#643/#883). Every instrument has an
+   * explicit destination, including `none`; changes are serialized so an older async request
+   * can never arrive after a newer score intent and restore stale routing.
    * `unit` is deliberately fixed at 0: the current 1-sequence/1-instrument model renders only
    * the main plugin output.
    */
   private ensureInstrumentSourceRouting(): Promise<void> {
-    if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
-    const bus = this._insertBus
-    if (this._instrumentSourceRoutingBus === bus) {
+    if (!this.isInstrument()) return Promise.resolve()
+    const target = this.instrumentSourceRoutingTarget()
+    const key = Sequence.sourceRoutingKey(target)
+    if (this._instrumentSourceRoutingKey === key) {
       return this._instrumentSourceRoutingPromise ?? Promise.resolve()
     }
     if (!this.audioEngine.setSourceRouting) {
@@ -968,12 +1012,18 @@ export class Sequence {
     }
 
     const name = this.stateManager.getName() || 'sequence'
-    this._instrumentSourceRoutingBus = bus
-    const pending = this.audioEngine
-      .setSourceRouting(`plugin:${name}`, 0, bus)
+    const previous = this._instrumentSourceRoutingPromise
+    this._instrumentSourceRoutingKey = key
+    const pending = (previous ? previous.catch(() => undefined) : Promise.resolve())
+      .then(() => {
+        // A newer declaration superseded this one before it reached the wire. Its queued request
+        // is the only one that should be sent; resolving this stale waiter is intentional.
+        if (this._instrumentSourceRoutingKey !== key) return
+        return this.audioEngine.setSourceRouting?.(`plugin:${name}`, 0, target)
+      })
       .catch((error) => {
-        if (this._instrumentSourceRoutingBus === bus) {
-          this._instrumentSourceRoutingBus = undefined
+        if (this._instrumentSourceRoutingKey === key) {
+          this._instrumentSourceRoutingKey = undefined
         }
         throw error
       })
@@ -1864,6 +1914,17 @@ export class Sequence {
     // rejected a `.midi()` sequence in a `global.linkAudio()` file (#282).
     if (this.isNoteSequence()) {
       return { kind: 'hardware' }
+    }
+    // #883 D2/D2b: this gate must remain after the note-sequence exemption above. MIDI and
+    // instrument dispatch stay on the hardware scheduler; an instrument is silenced by its
+    // explicit SourceRoutingTarget instead of skipping note scheduling here.
+    if (!this._line.hasOutputDestination() && !this._outputChannel) {
+      return {
+        kind: 'skip',
+        reason:
+          `has no output destination. Add .output() to route it to master, ` +
+          `.output("<bus>") / .send("<aux>", db) for a mixer route, or leave it silent.`,
+      }
     }
     if (!this.global.isLinkAudioEnabled()) {
       return { kind: 'hardware' }

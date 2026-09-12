@@ -421,7 +421,7 @@ The comment preserves a real case in which a form with a dropped argument, such 
 A call judged to be a DSL method finally reaches `callMethod()`.
 
 ```typescript
-// packages/engine/src/interpreter/evaluate-method.ts:23-35
+// packages/engine/src/interpreter/evaluate-method.ts:25-37
 export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
   const processedArgs = await processArguments(methodName, args)
   const method = obj[methodName]
@@ -445,6 +445,8 @@ Most arguments are passed through as-is, but a few special conversions are inser
 
 ```typescript
 // packages/engine/src/interpreter/evaluate-method.ts:58-145
+ * ```
+ */
 /**
  * #611 §3.8: methods that fold one or more `name:` arguments into a single trailing options
  * object instead of the staged-error path below. `output`/`send` are the only ones today
@@ -477,15 +479,60 @@ export async function processArguments(methodName: string, args: any[]): Promise
         if (typeof arg.value !== expectedType) {
           throw new Error(
             `${methodName}() named argument "${arg.name}:" must be a ${expectedType}, got ` +
-  // ...
+              `${typeof arg.value}.`,
+          )
+        }
+        if (arg.name in options) {
+          throw new Error(`${methodName}() specifies duplicate "${arg.name}:".`)
+        }
+        options[arg.name] = arg.value
+        sawNamedArg = true
+        continue
+      }
+      // Plugin-name dispatch handles selectors before reaching this function.
+      // Any named argument that arrives here belongs to a DSL method and must
+      // receive an explicit staged error (SC.3.3).
+      let stage: string
+      switch (arg.name) {
+        case 'format':
+        case 'vendor':
+          stage =
+            `string-form ${methodName}() does not accept selectors; ` +
+            `use the plugin-name method form Name(format: "vst3")`
+          break
+        case 'sidechain':
+          stage = 'sidechain routing arrives in #409'
+          break
+        case 'outs':
+          stage = 'multi-output routing arrives in #409'
+          break
+        default:
+          stage = 'parameter values require the Rust param-set/enumeration protocol in S4'
+      }
+      throw new Error(
+        `named argument "${arg.name}:" in ${methodName}() is not executable yet: ` +
+          `${stage} (#517).`,
+      )
+    }
+    if (methodName === 'beat' && arg.numerator !== undefined) {
+      // Handle meter: beat(4 by 4) -> beat(4, 4)
+      processed.push(arg.numerator, arg.denominator)
+    } else if (methodName === 'beat' && typeof arg === 'number') {
+      // ERROR: beat() must use "n by m" syntax, not single number
+      throw new Error(
+        `beat() requires meter notation: beat(${arg} by 4) instead of beat(${arg})\n` +
+          `This is essential for polymeter support where different time signatures create independent bar lengths.`,
+      )
+    } else if (methodName === 'play') {
+      // Play arguments are passed as-is (already PlayElement[])
+      processed.push(arg)
+    } else {
       // Most arguments are passed through
       processed.push(arg)
     }
   }
 
-  if (sawNamedArg) processed.push(options)
-  return processed
-}
+  if (sawNamedArg) {
 ```
 
 What is noteworthy is the handling of the `beat` method. The parser outputs `beat(4 by 4)` as the meter notation object `{ numerator: 4, denominator: 4 }`, but `processArguments()` expands it into the two arguments `[4, 4]`. Writing `beat(4)` and omitting `n by m` is designed to throw an error — an enforced notation that is essential for polymeter support.

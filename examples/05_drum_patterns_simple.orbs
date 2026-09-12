@@ -11,11 +11,13 @@ global.beat(4 by 4)
 var kick = init global.seq
 kick.length(1)
 kick.audio("../test-assets/audio/kick.wav").chop(1)  // Entire file is slice 1
+kick.output()
 kick.play(1, 0, 0, 0)  // Kick on beat 1
 
 var snare = init global.seq
 snare.length(1)
 snare.audio("../test-assets/audio/snare.wav").chop(1)
+snare.output()
 snare.play(0, 0, 1, 0)  // Snare on beat 3
 
 // === Pattern 2: Using Default (no chop) ===
@@ -23,6 +25,7 @@ snare.play(0, 0, 1, 0)  // Snare on beat 3
 var hihat = init global.seq
 hihat.length(1)
 hihat.audio("../test-assets/audio/hihat_closed.wav")  // No .chop() = chop(1)
+hihat.output()
 hihat.play(1, 1, 1, 1)  // Four-on-the-floor hi-hats
 
 // === Pattern 3: More Complex Pattern ===
@@ -30,6 +33,7 @@ hihat.play(1, 1, 1, 1)  // Four-on-the-floor hi-hats
 var kick2 = init global.seq
 kick2.length(2)  // 2 bar pattern
 kick2.audio("../test-assets/audio/kick.wav")  // Defaults to chop(1)
+kick2.output()
 kick2.play(
   1, 0, (1, 0), 0,  // Bar 1: Kick, rest, double kick, rest
   1, 0, 0, (1, 1),  // Bar 2: Kick, rest, rest, double kick
@@ -38,6 +42,7 @@ kick2.play(
 var snare2 = init global.seq
 snare2.length(2)
 snare2.audio("../test-assets/audio/snare.wav")  // Defaults to chop(1)
+snare2.output()
 snare2.play(
   0, 0, 1, 0,       // Bar 1: Standard backbeat
   0, 0, 1, (1, 1),  // Bar 2: Snare with fill
@@ -49,6 +54,7 @@ snare2.play(
 var ghost = init global.seq
 ghost.length(1)
 ghost.audio("../test-assets/audio/snare.wav")
+ghost.output()
 ghost.play(
   0, (0, 1), 1, (1, 0, 1)  // Ghost notes between main hits
 )
@@ -57,11 +63,13 @@ ghost.play(
 var closed_hat = init global.seq
 closed_hat.length(1)
 closed_hat.audio("../test-assets/audio/hihat_closed.wav")
+closed_hat.output()
 closed_hat.play(1, 1, 1, 0)  // Closed on 1, 2, 3
 
 var open_hat = init global.seq
 open_hat.length(1)
 open_hat.audio("../test-assets/audio/hihat_open.wav")
+open_hat.output()
 open_hat.play(0, 0, 0, 1)  // Open on 4
 
 // === Start Playback ===

@@ -12,6 +12,7 @@ description: seq.instrument() で CLAP / VST3 プラグインを音源として�
 ```text
 var piano = init global.seq
 piano.instrument("Kontakt 8")     // カタログ名で指定
+piano.output()
 piano.octave(4).vel(96).gate(0.8)
 piano.play(1, 3, 5, 0)            // 値は度数（MIDI 出力と同じ記法）
 ```

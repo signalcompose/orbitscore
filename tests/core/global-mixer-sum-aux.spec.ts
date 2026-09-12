@@ -207,13 +207,55 @@ describe('Global.sum() / Global.aux()', () => {
     expect(setBusLine).toHaveBeenNthCalledWith(1, 'sum-bus-0', [
       { op: 'rack' },
       { op: 'gain', gain: 10 ** (-6 / 20) },
-      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
     ])
     expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
       { op: 'rack' },
       { op: 'gain', gain: 10 ** (-6 / 20) },
       { op: 'pan', pan: 0.3 },
-      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+  })
+
+  it('treats an omitted output destination exactly like explicit master', async () => {
+    const omittedSetBusLine = vi.fn().mockResolvedValue(undefined)
+    const explicitSetBusLine = vi.fn().mockResolvedValue(undefined)
+    const omitted = new Global({
+      setBusLine: omittedSetBusLine,
+      boot: vi.fn(),
+      quit: vi.fn(),
+      isRunning: true,
+    } as any).sum('drum')
+    const explicit = new Global({
+      setBusLine: explicitSetBusLine,
+      boot: vi.fn(),
+      quit: vi.fn(),
+      isRunning: true,
+    } as any).sum('drum')
+
+    await omitted.output()
+    await explicit.output('master')
+
+    expect(omittedSetBusLine.mock.calls).toEqual(explicitSetBusLine.mock.calls)
+  })
+
+  it('treats a first-argument options bag as an omitted mixer output destination', async () => {
+    const setBusLine = vi.fn().mockResolvedValue(undefined)
+    const handle = new Global({
+      setBusLine,
+      boot: vi.fn(),
+      quit: vi.fn(),
+      isRunning: true,
+    } as any).sum('drum')
+
+    await handle.output({ db: -6 })
+
+    expect(setBusLine).toHaveBeenCalledWith('sum-bus-0', [
+      { op: 'rack' },
+      {
+        op: 'output',
+        dest: { kind: 'master' },
+        thru: false,
+        gain: 10 ** (-6 / 20),
+      },
     ])
   })
 
@@ -229,7 +271,6 @@ describe('Global.sum() / Global.aux()', () => {
       { op: 'rack' },
       { op: 'gain', gain: 10 ** (12 / 20) },
       { op: 'pan', pan: 1 },
-      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
     ])
   })
 

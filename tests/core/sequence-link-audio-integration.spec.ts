@@ -16,10 +16,8 @@ import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/ru
  *   - Global.linkAudio() ON + seq.output("X")  → { kind: 'link', channel: 'X' }
  *     (LinkAudio path)
  *   - Global.linkAudio() ON + no .output()      → { kind: 'skip', reason }
- *     (hardware/LinkAudio mixing forbidden per DSL spec §8.1.2, but this is a
- *     silent-skip-and-log now, NOT a throw — a throw here used to kill the
- *     whole evaluation block, stopping every OTHER sequence too. Design 610 §0
- *     裁定 6.)
+ *     (#883's general explicit-output rule now subsumes the older LinkAudio-only
+ *     missing-channel reason; this remains silent-skip-and-log, never a throw.)
  */
 describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
   let global: Global
@@ -58,7 +56,7 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       global.linkAudio()
       await expect(seq.run()).resolves.toBe(seq)
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/no \.output\(\) channel set/))
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/has no output destination/))
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('無音でスキップ'))
     })
 
@@ -66,7 +64,7 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       global.linkAudio()
       await expect(seq.loop()).resolves.toBe(seq)
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/no \.output\(\) channel set/))
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/has no output destination/))
     })
 
     it('seq.run() succeeds (does not throw, does not log a skip) when .output() is set', async () => {
@@ -122,8 +120,7 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       // reintroduce a silent fallback (#645's "別種の驚き").
       const target = seq.resolveDispatchChannel()
       expect(target.kind).toBe('skip')
-      expect(target.kind === 'skip' && target.reason).toMatch(/no \.output\(\) channel set/)
-      expect(target.kind === 'skip' && target.reason).toMatch(/global\.linkAudio\(\) is enabled/)
+      expect(target.kind === 'skip' && target.reason).toMatch(/has no output destination/)
     })
 
     it('skip reason references the sequence name for diagnosability via logSkipOnce', async () => {
@@ -135,11 +132,11 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("'kick'"))
     })
 
-    it('skip reason suggests a remediation path (.output or remove linkAudio)', () => {
+    it('skip reason suggests an explicit output remediation path', () => {
       global.linkAudio()
       const target = seq.resolveDispatchChannel()
       expect(target.kind).toBe('skip')
-      expect(target.kind === 'skip' && target.reason).toMatch(/Add \.output\("name"\)|hardware/)
+      expect(target.kind === 'skip' && target.reason).toMatch(/Add \.output\(\)/)
     })
 
     it('explicit target SR is propagated through GlobalState', () => {

@@ -12,6 +12,7 @@ chop_demo.beat(4 by 4).length(2)
 
 // Chop audio into 16 slices over 2 bars
 chop_demo.audio("../test-assets/audio/arpeggio_c.wav").chop(16)
+chop_demo.output()
 chop_demo.play(
   1, 0, 0, 1, 0, 0, 1, 0,  // Rhythmic pattern
   0, 1, 0, 1, 0, 0, 0, 0
@@ -21,6 +22,7 @@ chop_demo.play(
 var stretch = init global.seq
 stretch.beat(4 by 4).length(1)
 stretch.audio("../test-assets/audio/bass_c1.wav").chop(4)
+stretch.output()
 
 // Play at different speeds
 stretch.play(
@@ -34,6 +36,7 @@ stretch.play(
 var pitch = init global.seq
 pitch.beat(4 by 4).length(2)
 pitch.audio("../test-assets/audio/sine_440.wav").chop(8)
+pitch.output()
 
 // Play at different pitches
 pitch.play(

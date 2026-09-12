@@ -11,6 +11,7 @@ var chop = init global.seq
 chop.length(1)
 chop.audio("../audio/arpeggio_c.wav").chop(2)
 chop.defaultGain(-3).defaultPan(0)
+chop.output()
 chop.play(1, 0, 2, 0)
 
 global.start()

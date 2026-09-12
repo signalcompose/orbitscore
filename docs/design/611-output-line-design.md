@@ -80,7 +80,19 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 | `thru:` | boolean | `false`（裁定 ①）| `true` = この出口の**後ろへも信号を流す** |
 | `db:` | number | `0` | **その宛先へ行く分だけ**の減衰（裁定 ④）。ラインには影響しない |
 
-**書かない時の既定**: `_line` に **`thru: false` の `output`（＝終端）が 1 つも無ければ**、評価時に暗黙の
+> 🔴 **本項は #883 で撤回された（2026-09-11・DSL 2.0）。** 正本は
+> [`883-explicit-output-routing-design.md`](883-explicit-output-routing-design.md)。
+>
+> **撤回の理由**: 下の「`output` が 1 つも無ければ」案を却下した根拠が、**aux（センド・リターン）
+> しか見ていなかった**。`send(sum)` では **dry が master へ届かない方が正しい** という場合分けが
+> 視野に無く、その結果 `kick.send(drums,-6)` / `snare.send(drums,-6)` で master が
+> **各素材を 2 回**受け取り、`drums` のグルーコンプを dry が迂回していた。
+> `send(aux)` と `send(sum)` で正しい振る舞いは**逆**である。
+>
+> なお §9 の互換要件（バス無し経路 = bit 一致）も制約ではなくなった
+> （owner 2026-09-11「譜面の下位互換を担保するようなタイミングではない。そっちを直せばいい」）。
+
+**書かない時の既定**（🔴 **撤回済み**・以下は経緯の記録）: `_line` に **`thru: false` の `output`（＝終端）が 1 つも無ければ**、評価時に暗黙の
 `output(master, thru: false, db: 0)` を**末尾**に置く（今日の `BusTarget::Master` 既定と同じ音・§9 の互換要件）。
 🔴 **「`output` が 1 つも無ければ」ではない** — `send` は `output(thru: true)` の糖衣（§3.1）なので、
 send だけの行にも output は存在する。そちらを条件にすると **send を書いた行の dry が master へ届かなくなる**。
@@ -148,7 +160,7 @@ effect 併用の譜面では今日「ラック前」だったものが**既定�
 |---|---|
 | `_lineOrder` は**キーの順列**で、値は各スライスに残る | `_line: LineElement[]` に**値も同居**（§3.1）。スライス（`_sumOutputBus` / `_auxSends` / `_renderBus`）は廃止 |
 | output の同一性 = 単一 | 同一性 = **宛先キー**（send と同じ・§4.A.1 の帰結）|
-| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → pan → sends(=output thru) → output(master)]`（**pan はライン要素**・§2.4b / §14 (4)。位置は自由）|
+| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → pan → sends(=output thru) → output(master)]`（**pan はライン要素**・§2.4b / §14 (4)。位置は自由）。🔴 **#883 で末尾の `output(master)` は既定ストリップから外れた**（DSL 2.0・暗黙終端の廃止）— 書かれた出口だけがラインに乗る |
 | フェーダー = `gain_override` スカラー | フェーダー = `output` の `gain`（裁定 ④）。`gain` 要素は別に残る |
 
 ---

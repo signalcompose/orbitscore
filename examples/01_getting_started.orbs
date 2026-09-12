@@ -13,12 +13,14 @@ global.start()  // Start the scheduler
 var drum = init global.seq
 drum.beat(5 by 4).length(1)
 drum.audio("kick.wav").chop(1)  // audioPath already set
+drum.output()
 drum.play(1, 1, 1, 1)  // Simple kick pattern
 
 // === Section 3: Add More Layers ===
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav").chop(1)  // audioPath already set
+snare.output()
 snare.play(1, 1, 1, 1)  // Snare on beat 3
 
 // === Section 4: Control Playback ===

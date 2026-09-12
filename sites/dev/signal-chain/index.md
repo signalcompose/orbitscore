@@ -662,7 +662,7 @@ Active slot」を検分して rebuild へ倒す経路（設計書 §2.3・#626 �
 TS が daemon へ送る request の型は次のとおりです。
 
 ```typescript
-// packages/engine/src/audio/types.ts:41-71
+// packages/engine/src/audio/types.ts:47-77
 export type EffectChainStageConfig =
   | {
       kind: 'catalog'
@@ -700,7 +700,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:572-579
+// packages/engine/src/audio/rust-engine/daemon-client.ts:573-580
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -715,7 +715,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 respawn 後は `mode: 'rebuild'` で全段 load の plan を再発行します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1410-1420
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1411-1421
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -818,7 +818,7 @@ pub struct EffectChainPlan {
 選びます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6274-6282
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -831,7 +831,7 @@ pub struct EffectChainPlan {
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6322-6344
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6345-6367
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
@@ -1481,7 +1481,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4866-4873
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4897-4904
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

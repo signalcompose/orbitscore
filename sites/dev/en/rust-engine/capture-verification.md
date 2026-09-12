@@ -34,7 +34,7 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1846-1869
+// rust/crates/orbit-audio-native/src/output.rs:1886-1909
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -454,7 +454,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:218-232
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:219-233
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -504,7 +504,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:213-217
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:214-218
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {

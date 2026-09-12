@@ -49,6 +49,7 @@ import type {
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
+  SourceRoutingTarget,
   WireLineOp,
 } from '../types'
 
@@ -455,7 +456,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   private readonly sourceRoutings = new Map<
     string,
-    { source: string; unit: number; target: string | null }
+    { source: string; unit: number; target: SourceRoutingTarget }
   >()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
@@ -1063,7 +1064,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * `setBusRouting`: transport loss keeps the desired route for respawn replay, while a
    * definitive daemon rejection restores the last accepted intent.
    */
-  async setSourceRouting(source: string, unit: number, target: string | null): Promise<void> {
+  async setSourceRouting(source: string, unit: number, target: SourceRoutingTarget): Promise<void> {
     const key = `${source}#${unit}`
     const prev = this.sourceRoutings.get(key)
     this.sourceRoutings.set(key, { source, unit, target })

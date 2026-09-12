@@ -32,12 +32,14 @@ global.start()
 var kick = init global.seq
 kick.audio("kick.wav")
 kick.beat(4 by 4)
+kick.output()
 kick.play(1, 0, 0, 1)  // 1 拍目と 4 拍目
 
 // 5/4 のスネア（4 拍周期と周期がずれていく）
 var snare = init global.seq
 snare.audio("snare.wav")
 snare.beat(5 by 4)
+snare.output()
 snare.play(0, 0, 1, 0, 1)  // 3 拍目と 5 拍目
 
 LOOP(kick, snare)
@@ -62,12 +64,14 @@ global.start()
 var three = init global.seq
 three.audio("hihat.wav")
 three.length(1)
+three.output()
 three.play((1, 0, 1), (0, 1, 0))  // 1 小節を 2 グループ × 3 分割
 
 // 1 小節を 4 等分（4 分音符刻み）
 var four = init global.seq
 four.audio("snare.wav")
 four.length(1)
+four.output()
 four.play(0, 1, 0, 1)  // 2 拍目と 4 拍目
 
 LOOP(three, four)
@@ -91,6 +95,7 @@ global.start()
 // グローバルのテンポ（120 BPM）で動く kick
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)
 
 // 半速（60 BPM）のゆっくりしたシーケンス
@@ -99,6 +104,7 @@ slow.tempo(60)  // 個別テンポを指定するとグローバルから独立�
 slow.audio("snare.wav")
 slow.beat(4 by 4)
 slow.length(2)
+slow.output()
 slow.play(1, 0, 0, 0, 0, 0, 1, 0)
 
 // 倍速（240 BPM）の細かいシーケンス
@@ -106,6 +112,7 @@ var fast = init global.seq
 fast.tempo(240)
 fast.audio("hihat.wav")
 fast.beat(4 by 4)
+fast.output()
 fast.play(1, 0, 1, 0, 1, 0, 1, 0)
 
 LOOP(kick, slow, fast)
