@@ -151,6 +151,31 @@ Fable はまた **TS オラクルを baseline の 10 件ではなく測定対象
 **検証**（すべて main が sandbox 外で実行・委譲先の緑は根拠にしていない）:
 `npm test` **167 files・2445 passed / 76 skipped**（+21 件）/ lint・`docs:check`（948 引用 0 failed）・
 `typecheck:e2e` 緑 / `tests/repo` **57 件**。
+
+**マージ前ゲート**（main が sandbox 外で実行）: `npm run build` ✅ / `bundle-macos.sh` + 
+`rack-child --lib -- --ignored` **3 passed** + `--lib` **16 passed** ✅ /
+**実機 gated E2E 45 passed / 1 skipped / 0 failed** ✅ / **cold install 2 passed** ✅ /
+CI 3/3 pass ✅。
+
+🔴 **実機 E2E は 1 回目が「走っていなかった」。** sandbox 内で `mktemp` が
+`Operation not permitted` になり、しかも `| tail` のせいで **exit code 0 に化けていた**
+（タスク通知も「completed (exit code 0)」と報告した）。出力の中身を読んで気づき、
+sandbox 外で `set -o pipefail` 付きで回し直した。**終了コードと通知だけでは区別がつかない。**
+
+### 🔴 owner 裁定: 分割束の上限は residual で数える（2026-09-12）
+
+> フルレビュー 40 回はちょっと作業として重すぎる
+
+`BUNDLE_BRANCH_WORKFLOW.md` に **§5.1a** を制定した。分割（純粋な移動）の束は
+**residual 行数で 1,500 を判定**し、加えて **(i) `moved+ == moved−`**（複製・移動先の作り忘れ）と
+**(ii) K 行未満の短い moved ブロックは residual 扱い**（1 文の関数間移動）の 2 ゲートを課す。
+**最終防波堤は「既存テストの期待値を 1 つも変えていない」。**
+
+根拠は実測（設計 §13.6〜§13.8）: 実素材の抽出で **686 変更行 → residual 2 行（0.3%）**。
+敵対ケース 4 件は全部捕まえるが、**Fable 監査が見つけた抜け道 2 型**（1 文の関数間移動 = residual 0 /
+消して 2 回足す = 複製が見えない）は追加ゲートが要る。
+
+**見込み**: #888 の子 1〜3 は素の変更行なら約 40 束、residual なら **8〜9 束**。
 fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
 **オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
 baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
