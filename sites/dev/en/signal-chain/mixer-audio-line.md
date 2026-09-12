@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: f575f27
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to #883 bundle C (PR [#884](https://github.com/signalcompose/orbitscore/pull/884) — the omitted `output()` destination, realization elision, and `.output(` destination completion) on 2026-09-12 (citation line numbers are anchored at `f575f27`; **bundle S (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) is not reflected on this page yet**).
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -325,6 +325,141 @@ Keep in mind that `_line` (an `AudioLine`) tracks elements by a key (destination
 ordinal). The #649 design's finding that "each method updates a completely independent slice" —
 originally evidenced by the old `_auxSends` (`Map<string, number>`) — now carries over to
 `AudioLine`'s identity key.
+
+### An omitted destination, and "realization elision" (#883 bundle C, PR #884)
+
+The first argument of `output()` **may be omitted**. The short form `.output()` resolves to the
+same `{ kind: 'master' }` as `output("master")`, and it is a **default argument, not an implicit
+element** (core spec MX.2 / `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4 normative (2)). The
+element therefore appears in the line, which means the exit *is written in the score* —
+`.master` (bare form) ≡ `.output()` ≡ `.output("master")`.
+
+Telling an omitted `output()` apart from an options-only `output(db: -6)` happens in exactly one
+place. It rests on a single bet: a resolved destination always carries `kind`, and an options bag
+never does.
+
+```typescript
+// packages/engine/src/core/sequence/audio-line.ts:15-21
+/**
+ * The single runtime discriminator between a resolved destination and an options bag.
+ * Every OutputDest has `kind`; output/send options deliberately never do.
+ */
+export function isOutputDest(value: unknown): value is OutputDest {
+  return typeof value === 'object' && value !== null && 'kind' in value
+}
+```
+
+`send()` is different — its destination **cannot be omitted**. The guard lives in one function,
+and that one function **is the contract for both** `Sequence.send()` and `MixerBusHandle.send()`.
+
+```typescript
+// packages/engine/src/core/sequence/audio-line.ts:46-65
+/**
+ * 🔴 `send()` の宛先は**必須**（`output()` と違い省略できない — どこにも送らない send は無い）。
+ *
+ * **この 1 関数が両方の `send()` の契約**（`Sequence.send()` と `MixerBusHandle.send()`）。
+ * 片方にだけガードを書くと、パーサが名前付き引数だけの `send(db: -6)` を
+ * `[undefined, {db:-6}]` に整形した時、ガードの無い側が `undefined` を master に解決して
+ * **master への thru 出力を黙って 1 本増やす**（既存の直結と二重に鳴る）。
+ * 実際にレビューで再現した（PR #884 ラウンド 2）。
+ *
+ * 文言は**実際に来た型を出す** — 常に "null" と決め打ちすると、数値や真偽値を渡した人に
+ * 嘘の情報を与えることになる。
+ */
+export function assertSendDestination(value: unknown, call: string): void {
+  if (typeof value === 'string' || isOutputDest(value)) return
+  const actual = value === null ? 'null' : typeof value
+  throw new Error(
+    `${call}(aux, db) requires a destination; received ${actual}. ` +
+      `Unlike output(), send() has no default — name an aux/sum bus or pass a resolved destination.`,
+  )
+}
+```
+
+Writing it on only one side means that a named-arguments-only `send(db: -6)` — which the parser
+shapes into `[undefined, {db: -6}]` (see `processArguments()` in
+[II-3. The Evaluation Pipeline](/en/pipeline/evaluation)) — resolves `undefined` to master on the
+unguarded side and **silently adds one more thru exit to master**, doubling with the existing
+direct path. This path was actually reproduced during the review of PR #884.
+
+#### Realization elision — a plain master exit allocates no bus
+
+Making `.output()` mandatory means **every line in a score writes an exit**. Implemented naively,
+an insert bus would be allocated the moment `output()` is written, **exhausting the pool of
+eight** (four of the bundled examples exceed eight on their own).
+
+So a bus is allocated only when the line asks for something **the direct path cannot realize**.
+The predicate lives in one place in `audio-line.ts`. The definition of "a plain master exit"
+itself was later given its own name, `isPlainMasterOutput()`, so that the instrument path can
+share it (bundle S — which this page does not cover yet).
+
+```typescript
+// packages/engine/src/core/sequence/audio-line.ts:254-284
+/**
+ * #883 §2.3「実現の省略」: a line needs a daemon bus only when it asks for something the
+ * direct engine path cannot realize — a rack, or an exit that is not a plain master exit.
+ *
+ * 🔴 **This is the single definition.** 束 S の instrument 経路（設計 §2.2.1）は
+ * `SetSourceRouting` の宛先（`none` / `master` / `bus`）を**同じ述語**で選ぶ。ここに
+ * 置かずに呼び出し側へ書き写すと、audio 経路と instrument 経路の判定がドリフトする。
+ */
+/**
+ * 🔴 **「素の master 出口」とは何か — その定義はここだけにある。**
+ *
+ * 直接経路が実現できる唯一の形（master 宛て・分岐なし・減衰なし）。この 3 条件のどれか 1 つでも
+ * 外れたらラインは daemon のバスを要する。
+ *
+ * **呼び出し側へ書き写さないこと。** `lineNeedsBus()`（audio 経路）と
+ * `Sequence.instrumentSourceRoutingTarget()`（instrument 経路）の**両方**がこれを使う —
+ * 片方にだけ書くと 2 経路の判定がドリフトする。同じ型の事故を PR #884 ラウンド 2 で
+ * 実際に起こしている（`assertSendDestination` のコメント参照）。
+ */
+export function isPlainMasterOutput(element: LineElement): boolean {
+  return (
+    element.kind === 'output' && element.dest.kind === 'master' && !element.thru && element.db === 0
+  )
+}
+
+export function lineNeedsBus(elements: readonly LineElement[]): boolean {
+  return elements.some(
+    (element) =>
+      element.kind === 'rack' || (element.kind === 'output' && !isPlainMasterOutput(element)),
+  )
+}
+```
+
+The call site (`stageOutputElement()`) only consults it.
+
+```typescript
+// packages/engine/src/core/sequence.ts:481-498
+  private stageOutputElement(
+    name: string,
+    dest: OutputDest,
+    thru: boolean,
+    db: number,
+    sugar: 'output' | 'send',
+  ): void {
+    this._renderBus = undefined
+    this.upsertLine({ kind: 'output', dest, thru, db, sugar })
+    // #883 Bundle C realization elision: an explicit default master destination is score
+    // truth, but it is equivalent to today's direct path and therefore must not consume one
+    // of the eight sequence buses. Allocate only when the declared line needs processing or
+    // routing that the direct path cannot realize. Fixed gain/pan remain event-side until then.
+    // 🔴 述語の定義は `AudioLine.needsBus()` 側にある（束 S の instrument 経路が同じものを使う）。
+    if (!this._insertBus && this._line.needsBus()) {
+      this._insertBus = this.global.ensureSequenceInsertBus(name)
+    }
+  }
+```
+
+🔴 The predicate is **not copied into the call site** because bundle S's instrument path (the
+`none` / `master` / `bus` choice of `SetSourceRouting`) uses **the same predicate**. Copying it
+would let the audio path and the instrument path drift apart.
+
+As a side effect, the path where `seq.gain(fixed)` / `seq.pan(fixed)` "apply on the event side
+while there is no bus, and are handed over to the line the moment one is allocated" (the note in
+core spec MX.1) **does not hand over on a plain master exit alone**. The handover happens when a
+`rack`, a non-master destination, `thru`, or `db ≠ 0` appears.
 
 ## Delivering the routing to the daemon: `SetBusRouting` (🔴 historical path as of #611 PR-B2)
 
