@@ -1,8 +1,8 @@
 ---
 title: "ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot"
 chapter-id: "adr-002"
-verified-against: 56c34c3
-verified-at: "2026-09-11"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -280,6 +280,6 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:496-631` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:365-462` — §5 片記号方式 (unidirectional toggle) の仕様
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL 仕様書アーカイブ (2025-10-06 アーカイブ)
-- `packages/vscode-extension/src/extension.ts:4029-4038` — `sequence ` キーワードの deprecated 警告実装
+- `packages/vscode-extension/src/diagnostics-provider.ts:85-94` — `sequence ` キーワードの deprecated 警告実装
 - commit `081a474` — SuperCollider 統合と sox 廃止 (v2.0 の技術的基盤)
 - commit `cfa0381` — Web Audio API 削除・SuperCollider 一本化 (PR #31)

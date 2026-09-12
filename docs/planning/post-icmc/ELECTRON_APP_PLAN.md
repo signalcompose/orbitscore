@@ -144,7 +144,7 @@ packages/
 - エラーハンドリング
 - デバッグモード対応
 
-**参考コード**: `packages/vscode-extension/src/extension.ts:595-656`
+**参考コード**: `packages/vscode-extension/src/engine-process.ts:255-400`（#887 / PR #909 で `extension.ts` から分割。旧 `extension.ts:595-656` はこの分割より前から `startEngine` を指していなかった）
 
 ```typescript
 class EngineManager {

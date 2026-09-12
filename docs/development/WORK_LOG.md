@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): re-anchor the extension-split file references and record the new module layout (Sep 13, 2026)
+
+PR [#909](https://github.com/signalcompose/orbitscore/pull/909)（#887・`extension.ts` /
+`mcp-server.ts` の 19 モジュール分割、マージコミット `ca745e8`）への**ドキュメント追従のみ**。
+`packages/` と `rust/` とテストは 1 行も触っていない。
+
+#### 何を直したか
+
+dev 学習サイトの散文にある `extension.ts` / `mcp-server.ts` への行参照を、分割後の位置へ
+付け替えた（ja / en 同時・合計 160 参照）。
+
+- 範囲付き参照（`<file>:<a>-<b>`）: **110 件のうち 96 件**を再アンカー
+- 基底名だけの参照（`` `extension.ts:3405` `` 等）: **62 件**を再アンカー
+- `sites/dev/editor/vscode-architecture.md` の drift 節に、**分割の対応表**（主題 → 分割後の
+  ファイル）と MCP `tools/list` の順序復帰（`8561210`）を追記
+- 誤った地の文 2 件を修正: 「候補の組み立ては `extension.ts` 側」→ `dsl-providers.ts`、
+  `EngineViewProvider` (`extension.ts` 側) → `engine-view-provider.ts`
+
+#### 🔴 参照は分割より前から既に腐っていた
+
+再アンカーの方法として、まず**分割前の `extension.ts` のその行範囲の中身**を新モジュール群から
+内容一致で探した。**54 組中 17 組しか一致しなかった。**
+
+原因は、**分割より前の時点で散文の行番号が既にずれていたこと**である。実測（`0f930f3` =
+マージ直前の main）:
+
+| 散文が指していた範囲 | 実際にそこに在ったもの | 記述 |
+|---|---|---|
+| `extension.ts:286-498` | `if (playheadActiveRanges.size > 0) {` | `activate()` 全体 |
+| `extension.ts:500-521` | `decorationType.dispose()` | `deactivate()`（実際は 489 行目） |
+| `extension.ts:2044-2198` | `globalInitialized = false` | `startEngine()`（実際は 1927 行目） |
+| `extension.ts:3716-3726` | `function registerHoverProvider(` | カタログ不在の案内 |
+
+**「範囲内」は「正しい」を意味しない**（#911 が同じ指摘をしている）。したがって内容一致では
+引けず、**箇条書きが明示しているシンボル名で引き直した** — 各シンボルの定義位置を現在の
+ツリーで読んで範囲を確定させている。
+
+#### 直していないもの
+
+- **#502 で削除された関数を指す 14 件**（`getConfiguredEngineKind()` /
+  `resolveScsynthForUI()` / `startEngine()` の `sc` 分岐 / `bundleStatusItem` の engine kind
+  コメント）。`sites/dev/decisions/adr-003-scsynth-bundle.md` と
+  `sites/dev/editor/vscode-architecture.md:1066` に在る。**指す先が存在しない**ので範囲の
+  付け替えでは直らず、箇条書きの文章そのものを書き換える判断が要る（#911 の 3 番）
+- **`check-citations.mjs` に散文の範囲外検査を足すこと**（#911 の 1 番・本体）。仕組みの追加は
+  テスト / スクリプトの変更なので、この追従 PR の範囲外
+
 ### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
 
 `/code:peer-review-team` の comment-analyzer が出した 2 件。**コメントのみの変更**で、
@@ -1784,181 +1831,6 @@ Part of #883
 
 ---
 
-### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: 実装・実機検証完了（レビュー前）
-**版**: 🔴 **4.0.0 / `DSL_VERSION` 2.0**（破壊的変更）
-**担当**: 実装 = Codex（`gpt-5.6-sol` / effort **xhigh**）/ 裁定と検証 = main
-
-#883 の**振る舞いを変える**半分。束 0+C（PR #884）の上に載る。
-
-#### 閉じた 4 実体（§0.1）— **1 箇所ではない**
-
-| 実体 | 変更 |
-|---|---|
-| **A** `program()` の暗黙終端 | 合成を削除（`[rack]` の前置は残す） |
-| **B** バス無し audio の直接描画 | `resolveDispatchChannel()` に skip。🔴 **`isNoteSequence()` の早期 return より後ろ**（前だと MIDI が無音・#282 の再発） |
-| **C** daemon のバス既定ライン | `legacy(Master, [])` → **`[Rack]`（無音）** |
-| **D** instrument の source routing | `SetSourceRouting.target` を**明示 3 値**（`none` / `master` / `bus`）へ。🔴 **一方通行の wire 変更** |
-
-#### 🔴 横断規則を 6 箇所へ適用（main の審査で要求したもの）
-
-> routing 状態が「書かれていない」「表現できない」「失われた」いずれかの時、その信号はどこにも加算されない。
-> **master へ倒すことは最下層に暗黙 master を作り直すこと**である。
-
-| 箇所 | 実装 |
-|---|---|
-| `SourceDestCell::encode` | `Bus(_) \| Link(_) => Self::NONE` ← **Fable の監査も見ていなかった箇所** |
-| `SourceDestCell::decode` | `_ => SourceDest::None` |
-| `SourceDest::default()` | `#[default] None` |
-| `FeedDest` 変換 ×2 | `None => Discard` / `Link(_) => Discard` |
-| slot 解放時 | `store(SourceDest::None)` ×2 |
-
-**除外は master トラック自身の device 出口のみ**（owner 裁定で 1,2 固定＝定数なので規則の定義域外）。
-
-#### 🔴 実機 gated が 4 件落ちた — **すべて譜面・harness の誤り**（実装は無変更）
-
-| 失敗 | 原因 |
-|---|---|
-| 既存 `sum-bus insert across restart` | **移行漏れ** — 束 S で「出口を書かない sum は無音」になったので `sum("drum").output()` が要る |
-| X1 / X4 / X5 | 🔴 **`LOOP()` は追加ではなく置換** — `LOOP(a)` の次の `LOOP(b)` が a を止める。根拠は `calculateLoopDiff()`（`process-statement.ts:679`）→ `stopSequences(toStop)`（`:777`） |
-
-**main が先に潰した仮説**（unit で実測）: `ref883.output()` は skip されず（`{kind:'hardware'}`）、
-4 イベントをスケジュールし、`loop()` も throw しない。**TS 層は正しい**。
-崩れたのは「では実機の無音は実装のせい」という推論の方で、**`LOOP` の意味論**が抜けていた
-（個別に `loop()` を呼ぶ unit では原理的に再現しない形）。
-
-Codex は同じ誤用があった **X8 も落ちる前に先回りで修正**し、**静的回帰テストも追加**した
-（`gated-assertion-hygiene.spec.ts:557`）。
-
-⚠️ **ただしその検査は名指しの 4 ファイルしか守らない。** 3 本の新 fixture が揃って踏んだ性質なので、
-**一般化する価値がある**（例: gated fixture 内に `LOOP(` が 2 回以上現れたら red）。別途扱う。
-
-#### 実機 gated の実測（main が sandbox 外で）
-
-```
-Tests  45 passed | 1 skipped (46) | 0 failed
-
-[#883 X1] explicit-reference + orphan RMS: 0.08701663328815765      ← 漏れれば 2 倍
-[#883 X2] omitted=0.0870166332954772  explicit=0.08701663328808863
-[#883 X3] sendRms=0.0436116233054862  plainRms=0.0870166332927243
-          ratio=0.5011872058848396                                   ← 期待 10^(-6/20)=0.5012
-[#883 X4] reference + unterminated-sum member RMS: 0.087016633295434
-[#883 X5] withSilentInstrument=0.08701663329662541  refRms=0.08701663329662539
-```
-
-🔴 **X3 が #883 の実害そのもの**（`send(sum)` の dry が master へ二重に届く）**を実測で塞いだ証拠**。
-🔴 **X5 は小数点以下 16 桁が一致** — 出口を書かない instrument は基準の音に **1 bit も足していない**。
-
-#### ゴールの収束条件
-
-1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
-
----
-
-### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: ✅ 束 S 実装
-
-出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
-未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
-`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
-確定するため、#282 の挙動を維持する。
-
-編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
-(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
-実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
-
-この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
-`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
-
-### fix: make send() require a destination in both implementations (#883 round 2) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: ✅ ラウンド 2 収束（PR #884）
-
-#### 🔴 縮小レビューが **fix 起因の Critical** を捕まえた
-
-ラウンド 1 で置いたポリシーを、main が**片翼にしか適用していなかった**。
-
-| | ガード |
-|---|---|
-| `Sequence.send()` | ✅ あり |
-| `MixerBusHandle.send()` | ❌ **無い** |
-
-レビュアーが実際に走らせて wire の中身まで示した:
-
-```
-mix.sum('drum').send(db: -6)
-  → processArguments が [undefined, {db:-6}] に整形（ラウンド 1 の修正）
-  → MixerBusHandle.send(undefined, ...) → resolveDest(undefined) → {kind:'master'}
-  → setBusLine に output(master, thru:true, -6dB) が**追加で 1 本**
-  → 既存の直結と合わせて **master へ二重に鳴る**
-```
-
-🔴 **#883 が消そうとしている「dry が master へ漏れる」の派生形を、修正が自分で作っていた。**
-
-#### 直し方 — 契約を 1 関数へ
-
-```ts
-// audio-line.ts — この 1 関数が両方の send() の契約
-export function assertSendDestination(value: unknown, call: string): void
-```
-
-`send()` の宛先は **`output()` と違い必須**（どこにも送らない send は無い）。両方の `send()` が
-これを呼ぶので、**片翼だけに書けるコードでなくなった**。
-
-あわせて `resolveDest` / `send` のエラー文言が常に「null」と決め打ちしていたのを、
-**実際に来た型**を出すよう直した（数値や真偽値を渡した人に嘘の情報を与えていた）。
-
-#### 変異検証（main が実走）
-
-| 変異 | 結果 |
-|---|---|
-| `MixerBusHandle` のガードを削除 | **red**（1 件） |
-| 文言を "null" 決め打ちに戻す | **red**（3 件） |
-| restore | **green**（4 件） |
-
-#### 波及
-
-Codex がラウンド 1 で書いたテスト 2 箇所が**旧文言**を期待していたので整合させ、
-「なぜ `send()` は `output()` と文言が違うのか」と**この Critical への回帰検査であること**を
-コメントに残した。
-
-#### 🔴 実機 gated が 1 回 flake した（規律どおり再実行して確定させた）
-
-1 回目: `#611 E2E-3` が **`ENGINE_LOCK_CONTENTION`** で落ちた。
-
-```
-[warning] ENGINE_LOCK_CONTENTION: engine lock contention (1 total);
-          a block was silently zero-filled — this self-heals next block
-```
-
-これは **`severity=warning` として設計された事象**（`rust/crates/orbit-audio-daemon/tests/protocol.rs:1204`）
-だが、`mem:stderr-is-classified-as-error`（engine の warn は全部 ERROR 行）により
-`expectNoNewErrors` が ERROR として数える。
-
-**`mem:implementation-right-oracle-wrong`（赤を実装のせいにする前に同じテストを走らせる）に従い、
-断定せず再実行** — load 5.62 → 2.76 で**緑**。孤児 daemon 0 / 残存 dev host 0 も確認済み。
-
-🔴 **残る論点（この束とは独立）**: `expectNoNewErrors` は「新規 ERROR が 0」を要求するが、
-CLAUDE.md の規律は「ERROR 件数は固定 500 行窓なので**厳密等価にしない**（`<=`）」。
-`ENGINE_LOCK_CONTENTION` は負荷次第で正当に発生するので、**分類器が warning を ERROR へ畳んでいる**
-ことを別途扱う余地がある。
-
-#### 検証（すべて main が sandbox 外で実測）
-
-```
-npm test    2364 passed | 68 skipped | 0 failed
-lint 緑 / docs:check 948 引用 0 failed
-実機 gated  39 passed | 1 skipped | 0 failed
-[#883 X2] omittedRms=0.08701663329564219  explicitRms=0.08701663329564278
-```
-
----
-
 ## Archived sections
 
 Older entries have been archived by month for readability:
@@ -1971,4 +1843,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-11）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1 を含む
+- [2026-09（09-01〜09-12）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1 と、#883 束 S / 本体 (#883) の 3 エントリを含む

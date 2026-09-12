@@ -1,8 +1,8 @@
 ---
 title: "0-2. Architecture Overview"
 chapter-id: "0-2"
-verified-against: 56c34c3
-verified-at: "2026-09-11"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -669,14 +669,14 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 ## Sources
 
 - `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring, the two status bar items, command registration
-- `packages/vscode-extension/src/extension.ts:445-470` — MCP server start condition (`ORBITSCORE_MCP_PORT` over the setting) and the handler bundle
-- `packages/vscode-extension/src/extension.ts:628-642` — `resolveDaemonForUI()`: the boundary that runtime-requires the engine's compiled JS (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
-- `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: kind decision → pre-check → env → spawn
-- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
-- `packages/vscode-extension/src/extension.ts:3040-3047` — `evaluateForAgent()`: MCP evaluate shares `writeCodeToEngine`
+- `packages/vscode-extension/src/extension.ts:237-291` — MCP server start condition (`ORBITSCORE_MCP_PORT` over the setting) and the handler bundle
+- `packages/vscode-extension/src/engine-process.ts:57-65` — `resolveDaemonForUI()`: the boundary that runtime-requires the engine's compiled JS (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
+- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: kind decision → pre-check → env → spawn
+- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
+- `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate shares `writeCodeToEngine`
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — design comment of the MCP server (Agent Bridge, 127.0.0.1 bind)
-- `packages/vscode-extension/src/mcp-server.ts:1177-1347` — `startOrbitScoreMcpServer()`: Streamable HTTP, DNS-rebinding protection, listen
+- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`: Streamable HTTP, DNS-rebinding protection, listen
 - `packages/engine/src/cli-audio.ts:1-41` — CLI entry point
 - `packages/engine/src/cli/execute-command.ts:105-113` — routing of the `repl` subcommand
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: create interpreter → boot → start REPL

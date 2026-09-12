@@ -1,12 +1,14 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: f575f27
+verified-against: ca745e8
 verified-at: "2026-09-12"
 status: draft
 ---
 
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）、2026-09-11 に #860（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)・正常系で鳴っていた `warn!` を `debug!` へ）、2026-09-11 に #855（PR [#857](https://github.com/signalcompose/orbitscore/pull/857)・temp 掃除のレースが ERROR 件数を押し上げていた件）、2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・cold install ゲートの追加）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+>
+> 🔴 2026-09-12: #887（PR [#909](https://github.com/signalcompose/orbitscore/pull/909)）で `extension.ts` / `mcp-server.ts` が 19 モジュールへ分割されました。**振る舞いは変わっていません**（既存テストの期待値は 1 つも変わっていない）。本ページのファイル参照は分割後の位置へ付け替えてあります。対応表は [IV-1 の drift 節](/editor/vscode-architecture#_887-extension-ts-mcp-server-ts-の分割-pr-909)にあります。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -1407,15 +1409,15 @@ npm run test:e2e:cold-install
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — ファイルヘッダ（Agent Bridge の出自・SDK を `require` で読む理由）
 - `packages/vscode-extension/src/mcp-server.ts:233-286` — `OrbitScoreToolHandlers` seam
 - `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — `registerTool` 群（#887 束 F で `buildServer()` から 3 ファイルへ切り出した。ツールカタログの出典）
-- `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
+- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` マージと URL 組み立て
 - `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — 出力チャネルのリングバッファと monkey-patch
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead の状態と decoration 適用
-- `packages/vscode-extension/src/extension.ts:445-495` — MCP サーバの起動ゲートとハンドラ配線
-- `packages/vscode-extension/src/extension.ts:1153-1177` — `shouldFilterLine()`（`[STEP]` と bridge envelope の除外）
-- `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`
-- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`（#614）
-- `packages/vscode-extension/src/extension.ts:3585-3597` — `getLogForAgent()` / `analyzeAudioForAgent()`
+- `packages/vscode-extension/src/extension.ts:237-291` — MCP サーバの起動ゲートとハンドラ配線
+- `packages/vscode-extension/src/engine-handlers.ts:43-149` — `shouldFilterLine()`（`[STEP]` と bridge envelope の除外）
+- `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`
+- `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`（#614）
+- `packages/vscode-extension/src/agent-handlers.ts:483-499` — `getLogForAgent()` / `analyzeAudioForAgent()`
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — `//#evalMark` の requestId 相関ブリッジ
 - `packages/vscode-extension/src/log-ring.ts:1-45` — `selectLogLines()`（#567）
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout 行の分類と適用（`isCurrent` 分割）
@@ -1437,7 +1439,7 @@ npm run test:e2e:cold-install
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
-- `packages/vscode-extension/src/extension.ts:1567-1657` — `ERROR:` 前置を chunk 単位から行単位へ直した `createLinePrefixer` / `setupStderrHandler`（#756・PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
+- `packages/vscode-extension/src/engine-handlers.ts:371-429` — `ERROR:` 前置を chunk 単位から行単位へ直した `createLinePrefixer` / `setupStderrHandler`（#756・PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
 - `rust/crates/orbit-clap-host/src/controller.rs:398-420` — `query_note_port_index`。正常系で鳴っていた `warn!` を `debug!` へ下げた（#860・PR [#861](https://github.com/signalcompose/orbitscore/pull/861)）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
 - `tests/e2e/helpers/capture-windows.ts:1-489` — キャプチャ時計・音の検出・区間 → バケット写像と不変条件 A1 / U1 / U2 / U3（#739）

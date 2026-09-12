@@ -1,12 +1,14 @@
 ---
 title: "IV-2. インライン実行とフィードバック"
 chapter-id: "IV-2"
-verified-against: f575f27
+verified-against: ca745e8
 verified-at: "2026-09-12"
 status: draft
 ---
 
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout の bridge dispatch の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+>
+> 🔴 2026-09-12: #887（PR [#909](https://github.com/signalcompose/orbitscore/pull/909)）で `extension.ts` / `mcp-server.ts` が 19 モジュールへ分割されました。**振る舞いは変わっていません**（既存テストの期待値は 1 つも変わっていない）。本ページのファイル参照は分割後の位置へ付け替えてあります。対応表は [IV-1 の drift 節](/editor/vscode-architecture#_887-extension-ts-mcp-server-ts-の分割-pr-909)にあります。
 
 # IV-2. インライン実行とフィードバック
 
@@ -48,7 +50,7 @@ async function runSelection() {
 
 `languageId !== 'orbitscore'` の確認は重要です。VS Code のキーバインドには `when: editorLangId == orbitscore` 条件が設定されていますが、コマンドパレットから直接呼ぶ場合にはその `when` が効かないため、関数内でも言語を確認しています。
 
-ちなみに MCP の `run_selection` ツールもこの同じ関数を呼びます (`runSelectionForAgent()`、`extension.ts:3405`)。エージェントは事前に `set_selection` で範囲を置くので、パス 1 を通ることになります。
+ちなみに MCP の `run_selection` ツールもこの同じ関数を呼びます (`runSelectionForAgent()`、`run-selection.ts:216-231`)。エージェントは事前に `set_selection` で範囲を置くので、パス 1 を通ることになります。
 
 ---
 
@@ -423,9 +425,9 @@ export async function updateDiagnostics(
 
 | # | チェック | 実装 | Severity |
 |---|---|---|---|
-| 1 | 括弧の対応 (単一行のみ) | `extension.ts:4002-4012` | Error |
-| 2 | tempo 範囲 (20-999) | `extension.ts:4014-4027` | Warning |
-| 3 | deprecated `sequence ` キーワード | `extension.ts:4029-4038` | Warning + `Deprecated` タグ |
+| 1 | 括弧の対応 (単一行のみ) | `diagnostics-provider.ts:58-68` | Error |
+| 2 | tempo 範囲 (20-999) | `diagnostics-provider.ts:70-83` | Warning |
+| 3 | deprecated `sequence ` キーワード | `diagnostics-provider.ts:85-94` | Warning + `Deprecated` タグ |
 | 4 | `global` state-setter の once-per-file | `analyzeGlobalOncePerFile` | Warning |
 | 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
 | 6 | `.output()` が `global.linkAudio()` より前 / 不在 (ミキサー宛先は除外・#611) | `analyzeOutputWithoutLinkAudio` | Warning |
@@ -688,17 +690,17 @@ flowchart TD
 
 | 変更 | Issue | 出典 |
 |---|---|---|
-| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`extension.ts:3000-3032` |
-| フラッシュを常に whole-line に、送信前に `revealRange` | #388 | §6.193 (2026-07-07)、`extension.ts:2842-2857` / `2876-2880` |
+| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`engine-process.ts:592-630` |
+| フラッシュを常に whole-line に、送信前に `revealRange` | #388 | §6.193 (2026-07-07)、`run-selection.ts:176-184` / `202-206` |
 | `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
-| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:414-443` |
-| `//#documentDirectory` メタ行 (import の基準ディレクトリ) | #456 | §6.266 (2026-07-17)、`extension.ts:3009-3013` |
+| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:203-236` |
+| `//#documentDirectory` メタ行 (import の基準ディレクトリ) | #456 | §6.266 (2026-07-17)、`engine-process.ts:600-605` |
 | `GLOBAL_ONCE_METHODS` に `linkAudio` を追加、LinkAudio 系の診断 6-8 | (LinkAudio #209 系) | `diagnostics-analysis.ts:44-58` / `:194-391` |
-| 送信失敗時はフラッシュしない | — | `extension.ts:2873-2875` のコメント |
-| `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:3048-3077` / `:1501-1509` |
-| 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`extension.ts:4095-4112` |
+| 送信失敗時はフラッシュしない | — | `run-selection.ts:199-201` のコメント |
+| `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`agent-handlers.ts:80-109` / `engine-handlers.ts:248-256` |
+| 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`diagnostics-provider.ts:160-168` |
 | 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
-| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`、`extension.ts:3482-3520` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
+| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`、`dsl-providers.ts:176-213` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
 
 ---
 
@@ -730,18 +732,18 @@ flowchart TD
 
 ## Sources
 
-- `packages/vscode-extension/src/extension.ts:2701-2714` — `getLineSubject()`: `var <name> =` と `<name>.` の 2 パターン
-- `packages/vscode-extension/src/extension.ts:2716-2880` — `runSelection()` 全体: ガード・subject-based collection・`flashLines`・送信・`revealRange`
-- `packages/vscode-extension/src/extension.ts:2734-2736` — パス 1: 選択ありの場合
-- `packages/vscode-extension/src/extension.ts:2737-2786` — パス 2: subject-based block evaluation
-- `packages/vscode-extension/src/extension.ts:2786-2809` — パス 3: standalone コマンド
-- `packages/vscode-extension/src/extension.ts:2814-2871` — `flashLines()`: 点滅フィードバック実装 (whole-line)
-- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
-- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`: MCP evaluate と `//#evalMark`
-- `packages/vscode-extension/src/extension.ts:1501-1509` — stdout の `{"evalMark"` 独立分岐
+- `packages/vscode-extension/src/run-selection.ts:27-40` — `getLineSubject()`: `var <name> =` と `<name>.` の 2 パターン
+- `packages/vscode-extension/src/run-selection.ts:42-207` — `runSelection()` 全体: ガード・subject-based collection・`flashLines`・送信・`revealRange`
+- `packages/vscode-extension/src/run-selection.ts:60-62` — パス 1: 選択ありの場合
+- `packages/vscode-extension/src/run-selection.ts:63-111` — パス 2: subject-based block evaluation
+- `packages/vscode-extension/src/run-selection.ts:112-135` — パス 3: standalone コマンド
+- `packages/vscode-extension/src/run-selection.ts:141-197` — `flashLines()`: 点滅フィードバック実装 (whole-line)
+- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
+- `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate と `//#evalMark`
+- `packages/vscode-extension/src/engine-handlers.ts:248-256` — stdout の `{"evalMark"` 独立分岐
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead の decoration 管理と `handleStepLine()`
-- `packages/vscode-extension/src/extension.ts:3725-3875` — `updateDiagnostics()`: 行内 3 種 + 横断 6 種
-- `packages/vscode-extension/src/extension.ts:3482-3520` — `registerOutputCodeActionProvider()`: `output-missing` / `dry-not-routed` の quick fix
+- `packages/vscode-extension/src/diagnostics-provider.ts:21-171` — `updateDiagnostics()`: 行内 3 種 + 横断 6 種
+- `packages/vscode-extension/src/dsl-providers.ts:176-213` — `registerOutputCodeActionProvider()`: `output-missing` / `dry-not-routed` の quick fix
 - `packages/vscode-extension/src/playhead.ts:39-54` — `[STEP]` 行の文法と `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
