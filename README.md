@@ -321,9 +321,12 @@ npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives 
 
 ### Just want to use it?
 
-Download the `.vsix` from **[Releases](https://github.com/signalcompose/orbitscore/releases)** and
-install it — nothing else is required. OrbitScore is not published on the VS Code Marketplace or
-Open VSX.
+📖 **[Installation guide](https://signalcompose.github.io/orbitscore/getting-started/installation)** —
+the canonical steps (three install routes, requirements, and getting your first sound out).
+
+In short: download the `.vsix` from **[Releases](https://github.com/signalcompose/orbitscore/releases/latest)**
+and install it — nothing else is required. macOS Apple Silicon only. OrbitScore is not published on
+the VS Code Marketplace or Open VSX, so GitHub Releases is the only distribution route.
 
 ```bash
 code --install-extension orbitscore-darwin-arm64-<version>.vsix
