@@ -418,7 +418,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2574-2600
+// rust/crates/orbit-audio-native/src/output/render_full.rs:158-184
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -473,7 +473,7 @@ post-loop の中身が「`effective_targets[i]` を見て 1 箇所に足す」�
 「stage ごとの命令列を頭から実行する」へ置き換わりました。命令の型はこの 3 つです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1077-1102
+// rust/crates/orbit-audio-native/src/output/lines.rs:317-342
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -512,7 +512,7 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2609-2635
+// rust/crates/orbit-audio-native/src/output/render_full.rs:193-219
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -548,7 +548,7 @@ pub enum LineOp {
 詳しくは次の見出し）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1498-1510
+// rust/crates/orbit-audio-native/src/output/line_program.rs:335-347
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -575,50 +575,21 @@ pub enum LineOp {
 両方にある `LineOp::Pan(_)` 腕を、実際に L/R を掛ける処理へ置き換えます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2289-2308
+// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
 #[inline]
-fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
-    if ramp.is_settled() {
-        if ramp.end == 0.0 {
-            return;
-        }
-        let (left, right) = line_pan_coefficients(ramp.end);
-        for frame in 0..frames {
-            let base = frame * ENGINE_CHANNELS;
-            buf[base] *= left;
-            buf[base + 1] *= right;
-        }
-        return;
-    }
-
-    if ramp.hold_after == 0 {
-        return;
-    }
-    let (start_left, start_right) = line_pan_coefficients(ramp.start);
-    let (end_left, end_right) = line_pan_coefficients(ramp.end);
+pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
+    ready && scratch_len >= block
+}
 ```
 
 位置から L/R 係数を作るのは `line_pan_coefficients` に切り出されています（#859・2026-09-11）。
 `apply_line_pan` はもうここを直接計算せず、**ランプの始点と終点でこの関数を呼ぶだけ**です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2270-2286
+// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
 #[inline]
-fn line_pan_coefficients(pan: f32) -> (f32, f32) {
-    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
-    //
-    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
-    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
-    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
-    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
-    if pan == 0.0 {
-        return (1.0, 1.0);
-    }
-    let (left, right) = equal_power_pan(pan);
-    (
-        left * std::f32::consts::SQRT_2,
-        right * std::f32::consts::SQRT_2,
-    )
+pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
+    ready && scratch_len >= block
 }
 ```
 
@@ -653,8 +624,8 @@ golden は丸め誤差以外動かず**、動くのは「rack を挟んでから
 1 つめが `effective_line_output_dest` です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1540-1551
-fn effective_line_output_dest(
+// rust/crates/orbit-audio-native/src/output/line_program.rs:377-388
+pub(super) fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
     program_target: OutputDest,
@@ -685,12 +656,12 @@ line program は control スレッドが作って RT スレッドが読むので
 回収は control 側」です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1255-1260
-struct LineExchange {
-    live: AtomicPtr<LineProgram>,
-    retired: Mutex<Vec<RetiredLineProgram>>,
+// rust/crates/orbit-audio-native/src/output/line_program.rs:91-96
+pub(super) struct LineExchange {
+    pub(super) live: AtomicPtr<LineProgram>,
+    pub(super) retired: Mutex<Vec<RetiredLineProgram>>,
     /// Completed RT generations. The audio thread is the sole writer; control only Acquire-loads.
-    generation: AtomicU64,
+    pub(super) generation: AtomicU64,
 }
 ```
 
@@ -704,7 +675,7 @@ callback の最後に `finish_generation()` で世代を進めます。**alloc /
 共有している**点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2502-2519
+// rust/crates/orbit-audio-native/src/output/render_full.rs:86-103
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -941,20 +912,20 @@ verb 宛ての `Output` が 1.0 から目標（例えば 0.25）まで数 ms か
 その install ハンドルがこれです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:857-869
+// rust/crates/orbit-audio-native/src/output/bus_topology.rs:104-116
     pub fn line_program_installer(&self) -> LineProgramInstaller {
         let control = self.line.line_control();
         let current = control.clone();
-        let explicit = self.explicit_line.clone();
         LineProgramInstaller::new(
             move |program, bus_index, bus_count| {
-                control.install_for_bus(program, bus_index, bus_count)?;
-                explicit.store(true, Ordering::Release);
-                Ok(())
+                control.install_for_bus(program, bus_index, bus_count)
             },
             move || current.current_gains(),
         )
     }
+
+    /// Compatibility bridge used by the daemon's old `SetBusRouting` command. The closure accepts
+    /// the old routing shape but publishes a complete `LineProgram`; it exposes neither the live
 ```
 
 生の `Arc<dyn Fn(...)>` だったハンドルが `LineProgramInstaller::new(install, current_gains)`
@@ -995,7 +966,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:900-915
+// rust/crates/orbit-audio-native/src/output/lines.rs:139-154
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -1024,7 +995,7 @@ feed の収集は `collect_source_feeds`（`output.rs:2141-2173`）が行い、u
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2180-2193
+// rust/crates/orbit-audio-native/src/output/render.rs:393-406
             let dest = match slot.dests[unit].load() {
                 SourceDest::None => FeedDest::Discard,
                 SourceDest::Master => FeedDest::Hardware,
@@ -1335,7 +1306,7 @@ master gain の**手前**に来ます。
 ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5321-5326
+// rust/crates/orbit-audio-native/src/output/startup.rs:2491-2496
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

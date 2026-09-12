@@ -68,6 +68,44 @@ capture パス解決）166 行を、その主題そのものである `device_li
 
 🔴 レビュー指摘の前提が誤っていた例: 「`LoadedSample` の消費者は `playback.rs` だけ」は
 **`session.rs` が型名を書かずに（型推論で）使っている**ため誤り。名前の grep には掛からない。
+### refactor(native): split output.rs — 2,587 to 322 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c2-output`
+
+🎯 **#888 子 2 完了。`output.rs` が 2,587 → 322 コード行。** 9 ファイルすべて 500 以下
+（`device.rs` 327 / `lines.rs` 258 / `line_program.rs` 293 / `render.rs` 406 /
+`render_full.rs` 237 / `dsp.rs` 173 / `bus_topology.rs` 156 / `startup.rs` 477）。
+
+**これで 6 ファイル中 3 つが目標達成**（`engine_wrap.rs` 424 / `session.rs` 439 / `output.rs` 322）。
+
+### 🔴 引用の追随が 68 件 — 自動化しないと回らない規模
+
+`output.rs` は dev サイトから **34 箇所 ×2 言語**引用されていた。手で直すのは非現実的なので、
+**引用ブロックの中身から移動先を特定して header を書き換える**スクリプトを書いた
+（scratchpad の `relocate-citations.mjs`）。段階的に強化した経過:
+
+| 版 | 方式 | 解決 | 残り |
+|---|---|---|---|
+| 1 | 先頭行が**一意に**一致する候補ファイルを探す | 50 | 18 |
+| 2 | 先頭 5 行の連続一致で照合 | +0 | 18 |
+| 3 | 🔴 **可視性修飾（`pub(super) ` 等）を剥がして照合** | +16 | 2 |
+| 手動 | シグネチャが複数行に折り返された 2 件 | +2 | 0 |
+
+版 2 が 1 件も増やさなかったのが示唆的で、**問題は「先頭行の曖昧さ」ではなく「行そのものが
+変わったこと」**だった。分割で `pub(super) ` が前置されるので、素の文字列比較では永久に一致しない。
+
+### 移動の内訳
+
+デバイス解決 / ライン機構 / ラインプログラム / render 経路 / 最大の render 1 関数 /
+DSP ヘルパー（ゲイン・パン・加算）/ bus topology 検証 / 起動系。
+可視性は第 9〜11 束で確立した手法（フィールドまで含めた一括付与 →
+**コンパイラの指摘行を使った収束ループ**）で処理した。
+
+**検証**: cfg 4 象限緑 / `cargo fmt --check` / **`cargo clippy --workspace -D warnings` 緑** /
+`cargo test --workspace --lib` **476 passed** / `npm test` **2,445 passed**（不変）/ lint /
+`docs:check` 948 引用 0 failed。
+
+
 ### refactor(daemon): split session.rs — 2,605 to 439 code lines (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c2-session`

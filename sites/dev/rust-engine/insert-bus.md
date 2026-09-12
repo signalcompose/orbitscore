@@ -53,7 +53,7 @@ render 側の核は `orbit-audio-native` の `InsertBusStage` です。`processo
 event が retain され続けます（後述の landmine）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1553-1572
+// rust/crates/orbit-audio-native/src/output/line_program.rs:390-409
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -61,9 +61,9 @@ event が retain され続けます（後述の landmine）。
 /// event を必ず消費し、そのまま `output_target` へ足すので、未 attach bus の event が retain され
 /// 続けない。
 pub struct InsertBusStage {
-    name: String,
-    processor: Option<Box<dyn PostProcessor>>,
-    buffer: Vec<f32>,
+    pub(super) name: String,
+    pub(super) processor: Option<Box<dyn PostProcessor>>,
+    pub(super) buffer: Vec<f32>,
     /// **activation flag**（`LinkChannelActivate.ready` と同じパターン）: `false` の間この bus は
     /// render 対象から完全に外れる（zero-fill / gain-ramp / sum のコストゼロ）。daemon の既定
     /// bus プール（#434 S3）は宣言（LoadPlugin）まで inactive で、全 bus inactive なら
@@ -73,7 +73,7 @@ pub struct InsertBusStage {
     /// （LinkAudio の not-ready channel と同じ既存ハザード）。producer（TS）は「宣言 =
     /// activation → その後に tag 付き PlayAt」の順序を守ること（`seq.effect()` は await するので
     /// 構造的に成立）。
-    active: Arc<AtomicBool>,
+    pub(super) active: Arc<AtomicBool>,
 ```
 
 `active: Arc<AtomicBool>` が「宣言 = activation」契約の実体です。この flag は daemon
@@ -94,10 +94,10 @@ pub struct InsertBusStage {
 **`line: LineSlot` の 1 フィールドにまとめられました**。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1573-1575
+// rust/crates/orbit-audio-native/src/output/line_program.rs:410-412
     /// Published line program. Routing, sends, and rack position are all interpreted from this one
     /// ordered program by the callback post-loop.
-    line: LineSlot,
+    pub(super) line: LineSlot,
 ```
 
 `LineSlot` が抱えるのは `LineProgram`、つまり **`LineOp` の並び**です。「どこへ足すか」だけを
@@ -105,7 +105,7 @@ pub struct InsertBusStage {
 （`Gain`）・どこへ出すか（`Output`）が **1 本の順序付きプログラム**として表現されます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1095-1102
+// rust/crates/orbit-audio-native/src/output/lines.rs:335-342
 /// One operation in a bus line. Pan positions use the normalized -1..=1 wire range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineOp {
@@ -129,7 +129,7 @@ RE-1 で見た `render_engine_with_sources` は、insert bus が 1 つも active
 使わないセッションは bus プールのコストを一切払いません。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2104-2109
+// rust/crates/orbit-audio-native/src/output/render.rs:317-322
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses_and_source_outputs(
@@ -147,14 +147,14 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 両 pass の見え方が食い違うため）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2442-2448
+// rust/crates/orbit-audio-native/src/output/render.rs:460-466
     let bs = (hw.len() / output_channels) * output_channels;
 
-    // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
-    let active_flags: ArrayVec<bool, MAX_INSERT_BUS_STAGES> = buses
-        .iter()
-        .map(|bus| bus.active.load(Ordering::Relaxed))
-        .collect();
+    // egress に乗せる条件（pass 1/2 で同一）: ready かつ scratch が block 以上。両 pass で同じ closure を
+    // 使い **論理的な** divergence を防ぐ。ただし `ready` は consumer thread が concurrent に false→true
+    // にするため、pass 1 の後に ready 化した channel は pass 2 のみに入りうる（その block は無音で commit・
+    // 次 callback から正常）= benign。`bs` を capture するだけで `le.channels` は借用しない。
+    let egress_active = |ch: &LinkChannelActivate| {
 ```
 
 ## daemon の既定 bus プール — `ORBIT_EFFECT_BUS_POOL`

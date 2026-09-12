@@ -479,21 +479,21 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:885-891
+// rust/crates/orbit-audio-native/src/output/lines.rs:124-130
 pub struct RenderState {
-    link: Option<LinkEgress>,
-    insert_buses: Vec<InsertBusStage>,
-    sources: Vec<SourceSlot>,
-    transport: BlockTransport,
-    master: MasterLine,
+    pub(super) link: Option<LinkEgress>,
+    pub(super) insert_buses: Vec<InsertBusStage>,
+    pub(super) sources: Vec<SourceSlot>,
+    pub(super) transport: BlockTransport,
+    pub(super) master: MasterLine,
 }
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1801-1838
+// rust/crates/orbit-audio-native/src/output/render.rs:9-46
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
-fn render_shared_block(
+pub(super) fn render_shared_block(
     engine: &Engine,
     state: &Arc<std::sync::Mutex<RenderState>>,
     capture: &mut Option<RingTapSink>,
@@ -546,8 +546,8 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1886-1972
-fn render_block_with_sources(
+// rust/crates/orbit-audio-native/src/output/render.rs:94-180
+pub(super) fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
@@ -646,11 +646,11 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2355-2359
-struct DeviceLineBuffer<'a> {
-    samples: &'a mut [f32],
-    channels: usize,
-    wrote: bool,
+// rust/crates/orbit-audio-native/src/output/dsp.rs:144-148
+pub(super) struct DeviceLineBuffer<'a> {
+    pub(super) samples: &'a mut [f32],
+    pub(super) channels: usize,
+    pub(super) wrote: bool,
 }
 ```
 
@@ -673,7 +673,7 @@ everything from the engine through the bus graph runs at **exactly two channels 
 many the device has**. That width is published as a named constant.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:691-697
+// rust/crates/orbit-audio-native/src/output/device.rs:350-356
 /// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
 ///
 /// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
@@ -687,8 +687,13 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2042-2066
-fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
+// rust/crates/orbit-audio-native/src/output/render.rs:250-279
+pub(super) fn place_master_into_device(
+    buf: &[f32],
+    frames: usize,
+    device_channels: usize,
+    hw: &mut [f32],
+) {
     match device_channels {
         0 => {}
         // mono デバイス: L+R を 0.5 でマージ（相関信号でクリップしない・設計 §2.2 Q-611-5 と同じ法則）。
@@ -728,12 +733,12 @@ toward the target the control side (`SetGlobalGain`) wrote atomically, one block
 applies to which frame inside that block**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:871-881
+// rust/crates/orbit-audio-native/src/output/lines.rs:110-120
     /// 1 block 分ランプを進め、その block に適用する ramp を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
     #[inline]
-    fn advance_gain(&mut self, frames: usize) -> LineRamp {
+    pub(super) fn advance_gain(&mut self, frames: usize) -> LineRamp {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
         advance_line_ramp(&mut self.gain_current, target, frames, self.ramp_frames)
     }
@@ -873,7 +878,7 @@ though, the publication target is a dedicated `LineSlot` owned by `MasterLine`. 
 is that **whether a publication has happened is held in a separate one-way flag**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:800-810
+// rust/crates/orbit-audio-native/src/output/lines.rs:39-49
     /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
     /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
     /// publish した」場合を区別できない）。
@@ -884,7 +889,7 @@ is that **whether a publication has happened is held in a separate one-way flag*
     /// `SetBusLine("master", …)` を送る新表面へ切り替わり、その経路が実機で確かめられ、PR-O6 で
     /// 旧 `SetBusRouting` 系が撤去された後。そこで固定互換経路と本フラグを同時に削り、
     /// `execute_master_line` の 1 本にできる見込みである。
-    explicit_line: Arc<AtomicBool>,
+    pub(super) explicit_line: Arc<AtomicBool>,
 ```
 
 While that flag is `false`, the RT side runs the fixed compatibility path seen above (rack → gain →
@@ -892,8 +897,8 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1975-1992
-fn execute_master_line(
+// rust/crates/orbit-audio-native/src/output/render.rs:183-200
+pub(super) fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
     output_channels: usize,
@@ -933,8 +938,8 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2070-2111
-fn render_engine_with_sources(
+// rust/crates/orbit-audio-native/src/output/render.rs:283-324
+pub(super) fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     buses: &mut [InsertBusStage],
@@ -956,7 +961,7 @@ fn render_engine_with_sources(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_engine_with_sources_impl(
+pub(super) fn render_engine_with_sources_impl(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     buses: &mut [InsertBusStage],
@@ -984,7 +989,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3267-3284
+// rust/crates/orbit-audio-native/src/output/startup.rs:437-454
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -1029,8 +1034,8 @@ The countermeasure has two parts. The first is to **check liveness on a throwawa
 before committing to the device**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:505-539
-fn probe_output_device(
+// rust/crates/orbit-audio-native/src/output/device.rs:164-198
+pub(super) fn probe_output_device(
     live: &LiveOutputDevice,
     suppress_callback: bool,
 ) -> Result<Option<u64>, OutputError> {
@@ -1078,7 +1083,7 @@ stream you meant to discard does not stop its callbacks, so `OutputStream` pause
 `Drop` as well.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:676-682
+// rust/crates/orbit-audio-native/src/output/device.rs:335-341
 impl Drop for OutputStream {
     fn drop(&mut self) {
         // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
@@ -1097,14 +1102,14 @@ What is interesting is that the **fallback policy is inverted between the startu
 live-switch path**. That distinction is carried by a type.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:335-342
+// rust/crates/orbit-audio-native/src/output/lines.rs:319-326
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceFallbackPolicy {
-    /// 起動経路。利用者を無音のまま放置しないので host 既定へ縮退して起動を成功させる。
-    FallBackToHostDefault,
-    /// ライブ切替経路。縮退せず `DeviceUnavailable` / `StreamDead` を返し、呼び出し側が
-    /// **いま鳴っているデバイスをそのまま使い続ける**。
-    RejectAndKeepCurrent,
+pub enum OutputDest {
+    Master,
+    Bus(usize),
+    Device { left: usize, right: Option<usize> },
+    Render(usize),
+    Link(usize),
 }
 ```
 
