@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the OOP role abstraction into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-role-traits`
+
+#888 子 1 の**第 11 束**。`OutProcRole` トレイトとその 2 実装、`StreamGuard`、
+リトライ付き push（696 行）を `engine_wrap/role.rs`（483 コード行）へ。
+🔴 **`engine_wrap.rs` が 1,000 行を切った**（1,468 → **995** コード行）。
+
+### 🔴 トレイトの中では `pub(super)` が使えない
+
+一括で `pub(super)` を付けたところ **E0449「visibility qualifiers are not permitted here」が 33 件**
+出た。トレイト定義の本体とトレイト実装ブロックのメソッドは、**可視性がトレイト側で決まる**ので
+修飾子を書けない。これまでの束は inherent impl（`impl EngineWrap`）だったので出なかった。
+
+**対処**: 正規表現で構文を判定するのをやめ、**コンパイラの指摘行をそのまま使って**外した。
+`cargo clippy` の出力から `role.rs:<行>` を抜き、その行の `pub(super) ` を削るループを回して収束させた。
+同じ手法を「フィールドが private」47 件にも使い、エラーメッセージから
+`struct 名 + フィールド名` を抜いて該当行だけに付けた。
+
+**再エクスポート 2 件**: `DeviceSwitchRequest`（`main.rs` から）と `ClapPluginRole`（`session.rs` から）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
 ### refactor(daemon): move the instrument slot types and plugin UI wiring out (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-instrument-slot-types`

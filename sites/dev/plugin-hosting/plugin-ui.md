@@ -943,7 +943,7 @@ ack の照合キーは `(generation, window, evt_seq)` の三つ組になり、�
 loud に拒否されます。event frame の `PluginUiTarget` にも `window` が載りました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:4515-4528
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3824-3837
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
