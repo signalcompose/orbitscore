@@ -1343,15 +1343,15 @@ LOOP(drums)
 ## Sources
 
 - `rust/crates/orbit-plugin-scan/Cargo.toml:1-7` — スキャナを独立バイナリにする理由（crash isolation）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:29-50` — `CatalogEntry` / `Catalog`（PC.1 JSON スキーマ）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:52-61` — `SCANNER_SCHEMA_VERSION` とキャッシュ無効化の条件
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1028-1035` — `dedup_key`（format, path, pluginId）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:187-198` — 標準スキャンディレクトリ
-- `rust/crates/orbit-plugin-scan/src/lib.rs:228-253` — 非再帰のバンドル列挙
-- `rust/crates/orbit-plugin-scan/src/lib.rs:571-584` — CLAP feature → roles（不明なら両方）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:922-940` — VST3 Sub Categories → roles
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1037-1055` — `dedup_entries`（後勝ち）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1854-1866` — atomic write
+- `rust/crates/orbit-plugin-scan/src/types.rs:21-42` — `CatalogEntry` / `Catalog`（PC.1 JSON スキーマ）
+- `rust/crates/orbit-plugin-scan/src/types.rs:44-53` — `SCANNER_SCHEMA_VERSION` とキャッシュ無効化の条件
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:206-213` — `dedup_key`（format, path, pluginId）
+- `rust/crates/orbit-plugin-scan/src/dirs.rs:9-20` — 標準スキャンディレクトリ
+- `rust/crates/orbit-plugin-scan/src/dirs.rs:50-75` — 非再帰のバンドル列挙
+- `rust/crates/orbit-plugin-scan/src/clap_scan.rs:43-56` — CLAP feature → roles（不明なら両方）
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:100-118` — VST3 Sub Categories → roles
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:215-233` — `dedup_entries`（後勝ち）
+- `rust/crates/orbit-plugin-scan/src/catalog_io.rs:29-41` — atomic write
 - `rust/crates/orbit-plugin-scan/src/main.rs:25-29` / `:64-69` — `--probe-artifacts` opt-in と catalog version 2
 - `packages/engine/src/core/global/plugin-catalog.ts:18-73` — engine 側 reader（型・パス解決・mtime キャッシュ）
 - `packages/engine/src/core/global/plugin-resolver.ts:68-80` — PC.2 判別規則 `isPluginPathSpec`

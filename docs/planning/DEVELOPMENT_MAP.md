@@ -749,7 +749,7 @@ owner は「**実行ファイルに対してディレクトリを作って保存
 
 | # | 規格が定める作法（**強度に注意**） | 現在地 |
 |---|---|---|
-| **1** | 🔴 **CLAP: `CLAP_PATH` 環境変数を問い合わせる — `must`。** OS 既定パスに加え、`CLAP_PATH`（PATH と同じ形式・`:` / `;` 区切り）を見る**義務**（`clap/include/clap/entry.h` 逐語: "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 **`CLAP_PATH` は見ていない**。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`orbit-plugin-scan/src/lib.rs:200-211` `extra_scan_dirs_from_env`）。**修正は「同じ関数に `CLAP_PATH` を並べる」だけ**で、新規実装ではない |
+| **1** | 🔴 **CLAP: `CLAP_PATH` 環境変数を問い合わせる — `must`。** OS 既定パスに加え、`CLAP_PATH`（PATH と同じ形式・`:` / `;` 区切り）を見る**義務**（`clap/include/clap/entry.h` 逐語: "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 **`CLAP_PATH` は見ていない**。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`orbit-plugin-scan/src/dirs.rs:22-33` `extra_scan_dirs_from_env`）。**修正は「同じ関数に `CLAP_PATH` を並べる」だけ**で、新規実装ではない |
 | **2** | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同 `entry.h`: "Each directory **should** be recursively searched"）。1 と違い義務ではない | 🔴 **非再帰**（`list_bundle_candidates` の doc「1 ディレクトリ直下（非再帰）」・同 `:228`。テスト `:2197` が非再帰を固定している） |
 | **3** | **CLAP: 1 つの `.clap` に複数プラグインが入りうる。** `CLAP_PLUGIN_FACTORY_ID` で factory を取り、`get_plugin_count` / `get_plugin_descriptor(index)` で列挙し、`create_plugin(…, plugin_id)` で生成する | ✅ **列挙は実装済み**（`orbit-clap-host/src/discovery.rs:105-120` が descriptor を全列挙・`lib.rs:540-566` が 1 バンドル→複数エントリ化・`discovery.rs:125-137` が ID で選ぶ）。**カタログの同一性は `(format, path, pluginId)` の複合キー**（`lib.rs:1028-1034`） |
 | **4** | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/` へ移動**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認）。CID / Category / Name / Vendor / Version を持つ | ○ 参照している（`lib.rs:110`）。⚠️ ただし scanner は **`Contents/Resources/moduleinfo.json` のみ**を見る（`lib.rs:842`）ので、**3.7.5〜3.7.7 でビルドされたバンドルは `moduleinfoMissing` → ProbePending** になる（probe で回収されるので致命ではない） |
@@ -1525,7 +1525,7 @@ input.effect("Reverb").rec()     // ウェットを録る
 | ~~#598 P1 の実装着手有無~~ → ✅ PR #612（`10f3594c`）で P1 完了。P2/P3 は未着手（`git log`） | — |
 | #546 Phase 3「明示 `save_plugin_state` 無しの通し E2E」の有無 | `tests/e2e/orbitstudio-mcp-gated.spec.ts` を `save_plugin_state` で grep し、無い経路の E2E があるか読む |
 | #546 Phase 5「`.vstpreset` DSL 表面の降格」「instrument slot 非解放」 | 前者は `sequence.ts` の `instrument()` の引数処理 / 後者は #618 の spare slot 実装で live rename が枯渇するか実機 |
-| #592 の排他契約が #474 P4 でどう固定されたか | `orbit-audio-sandbox/src/transport.rs` の `reset_child_starting` と daemon 側の watchdog 配線を読む |
+| #592 の排他契約が #474 P4 でどう固定されたか | `orbit-audio-sandbox/src/transport/shm.rs:256` の `reset_child_starting` と daemon 側の watchdog 配線を読む |
 | #142 / #145 に相当する章が `sites/user/` に既にあるか | `sites/user/` の目次と T1-T8 の対応 |
 | #465 / #315 / #410 の現存 | triage が「再現確認が必要」としたもの。本地図でも未確認 |
 | #598 本文「out-of-process child のオフライン駆動は未検証」と設計文書 §3「成立する（2026-08-01 実行）」の矛盾 | 設計文書 §3 の実測を再読して本文を更新 |

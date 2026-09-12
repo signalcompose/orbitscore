@@ -1203,12 +1203,12 @@ CLAP を使う必要があります。
 - `rust/crates/orbit-child-ui/src/lib.rs:203-225` — `open_command`（ドレーンゲート・detail の分離）
 - `rust/crates/orbit-child-ui/src/lib.rs:268-319` — `tick`（フェーズ B のトリガと解放順序）
 - `rust/crates/orbit-child-ui/src/lib.rs:321-342` — `begin_close`（3 経路合流の再入ガード）
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:79-87` — `EVT_SLOTS = 2` と const assert
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:265-277` — `SharedRegion` の evt リング・`dirty_epoch` フィールド
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:359-378` — `ReleaseAcquireSeq`（Ordering を型で固定）
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:512-538` — `EventRingChild::service`（slot 再利用の不変条件・保持して再試行）
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:1213-1225` — `UiPumpNotification`
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374` — per-window の `UiPumpState`
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:33-41` — `EVT_SLOTS = 2` と const assert
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-234` — `SharedRegion` の evt リング・`dirty_epoch` フィールド
+- `rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:37-56` — `ReleaseAcquireSeq`（Ordering を型で固定）
+- `rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:192-218` — `EventRingChild::service`（slot 再利用の不変条件・保持して再試行）
+- `rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45` — `UiPumpNotification`
+- `rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82` — per-window の `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame 名
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` はフェーズ A 受理のみ
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
