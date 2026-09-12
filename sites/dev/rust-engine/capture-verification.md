@@ -1,12 +1,12 @@
 ---
 title: "RE-4. capture seam と客観検証（ORBIT_CAPTURE_WAV）"
 chapter-id: "RE-4"
-verified-against: 76a4056
-verified-at: "2026-09-05"
+verified-against: 9c29e45
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-4. capture seam と客観検証（ORBIT_CAPTURE_WAV）
 
@@ -60,7 +60,7 @@ pub(super) fn render_block_with_sources(
 タップは `RingTapSink::commit` という wait-free / no-alloc な操作で行われ、
 リングが満杯なら drop カウントで検出します（RT 契約を守りつつ off-thread writer
 が追いつかない場合を可視化する）。ring の容量は `CAPTURE_RING_SECONDS = 8` 秒分で、
-writer が一時的に遅れても吸収できるよう generous に確保されています（`output.rs:222`）。
+writer が一時的に遅れても吸収できるよう generous に確保されています（`output/device.rs:265`）。
 
 ## `RiffWavWriter`: 外部依存なしの自作 32-bit float WAV encoder
 
@@ -546,7 +546,8 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 
 ## Sources
 
-- `rust/crates/orbit-audio-native/src/output.rs:222-233,662-707` — `CAPTURE_RING_SECONDS` / `OutputStream`（`_capture` フィールドの drop 順保証）/ `render_block_with_sources`（capture タップの位置）
+- `rust/crates/orbit-audio-native/src/output/device.rs:265-282` — `CAPTURE_RING_SECONDS` / `OutputStream`（`_capture` フィールドの drop 順保証）
+- `rust/crates/orbit-audio-native/src/output/render.rs:94-180` — `render_block_with_sources`（capture タップの位置）
 - `rust/crates/orbit-audio-native/src/capture.rs:21-35` — 定数（`HEADER_SYNC_INTERVAL_SAMPLES` と #651 の経緯）
 - `rust/crates/orbit-audio-native/src/capture.rs:37-127` — `RiffWavWriter`（32-bit float・外部 crate 不使用・`sync_header`・`data_bytes`・`finalize`）
 - `rust/crates/orbit-audio-native/src/capture.rs:186-256` — `CaptureWriter::create`（off-thread drain ループ・定期 header patch・best-effort finalize）

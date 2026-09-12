@@ -1,12 +1,12 @@
 ---
 title: "RE-4. Capture Seam and Objective Verification (ORBIT_CAPTURE_WAV)"
 chapter-id: "RE-4"
-verified-against: 76a4056
-verified-at: "2026-09-05"
+verified-against: 9c29e45
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-4. Capture Seam and Objective Verification (ORBIT_CAPTURE_WAV)
 
@@ -65,7 +65,7 @@ The tap is performed via `RingTapSink::commit`, a wait-free / no-alloc
 operation; if the ring is full, it is tracked with a drop counter (this keeps
 the RT contract intact while making it visible when the off-thread writer
 cannot keep up). The ring holds `CAPTURE_RING_SECONDS = 8` seconds, generously sized so that a
-temporarily lagging writer is absorbed (`output.rs:222`).
+temporarily lagging writer is absorbed (`output/device.rs:265`).
 
 ## `RiffWavWriter`: a self-authored 32-bit float WAV encoder with no external dependency
 
@@ -580,7 +580,8 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 
 ## Sources
 
-- `rust/crates/orbit-audio-native/src/output.rs:222-233,662-707` — `CAPTURE_RING_SECONDS` / `OutputStream` (drop-order guarantee for the `_capture` field) / `render_block_with_sources` (location of the capture tap)
+- `rust/crates/orbit-audio-native/src/output/device.rs:265-282` — `CAPTURE_RING_SECONDS` / `OutputStream` (drop-order guarantee for the `_capture` field)
+- `rust/crates/orbit-audio-native/src/output/render.rs:94-180` — `render_block_with_sources` (location of the capture tap)
 - `rust/crates/orbit-audio-native/src/capture.rs:21-35` — constants (`HEADER_SYNC_INTERVAL_SAMPLES` and the #651 background)
 - `rust/crates/orbit-audio-native/src/capture.rs:37-127` — `RiffWavWriter` (32-bit float, no external crate, `sync_header`, `data_bytes`, `finalize`)
 - `rust/crates/orbit-audio-native/src/capture.rs:186-256` — `CaptureWriter::create` (off-thread drain loop, periodic header patch, best-effort finalize)

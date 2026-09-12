@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: re-anchor the dev-site code pointers onto the #896 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr896`
+
+PR [#896](https://github.com/signalcompose/orbitscore/pull/896)（#888 子 2・`session.rs` 2,605 → 439 /
+`output.rs` 2,587 → 322 コード行）へのドキュメント追従。
+
+#896 は `// FILE:START-END` 引用ブロックを分割後のモジュールへ張り直しており、`npm run docs:check`
+は 948 件すべて緑である。**しかし `check-citations.mjs` が見ているのは引用ブロックだけ**で、
+本文中のインライン参照と各章末「参考にしたコード」の `path:line` は検査対象外だった。
+その結果、**dev サイトに 44 箇所の宙に浮いた参照が残っていた**（`output.rs:3290-3322` など、
+445 行しかないファイルへの参照）。
+
+本コミットはそれらを**シンボルから引き直して**再アンカーした（ja / en 両方）:
+
+- `sites/dev/rust-engine/index.md` — コマンド表の出典が単一 `match` ではなくなった旨を追記し、
+  `session/run_loop.rs` / `session/dispatch.rs` / `dispatch_plugin.rs` / `dispatch_transport.rs` へ分解
+- `sites/dev/rust-engine/insert-bus.md` — `InsertBusStage` の 2 つの参照が同一定義に解決するため 1 本へ統合
+- `sites/dev/rust-engine/capture-verification.md` — `CAPTURE_RING_SECONDS` / `OutputStream` と
+  `render_block_with_sources` が別ファイルへ分かれたため 2 本へ分割
+- `sites/dev/signal-chain/mixer-audio-line.md` — post-loop が `output/render_full.rs` へ移った
+- `sites/dev/plugin-hosting/plugin-ui.md` — `ClosePluginUI` が `session/dispatch.rs` へ移った
+- 上記 5 章の `verified-against` / `verified-at` を `9c29e45` / `2026-09-12` へ更新
+
+`/docs` 側も 2 件:
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — `validate_line_program` の `Pan` 受理と
+  バス上 pan 則（`line_pan_coefficients`）を `output/line_program.rs` / `output/dsp.rs` へ
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — 最後の session 切断の判定を
+  `session/params_plugin.rs` の `SessionRegistration::disconnect` へ
+
+🔴 **発見: これらの参照は #896 より前から既に壊れていた。** 旧 `path:line` を `9d39d2e`
+（#896 の base）で引き直したところ、**確認した 34 箇所のほぼ全部が無関係な行を指していた**
+（例: `output.rs:823-846` は「active flag snapshot」と書かれていたが実際は `MasterLine::new`、
+`session.rs:1271-1284` は「session 切断 trigger」と書かれていたが実際は outproc frames-clamped の
+ticker）。**引用ブロックだけがラチェットで守られ、その隣の散文参照は誰にも検査されずに漂流していた。**
+CLAUDE.md「規律を足す時は、同時にそれを守らせる仕組みを足すこと」の未適用箇所である。
+
+**実装・テストは 1 行も変更していない。**
+
+---
+
 ### fix(plugin-scan): re-export vst3_scan publicly — my sed excluded digits (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`

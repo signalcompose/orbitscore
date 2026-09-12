@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: 9c29e45
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで、2026-09-10 に #502 の SC 削除（[#833](https://github.com/signalcompose/orbitscore/pull/833)）で確定した「LinkAudio egress は出荷ビルドに入っていない」まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）の `pan` op・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで、2026-09-10 に #502 の SC 削除（[#833](https://github.com/signalcompose/orbitscore/pull/833)）で確定した「LinkAudio egress は出荷ビルドに入っていない」まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）の `pan` op・mono デバイス宛先・再 publish の seed まで追従しました。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -272,7 +272,9 @@ pub(super) async fn handle_command(
 ### コマンド一覧（`handle_command` の match arm から）
 
 `Command` は `method: String` を持つ構造体で、Rust の enum ではありません。したがって「コマンドの
-一覧」は `session.rs` の `match method.as_str()` の arm を数えたものになります。2026-09-01 時点で
+一覧」は `session/dispatch.rs` の `match method.as_str()` の arm と、その手前で分岐する
+`session/dispatch_plugin.rs` / `session/dispatch_transport.rs` の arm を数えたものになります
+（#888 子 2 の分割前は `session.rs` の単一 `match` でした）。2026-09-01 時点で
 arm は次のとおりです（`cfg` 列は feature で分岐する arm。`SetBusLine` の行だけ 2026-09-10 の
 #611 PR-O3b で足しました）。
 
@@ -759,7 +761,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。返�
 下の引用のとおり atomic を 1 つ store するだけで、line-program installer を呼びません。
 残っているのは TS 側の切り替え（後半の束 `611-output-line`）で、そのとき
 `LineControl::current_gains()` の doc が名指ししている直列化の契約
-（`rust/crates/orbit-audio-native/src/output.rs:1254-1293`）を新たに満たす必要があります。
+（`rust/crates/orbit-audio-native/src/output/line_program.rs:173-212`）を新たに満たす必要があります。
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:225-234
@@ -835,7 +837,7 @@ dispatch が `engine.output_channels()` を渡して間に挟まります。
 ようになり、形の検証は `matches!(channels.len(), 1 | 2)`、範囲の検証は「`left` は
 `1..=output_channels`・`right` があるときだけ 0 でないこと・`left` と異なること」に変わりました。
 要素数が 0 個や 3 個以上なら `MALFORMED_REQUEST`、形は正しいが範囲外なら `PARAM_OUT_OF_RANGE`
-です（`rust/crates/orbit-audio-daemon/src/session.rs:3916-3954` の
+です（`rust/crates/orbit-audio-daemon/src/session.rs:1470-1508` の
 `set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range` が両方を固定しています）。
 
 もう 1 つ、`SetBusRouting` との違いで押さえておきたいのが**宛先の kind 制約**です。
@@ -1116,14 +1118,15 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-daemon/src/main.rs:1-265` — daemon エントリポイント。boot シーケンス（CLI 引数 → audio owner thread → WebSocket bind → ready line 出力 → accept loop）と panic hook（#605）、既知の shutdown ギャップ（#448）
 - `rust/crates/orbit-audio-daemon/src/server.rs:1-79` — WebSocket accept loop（`bind_localhost` / `serve` / `handle_connection`）
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:1-195` — wire protocol の型定義（`Handshake` / `Command` / `OkResponse` / `ErrorResponse` / `Event` / エラーコード定数）。契約の正本は `docs/research/ENGINE_DAEMON_PROTOCOL.md`
-- `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run`（handshake・writer task・UI event 転送）と `handle_command` の match arm（コマンド表の出典）
-- `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
-- `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
+- `rust/crates/orbit-audio-daemon/src/session/run_loop.rs:9-591` — `session::run`（handshake・writer task・UI event 転送）
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:12-466` — `handle_command` と `match method.as_str()` の arm（コマンド表の出典）。プラグイン系は `session/dispatch_plugin.rs:21` の `handle_plugin_command`、トランスポート系は `session/dispatch_transport.rs:12` の `handle_transport_command` へ手前で分岐する
+- `rust/crates/orbit-audio-native/src/output/lines.rs:124-130` / `rust/crates/orbit-audio-native/src/output/render.rs:11-48,94-180,283-302` / `rust/crates/orbit-audio-native/src/output/startup.rs:409-566` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
+- `rust/crates/orbit-audio-native/src/output/device.rs:350-356` / `rust/crates/orbit-audio-native/src/output/lines.rs:9-50` / `rust/crates/orbit-audio-native/src/output/render.rs:250-279` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750` — `EngineWrap::set_global_gain`（PR-O3b では **atomic のみ**。master line への写しは PR-O4 と同時・`ramp_sec` は wire 互換のみ）
-- `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device`（直行デバイスライン・#611 PR-O3a）
-- `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params`（wire 形の検証）と `SetBusLine` の dispatch arm（#611 PR-O3b）
+- `rust/crates/orbit-audio-native/src/output/dsp.rs:144-148,151-212` — `DeviceLineBuffer` / `add_to_device`（直行デバイスライン・#611 PR-O3a）
+- `rust/crates/orbit-audio-daemon/src/session/params.rs:109-169` / `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:407-429` — `parse_set_bus_line_params`（wire 形の検証）と `SetBusLine` の dispatch arm（#611 PR-O3b）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line`（名前 → RT index の解決・全検証後に一度だけ publish）
-- `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line`（#611 PR-O3b）
+- `rust/crates/orbit-audio-native/src/output/lines.rs:38-49` / `rust/crates/orbit-audio-native/src/output/render.rs:183-240` — `MasterLine.line` / `explicit_line` / `execute_master_line`（#611 PR-O3b）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine`（呼び出し元は PR-O4）
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — 束 O-wire（line program 化・互換維持）
 - PR [#824](https://github.com/signalcompose/orbitscore/pull/824) — 束 O-wire-b（`SetBusLine` の wire 契約・DSL からは呼ばない）

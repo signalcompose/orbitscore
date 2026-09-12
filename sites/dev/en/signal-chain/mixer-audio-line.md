@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: 9c29e45
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -427,7 +427,7 @@ listed" partial-update semantics is reproduced.
 
 How does the native render callback consume the routing the daemon wrote into the atomics? The
 place is the second half of `render_engine_with_insert_buses_and_source_outputs` in
-`output.rs`, the so-called **post-loop**.
+`output/render_full.rs`, the so-called **post-loop**.
 
 ```rust
 // rust/crates/orbit-audio-native/src/output/render_full.rs:158-184
@@ -473,7 +473,7 @@ Read it like this.
    the **line program published for that stage** (a sequence of `LineOp`). `LineOp::Rack` is the
    insert's `processor.process`; `LineOp::Output` is the add into `hw` (Master) or into a later
    bus (`Bus(j)`)
-3. The continuation of the excerpt (`output.rs:2160-2184`) is the body of `LineOp::Output`, a
+3. The continuation of the excerpt (`output/render_full.rs:193-257`) is the body of `LineOp::Output`, a
    gain-scaled copy-add (fan-out is not event duplication but "copy-add at the bus processing
    stage", exactly as MX.4 prescribes)
 
@@ -935,7 +935,7 @@ silence). The same thing happens on the `master` path (the `bus == "master"` bra
 The `bus` of `SetBusLine` accepts `"master"`. To have somewhere to receive that, PR-O3b also gave
 `MasterLine` a `line: LineSlot` and branched the render on whether a program has been published,
 tracked by `explicit_line` (the branch is at
-`rust/crates/orbit-audio-native/src/output.rs:1719-1721`, and the generic execution at `:1765-1821`).
+`rust/crates/orbit-audio-native/src/output/render.rs:140-142`, and the generic execution at `:183-240`).
 
 Here is the install handle.
 
@@ -1018,7 +1018,7 @@ decision "fix the address model as `(instance, unit)` now". `SourceSlot.dests` i
 explicit silent destination: unset, out-of-range, and lost routing never falls back to master.
 TS still issues `unit` fixed at 0 (see below).
 
-Feed collection is done by `collect_source_feeds` (`output.rs:2141-2173`), which maps each unit's
+Feed collection is done by `collect_source_feeds` (`output/render.rs:378-410`), which maps each unit's
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
@@ -1069,7 +1069,7 @@ quoted.
 Design document §5.1 marks this position as "★ feed addition loop (new, ~10 lines)" and concludes
 "**this makes the existing defect of `global.gain` not affecting instruments disappear** (position
 fix only; no separate treatment needed)". The native unit test
-`global_gain_scales_instrument_contribution` (`output.rs:2017`) sets `set_global_gain(0.5, 0.0)`,
+`global_gain_scales_instrument_contribution` (`output/startup.rs:1008`) sets `set_global_gain(0.5, 0.0)`,
 pushes a `SourceDest::Master` feed through, and pins the output at 0.5× (WORK_LOG 6.405 keeps the
 actual red → green output).
 
@@ -1278,7 +1278,7 @@ But the #649 design v3 the following day (WORK_LOG 6.420) **corrects that explan
 > — `docs/archive/WORK_LOG_2026-08.md` 6.420
 
 Indeed, E2E-1's DSL declares neither sum nor aux, so the instrument's feed goes from
-`render_engine_with_source_outputs` (`output.rs:1078`) into `render_multi_feeds` and is added to
+`render_engine_with_source_outputs` (`output.rs:389`) into `render_multi_feeds` and is added to
 `hw` **before** the gain loop. As far as the core code quoted above goes, the same `g` is applied
 to `hw` and to every `channels` buffer, so a static reading alone cannot explain a "bypass". The
 #649 design document §13 frames it as "**the static wiring is complete**; therefore the defect is
@@ -1610,8 +1610,8 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing (MX.1–MX.5) normative text
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1313-1325` — PH.2b known v1 constraints, plus the note that the master gain ordering was swapped (#649 PR-O2)
-- `rust/crates/orbit-audio-native/src/output.rs:700-754,1253-1277` — `MasterLine` (rack → gain) / `place_master_into_device`
-- `rust/crates/orbit-audio-native/src/output.rs:3290-3322` — unit test `master_gain_applies_after_the_master_rack_generates_sound` (the only guard on the ordering)
+- `rust/crates/orbit-audio-native/src/output/lines.rs:9-50` / `rust/crates/orbit-audio-native/src/output/render.rs:250-279` — `MasterLine` (rack → gain) / `place_master_into_device`
+- `rust/crates/orbit-audio-native/src/output/startup.rs:2465-2497` — unit test `master_gain_applies_after_the_master_rack_generates_sound` (the only guard on the ordering)
 - `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — design source of truth for the master line and the single multiplication path
 - `docs/design/643-mixer-foundation-design.md` — #643 design (owner's three articles, responsibility boundary, feed injection point §5.1, `output()` three branches §12)
 - `docs/design/649-audio-line-design.md` — #649 audio-line design (§7 decisions, §8 open items, §9–§14 implementation design v3)
@@ -1632,28 +1632,28 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259` — `setGlobalGain` (intent recording)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum and aux pool prefixes and default sizes
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing` (validation → one line-program publication → mirror into the old atomics, #611 PR-O3a)
-- `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` handler
-- `rust/crates/orbit-audio-native/src/output.rs:900-915` — `BlockSource` / `SourceDest`
-- `rust/crates/orbit-audio-native/src/output.rs:2141-2173` — `collect_source_feeds`
-- `rust/crates/orbit-audio-native/src/output.rs:2119-2235` — the `render_multi_feeds` call and the post-loop (line-program execution, #611 PR-O3a)
-- `rust/crates/orbit-audio-native/src/output.rs:914-939` — `OutputDest` / `LineOutput` / `LineOp`
-- `rust/crates/orbit-audio-native/src/output.rs:1043-1100` — `LineExchange` (AtomicPtr publication + generation-counter reclamation)
-- `rust/crates/orbit-audio-native/src/output.rs:1249-1297` — `validate_line_program` (install-time rejection of `Pan` / `Render` / `Link`)
+- `rust/crates/orbit-audio-daemon/src/session/dispatch_transport.rs:168-190` — `SetGlobalGain` handler
+- `rust/crates/orbit-audio-native/src/output/lines.rs:140-154` — `BlockSource` / `SourceDest`
+- `rust/crates/orbit-audio-native/src/output/render.rs:378-410` — `collect_source_feeds`
+- `rust/crates/orbit-audio-native/src/output/render_full.rs:11-283` — the `render_multi_feeds` call and the post-loop (line-program execution, #611 PR-O3a)
+- `rust/crates/orbit-audio-native/src/output/lines.rs:320-342` — `OutputDest` / `LineOutput` / `LineOp`
+- `rust/crates/orbit-audio-native/src/output/line_program.rs:91-154` — `LineExchange` (AtomicPtr publication + generation-counter reclamation)
+- `rust/crates/orbit-audio-native/src/output/line_program.rs:329-374` — `validate_line_program` (install-time rejection of `Pan` / `Render` / `Link`)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) / PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — bundle O-wire, PR-O3a (line-program conversion, compatibility preserved)
 - PR [#823](https://github.com/signalcompose/orbitscore/pull/823) — bundle O-wire-b, PR-O3b (the `SetBusLine` wire and TS client, `MasterLine.line`)
-- `rust/crates/orbit-audio-daemon/src/session.rs:299-361` — `set_bus_line_malformed` / `parse_set_bus_line_params` (wire shape validation, `MALFORMED_REQUEST`)
-- `rust/crates/orbit-audio-daemon/src/session.rs:435-464` — `validate_set_bus_line_device_channels` (`PARAM_OUT_OF_RANGE`)
-- `rust/crates/orbit-audio-daemon/src/session.rs:2633-2656` — the `SetBusLine` dispatch and the `UNSUPPORTED` arm for a build without the feature
+- `rust/crates/orbit-audio-daemon/src/session/params.rs:103-169` — `set_bus_line_malformed` / `parse_set_bus_line_params` (wire shape validation, `MALFORMED_REQUEST`)
+- `rust/crates/orbit-audio-daemon/src/session/params.rs:268-295` — `validate_set_bus_line_device_channels` (`PARAM_OUT_OF_RANGE`)
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:407-429` — the `SetBusLine` dispatch and the `UNSUPPORTED` arm for a build without the feature
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6499-6687` — `EngineWrap::set_bus_line` (forward-only, the master branch, one publish after all validation)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9266-9294` — `EngineWrap::set_global_gain` (one more step: republishing the master line)
-- `rust/crates/orbit-audio-native/src/output.rs:739-742` — `MasterLine.line` / `explicit_line`
-- `rust/crates/orbit-audio-native/src/output.rs:1765-1821` — `execute_master_line` (master execution after a publish)
+- `rust/crates/orbit-audio-native/src/output/lines.rs:38-49` — `MasterLine.line` / `explicit_line`
+- `rust/crates/orbit-audio-native/src/output/render.rs:183-240` — `execute_master_line` (master execution after a publish)
 - `packages/engine/src/audio/rust-engine/protocol-types.ts:33-34` — `'SetBusLine'` added to `CommandMethod`
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97` — `WireDest` / `WireLineOp`
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:715-718` — `DaemonClient.setBusLine()`
 - `tests/audio/rust-engine/daemon-client-line-wire.spec.ts:8-36` — the only TS-side `SetBusLine` test (it mocks `request`)
-- `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — the no-bus path `render_engine_with_source_outputs`
-- `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
+- `rust/crates/orbit-audio-native/src/output.rs:389-445` — the no-bus path `render_engine_with_source_outputs`
+- `rust/crates/orbit-audio-native/src/output/startup.rs:1008-1060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds` (feed addition and gain ramp)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:500-600` — `captureInstrumentScenario` / `rms()`
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463` — E2E-1 (`global.gain(-6)`)

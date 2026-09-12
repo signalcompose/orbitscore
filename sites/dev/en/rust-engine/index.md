@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: 9c29e45
+verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -279,7 +279,9 @@ pub(super) async fn handle_command(
 ### The command list (from the match arms of `handle_command`)
 
 `Command` is a struct carrying `method: String`; it is not a Rust enum. The "list of commands"
-is therefore whatever arms exist in `session.rs`'s `match method.as_str()`. As of 2026-09-01 the
+is therefore whatever arms exist in `session/dispatch.rs`'s `match method.as_str()`, plus the
+arms in `session/dispatch_plugin.rs` / `session/dispatch_transport.rs` it branches to first
+(before the #888 child-2 split these were one `match` in `session.rs`). As of 2026-09-01 the
 arms are as follows (the notes column mentions the arms gated by a feature `cfg`; only the
 `SetBusLine` row was added later, by #611 PR-O3b on 2026-09-10).
 
@@ -779,7 +781,7 @@ values (see "A republish carries the effective gain across" in
 the quotation below shows, it stores one atomic and does not call the line-program installer. What
 remains is the TS-side switch (the second bundle, `611-output-line`), which will have to newly
 satisfy the serialization contract named in the doc comment on `LineControl::current_gains()`
-(`rust/crates/orbit-audio-native/src/output.rs:1254-1293`).
+(`rust/crates/orbit-audio-native/src/output/line_program.rs:173-212`).
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:225-234
@@ -861,7 +863,7 @@ one-element (mono) array acceptable too**: the shape check became
 `left`". Zero or three-plus elements are `MALFORMED_REQUEST`; a well-shaped but out-of-range
 channel is `PARAM_OUT_OF_RANGE` — both are pinned by
 `set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range`
-(`rust/crates/orbit-audio-daemon/src/session.rs:3916-3954`).
+(`rust/crates/orbit-audio-daemon/src/session.rs:1470-1508`).
 
 One more difference from `SetBusRouting` is worth holding onto: the **kind constraint on
 destinations**. `SetBusRouting` validates and rejects unless "the output target is a sum bus and
@@ -1156,14 +1158,15 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/main.rs:1-265` — daemon entry point. Boot sequence (CLI args → audio owner thread → bind WebSocket → emit ready line → accept loop), panic hook (#605), known shutdown gap (#448)
 - `rust/crates/orbit-audio-daemon/src/server.rs:1-79` — WebSocket accept loop (`bind_localhost` / `serve` / `handle_connection`)
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:1-195` — wire protocol type definitions (`Handshake` / `Command` / `OkResponse` / `ErrorResponse` / `Event` / error code constants). Contract source of truth: `docs/research/ENGINE_DAEMON_PROTOCOL.md`
-- `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
-- `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
-- `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
+- `rust/crates/orbit-audio-daemon/src/session/run_loop.rs:9-591` — `session::run` (handshake, writer task, UI event forwarding)
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:12-466` — `handle_command` and the `match method.as_str()` arms (source of the command table). Plugin methods branch out first into `handle_plugin_command` (`session/dispatch_plugin.rs:21`) and transport methods into `handle_transport_command` (`session/dispatch_transport.rs:12`)
+- `rust/crates/orbit-audio-native/src/output/lines.rs:124-130` / `rust/crates/orbit-audio-native/src/output/render.rs:11-48,94-180,283-302` / `rust/crates/orbit-audio-native/src/output/startup.rs:409-566` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
+- `rust/crates/orbit-audio-native/src/output/device.rs:350-356` / `rust/crates/orbit-audio-native/src/output/lines.rs:9-50` / `rust/crates/orbit-audio-native/src/output/render.rs:250-279` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
-- `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
-- `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params` (wire-shape validation) and the `SetBusLine` dispatch arm (#611 PR-O3b)
+- `rust/crates/orbit-audio-native/src/output/dsp.rs:144-148,151-212` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
+- `rust/crates/orbit-audio-daemon/src/session/params.rs:109-169` / `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:407-429` — `parse_set_bus_line_params` (wire-shape validation) and the `SetBusLine` dispatch arm (#611 PR-O3b)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line` (name → RT index resolution, published exactly once after every check)
-- `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line` (#611 PR-O3b)
+- `rust/crates/orbit-audio-native/src/output/lines.rs:38-49` / `rust/crates/orbit-audio-native/src/output/render.rs:183-240` — `MasterLine.line` / `explicit_line` / `execute_master_line` (#611 PR-O3b)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine` (the caller arrives in PR-O4)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — bundle O-wire (line-program conversion, compatibility preserved)
 - PR [#824](https://github.com/signalcompose/orbitscore/pull/824) — bundle O-wire-b (the `SetBusLine` wire contract; the DSL never calls it)
