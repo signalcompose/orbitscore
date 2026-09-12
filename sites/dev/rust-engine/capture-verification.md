@@ -30,8 +30,8 @@ capture は `render_block_with_sources`（[RE-1](/rust-engine/) 参照）の中�
 変わりません（読むだけで mutation ではない）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1886-1909
-fn render_block_with_sources(
+// rust/crates/orbit-audio-native/src/output/render.rs:94-117
+pub(super) fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
@@ -337,15 +337,15 @@ Rust の struct field 宣言順 drop を利用し「stream 停止（callback 停
 writer が ring 残りを drain して finalize」という順序を構造的に保証しています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:608-617
+// rust/crates/orbit-audio-native/src/output/device.rs:267-276
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
-    _stream: Stream,
+    pub(super) _stream: Stream,
     /// capture seam（#307 realtime）: `ORBIT_CAPTURE_WAV` 有効時のみ `Some`。**`_stream` より後に
     /// 宣言する**ことで drop 順を「stream 停止（callback 停止＝以後 commit なし）→ writer が ring の
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
-    _capture: Option<crate::capture::CaptureWriter>,
-    render_state: Arc<std::sync::Mutex<RenderState>>,
+    pub(super) _capture: Option<crate::capture::CaptureWriter>,
+    pub(super) render_state: Arc<std::sync::Mutex<RenderState>>,
     pub device_name: String,
     pub sample_rate: u32,
 ```

@@ -430,7 +430,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2574-2600
+// rust/crates/orbit-audio-native/src/output/render_full.rs:158-184
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -490,7 +490,7 @@ place", it now "executes a per-stage sequence of operations from the top". The o
 these three.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1077-1102
+// rust/crates/orbit-audio-native/src/output/lines.rs:317-342
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,7 +530,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2609-2635
+// rust/crates/orbit-audio-native/src/output/render_full.rs:193-219
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -566,7 +566,7 @@ as an `Output`. `Render` / `Link` are still **rejected at install time** (`Pan` 
 it directly into RT. Details in the next heading).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1498-1510
+// rust/crates/orbit-audio-native/src/output/line_program.rs:335-347
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -595,27 +595,11 @@ both master-line execution (`execute_master_line`) and the post-loop with code t
 L/R.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2289-2308
+// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
 #[inline]
-fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
-    if ramp.is_settled() {
-        if ramp.end == 0.0 {
-            return;
-        }
-        let (left, right) = line_pan_coefficients(ramp.end);
-        for frame in 0..frames {
-            let base = frame * ENGINE_CHANNELS;
-            buf[base] *= left;
-            buf[base + 1] *= right;
-        }
-        return;
-    }
-
-    if ramp.hold_after == 0 {
-        return;
-    }
-    let (start_left, start_right) = line_pan_coefficients(ramp.start);
-    let (end_left, end_right) = line_pan_coefficients(ramp.end);
+pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
+    ready && scratch_len >= block
+}
 ```
 
 Turning a position into L/R coefficients was factored out into `line_pan_coefficients`
@@ -623,23 +607,10 @@ Turning a position into L/R coefficients was factored out into `line_pan_coeffic
 **at the ramp's start and end positions**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2270-2286
+// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
 #[inline]
-fn line_pan_coefficients(pan: f32) -> (f32, f32) {
-    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
-    //
-    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
-    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
-    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
-    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
-    if pan == 0.0 {
-        return (1.0, 1.0);
-    }
-    let (left, right) = equal_power_pan(pan);
-    (
-        left * std::f32::consts::SQRT_2,
-        right * std::f32::consts::SQRT_2,
-    )
+pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
+    ready && scratch_len >= block
 }
 ```
 
@@ -676,8 +647,8 @@ devices are in place to preserve the semantics of the old API.
 The first is `effective_line_output_dest`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1540-1551
-fn effective_line_output_dest(
+// rust/crates/orbit-audio-native/src/output/line_program.rs:377-388
+pub(super) fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
     program_target: OutputDest,
@@ -708,12 +679,12 @@ replacement becomes a question. `LineExchange`'s answer is "RT does one Acquire 
 belongs to control".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1255-1260
-struct LineExchange {
-    live: AtomicPtr<LineProgram>,
-    retired: Mutex<Vec<RetiredLineProgram>>,
+// rust/crates/orbit-audio-native/src/output/line_program.rs:91-96
+pub(super) struct LineExchange {
+    pub(super) live: AtomicPtr<LineProgram>,
+    pub(super) retired: Mutex<Vec<RetiredLineProgram>>,
     /// Completed RT generations. The audio thread is the sole writer; control only Acquire-loads.
-    generation: AtomicU64,
+    pub(super) generation: AtomicU64,
 }
 ```
 
@@ -727,7 +698,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2502-2519
+// rust/crates/orbit-audio-native/src/output/render_full.rs:86-103
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -809,10 +780,12 @@ session side only looks at the JSON shape (op names, `gain` finite and >= 0, at 
 `master` line not pointing at master or at a bus); it never resolves a name into an RT index.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:306-318
+// rust/crates/orbit-audio-daemon/src/session/params.rs:107-119
 /// `SetBusLine` の一方通行 wire shape を完全に検証してから engine 用 vocabulary を返す。
 #[cfg(feature = "outproc-effect")]
-fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
+pub(super) fn parse_set_bus_line_params(
+    params: &Value,
+) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
     let bus = match params.get("bus") {
         Some(Value::String(bus)) if !bus.trim().is_empty() => bus.clone(),
         _ => return Err(set_bus_line_malformed("'bus' must be a non-empty string")),
@@ -821,15 +794,13 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
         .get("line")
         .and_then(Value::as_array)
         .ok_or_else(|| set_bus_line_malformed("'line' must be an array"))?;
-    let mut line = Vec::with_capacity(items.len());
-    let mut rack_seen = false;
 ```
 
 The dispatch is just those three steps in order (shape check, device-channel range check, delegation
 to the engine), with a separate arm returning `UNSUPPORTED` on a build without the feature.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2670-2693
+// rust/crates/orbit-audio-daemon/src/session/dispatch.rs:406-429
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -969,20 +940,20 @@ tracked by `explicit_line` (the branch is at
 Here is the install handle.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:857-869
+// rust/crates/orbit-audio-native/src/output/bus_topology.rs:104-116
     pub fn line_program_installer(&self) -> LineProgramInstaller {
         let control = self.line.line_control();
         let current = control.clone();
-        let explicit = self.explicit_line.clone();
         LineProgramInstaller::new(
             move |program, bus_index, bus_count| {
-                control.install_for_bus(program, bus_index, bus_count)?;
-                explicit.store(true, Ordering::Release);
-                Ok(())
+                control.install_for_bus(program, bus_index, bus_count)
             },
             move || current.current_gains(),
         )
     }
+
+    /// Compatibility bridge used by the daemon's old `SetBusRouting` command. The closure accepts
+    /// the old routing shape but publishes a complete `LineProgram`; it exposes neither the live
 ```
 
 The handle used to be a bare `Arc<dyn Fn(...)>`; it is now built through
@@ -1022,7 +993,7 @@ native) does not know what an instrument is; it holds only the abstraction "some
 back N blocks when rendered".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:900-915
+// rust/crates/orbit-audio-native/src/output/lines.rs:139-154
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -1051,7 +1022,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:2141-2173`), which
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2180-2193
+// rust/crates/orbit-audio-native/src/output/render.rs:393-406
             let dest = match slot.dests[unit].load() {
                 SourceDest::None => FeedDest::Discard,
                 SourceDest::Master => FeedDest::Hardware,
@@ -1375,7 +1346,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5321-5326
+// rust/crates/orbit-audio-native/src/output/startup.rs:2491-2496
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

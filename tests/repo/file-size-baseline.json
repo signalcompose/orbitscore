@@ -13,8 +13,6 @@
     "packages/vscode-extension/src/mcp-server.ts": 1161,
     "rust/crates/orbit-audio-daemon/src/outproc_effect.rs": 812,
     "rust/crates/orbit-audio-daemon/src/outproc_instrument.rs": 705,
-    "rust/crates/orbit-audio-daemon/src/session.rs": 2605,
-    "rust/crates/orbit-audio-native/src/output.rs": 2587,
     "rust/crates/orbit-audio-sandbox/src/events.rs": 520,
     "rust/crates/orbit-audio-sandbox/src/transport.rs": 1416,
     "rust/crates/orbit-child-runtime/src/ui_service.rs": 571,
