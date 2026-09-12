@@ -1,12 +1,14 @@
 ---
 title: "IV-2. Inline Execution and Feedback"
 chapter-id: "IV-2"
-verified-against: f575f27
+verified-against: ca745e8
 verified-at: "2026-09-12"
 status: draft
 ---
 
 > **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-wise stdout bridge dispatch) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
+>
+> 🔴 2026-09-12: #887 (PR [#909](https://github.com/signalcompose/orbitscore/pull/909)) split `extension.ts` / `mcp-server.ts` into 19 modules. **Behavior did not change** (not one expectation in the existing tests moved). The file references on this page have been re-anchored to the post-split locations; the mapping table is in [the drift section of IV-1](/en/editor/vscode-architecture#_887-splitting-extension-ts-mcp-server-ts-pr-909).
 
 # IV-2. Inline Execution and Feedback
 
@@ -48,7 +50,7 @@ async function runSelection() {
 
 The check `languageId !== 'orbitscore'` is important. The keybinding in VS Code has the condition `when: editorLangId == orbitscore`, but when the command is called directly from the command palette, that `when` does not apply, so the language is also confirmed inside the function.
 
-Incidentally, the MCP `run_selection` tool calls this same function (`runSelectionForAgent()`, `extension.ts:3405`). Because the agent places a range beforehand with `set_selection`, it goes through Path 1.
+Incidentally, the MCP `run_selection` tool calls this same function (`runSelectionForAgent()`, `run-selection.ts:216-231`). Because the agent places a range beforehand with `set_selection`, it goes through Path 1.
 
 ---
 
@@ -423,9 +425,9 @@ There are 9 kinds of diagnostic checks in total:
 
 | # | Check | Implementation | Severity |
 |---|---|---|---|
-| 1 | Parenthesis matching (single line only) | `extension.ts:4002-4012` | Error |
-| 2 | tempo range (20-999) | `extension.ts:4014-4027` | Warning |
-| 3 | Deprecated `sequence ` keyword | `extension.ts:4029-4038` | Warning + `Deprecated` tag |
+| 1 | Parenthesis matching (single line only) | `diagnostics-provider.ts:58-68` | Error |
+| 2 | tempo range (20-999) | `diagnostics-provider.ts:70-83` | Warning |
+| 3 | Deprecated `sequence ` keyword | `diagnostics-provider.ts:85-94` | Warning + `Deprecated` tag |
 | 4 | `global` state-setter once-per-file | `analyzeGlobalOncePerFile` | Warning |
 | 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
 | 6 | `.output()` before / without `global.linkAudio()` (mixer destinations excluded — #611) | `analyzeOutputWithoutLinkAudio` | Warning |
@@ -688,17 +690,17 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 
 | Change | Issue | Source |
 |---|---|---|
-| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `extension.ts:3000-3032` |
-| Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `extension.ts:2842-2857` / `2876-2880` |
+| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `engine-process.ts:592-630` |
+| Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `run-selection.ts:176-184` / `202-206` |
 | Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
-| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:414-443` |
-| The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `extension.ts:3009-3013` |
+| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:203-236` |
+| The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `engine-process.ts:600-605` |
 | `linkAudio` added to `GLOBAL_ONCE_METHODS`, LinkAudio diagnostics 6-8 | (LinkAudio #209 family) | `diagnostics-analysis.ts:44-58` / `:194-391` |
-| No flash when sending fails | — | the comment at `extension.ts:2873-2875` |
-| Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:3048-3077` / `:1501-1509` |
-| Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `extension.ts:4095-4112` |
+| No flash when sending fails | — | the comment at `run-selection.ts:199-201` |
+| Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `agent-handlers.ts:80-109` / `engine-handlers.ts:248-256` |
+| Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `diagnostics-provider.ts:160-168` |
 | The runtime counterpart of diagnostics 6-8 became a **silent skip plus a log line** instead of a throw (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587` (PR [#737](https://github.com/signalcompose/orbitscore/pull/737)) |
-| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`, `extension.ts:3482-3520` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
+| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`, `dsl-providers.ts:176-213` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
 
 ---
 
@@ -730,18 +732,18 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 
 ## Sources
 
-- `packages/vscode-extension/src/extension.ts:2701-2714` — `getLineSubject()`: the two patterns `var <name> =` and `<name>.`
-- `packages/vscode-extension/src/extension.ts:2716-2880` — entire `runSelection()`: guards, subject-based collection, `flashLines`, sending, `revealRange`
-- `packages/vscode-extension/src/extension.ts:2734-2736` — Path 1: when there is a selection
-- `packages/vscode-extension/src/extension.ts:2737-2786` — Path 2: subject-based block evaluation
-- `packages/vscode-extension/src/extension.ts:2786-2809` — Path 3: standalone command
-- `packages/vscode-extension/src/extension.ts:2814-2871` — `flashLines()`: flash feedback implementation (whole-line)
-- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
-- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`: MCP evaluate and `//#evalMark`
-- `packages/vscode-extension/src/extension.ts:1501-1509` — the independent `{"evalMark"` branch on stdout
+- `packages/vscode-extension/src/run-selection.ts:27-40` — `getLineSubject()`: the two patterns `var <name> =` and `<name>.`
+- `packages/vscode-extension/src/run-selection.ts:42-207` — entire `runSelection()`: guards, subject-based collection, `flashLines`, sending, `revealRange`
+- `packages/vscode-extension/src/run-selection.ts:60-62` — Path 1: when there is a selection
+- `packages/vscode-extension/src/run-selection.ts:63-111` — Path 2: subject-based block evaluation
+- `packages/vscode-extension/src/run-selection.ts:112-135` — Path 3: standalone command
+- `packages/vscode-extension/src/run-selection.ts:141-197` — `flashLines()`: flash feedback implementation (whole-line)
+- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
+- `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate and `//#evalMark`
+- `packages/vscode-extension/src/engine-handlers.ts:248-256` — the independent `{"evalMark"` branch on stdout
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead decoration management and `handleStepLine()`
-- `packages/vscode-extension/src/extension.ts:3725-3875` — `updateDiagnostics()`: 3 per-line + 6 cross-line
-- `packages/vscode-extension/src/extension.ts:3482-3520` — `registerOutputCodeActionProvider()`: the quick fix for `output-missing` / `dry-not-routed`
+- `packages/vscode-extension/src/diagnostics-provider.ts:21-171` — `updateDiagnostics()`: 3 per-line + 6 cross-line
+- `packages/vscode-extension/src/dsl-providers.ts:176-213` — `registerOutputCodeActionProvider()`: the quick fix for `output-missing` / `dry-not-routed`
 - `packages/vscode-extension/src/playhead.ts:39-54` — the `[STEP]` line grammar and `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`

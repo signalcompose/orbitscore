@@ -1,8 +1,8 @@
 ---
 title: "ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot"
 chapter-id: "adr-002"
-verified-against: 56c34c3
-verified-at: "2026-09-11"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -280,6 +280,6 @@ In v3.0, "which sound to play" is determined by the file name, and "at what timi
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:496-631` — §7 the v3.0 underscore prefix pattern specification
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:365-462` — §5 the unidirectional toggle specification
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — the v1.0 MIDI DSL specification archive (archived 2025-10-06)
-- `packages/vscode-extension/src/extension.ts:4029-4038` — implementation of the deprecation warning for the `sequence ` keyword
+- `packages/vscode-extension/src/diagnostics-provider.ts:85-94` — implementation of the deprecation warning for the `sequence ` keyword
 - commit `081a474` — the SuperCollider integration and sox abolition (the technical foundation of v2.0)
 - commit `cfa0381` — Web Audio API removal and consolidation on SuperCollider (PR #31)

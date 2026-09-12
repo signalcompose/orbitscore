@@ -1,8 +1,8 @@
 ---
 title: "II-4. Transport"
 chapter-id: "II-4"
-verified-against: 46f5d7a
-verified-at: "2026-09-05"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -642,7 +642,7 @@ OrbitScore's transport runs on the simple input model of "feed DSL text into std
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: creating a single `globalInterpreter` instance and handing it to the REPL
 - `packages/engine/src/cli/repl-mode.ts:370-378` — the REPL's `interpreter.execute()` call (the options it passes)
 - `packages/engine/src/core/sequence.ts:1774-1799` — `Sequence.stop()`: clearing events and cancelling the loop timer
-- `packages/vscode-extension/src/extension.ts:3030-3030` — the extension's stdin send
+- `packages/vscode-extension/src/engine-process.ts:628-628` — the extension's stdin send
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Transport Commands" — the launch-quantize specification and that `global.start()` does not wait
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize
 - Issue [#108](https://github.com/signalcompose/orbitscore/issues/108) — cutover (default backend to Rust)

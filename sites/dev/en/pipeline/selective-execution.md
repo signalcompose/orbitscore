@@ -1,8 +1,8 @@
 ---
 title: "I-3. Selective Execution"
 chapter-id: "I-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -16,7 +16,7 @@ Executing only part of the code with Cmd+Enter — this is the central operation
 
 The first edition of this chapter was written against the 2026-05-05 snapshot (0a4b598). In the code as of 2026-09-01 (69dc968), the skeleton — "the extension decides what code to send and writes it to stdin; the engine's readline buffers it and does parse → execute" — is the same, but much of the inside has been replaced.
 
-- **Writing to stdin was centralized in `writeCodeToEngine()`**. The editor's `runSelection()` and the MCP `evaluate_orbitscore` tool go through the same function (`packages/vscode-extension/src/extension.ts:3000-3032`)
+- **Writing to stdin was centralized in `writeCodeToEngine()`**. The editor's `runSelection()` and the MCP `evaluate_orbitscore` tool go through the same function (`packages/vscode-extension/src/engine-process.ts:592-630`)
 - **A `//#documentDirectory <path>` meta line is now prepended to the DSL** (#456 on 2026-07-17). Because `import` is evaluated before statements, the DSL-injected `global.setDocumentDirectory(...)` comes too late, so the directory is delivered ahead of time through an out-of-band meta line
 - **REPL line handling was extracted into `createReplSession()` and serialized through a FIFO promise chain** (#476 on 2026-07-17). readline fires multiple lines from one chunk in the same tick, so a naive async handler let the shared buffer race
 - **The "is the input incomplete" decision is now only `\bEOF\b` on parse errors** (#607 / #612 in 2026-08). The 2026-05 edition's `Expected RPAREN` match also treated "a genuine syntax error in the middle of a line" as incomplete and silenced the session
@@ -546,13 +546,13 @@ sequenceDiagram
 ## Sources
 
 - `packages/vscode-extension/src/extension.ts:110-112` — declaration and purpose of the `globalInitialized` flag
-- `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: pre-check → env → process boot with `stdio: ['pipe','pipe','pipe']`
-- `packages/vscode-extension/src/extension.ts:2701-2714` — regex matches in `getLineSubject()`
-- `packages/vscode-extension/src/extension.ts:2716-2881` — overall flow of `runSelection()` (selection / subject block / standalone / flash)
-- `packages/vscode-extension/src/extension.ts:2734-2737` — the path used when there is selected text
-- `packages/vscode-extension/src/extension.ts:2883-2907` — design comment of `writeCodeToEngine()` (injection conditions and the meaning of the return value)
-- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
-- `packages/vscode-extension/src/extension.ts:3040-3075` — `evaluateForAgent()`: MCP evaluate waits for the result via `//#evalMark`
+- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: pre-check → env → process boot with `stdio: ['pipe','pipe','pipe']`
+- `packages/vscode-extension/src/run-selection.ts:27-40` — regex matches in `getLineSubject()`
+- `packages/vscode-extension/src/run-selection.ts:42-207` — overall flow of `runSelection()` (selection / subject block / standalone / flash)
+- `packages/vscode-extension/src/run-selection.ts:60-62` — the path used when there is selected text
+- `packages/vscode-extension/src/engine-process.ts:594-604` — design comment of `writeCodeToEngine()` (injection conditions and the meaning of the return value)
+- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
+- `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate waits for the result via `//#evalMark`
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()` and `InterpreterV2` instance creation
 - `packages/engine/src/cli/repl-mode.ts:64-93` — `extractDocumentDirectoryMeta()` / `extractSelectAudioDeviceMeta()`
 - `packages/engine/src/cli/repl-mode.ts:290-331` — design comment of `createReplSession()` and its closure state (including `pendingDiagnostics`)

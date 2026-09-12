@@ -81,7 +81,7 @@ LLM の足（オートメーション DSL・#506）は**本計画のスコープ
 | state 保存の全経路 | engine(TS) が sidecar パス決定 → daemon → `CommandMailboxHost` → child、atomic rename と `project.yaml` 登記は engine 側（`project-state-store.ts`） | **UIH の「host」は実際には daemon+engine の 2 プロセス**に分かれている。セーフポイント(b) の evt_ack 前進条件はこの跨ぎを含む（§4 P4 参照） |
 | oracle 資産 | VST3: `orbit-vst3-gain-oracle` / `orbit-vst3-synth-oracle`。CLAP: `CLAPTestEffect.clap`（テストが自前 package）。**いずれも GUI なし** | P6 で gui 拡張を oracle に実装する |
 | macOS binding 依存 | workspace に objc2 / cocoa 系 crate **なし**（core-foundation-sys のみ） | NSApplication/NSWindow 用に新規依存が要る（§8 Q3） |
-| MCP | `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` は `packages/vscode-extension/src/mcp-server.ts` に登録済み | P4c で完了 |
+| MCP | `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` は `packages/vscode-extension/src/mcp-tools-plugins.ts:23-141` に登録済み（#887 / PR #909 で `mcp-server.ts` から分割） | P4c で完了 |
 
 ---
 

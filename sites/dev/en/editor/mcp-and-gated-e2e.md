@@ -1,12 +1,14 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: f575f27
+verified-against: ca745e8
 verified-at: "2026-09-12"
 status: draft
 ---
 
 > **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) and #855 (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), the temp-sweep race that was inflating the ERROR count) on 2026-09-11, and to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889), the addition of the cold install gate) on 2026-09-12. The code is the truth; this page is only a snapshot of understanding at that time.
+>
+> 🔴 2026-09-12: #887 (PR [#909](https://github.com/signalcompose/orbitscore/pull/909)) split `extension.ts` / `mcp-server.ts` into 19 modules. **Behavior did not change** (not one expectation in the existing tests moved). The file references on this page have been re-anchored to the post-split locations; the mapping table is in [the drift section of IV-1](/en/editor/vscode-architecture#_887-splitting-extension-ts-mcp-server-ts-pr-909).
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -1417,15 +1419,15 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — file header (Agent Bridge origin; why the SDK is loaded via `require`)
 - `packages/vscode-extension/src/mcp-server.ts:233-286` — the `OrbitScoreToolHandlers` seam
 - `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — the `registerTool` calls (split out of `buildServer()` into three files in #887 bundle F) ()` (source of the tool catalogue)
-- `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing)
+- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing)
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` merge and URL construction
 - `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — output-channel ring buffer and monkey-patch
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead state and decoration application
-- `packages/vscode-extension/src/extension.ts:445-495` — MCP server startup gate and handler wiring
-- `packages/vscode-extension/src/extension.ts:1153-1177` — `shouldFilterLine()` (exclusion of `[STEP]` and bridge envelopes)
-- `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`
-- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()` (#614)
-- `packages/vscode-extension/src/extension.ts:3585-3597` — `getLogForAgent()` / `analyzeAudioForAgent()`
+- `packages/vscode-extension/src/extension.ts:237-291` — MCP server startup gate and handler wiring
+- `packages/vscode-extension/src/engine-handlers.ts:43-149` — `shouldFilterLine()` (exclusion of `[STEP]` and bridge envelopes)
+- `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`
+- `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()` (#614)
+- `packages/vscode-extension/src/agent-handlers.ts:483-499` — `getLogForAgent()` / `analyzeAudioForAgent()`
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — the `//#evalMark` requestId correlation bridge
 - `packages/vscode-extension/src/log-ring.ts:1-45` — `selectLogLines()` (#567)
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout line classification and application (`isCurrent` partitioning)
@@ -1447,7 +1449,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
-- `packages/vscode-extension/src/extension.ts:1567-1657` — `createLinePrefixer` / `setupStderrHandler`, which moved the `ERROR:` prefix from per-chunk to per-line (#756, PR [#776](https://github.com/signalcompose/orbitscore/pull/776))
+- `packages/vscode-extension/src/engine-handlers.ts:371-429` — `createLinePrefixer` / `setupStderrHandler`, which moved the `ERROR:` prefix from per-chunk to per-line (#756, PR [#776](https://github.com/signalcompose/orbitscore/pull/776))
 - `rust/crates/orbit-clap-host/src/controller.rs:398-420` — `query_note_port_index`, whose normal-path `warn!` was lowered to `debug!` (#860, PR [#861](https://github.com/signalcompose/orbitscore/pull/861))
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
 - `tests/e2e/helpers/capture-windows.ts:1-489` — the capture clock, sound detection, segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)

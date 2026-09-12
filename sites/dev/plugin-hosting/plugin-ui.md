@@ -1,8 +1,8 @@
 ---
 title: "PH-2. プラグイン UI ホスティング — seq.ui() からウィンドウまで"
 chapter-id: "PH-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -1189,8 +1189,8 @@ CLAP を使う必要があります。
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:622-650` — `onPluginUiClosed`（保存失敗時は ack を送らない）
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — `closePluginUi` の DONE 待ち（受理 ≠ 完了）
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — `//#pluginUi` メタ行の書き出し
-- `packages/vscode-extension/src/extension.ts:1496-1500` — `{"pluginUi"` 結果行のルーティング
-- `packages/vscode-extension/src/mcp-server.ts:937-1000` — `open_plugin_ui` / `close_plugin_ui` tool 定義
+- `packages/vscode-extension/src/engine-handlers.ts:243-247` — `{"pluginUi"` 結果行のルーティング
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:86-141` — `open_plugin_ui` / `close_plugin_ui` tool 定義
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — 実行モデル（main = NSApplication runloop / audio = 専用スレッド）
 - `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main`（mailbox 振り分け + `ui.tick`）
 - `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`
