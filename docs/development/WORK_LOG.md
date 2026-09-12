@@ -17,6 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 2 束**。🔴 **純粋な移動**。
+
+`device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` / `set_bus_line` /
+`set_bus_routing` / `set_source_routing`（元 6956-7451・496 行）を
+`src/engine_wrap/bus_lines.rs` へ。**ヘルパー 3 本を一緒に動かした**のは、置いていくと
+モジュールを跨いで `pub(crate)` 化が要り、それは「移動」ではなく「変更」だから。
+
+| | before | after |
+|---|---|---|
+| `engine_wrap.rs` | 6,014 コード行 | **5,585** |
+| `engine_wrap/bus_lines.rs` | — | 433 |
+| `excluded` | 7,730 | **7,730** |
+
+**residual**: 素の変更行 1,013 → moved+ 496 == moved− 496 → **residual 21**
+（うち 15 行は新設 doc コメント = **実質 6 行**）。ゲート (i) 通過。
+
+🔴 **引用が 14 件落ちた**（7 箇所 ×2 言語）。第 1 束と違い、**移動したコード自体が引用されていた**ので
+4 箇所は**ファイルパスごと** `bus_lines.rs` へ向け直した。残り 3 箇所は行番号のずれ。
+`docs:check` は**先頭行しか照合しない**ので、末尾が関数シグネチャの途中で終わっていた 1 件を
+引用元の文脈まで読んで確認した（「関数コメントが機構を一文で言い切っている」を見せる意図なので
+doc コメント + シグネチャで正しい）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
 ### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
