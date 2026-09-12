@@ -37,6 +37,35 @@ case "$TARGET_FILE" in
     ;;
 esac
 
+# 🔴 リポジトリ外の絶対パスはこのフックの対象外（#913）。
+#
+# このフックが守っているのは「main に直接**実装**を積まない」ことである。
+# repo の外にあるファイルはブランチと無関係なので、そもそも保護対象ではない:
+#   ~/.claude/projects/<project>/memory/       セッション横断の memory
+#   /private/tmp/claude-<uid>/.../scratchpad/  一時ファイル
+#   ~/.cvi                                     additional working directory
+#
+# これを塞いでいなかったため、**memory を 1 ファイル書くためだけに差分 0 の
+# ブランチを作って消す**という運用が発生した（2026-09-13 実測）。
+#
+# 🔴 個別のホワイトリストを増やす形にはしない。次に別の外部パスで同じことが起きる。
+# 判定は「repo 配下かどうか」の 1 本にする。
+#
+# 安全側の倒し方:
+#   - 相対パスは cwd = repo 相対なので **repo 内**として扱う（従来どおり deny 対象）
+#   - `..` を含む絶対パスは解決せず **repo 内**として扱う（fail closed）
+if [ -n "$PROJECT_DIR" ] && [ -n "$TARGET_FILE" ]; then
+  case "$TARGET_FILE" in
+    /*)
+      case "$TARGET_FILE" in
+        *..*) ;;
+        "$PROJECT_DIR"/*) ;;
+        *) exit 0 ;;
+      esac
+      ;;
+  esac
+fi
+
 # Block edits on main branch (JSON-style deny so the reason reaches the user)
 if [[ "$CURRENT_BRANCH" == "main" ]]; then
   REASON=$(cat <<'MSG'

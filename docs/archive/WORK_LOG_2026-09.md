@@ -11067,3 +11067,90 @@ docs:check  948 引用 / 0 failed
 `tests/e2e/output-line-expectations.ts` の式は**1 つも変わっていない**（束 C の検算）。
 
 ---
+
+---
+
+### fix: make send() require a destination in both implementations (#883 round 2) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: ✅ ラウンド 2 収束（PR #884）
+
+#### 🔴 縮小レビューが **fix 起因の Critical** を捕まえた
+
+ラウンド 1 で置いたポリシーを、main が**片翼にしか適用していなかった**。
+
+| | ガード |
+|---|---|
+| `Sequence.send()` | ✅ あり |
+| `MixerBusHandle.send()` | ❌ **無い** |
+
+レビュアーが実際に走らせて wire の中身まで示した:
+
+```
+mix.sum('drum').send(db: -6)
+  → processArguments が [undefined, {db:-6}] に整形（ラウンド 1 の修正）
+  → MixerBusHandle.send(undefined, ...) → resolveDest(undefined) → {kind:'master'}
+  → setBusLine に output(master, thru:true, -6dB) が**追加で 1 本**
+  → 既存の直結と合わせて **master へ二重に鳴る**
+```
+
+🔴 **#883 が消そうとしている「dry が master へ漏れる」の派生形を、修正が自分で作っていた。**
+
+#### 直し方 — 契約を 1 関数へ
+
+```ts
+// audio-line.ts — この 1 関数が両方の send() の契約
+export function assertSendDestination(value: unknown, call: string): void
+```
+
+`send()` の宛先は **`output()` と違い必須**（どこにも送らない send は無い）。両方の `send()` が
+これを呼ぶので、**片翼だけに書けるコードでなくなった**。
+
+あわせて `resolveDest` / `send` のエラー文言が常に「null」と決め打ちしていたのを、
+**実際に来た型**を出すよう直した（数値や真偽値を渡した人に嘘の情報を与えていた）。
+
+#### 変異検証（main が実走）
+
+| 変異 | 結果 |
+|---|---|
+| `MixerBusHandle` のガードを削除 | **red**（1 件） |
+| 文言を "null" 決め打ちに戻す | **red**（3 件） |
+| restore | **green**（4 件） |
+
+#### 波及
+
+Codex がラウンド 1 で書いたテスト 2 箇所が**旧文言**を期待していたので整合させ、
+「なぜ `send()` は `output()` と文言が違うのか」と**この Critical への回帰検査であること**を
+コメントに残した。
+
+#### 🔴 実機 gated が 1 回 flake した（規律どおり再実行して確定させた）
+
+1 回目: `#611 E2E-3` が **`ENGINE_LOCK_CONTENTION`** で落ちた。
+
+```
+[warning] ENGINE_LOCK_CONTENTION: engine lock contention (1 total);
+          a block was silently zero-filled — this self-heals next block
+```
+
+これは **`severity=warning` として設計された事象**（`rust/crates/orbit-audio-daemon/tests/protocol.rs:1204`）
+だが、`mem:stderr-is-classified-as-error`（engine の warn は全部 ERROR 行）により
+`expectNoNewErrors` が ERROR として数える。
+
+**`mem:implementation-right-oracle-wrong`（赤を実装のせいにする前に同じテストを走らせる）に従い、
+断定せず再実行** — load 5.62 → 2.76 で**緑**。孤児 daemon 0 / 残存 dev host 0 も確認済み。
+
+🔴 **残る論点（この束とは独立）**: `expectNoNewErrors` は「新規 ERROR が 0」を要求するが、
+CLAUDE.md の規律は「ERROR 件数は固定 500 行窓なので**厳密等価にしない**（`<=`）」。
+`ENGINE_LOCK_CONTENTION` は負荷次第で正当に発生するので、**分類器が warning を ERROR へ畳んでいる**
+ことを別途扱う余地がある。
+
+#### 検証（すべて main が sandbox 外で実測）
+
+```
+npm test    2364 passed | 68 skipped | 0 failed
+lint 緑 / docs:check 948 引用 0 failed
+実機 gated  39 passed | 1 skipped | 0 failed
+[#883 X2] omittedRms=0.08701663329564219  explicitRms=0.08701663329564278
+```
+
+---
