@@ -6,7 +6,7 @@ verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871), the bump to extension 3.0.0 / `DSL_VERSION` 1.2) on 2026-09-11. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # 0-2. Architecture Overview
 
@@ -99,7 +99,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch entirely**, leaving only the startup path for the sole remaining backend, the Rust daemon. The first thing it does is **have backend binary resolution precede spawning the engine**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1942-1951
+// packages/vscode-extension/src/extension.ts:1944-1953
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     outputChannel?.appendLine(
@@ -132,7 +132,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1983-1997
+// packages/vscode-extension/src/extension.ts:1985-1999
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +153,7 @@ Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_E
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1999-2005
+// packages/vscode-extension/src/extension.ts:2001-2007
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -166,7 +166,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2745-2746
+// packages/vscode-extension/src/extension.ts:2747-2748
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -194,7 +194,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:438-443
+// packages/vscode-extension/src/extension.ts:440-445
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -206,7 +206,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1350-1354
+// packages/vscode-extension/src/mcp-server.ts:1351-1355
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -334,7 +334,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `RustEnginePlayer` is the boundary on the engine side. Its `boot()` calls `DaemonClient.start()` and then establishes the transport clock anchor.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:579-586
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:580-587
   async boot(outputDevice?: string): Promise<void> {
     await this.daemon.start({
       daemonPath: this.daemonPath,
@@ -348,7 +348,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `DaemonClient.start()` proceeds in the order "spawn → read the ready line from stdout → connect the WebSocket → receive the handshake."
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:296-334 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:297-335 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -372,7 +372,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:886-896
+// packages/engine/src/audio/rust-engine/daemon-client.ts:887-897
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -387,7 +387,7 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:960-974
+// packages/engine/src/audio/rust-engine/daemon-client.ts:961-975
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -412,7 +412,7 @@ The daemon-side code that writes this ready line (`run()` in `main.rs`) and the 
 The search order for the daemon binary is in `resolveDaemonBinaryPath()`: explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:223-259 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:224-260 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
@@ -560,21 +560,21 @@ Thanks to this separation of responsibilities, the cutover from SC to Rust amoun
 Let's sort out "which version is this about," a common source of confusion when reading the code.
 
 ```typescript
-// packages/engine/src/version.ts:14-17
+// packages/engine/src/version.ts:15-18
 export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
-export const DSL_VERSION = '1.2'
+export const DSL_VERSION = '2.0'
 ```
 
 - **`ENGINE_VERSION`**: `2.0.0` — the version the `.orbslog` meta header carries; the WCTM milestone including MIDI output + Pitch DSL + session log
-- **DSL spec version**: `1.2` — the pitch DSL spec axis (separate from both `ENGINE_VERSION` and the extension version)
-- **VS Code extension package version**: `3.0.0` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
+- **DSL spec version**: `2.0` — the DSL spec axis (separate from both `ENGINE_VERSION` and the extension version)
+- **VS Code extension package version**: `4.0.0` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `3.0.0` is by design, not an accident. The extension went to 3.0.0 in #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871)); `DSL_VERSION` went to 1.2 in the same PR but for a different reason (the DSL surface changed).
+Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `4.0.0` is by design, not an accident. In #883, removing implicit terminals is the incompatible change that takes the extension to 4.0.0 and `DSL_VERSION` to 2.0.
 
-Note that the "DSL v3.0" that appears in CLAUDE.md and the glossary names the syntax generation (the `sequence` → `init` pivot, [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)); it is a different axis from `DSL_VERSION = '1.2'` (the pitch DSL spec version).
+Note that the "DSL v3.0" that appears in CLAUDE.md and the glossary names the syntax generation (the `sequence` → `init` pivot, [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)); it is a different axis from `DSL_VERSION = '2.0'` (the DSL spec version).
 
 ## Navigating to Later Chapters
 

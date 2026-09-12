@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:885-905
+// packages/engine/src/core/sequence.ts:874-894
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -308,7 +308,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:632-645
+// packages/engine/src/audio/rust-engine/daemon-client.ts:633-646
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -765,7 +765,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 だけになっています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:654-682
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:655-683
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -815,7 +815,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 **フェーズ A の受理**でしかありません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2401-2402
+// rust/crates/orbit-audio-daemon/src/session.rs:2412-2413
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -825,7 +825,7 @@ TS はこれとは別に `UI_CLOSED_DONE` の event frame を待ち受けます�
 タスクなので、DONE が ack を追い抜くことがあるからです。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:885-899
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:886-900
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -850,7 +850,7 @@ pending が reject され、「保存完了」を偽って返すことはあり�
 変異検証がこの穴を見つけ、テストを足しています）。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-331
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```
@@ -943,7 +943,7 @@ ack の照合キーは `(generation, window, evt_seq)` の三つ組になり、�
 loud に拒否されます。event frame の `PluginUiTarget` にも `window` が載りました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10450-10463
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10474-10487
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1045,7 +1045,7 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1288-1292
+// packages/vscode-extension/src/extension.ts:1290-1294
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2446-2468
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2469
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

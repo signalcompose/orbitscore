@@ -1,0 +1,19 @@
+// #883 X8: MIDI has an external destination and must not enter the audio-output skip path.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var melody883 = init global.seq
+melody883.midi("iac", 1)
+melody883.play(1, 2, 3, 4)
+
+var ref883 = init global.seq
+ref883.audio("kick.wav").chop(1)
+ref883.output()
+ref883.play(1, 1, 1, 1)
+
+// LOOP() replaces the group; keep both dispatch paths active in one command.
+LOOP(melody883, ref883)

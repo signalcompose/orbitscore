@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:885-905
+// packages/engine/src/core/sequence.ts:874-894
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -313,7 +313,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:632-645
+// packages/engine/src/audio/rust-engine/daemon-client.ts:633-646
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -777,7 +777,7 @@ that landed in #474 P4b (2026-07-31); it creates no new save mechanism and merel
 existing save flow from the event.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:654-682
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:655-683
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2401-2402
+// rust/crates/orbit-audio-daemon/src/session.rs:2412-2413
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -837,7 +837,7 @@ TS separately waits for the `UI_CLOSED_DONE` event frame. Moreover, it registers
 the daemon side, so DONE can overtake the ack.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:885-899
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:886-900
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -862,7 +862,7 @@ and "save completed" is never falsely returned (main's mutation verification in 
 found this hole and added a test).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-331
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```
@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10450-10463
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10474-10487
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1063,7 +1063,7 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `extension.ts` picks up this result line by the `{"pluginUi"` prefix. Since #773 ([#811](https://github.com/signalcompose/orbitscore/pull/811)) these four branches live inside the callback of `createLinePrefixer`, so **a line split at a chunk boundary is no longer lost** (see [IV-1](/en/editor/vscode-architecture#the-stdout-bridge-envelopes-are-reassembled-into-lines-too-773)).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1288-1292
+// packages/vscode-extension/src/extension.ts:1290-1294
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2446-2468
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2469
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

@@ -1,0 +1,17 @@
+// #883 X3: a sum-only send contributes the send copy, never an implicit dry copy.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.sum("x3sum883")
+sum("x3sum883").output()
+global.start()
+
+var kick883 = init global.seq
+kick883.beat(4 by 4).length(1)
+kick883.audio("kick.wav").chop(1)
+kick883.send("x3sum883", -6)
+kick883.play(1, 1, 1, 1)
+
+LOOP(kick883)

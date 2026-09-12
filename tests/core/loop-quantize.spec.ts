@@ -67,7 +67,7 @@ describe('LOOP quantize startup', () => {
     global = new Global(mockPlayer)
     seq = new Sequence(global, mockPlayer)
     seq.setName('kick')
-    seq.audio('/tmp/kick.wav').play(1, 0, 0, 0)
+    seq.audio('/tmp/kick.wav').output().play(1, 0, 0, 0)
   })
 
   afterEach(() => {

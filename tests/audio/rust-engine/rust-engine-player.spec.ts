@@ -47,7 +47,7 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
   return {
     GetStatus: () => ({
       daemon_version: 'mock-0.0.0',
-      protocol_version: '0.2',
+      protocol_version: '0.3',
       output_sample_rate: 48000,
       output_channels: 2,
       loaded_samples: 0,
@@ -815,7 +815,7 @@ describe('RustEnginePlayer with mock daemon', () => {
           }
           return {
             daemon_version: 'mock-0.0.0',
-            protocol_version: '0.2',
+            protocol_version: '0.3',
             output_sample_rate: 48000,
             output_channels: 2,
             loaded_samples: 0,

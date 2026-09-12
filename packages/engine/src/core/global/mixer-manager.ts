@@ -2,9 +2,9 @@ import type { AudioEngine } from '../../audio/types'
 import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
 import {
-  assertOutputOptions,
   AudioLine,
   isOutputDest,
+  resolveOutputArgs,
   assertSendDestination,
   resolveNamedOutputDest,
   resolveSendLevel,
@@ -343,15 +343,7 @@ export class MixerManager {
         opts: MixerOutputOptions = {},
       ) => {
         const call = `Mixer bus '${formatReceiverId(kind, name)}': output`
-        let dest: string | OutputDest | undefined = destOrOptions as string | OutputDest | undefined
-        let options = opts
-        if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
-          assertOutputOptions(destOrOptions, call)
-          dest = undefined
-          options = destOrOptions
-        } else {
-          assertOutputOptions(options, call)
-        }
+        const { dest, options } = resolveOutputArgs<string | OutputDest>(destOrOptions, opts, call)
         await this.applyLineElement(bus, {
           kind: 'output',
           dest: this.resolveDest(dest),

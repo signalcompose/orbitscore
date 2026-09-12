@@ -128,6 +128,28 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     expect(explicit.setBusLine).not.toHaveBeenCalled()
   })
 
+  it('does not acquire a bus for an audio sequence with no output', () => {
+    const { global, seq } = harness()
+    const acquire = vi.spyOn(global, 'ensureSequenceInsertBus')
+
+    seq.audio('/abs/kick.wav')
+
+    expect(acquire).toHaveBeenCalledTimes(0)
+    expect(seq.resolveDispatchChannel()).toMatchObject({ kind: 'skip' })
+  })
+
+  it('declares an output-less instrument as none without acquiring a bus', async () => {
+    const { global, seq, setSourceRouting } = harness()
+    const acquire = vi.spyOn(global, 'ensureSequenceInsertBus')
+
+    await seq.instrument('synth.clap')
+
+    expect(acquire).toHaveBeenCalledTimes(0)
+    expect(seq.getInsertBus()).toBeUndefined()
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, { kind: 'none' })
+  })
+
   it('allocates a bus for master output when db or thru needs line processing', async () => {
     const attenuated = harness()
     const thru = harness()
@@ -143,11 +165,7 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
       rack,
       { ...masterOutput(false), gain: 10 ** (-6 / 20) },
     ])
-    expect(thru.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
-      rack,
-      masterOutput(true),
-      masterOutput(false),
-    ])
+    expect(thru.setBusLine).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(true)])
   })
 
   it('treats a first-argument options bag as an omitted sequence output destination', async () => {
@@ -192,11 +210,15 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     await seq.instrument('synth.clap')
     expect(seq.output('drum')).toBe(seq)
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
-    expect(setSourceRouting).toHaveBeenCalledTimes(1)
-    expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
+    await vi.waitFor(() => expect(setSourceRouting).toHaveBeenCalledTimes(2))
+    expect(setSourceRouting).toHaveBeenNthCalledWith(1, 'plugin:kick', 0, { kind: 'none' })
+    expect(setSourceRouting).toHaveBeenNthCalledWith(2, 'plugin:kick', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
   })
 
-  it('keeps instrument-only output() on the direct master path without source routing', async () => {
+  it('routes instrument output() explicitly to master without allocating a bus', async () => {
     const { seq, setBusLine, setSourceRouting } = harness()
 
     await seq.instrument('synth.clap')
@@ -204,7 +226,9 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
 
     expect(seq.getInsertBus()).toBeUndefined()
     expect(setBusLine).not.toHaveBeenCalled()
-    expect(setSourceRouting).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(setSourceRouting).toHaveBeenCalledTimes(2))
+    expect(setSourceRouting).toHaveBeenNthCalledWith(1, 'plugin:kick', 0, { kind: 'none' })
+    expect(setSourceRouting).toHaveBeenNthCalledWith(2, 'plugin:kick', 0, { kind: 'master' })
   })
 
   it('logs a transient warning (not error) and does not throw when SetBusLine fails at transport', async () => {
@@ -288,11 +312,10 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalled())
     expect(seq.getInsertBus()).toBe('seq-bus-0')
     // #611 §2.3: send() ≡ output(aux, thru: true, db) — 0.3 is dB now, not linear
-    // (10 ** (0.3 / 20) ≈ 1.0351), and the implicit master terminal follows it (§2.1).
+    // (10 ** (0.3 / 20) ≈ 1.0351). No dry terminal is synthesized (#883).
     expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 10 ** (0.3 / 20)),
-      masterOutput(false),
     ])
   })
 
@@ -304,12 +327,11 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     seq.send('delay', 0.5)
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
     // #611 §2.3/§5.1: both sends are thru: true by definition (declaration order, not a
-    // sends.length-dependent formula) and the implicit master terminal follows both.
+    // sends.length-dependent formula). No dry terminal is synthesized (#883).
     expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 10 ** (0.3 / 20)),
       busOutput('aux-bus-1', true, 10 ** (0.5 / 20)),
-      masterOutput(false),
     ])
   })
 
@@ -355,8 +377,12 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     await seq.instrument('synth.clap')
     expect(seq.send('rev', 0.5)).toBe(seq)
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
-    expect(setSourceRouting).toHaveBeenCalledTimes(1)
-    expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
+    await vi.waitFor(() => expect(setSourceRouting).toHaveBeenCalledTimes(2))
+    expect(setSourceRouting).toHaveBeenNthCalledWith(1, 'plugin:kick', 0, { kind: 'none' })
+    expect(setSourceRouting).toHaveBeenNthCalledWith(2, 'plugin:kick', 0, {
+      kind: 'bus',
+      name: 'seq-bus-0',
+    })
   })
 
   it('is method-chainable (returns this)', () => {
@@ -374,7 +400,6 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 10 ** (-12 / 20)),
-      masterOutput(false),
     ])
 
     expect(() => seq.send('rev', -12, { db: -6 })).toThrow(
@@ -406,9 +431,13 @@ describe('Sequence gain/pan line ownership', () => {
       seq[method](value)
 
       await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
-      expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [rack, op, masterOutput(false)])
-      expect(setSourceRouting).toHaveBeenCalledTimes(1)
-      expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
+      expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [rack, op])
+      await vi.waitFor(() => expect(setSourceRouting).toHaveBeenCalledTimes(2))
+      expect(setSourceRouting).toHaveBeenNthCalledWith(1, 'plugin:kick', 0, { kind: 'none' })
+      expect(setSourceRouting).toHaveBeenNthCalledWith(2, 'plugin:kick', 0, {
+        kind: 'bus',
+        name: 'seq-bus-0',
+      })
     },
   )
 

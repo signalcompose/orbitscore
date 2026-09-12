@@ -5,7 +5,9 @@ import {
   analyzeEmptyOutputArg,
   analyzeGlobalOncePerFile,
   analyzeLinkAudioMissingOutput,
+  analyzeMissingOutput,
   analyzeOutputWithoutLinkAudio,
+  missingOutputQuickFixEdit,
 } from '../../packages/vscode-extension/src/diagnostics-analysis'
 
 describe('analyzeGlobalOncePerFile', () => {
@@ -429,7 +431,7 @@ describe('analyzeLinkAudioMissingOutput', () => {
     expect(issues).toHaveLength(1)
     expect(issues[0].line).toBe(3)
     expect(issues[0].message).toContain("Sequence 'kick'")
-    expect(issues[0].message).toContain('global.linkAudio()')
+    expect(issues[0].message).toContain('will be silent')
   })
 
   it('does not flag sequences that have .output() set', () => {
@@ -544,7 +546,7 @@ describe('analyzeLinkAudioMissingOutput', () => {
     expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
   })
 
-  it('does not flag an instrument sequence with no .output() under linkAudio mode', () => {
+  it('flags an instrument sequence with no .output() because source routing is none', () => {
     const text = [
       'global.linkAudio()',
       'var synth = init global.seq',
@@ -552,7 +554,9 @@ describe('analyzeLinkAudioMissingOutput', () => {
       'synth.play(1, 3, 5)',
     ].join('\n')
 
-    expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
+    expect(analyzeLinkAudioMissingOutput(text)).toMatchObject([
+      { code: 'output-missing', sequenceName: 'synth', line: 3 },
+    ])
   })
 
   it('flags only the orphan AUDIO sequence in a mixed MIDI + LinkAudio file (#282 coexistence)', () => {
@@ -575,6 +579,129 @@ describe('analyzeLinkAudioMissingOutput', () => {
     const issues = analyzeLinkAudioMissingOutput(text)
     expect(issues).toHaveLength(1)
     expect(issues[0].message).toContain("Sequence 'snare'")
+  })
+})
+
+describe('analyzeMissingOutput (#883)', () => {
+  it('reports output-missing at play() for an audio sequence with no destination', () => {
+    const issues = analyzeMissingOutput(
+      ['var kick = init global.seq', 'kick.audio("kick.wav")', 'kick.play(1, 0, 1, 0)'].join('\n'),
+    )
+
+    expect(issues).toMatchObject([{ code: 'output-missing', sequenceName: 'kick', line: 2 }])
+  })
+
+  it('reports dry-not-routed for an aux-only send', () => {
+    const issues = analyzeMissingOutput(
+      [
+        'global.aux("verb")',
+        'var kick = init global.seq',
+        'kick.send("verb", -12)',
+        'kick.play(1, 0, 1, 0)',
+      ].join('\n'),
+    )
+
+    expect(issues).toMatchObject([{ code: 'dry-not-routed', sequenceName: 'kick', line: 3 }])
+  })
+
+  it.each([
+    {
+      name: 'sum-only send',
+      lines: ['global.sum("drums")', 'kick.send("drums", -6)'],
+    },
+    {
+      name: 'bare sum destination',
+      lines: ['global.sum("drums")', 'kick.drums'],
+    },
+    {
+      name: 'bare aux destination',
+      lines: ['global.aux("verb")', 'kick.verb(-12)'],
+    },
+    {
+      name: 'LinkAudio output',
+      lines: ['global.linkAudio()', 'kick.output("Kick Ch")'],
+    },
+  ])('does not report $name', ({ lines }) => {
+    const text = [
+      lines[0],
+      'var kick = init global.seq',
+      ...lines.slice(1),
+      'kick.play(1, 0, 1, 0)',
+    ].join('\n')
+
+    expect(analyzeMissingOutput(text)).toEqual([])
+  })
+
+  it('does not report dry-not-routed when a bus kind is ambiguous', () => {
+    const text = [
+      'global.sum("shared")',
+      'global.aux("shared")',
+      'var kick = init global.seq',
+      'kick.send("shared", -6)',
+      'kick.play(1)',
+    ].join('\n')
+
+    expect(analyzeMissingOutput(text)).toEqual([])
+  })
+
+  // 🔴 チェーンの途中に置いた出口は、名前の直後に置いたものと**同じ意味**である
+  // （MX.3「タップ位置はチェーン上の位置がそのまま意味を持つ」）。診断が両者で違う答えを
+  // 出すなら、それは診断の欠陥であって譜面の問題ではない。PR #885 のレビューで
+  // code-reviewer / Fable 監査が独立に同じ取りこぼしへ到達した。
+  it.each([
+    {
+      name: 'a send that follows another method in the chain',
+      lines: ['global.aux("verb")', 'kick.audio("k.wav").send("verb", -12)'],
+      expected: [{ code: 'dry-not-routed', sequenceName: 'kick', line: 3 }],
+    },
+    {
+      name: 'a bare master that follows another method in the chain',
+      lines: ['global.tempo(120)', 'kick.gain(-3).master'],
+      expected: [],
+    },
+    {
+      name: 'a bare sum that follows another method in the chain',
+      lines: ['global.sum("drums")', 'kick.gain(-3).drums'],
+      expected: [],
+    },
+    {
+      name: 'two sends on one line where only the second reaches a sum',
+      lines: [
+        'global.sum("drums")',
+        'global.aux("verb")',
+        'kick.send("verb", -12).send("drums", -6)',
+      ],
+      expected: [],
+    },
+  ])('reads $name', ({ lines, expected }) => {
+    const text = [
+      lines[0],
+      'var kick = init global.seq',
+      ...lines.slice(1),
+      'kick.play(1, 0, 1, 0)',
+    ].join('\n')
+
+    expect(analyzeMissingOutput(text)).toMatchObject(expected)
+  })
+
+  // play() 自体もチェーンの途中に来る。ここを取りこぼすと、**出口の無いラインが
+  // 1 件も警告されない**（診断の発火点が play() だから）。
+  it('reports output-missing when play() follows another method in the chain', () => {
+    const issues = analyzeMissingOutput(
+      ['var kick = init global.seq', 'kick.audio("kick.wav").play(1, 0, 1, 0)'].join('\n'),
+    )
+
+    expect(issues).toMatchObject([{ code: 'output-missing', sequenceName: 'kick', line: 1 }])
+  })
+
+  it('builds a quick fix that inserts sequence.output() immediately after play()', () => {
+    const text = ['var kick = init global.seq', '  kick.play(1)'].join('\n')
+    const issue = analyzeMissingOutput(text)[0]
+
+    expect(missingOutputQuickFixEdit(text, issue)).toEqual({
+      line: 1,
+      insertText: '\n  kick.output()',
+    })
   })
 })
 

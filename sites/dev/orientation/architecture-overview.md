@@ -6,7 +6,7 @@ verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 / `DSL_VERSION` 1.2 へのバンプ）まで**バージョン節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # 0-2. アーキテクチャ全景
 
@@ -99,7 +99,7 @@ graph TD
 engine の起動は `startEngine()` が担います。**2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**され、唯一のバックエンドである Rust daemon 向けの起動だけが残りました。最初にやるのは **engine を spawn する前にバックエンドのバイナリ解決を先行させる** ことです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1942-1951
+// packages/vscode-extension/src/extension.ts:1944-1953
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     outputChannel?.appendLine(
@@ -132,7 +132,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 env へ積むのは debug フラグと capture seam（#307）だけです。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1983-1997
+// packages/vscode-extension/src/extension.ts:1985-1999
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +153,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1999-2005
+// packages/vscode-extension/src/extension.ts:2001-2007
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -166,7 +166,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2745-2746
+// packages/vscode-extension/src/extension.ts:2747-2748
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -194,7 +194,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:438-443
+// packages/vscode-extension/src/extension.ts:440-445
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -206,7 +206,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 サーバーは loopback にしか bind しません。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1350-1354
+// packages/vscode-extension/src/mcp-server.ts:1351-1355
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -334,7 +334,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `RustEnginePlayer` が engine 側の境界面です。`boot()` は `DaemonClient.start()` を呼び、そのあとで transport clock の anchor を確立します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:579-586
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:580-587
   async boot(outputDevice?: string): Promise<void> {
     await this.daemon.start({
       daemonPath: this.daemonPath,
@@ -348,7 +348,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `DaemonClient.start()` は「spawn → stdout の ready line を読む → WebSocket 接続 → handshake 受信」の順に進みます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:296-334 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:297-335 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -372,7 +372,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 daemon は engine から見ると **child process** です。ただし通信は stdin/stdout ではなく WebSocket で、stdout は起動時の ready line (port 番号を含む 1 行 JSON) を受け取るためだけに使います。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:886-896
+// packages/engine/src/audio/rust-engine/daemon-client.ts:887-897
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -387,7 +387,7 @@ daemon は engine から見ると **child process** です。ただし通信は 
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:960-974
+// packages/engine/src/audio/rust-engine/daemon-client.ts:961-975
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -412,7 +412,7 @@ daemon 側でこの ready line を書くコード (`main.rs` の `run()`) と、
 daemon バイナリの探索順は `resolveDaemonBinaryPath()` にあり、explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle の順です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:223-259 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:224-260 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
@@ -560,21 +560,21 @@ sequenceDiagram
 コードを読むときに混乱しがちな「どのバージョンの話か」を整理しておきます。
 
 ```typescript
-// packages/engine/src/version.ts:14-17
+// packages/engine/src/version.ts:15-18
 export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
-export const DSL_VERSION = '1.2'
+export const DSL_VERSION = '2.0'
 ```
 
 - **`ENGINE_VERSION`**: `2.0.0` — `.orbslog` の meta ヘッダが名乗る版。MIDI 出力 + Pitch DSL + session log を含む WCTM milestone
-- **DSL spec バージョン**: `1.2` — pitch DSL spec の軸 (`ENGINE_VERSION` とも拡張の版とも別)
-- **VS Code 拡張の package version**: `3.0.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
+- **DSL spec バージョン**: `2.0` — DSL spec の軸 (`ENGINE_VERSION` とも拡張の版とも別)
+- **VS Code 拡張の package version**: `4.0.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `3.0.0` の食い違いは事故ではなく設計です。拡張が 3.0.0 に上がったのは #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871)) で、`DSL_VERSION` が 1.2 に上がったのは同じ PR ですが理由は別 (DSL の表面が変わったため)。
+上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.0.0` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
 
-なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '1.2'` (pitch DSL の spec 版) とは軸が違います。
+なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '2.0'` (DSL spec 版) とは軸が違います。
 
 ## 後続章へのナビゲーション
 

@@ -67,7 +67,7 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:236-288
+// packages/vscode-extension/src/mcp-server.ts:237-289
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -132,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:432-443
+// packages/vscode-extension/src/extension.ts:434-445
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -152,7 +152,7 @@ The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1177-1182
+// packages/vscode-extension/src/mcp-server.ts:1178-1183
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -166,7 +166,7 @@ A `McpServer` instance is created per session, but the handlers are shared. Whic
 There is also a judgement that a loopback bind alone is not enough.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1196-1203
+// packages/vscode-extension/src/mcp-server.ts:1197-1204
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -229,7 +229,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:544-561
+// packages/vscode-extension/src/mcp-server.ts:545-562
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -253,7 +253,7 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2755-2792
+// packages/vscode-extension/src/extension.ts:2757-2794
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -312,7 +312,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1293-1301
+// packages/vscode-extension/src/extension.ts:1295-1303
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -379,7 +379,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2885-2896
+// packages/vscode-extension/src/extension.ts:2887-2898
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -403,7 +403,7 @@ So `statusError` does not necessarily mean "the daemon is broken" — it can equ
 The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` to push the same lines into a ring buffer.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:143-153
+// packages/vscode-extension/src/extension.ts:144-154
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -418,7 +418,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:306-317
+// packages/vscode-extension/src/extension.ts:307-318
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -547,7 +547,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:103-127
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:104-128
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
 // ...
@@ -563,7 +563,7 @@ const appAvailable = fs.existsSync(appPath)
 When the suite is loaded, before a single test runs, it checks the freshness of the daemon binary.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:226-236
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:227-237
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -582,7 +582,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 **What counts as a "source"** took a second pass as well (#713). Picking up every `.rs` under `rust/` unconditionally lets an integration test — a separate cargo target, in practice `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` — be selected as the "newest source". Such a file never enters the dependency graph of the `orbit-audio-daemon` binary, so cargo correctly reads its dependencies, builds nothing, and the binary's mtime is never refreshed. The result is an **unfixable red**: running `npm run test:e2e:gated`, exactly what the guard's message instructs, cannot clear it. The trigger is a property of mtime — `git checkout` sets a file's mtime to the checkout time, so merely moving between branches turns an integration test whose content never changed into the "newest source". In #713 this stopped the gated suite from running a single test.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:215-217
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:216-218
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -603,7 +603,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — stock VS Code and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:713-744
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:714-745
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -645,7 +645,7 @@ The teardown repeats a safety warning. It used to send a blanket `pkill -f` to e
 The fix is to signal only the roots of the process tree.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:369-402
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:370-403
 async function killHarnessInstances(): Promise<void> {
   const pids = harnessPids()
   if (pids.length === 0) return
@@ -691,7 +691,7 @@ The pattern must never be widened to an app or process name, it says in more tha
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1441-1446
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1442-1447
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -864,7 +864,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2051-2065
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2066
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1030,7 +1030,7 @@ If the entry spec is renamed or a directory is moved and the list empties out, b
 There are two ways to read the list. The ratchet does not care which file or which line a match came from, so it uses `readGatedSources()`, which returns all sources concatenated into one string. Assertion hygiene, which wants to name the offending line, uses `readGatedSourceEntries()` — relative path plus contents, per file — and reports in `file:line` form.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:38-43
+// tests/e2e/gated-assertion-hygiene.spec.ts:42-47
 const offendingLines = (sourceEntries: readonly SourceEntry[], pattern: RegExp): string[] => {
   const isComment = (line: string): boolean => {
     const trimmed = line.trim()
@@ -1080,7 +1080,7 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
 ### Assertion hygiene
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:553-562
+// tests/e2e/gated-assertion-hygiene.spec.ts:590-599
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1102,7 +1102,7 @@ That tracking originally stayed **inside a single expression chain**, so a count
 The two stale-guard checks (`keeps the stale guard off cargo targets it can never rebuild` and `still lets the stale guard see the sources the daemon is built from`) form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:681-685
+// tests/e2e/gated-assertion-hygiene.spec.ts:718-722
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1119,7 +1119,7 @@ It is the same idea as `gated-sources.ts` throwing on an empty list: pin the det
 from outside the detector.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:694-701
+// tests/e2e/gated-assertion-hygiene.spec.ts:731-738
     const resolved = resolvedLogCountHelperNamesAcrossCorpus(entries)
     expect(
       [...resolved].sort(),
@@ -1196,7 +1196,7 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1652-1658
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1659
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1219,7 +1219,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1650-1660
+// packages/engine/src/core/sequence.ts:1674-1684
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1269,7 +1269,7 @@ State mutations are guarded by `isCurrent` (whether the process that produced th
 The real `handleStep` is in `extension.ts`, and it **waits until the grid time** before moving the highlight.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:240-251
+// packages/vscode-extension/src/extension.ts:241-252
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1287,7 +1287,7 @@ function handleStepLine(step: StepEvent): void {
 Dispatch runs a lookahead early, so lighting the highlight the moment the line arrives would move it ahead of the sound. Lines more than one second late (replayed buffered output, for example) are dropped.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:253-272
+// packages/vscode-extension/src/extension.ts:254-273
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1315,7 +1315,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` is invisible in normal mode
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:954-978
+// packages/vscode-extension/src/extension.ts:956-980
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1346,7 +1346,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2730-2741
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2731-2742
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1362,13 +1362,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2749-2750
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2750-2751
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2806-2808
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2807-2809
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

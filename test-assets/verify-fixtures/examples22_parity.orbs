@@ -27,24 +27,28 @@ var kick = init global.seq
 kick.length(4)
 kick.audio("../audio/kick.wav").chop(1)
 kick.defaultGain(-3).defaultPan(-60)
+kick.output()
 kick.play(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 var snare = init global.seq
 snare.length(4)
 snare.audio("../audio/snare.wav").chop(1)
 snare.defaultGain(-6).defaultPan(60)
+snare.output()
 snare.play(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 var hat = init global.seq
 hat.length(4)
 hat.audio("../audio/hihat_closed.wav").chop(1)
 hat.defaultGain(-9).defaultPan(0)
+hat.output()
 hat.play(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)
 
 var chopd = init global.seq
 chopd.length(4)
 chopd.audio("../audio/arpeggio_c.wav").chop(2)
 chopd.defaultGain(-4).defaultPan(20)
+chopd.output()
 chopd.play(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0)
 
 global.start()

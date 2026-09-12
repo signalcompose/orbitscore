@@ -5,7 +5,12 @@
  * 型のドリフト検出はレビューで担保する（機械的同期は今は行わない）。
  */
 
-export const PROTOCOL_VERSION = '0.2' as const
+// 🔴 #883（DSL 2.0）で wire が非互換になった: `SetSourceRouting.target` は
+// `null` / 生文字列を受け付けず、`{kind}` を持つオブジェクトだけを受理する。版を上げないと
+// ずれは handshake ではなく**最初の `SetSourceRouting` まで露見せず**、その間 instrument は
+// 旧既定の master で鳴り続ける（孤児 daemon を掴んだ時に実際に起きうる）。handshake の
+// 不一致は `daemon-client.ts` の両経路で loud に落ちるので、そこまで前倒しする。
+export const PROTOCOL_VERSION = '0.3' as const
 
 export interface HandshakeFrame {
   type: 'handshake'

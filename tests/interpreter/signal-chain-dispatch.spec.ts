@@ -310,7 +310,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     // reordering the whole array around a fixed [output, sends...] shape.
     const auxGain = 10 ** (0.37 / 20)
     expect(routing.mock.calls).toEqual([
-      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
+      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain)]],
       ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), busOutput('sum-bus-0', false)]],
       ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
     ])
@@ -486,11 +486,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await run('kick.verb(db: 0.8, enabled: false)\nverb.effect("TAL Reverb 4").master', state)
 
     // #611 §2.3: send() is always thru: true by definition; disabled means gain 0 (not a
-    // position-dependent thru flag). The implicit master terminal is appended after it.
+    // position-dependent thru flag). #883 leaves it send-only until an explicit terminal.
     expect(scheduler.setBusLine).toHaveBeenNthCalledWith(1, 'seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 0),
-      masterOutput(false),
     ])
     expect(scheduler.setBusLine).toHaveBeenNthCalledWith(2, 'aux-bus-0', [
       rack,
@@ -511,7 +510,6 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
       rack,
       busOutput('aux-bus-0', true, 10 ** (-12 / 20)),
-      masterOutput(false),
     ])
 
     await expect(run('kick.send(verb, -12, db: -6)', state)).rejects.toThrow(
@@ -778,6 +776,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // 発行する choke point。**利用者が書く語彙ではない** — `effect()` / `output()` /
       // `instrument()` の各 DSL 表面から呼ばれる private な配線で、宣言順が両方向あり得るため
       // 「揃った時に発行」を両側に置いている。
+      'instrumentSourceRoutingTarget',
       'ensureInstrumentSourceRouting',
       // 同上の fire-and-forget 版（同期文脈の DSL 表面から呼ぶ）。
       'syncInstrumentSourceRouting',

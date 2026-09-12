@@ -10,6 +10,9 @@
  * ここでは gated spec 自身のソースを検査して、**弱いアサーションの型を機械的に**探す。
  * 完全ではないが、「書いた本人が気づかなかった」を CI が拾える位置に置く価値はある。
  */
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 import * as ts from 'typescript'
 
@@ -19,6 +22,7 @@ import { readGatedSourceEntries } from './gated-sources'
 // シナリオを別ファイルへ出した時に**検査が新ファイルを見ず、黙って弱くなる**。
 const entries = readGatedSourceEntries()
 const source = entries.map(({ source: text }) => text).join('\n')
+const repoRoot = path.resolve(__dirname, '../..')
 
 type SourceEntry = (typeof entries)[number]
 
@@ -550,6 +554,39 @@ const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntr
   })
 
 describe('gated E2E assertion hygiene', () => {
+  // 🔴 `LOOP()` は**追加ではなく置換**である（`process-statement.ts` の `calculateLoopDiff()` が
+  // 新 group から外れた sequence を算出し `stopSequences(toStop)` する）。したがって
+  // `LOOP(a)` の次に `LOOP(b)` を書くと **a が止まる**。
+  //
+  // 差分法のオラクル（可聴な基準シーケンス + 意図的に無音な対象）を使う譜面でこれをやると、
+  // **基準まで止まって全体が無音**になり、「無音である」という判定が偶然通ってしまう。
+  // #883 束 S の新 fixture 3 本が揃ってこれを踏んだ（PR #885・実機 gated で 4 件 red）。
+  //
+  // 🔴 **個別のファイル名や LOOP 行の中身を固定しない。** 守りたいのは「置換である」という
+  // 一般的性質なので、**ファイルごとの `LOOP(` 出現数が高々 1** であることだけを見る。
+  // これなら fixture が増えてもこのテストを編集せずに追随する。
+  it('never splits a gated fixture across more than one replacement-style LOOP call', () => {
+    const fixtureDir = path.join(repoRoot, 'tests/fixtures/mcp-e2e')
+    const offenders = fs
+      .readdirSync(fixtureDir)
+      .filter((entry) => entry.endsWith('.orbs'))
+      .map((entry) => {
+        const loops = fs
+          .readFileSync(path.join(fixtureDir, entry), 'utf8')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith('LOOP('))
+        return { entry, loops }
+      })
+      .filter(({ loops }) => loops.length > 1)
+
+    expect(
+      offenders.map(({ entry, loops }) => `${entry}: ${loops.join(' / ')}`),
+      'LOOP() replaces the loop group — a second call stops what the first started. ' +
+        'Name every sequence in one LOOP(...) instead.',
+    ).toEqual([])
+  })
+
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。

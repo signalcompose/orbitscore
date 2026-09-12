@@ -207,13 +207,11 @@ describe('Global.sum() / Global.aux()', () => {
     expect(setBusLine).toHaveBeenNthCalledWith(1, 'sum-bus-0', [
       { op: 'rack' },
       { op: 'gain', gain: 10 ** (-6 / 20) },
-      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
     ])
     expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
       { op: 'rack' },
       { op: 'gain', gain: 10 ** (-6 / 20) },
       { op: 'pan', pan: 0.3 },
-      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
     ])
   })
 
@@ -273,7 +271,6 @@ describe('Global.sum() / Global.aux()', () => {
       { op: 'rack' },
       { op: 'gain', gain: 10 ** (12 / 20) },
       { op: 'pan', pan: 1 },
-      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
     ])
   })
 

@@ -1,0 +1,22 @@
+// #883 X1: the orphan must be silent while the explicit reference remains audible.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var ref883 = init global.seq
+ref883.beat(4 by 4).length(1)
+ref883.audio("kick.wav").chop(1)
+ref883.output()
+ref883.play(1, 1, 1, 1)
+
+var orphan883 = init global.seq
+orphan883.beat(4 by 4).length(1)
+orphan883.audio("kick.wav").chop(1)
+orphan883.play(1, 1, 1, 1)
+
+// LOOP() replaces the whole loop group, so the audible oracle and silent subject
+// must be named together. Two separate calls would stop ref883 on the second call.
+LOOP(ref883, orphan883)

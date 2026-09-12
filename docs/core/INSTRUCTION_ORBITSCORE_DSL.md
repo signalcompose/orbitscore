@@ -3,8 +3,8 @@
 ## OrbitScore 2.0.0 — DSL Specification
 
 > **Product version**: OrbitScore **2.0.0**
-> `ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.2`（拡張は 3.0.0 — 3 つは別軸・§4.4）
-> (audio engine line v3.0 + Pitch DSL v1.1)
+> `ENGINE_VERSION 2.0.0` / `DSL_VERSION 2.0`（拡張は 4.0.0 — 3 つは別軸・§4.4）
+> (audio engine line v3.0 + Pitch DSL v2.0)
 
 This document defines the **OrbitScore DSL**.
 It is the **single source of truth** for the project.
@@ -1810,10 +1810,11 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 **出口を 1 つも書かないラインは無音になる。** 暗黙の `output(master)` は**付かない** —
 sequence も sum / aux バスも instrument も同じ規則である。
 
-> ⏳ **エディタの診断は束 S で入る**（#883 設計 D7）: 出口の無い発音シーケンスに
-> Warning（`output-missing`）+ quick fix、aux 宛て `send` だけのラインに
-> Information（`dry-not-routed`）。**まだ実装されていない** — 本節の規則（spec 先行・
-> 運用規則 6）が先に確定し、診断とセマンティクスは同じリリースで出る。
+✅ **実装済み**（束 S・PR #885・#883 設計 D7）: エディタは出口の無い発音シーケンスに
+**Warning（`output-missing`）+ quick fix**、aux 宛て `send` だけのラインに
+**Information（`dry-not-routed`）** を出す（`packages/vscode-extension/src/diagnostics-analysis.ts` の
+`analyzeMissingOutput()`・quick fix は `extension.ts` の CodeActionProvider）。
+**書き忘れは評価する前に分かる。**
 
 ```js
 kick.audio("k.wav").play()             // 🔴 無音（出口が無い）
@@ -2260,7 +2261,7 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 > (2026, Epic #224) layered *on top of* the v3.0 audio engine — it is not a predecessor of
 > v3.0 despite the lower number. Read the two as parallel tracks, not a single sequence.
 
-**Current Version**: 拡張 **3.0.0** — audio engine + **v1.2** Pitch DSL (MIDI) — Phases 1/2/3/R/4
+**Current Version**: 拡張 **4.0.0** — audio engine + **v2.0** Pitch DSL (MIDI) — Phases 1/2/3/R/4
 
 - v1.1 Pitch DSL / MIDI (2026, Epic #224): **MIDI output path + symbolic pitch language**,
   layered on the v3.0 audio engine. See "Pitch DSL (v1.1 — MIDI Output)".

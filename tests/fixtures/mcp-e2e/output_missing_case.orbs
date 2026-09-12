@@ -1,0 +1,29 @@
+// #883 X6: static routing diagnostics. This fixture is opened but never evaluated.
+
+var global = init GLOBAL
+global.sum("x6sum883")
+global.aux("x6aux883")
+
+var orphan = init global.seq
+orphan.audio("kick.wav")
+orphan.play(1)
+
+var ref = init global.seq
+ref.audio("kick.wav")
+ref.output()
+ref.play(1)
+
+var sendAux = init global.seq
+sendAux.audio("kick.wav")
+sendAux.send("x6aux883", -6)
+sendAux.play(1)
+
+var sendSum = init global.seq
+sendSum.audio("kick.wav")
+sendSum.send("x6sum883", -6)
+sendSum.play(1)
+
+var bare = init global.seq
+bare.audio("kick.wav")
+bare.master
+bare.play(1)

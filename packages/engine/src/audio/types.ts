@@ -24,6 +24,12 @@ export type WireLineOp =
   | { op: 'pan'; pan: number }
   | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
 
+/** Explicit wire destination for a premaster source output (#883). */
+export type SourceRoutingTarget =
+  | { kind: 'none' }
+  | { kind: 'master' }
+  | { kind: 'bus'; name: string }
+
 export interface PluginLoadResult {
   pluginId: string
   pluginName: string
@@ -242,11 +248,8 @@ export interface AudioEngine {
   /** Replace one daemon bus's complete ordered audio line. */
   setBusLine?(bus: string, line: WireLineOp[]): Promise<void>
 
-  /**
-   * Route one premaster source output. `source` is an opaque daemon key, `unit` is the
-   * format-neutral audio-output index, and `target: null` means Master (#643).
-   */
-  setSourceRouting?(source: string, unit: number, target: string | null): Promise<void>
+  /** Route one premaster source output to an explicit destination (#883). */
+  setSourceRouting?(source: string, unit: number, target: SourceRoutingTarget): Promise<void>
 }
 
 /**

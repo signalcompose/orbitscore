@@ -16,10 +16,11 @@ mod resampler;
 pub use link_audio_ring::{PostMixSink, RingTapSink};
 pub use loader::{load_sample_from_file, load_sample_resampled, LoaderError};
 pub use output::{
-    decode_bus_routing_sentinel, default_master_line_ops, legacy_line_ops, list_output_devices,
-    rebuild_output_stream, resolve_requested_device_name, select_live_output_device,
-    start_default_output, start_default_output_with_clap, start_default_output_with_device,
-    start_default_output_with_insert_buses, start_default_output_with_insert_buses_and_post,
+    decode_bus_routing_sentinel, default_bus_line_ops, default_master_line_ops, legacy_line_ops,
+    list_output_devices, rebuild_output_stream, resolve_requested_device_name,
+    select_live_output_device, start_default_output, start_default_output_with_clap,
+    start_default_output_with_device, start_default_output_with_insert_buses,
+    start_default_output_with_insert_buses_and_post,
     start_default_output_with_insert_buses_sources_and_post, start_default_output_with_link_egress,
     start_default_output_with_sources, AudioDeviceInfo, BlockSource, BlockTransport, BusSend,
     BusTarget, DeviceFallback, DeviceFallbackPolicy, InsertBusStage, LegacyLineInstaller, LineOp,

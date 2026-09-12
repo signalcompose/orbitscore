@@ -29,26 +29,26 @@ function batch(line: AudioLine, elements: LineElement[]): void {
 }
 
 describe('AudioLine', () => {
-  it('U1 supplies rack and an implicit terminal master for an empty line', () => {
-    expect(new AudioLine().program()).toEqual([{ kind: 'rack' }, master()])
+  it('U1 supplies only the rack marker for an empty line', () => {
+    expect(new AudioLine().program()).toEqual([{ kind: 'rack' }])
   })
 
-  it('U2 keeps a send and supplies a terminal master', () => {
+  it('U2 keeps a send without synthesizing a terminal master', () => {
     const line = new AudioLine()
     batch(line, [bus('verb', true, -12, 'send')])
-    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true, -12, 'send'), master()])
+    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true, -12, 'send')])
   })
 
   it('U3 preserves a pre-rack output written before rack', () => {
     const line = new AudioLine()
     batch(line, [bus('verb', true), { kind: 'rack' }])
-    expect(line.program()).toEqual([bus('verb', true), { kind: 'rack' }, master()])
+    expect(line.program()).toEqual([bus('verb', true), { kind: 'rack' }])
   })
 
   it('U4 preserves a post-rack output written after rack', () => {
     const line = new AudioLine()
     batch(line, [{ kind: 'rack' }, bus('verb', true)])
-    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true), master()])
+    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true)])
   })
 
   it('U5 inserts single-element batches in default strip order', () => {
@@ -60,7 +60,6 @@ describe('AudioLine', () => {
       { kind: 'rack' },
       { kind: 'gain', db: -6 },
       { kind: 'pan', pan: -100 },
-      master(),
     ])
   })
 
@@ -68,7 +67,7 @@ describe('AudioLine', () => {
     const line = new AudioLine()
     batch(line, [{ kind: 'gain', db: -6 }])
     batch(line, [{ kind: 'rack' }])
-    expect(line.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -6 }, master()])
+    expect(line.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -6 }])
   })
 
   it('U7 decrements the cursor after moving an earlier element', () => {
@@ -94,7 +93,6 @@ describe('AudioLine', () => {
       { kind: 'rack' },
       { kind: 'gain', db: -12 },
       { kind: 'pan', pan: 30 },
-      master(),
     ])
   })
 
@@ -123,9 +121,9 @@ describe('AudioLine', () => {
     batch(line, [bus('verb', true, -12, 'send')])
     batch(line, [bus('verb', true, -6, 'send')])
     // The second batch must REPLACE the -12 dB send, not append a second one — assert on the
-    // whole program (with the implicit rack + terminal `program()` adds), so a stray extra
+    // whole program (including the implicit rack marker `program()` adds), so a stray extra
     // output cannot hide the way a filtered outputs-only view would have let it.
-    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true, -6, 'send'), master()])
+    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true, -6, 'send')])
   })
 
   it('degenerates outside a batch to value replacement without reordering', () => {
@@ -156,7 +154,6 @@ describe('AudioLine', () => {
       { kind: 'rack' },
       { kind: 'gain', db: -6 },
       { kind: 'pan', pan: -100 },
-      master(),
     ])
   })
 
@@ -171,12 +168,12 @@ describe('AudioLine', () => {
     during.upsert({ kind: 'rack' })
     during.upsert(bus('verb', true))
     AudioLine.endBatchAll()
-    expect(before.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -6 }, master()])
-    expect(during.program()).toEqual([{ kind: 'rack' }, bus('verb', true), master()])
+    expect(before.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -6 }])
+    expect(during.program()).toEqual([{ kind: 'rack' }, bus('verb', true)])
 
     // Outside the frame again, both lines degenerate to value-only updates.
     before.upsert({ kind: 'gain', db: -18 })
-    expect(before.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -18 }, master()])
+    expect(before.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -18 }])
   })
 
   it('U13 converts gain, pan, and mono device destinations and refuses link output', () => {
