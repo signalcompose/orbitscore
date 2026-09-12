@@ -6,7 +6,7 @@ verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # 0-2. アーキテクチャ全景
 
@@ -57,7 +57,7 @@ graph TD
 
   AGENT["外部 agent\n(Claude Code 等)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv は debug フラグと capture seam のみ"| CLI
+  EXT -->|"child_process.spawn(process.execPath, [cli-audio.js, 'repl'])\nELECTRON_RUN_AS_NODE=1 で VS Code 同梱の Node を借りる"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
@@ -129,7 +129,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 
 面白いのは、解決した path を env で engine に渡さないことです。spawn される engine CLI 自身が同じ `resolveDaemonBinaryPath()` を実行するので結果は決定的に一致し、再注入する理由がありません。
 
-env へ積むのは debug フラグと capture seam（#307）だけです。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
+この `env` 変数へ積むのは debug フラグと capture seam（#307）だけです（spawn の直前にもう 2 つ足されます。すぐあとで出てきます）。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:1985-1999
@@ -150,7 +150,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
   outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 ```
 
-そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
+そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。ここで問題になるのが「**どの** Node.js か」です。**2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、PATH から `node` を引くのをやめて VS Code 自身が同梱している Node を借りる**ようになりました。Finder や launchd から起動された VS Code の PATH は `/etc/paths` の最小構成で、nodenv や Homebrew で node を入れている環境ではそこに `node` がありません。engine は `spawn node ENOENT` で起動せず、しかも利用者から見える症状は「エンジンが起動しない」だけなので、原因が PATH だとは分かりません。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` を渡して初めて Node になります。
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:2001-2034
@@ -189,6 +189,8 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
       env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
     })
 ```
+
+ここで足した 2 つの env は engine プロセスに入ります。プロセスツリーは extension host → engine → daemon → plugin child と続くので、**足した変数は放っておくと末端まで流れます**。その出口の処理は、後述の daemon spawn のところで出てきます。
 
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
@@ -415,6 +417,20 @@ daemon は engine から見ると **child process** です。ただし通信は 
     })
     this.child = child
 ```
+
+`env: daemonEnv(process.env)` が、先ほど触れた「出口」です。`daemonEnv()` は `ELECTRON_RUN_AS_NODE` だけを落として残りをそのまま渡す純関数です（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）。
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-client.ts:75-78
+export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source
+  return rest
+}
+```
+
+落とす根拠は「**自分が足したものを、自分の出口で戻す**」です。この変数は拡張が VS Code 同梱の Node で engine を起動するために足したもので、Electron がプロセス初期化時に読んだ時点で役目は終わっています。落とさないと Rust の daemon がそのまま継承し、daemon は out-of-process のプラグイン子プロセスを起動する際に env を絞っていないので、**第三者のプラグインホストまで届きます**。
+
+逆に「ホスト由来の変数を第三者へ渡さない」という一般則は根拠にしていません。それを根拠にするなら拡張ホストの env に乗っている `VSCODE_*` や他の `ELECTRON_*` も落とす必要があり、この関数はそこまではやらないからです。
 
 ```typescript
 // packages/engine/src/audio/rust-engine/daemon-client.ts:986-1000
@@ -673,6 +689,7 @@ export const DSL_VERSION = '2.0'
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1-39` — Rust backend adapter の設計コメント (timing モデル、クロックマッピング、feature gap)
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:548-555` — `boot()`
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:1-13` — DaemonClient の 5 ステップ (spawn → ready line → ws → request/response → events)
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:58-78` — `daemonEnv()`: daemon の子へ `ELECTRON_RUN_AS_NODE` を渡さない出口（#878）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-257` — `resolveDaemonBinaryPath()`: 探索順と fail-loud
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:294-342` — `doStart()`: spawn / connect / handshake
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr ルーティングと ready line 読み取り

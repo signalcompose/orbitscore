@@ -6,7 +6,7 @@ verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) and #855 (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), the temp-sweep race that was inflating the ERROR count) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) and #855 (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), the temp-sweep race that was inflating the ERROR count) on 2026-09-11, and to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889), the addition of the cold install gate) on 2026-09-12. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -30,9 +30,10 @@ They look like three independent features, but a single line — the engine's st
 6. [`get_log` and the ring buffer](#get_log-and-the-ring-buffer)
 7. [The gated E2E harness — driving real VS Code through MCP alone](#the-gated-e2e-harness--driving-real-vs-code-through-mcp-alone)
 8. [Capture WAV and RMS assertions](#capture-wav-and-rms-assertions)
-9. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
-10. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
-11. [Running it locally](#running-it-locally)
+9. [The cold install gate — the layer the dev host structurally never reaches](#the-cold-install-gate--the-layer-the-dev-host-structurally-never-reaches)
+10. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
+11. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
+12. [Running it locally](#running-it-locally)
 
 ---
 
@@ -973,6 +974,56 @@ quietly weakens the moment that name is reused with a different intent.
 
 ---
 
+## The cold install gate — the layer the dev host structurally never reaches
+
+The gated harness read so far has a layer it **cannot reach in principle**. The Extension Development Host started with `--extensionDevelopmentPath` loads the repository sources in place, so it never walks the paths that **only run when the shipped `.vsix` is actually installed**. On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) a second gated suite, `tests/e2e/vsix-cold-install-gated.spec.ts`, was added to look at exactly that layer.
+
+Three paths go unwalked: where the daemon binary resolves from (`monorepo-release` under the dev host, `extension-bundle` under a cold install), the extension's own bundled dependencies, and **how the Node runtime that starts the engine is chosen**. The third one is #878; and in v3.0.0 a `.vsix` whose `activate()` did not even run survived until just before the freeze tag (#873). Both happened while the unit tests and the gated E2E were entirely green.
+
+```typescript
+// tests/e2e/vsix-cold-install-gated.spec.ts:9-17
+ * ここでは 2 つの構成で確かめる:
+ *
+ * | 構成 | 何を守るか |
+ * |---|---|
+ * | **strict**（CLI ラッパ経由 + node の無い最小 PATH） | **#878**。VS Code のシェル環境解決に救われない条件。修正前は確定で `spawn node ENOENT` |
+ * | **finder**（app 本体を直接起動） | 利用者の通常経路。`.vsix` を入れただけで音が出ること |
+ *
+ * 🔴 **strict を「Finder より厳しすぎる」と切り捨てない。** `code .` を、nodenv を初期化しない
+ * ログインシェルから叩けば同じ条件になる。engine の起動を PATH に依存させない限り両方緑になる。
+```
+
+The only difference between the two configurations is **the launcher and the env**. strict invokes `Contents/Resources/app/bin/code` (the CLI wrapper); finder invokes `Contents/MacOS/Code` (the app binary). Through the CLI wrapper VS Code **skips resolving the login shell environment** (it assumes the environment is inherited from the terminal), so combining it with a node-less PATH reproduces the "not rescued by VS Code's shell environment resolution" condition deterministically.
+
+```typescript
+// tests/e2e/vsix-cold-install-gated.spec.ts:48-51
+/** `/etc/paths` 相当。nodenv / Homebrew の node はここに無い。 */
+const NODE_LESS_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+
+const enabled = process.env.ORBIT_GATED_COLD_INSTALL === '1'
+```
+
+The gate env var is **`ORBIT_GATED_COLD_INSTALL`**, not `ORBIT_GATED_ORBITSTUDIO`. It is a separate variable because this suite presupposes a packaged `.vsix`: the `pretest` of `npm run test:e2e:cold-install` deletes the stale `.vsix` and runs `vsce package`. In an ordinary `npm test` without the gate, `describe.skipIf(!enabled)` skips the whole describe.
+
+The oracle is not `ok`. The `.vsix` goes into an empty extensions-dir, the app starts **without** `--extensionDevelopmentPath`, and the assertion reaches the RMS of the captured WAV.
+
+```typescript
+// tests/e2e/vsix-cold-install-gated.spec.ts:195-203
+  expect(windows, 'no capture windows were produced').toBeDefined()
+  // 🔴 `ok` で終わらせない。音が出たことは WAV の RMS でしか言えない。
+  expect(windows!.rms('sound')).toBeGreaterThan(0.01)
+
+  const log = (await client.call('get_log', { lines: 500 })).text
+  expect(
+    log.split('\n').filter((l) => l.includes('Cannot find module')),
+    'the packaged .vsix failed to resolve a bundled dependency',
+  ).toEqual([])
+```
+
+The second `expect` looks at `get_log` for the same reason given in [What `ok` means](#what-ok-from-evaluate_orbitscore-means) earlier in this chapter. A bundled dependency failing to resolve happens asynchronously after the evaluation returns, so it shows up in neither `ok` nor the RMS — **only in the output channel**.
+
+---
+
 ## Turning discipline into mechanism — the ratchet and assertion hygiene
 
 The title of WORK_LOG 6.418 is "turning today's corrections from 'knowledge' into a 'reproducible mechanism'". CLAUDE.md said "when you add a DSL feature, always add an E2E test", yet measurement showed that 19 of the 32 `seq` words had never been evaluated on the real device. Prose is sometimes not read. So two tests inspect the **source of the gated E2E itself**.
@@ -1390,6 +1441,9 @@ npm run test:e2e:gated
 
 # アプリの場所を変える / キャプチャ WAV を残す
 ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
+
+# 出荷 `.vsix` の cold install ゲート（pretest で `vsce package` が走る）
+npm run test:e2e:cold-install
 ```
 
 Running it launches a GUI app and plays audible sound, so, as CLAUDE.md instructs, it is **not to be run unattended or unprompted**. In an ordinary `npm test` without the gate env var the whole describe is skipped, and only the ratchet and hygiene tests run every time.
@@ -1455,6 +1509,8 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — the first test (launch, catalogue, capture, run_selection, onset verification)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — the #654 playhead E2E
+- `tests/e2e/vsix-cold-install-gated.spec.ts:1-51` — the cold install gate's env contract (`ORBIT_GATED_COLD_INSTALL`) and the strict / finder configurations (#878 / #873)
+- `tests/e2e/vsix-cold-install-gated.spec.ts:160-223` — from evaluating DSL through to the RMS and `get_log` assertions
 - `tests/e2e/helpers/harness-processes.ts:1-49` — the teardown containment policy, `selectRootPids()` and `userDataDirExceedsSocketLimit()` (#830)
 - `tests/e2e/harness-processes.spec.ts:1-89` — unit tests for that process classification (#830)
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
