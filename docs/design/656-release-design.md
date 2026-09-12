@@ -42,7 +42,7 @@
 | `orbitscore.scsynthPath` は**実行ファイルのパス**を受ける | 同 `:368-373` | 同上 |
 | DSL の `instrument(path)` は**任意のパスのプラグイン**を読む（= 任意コード実行） | `packages/engine/src/core/sequence.ts:621-650` | §3.3 の脅威モデルの根拠 |
 | 拡張は activate 中に MCP HTTP を `127.0.0.1` へ bind する | `extension.ts:451-456` → `mcp-server.ts:1339-1348` | §3.3・§12 の観測手段 |
-| engine は **PATH の `node`** を spawn する（node は同梱していない） | `extension.ts:2159` | 🔴 §6.3 の cold-install 危険 |
+| ~~engine は **PATH の `node`** を spawn する（node は同梱していない）~~ → **解決済み（§6.3 Q-656-8b・PR #889）**: VS Code 同梱の Node（`process.execPath` + `ELECTRON_RUN_AS_NODE=1`） | `extension.ts`（行番号は当時） | ✅ |
 | engine 本体は拡張内の `engine/dist/cli-audio.js` | `extension.ts:1084-1105` | 不変 |
 | daemon は**同梱バイナリ**を最後の候補として解決 | `packages/engine/src/audio/rust-engine/daemon-client.ts:246-250` | 不変（署名対象・§5.1） |
 | daemon は `127.0.0.1:0` に bind する | `rust/crates/orbit-audio-daemon/src/server.rs:19` | §5.3 の entitlements 論点 |
@@ -409,18 +409,38 @@ const extArgs = EXT_MODE === 'dev' ? [`--extensionDevelopmentPath=${EXTENSION_DE
 
 ### 6.3 🔴 `node` 依存 — cold-install で最初に壊れうる場所
 
-`extension.ts:2159` は `child_process.spawn('node', [enginePath, ...args])` で **PATH の `node`** を呼ぶ。**node は `.vsix` にも `.app` にも同梱していない**（`.vscodeignore` にも `engine/` にも node ランタイムは無い）。一方ユーザーサイトは「**他に何かをインストールする必要はありません**」と書いている（`sites/user/getting-started/installation.md:21-24`）。
+🔴 **以下は 2026-09-03 時点の問題提起。解決は下の Q-656-8b（PR #889）**。当時: `extension.ts:2159` は `child_process.spawn('node', [enginePath, ...args])` で **PATH の `node`** を呼ぶ。**node は `.vsix` にも `.app` にも同梱していない**（`.vscodeignore` にも `engine/` にも node ランタイムは無い）。一方ユーザーサイトは「**他に何かをインストールする必要はありません**」と書いている（`sites/user/getting-started/installation.md:21-24`）。
 
 `docs/development/POST_2.0_ENGINE_AND_DISTRIBUTION.md:67` は殻の要素として「**node ランタイム**」を挙げており、**この問題は #301/#302 の時点で認識されていて、まだ解かれていない。**
 
 **まず測る**（設計で決め打たない）: E2E-D3（§12）で PATH を launchd 既定相当（`/usr/bin:/bin:/usr/sbin:/sbin`）に絞って起動し、engine が起動するかを見る。
 
-✅ **owner 裁定（2026-09-03 Q-656-8）: B node を同梱する**（サイズ + 署名対象 +1）。E2E-D3 は「同梱 node で起動する」ことの確認に読み替え、PATH の node には依存しない。同梱先は `.app/Contents/Resources/app/extensions/orbitscore/engine/bin/node`（`enginePath` の隣・§4.3 の成果物一覧に追加）、`extension.ts:2159` の `spawn('node', …)` を同梱パスへ（無ければ PATH へフォールバックし警告）。署名は §5.1 の内側リストに +1。以下の表は裁定前の分岐の記録:
+🔴 **裁定の更新（2026-09-12 Q-656-8b）: 拡張線（`.vsix`）は A（VS Code 同梱の Node）**。
+下の 2026-09-03 裁定（B）は**ネイティブ `.app` 向けとして残る** — 借りる VS Code が無いのでそちらでは
+A が使えない。**両者は配布物が違うので矛盾しない。**
+
+> **なぜ変えたか**: 2026-09-03 の裁定は配布物が **VSCodium フォークの `.app`** だった時のもので、
+> 同梱先も `.app/Contents/Resources/app/extensions/...` と指定されていた。**2026-09-10（#827）で
+> フォークを畳み、拡張線は `.vsix` のみ**になった。`.vsix` は Node を持っているホスト（VS Code）の
+> 中で動くので、B は 50MB 超の同梱と署名対象 +1 を払って**ホストが既に持っているもの**を二重に運ぶ
+> ことになる。
+>
+> **A の検証（2026-09-12・実測）**: VS Code 同梱の Electron は **Node 24.18.1**（本リポジトリの要求は
+> `>=22.0.0`）。`@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+> node の無い PATH かつシェル環境解決が効かない条件で cold install した `.vsix` から**音が出る**ところまで
+> 確認し、変異（`process.execPath` → `'node'`）で赤・復元で緑を実走した（`tests/e2e/vsix-cold-install-gated.spec.ts`）。
+>
+> **「どちらに転んでも今すぐやること」として挙げていた node の pre-check は不要になった** — A では
+> ランタイムが必ず存在するので、検査すべき不在が無い。
+
+---
+
+✅ **owner 裁定（2026-09-03 Q-656-8・🔴 拡張線については上の Q-656-8b で置換。ネイティブ `.app` 向けとしては有効）: B node を同梱する**（サイズ + 署名対象 +1）。E2E-D3 は「同梱 node で起動する」ことの確認に読み替え、PATH の node には依存しない。同梱先は `.app/Contents/Resources/app/extensions/orbitscore/engine/bin/node`（`enginePath` の隣・§4.3 の成果物一覧に追加）、`extension.ts:2159` の `spawn('node', …)` を同梱パスへ（無ければ PATH へフォールバックし警告）。署名は §5.1 の内側リストに +1。以下の表は裁定前の分岐の記録:
 
 | 結果 | 取る手 |
 |---|---|
 | 起動する | VS Code / VSCodium の shell env 解決が効いている。**ユーザーが node を持っていない場合**を別途 E2E で作る（PATH から node を外す） |
-| 起動しない | 🔴 cold-install が原理的に成立しない。手は 2 つ: **(A)** `process.execPath` + `ELECTRON_RUN_AS_NODE=1` で Electron を node として使う（同梱ゼロ・Node 版はアプリに従属）/ **(B)** node を同梱する（サイズ増・署名対象が増える）。**A/B は裁定待ち (8)** |
+| 起動しない | 🔴 cold-install が原理的に成立しない。手は 2 つ: **(A)** `process.execPath` + `ELECTRON_RUN_AS_NODE=1` で Electron を node として使う（同梱ゼロ・Node 版はアプリに従属）/ **(B)** node を同梱する（サイズ増・署名対象が増える）。~~**A/B は裁定待ち (8)**~~ → **裁定済み: 拡張線は A / ネイティブ `.app` は B（Q-656-8b・2026-09-12）** |
 
 **どちらに転んでも今すぐやること**: `getEnginePath()` の直後（`extension.ts:1084-1105` と同じ形）で **`node` の解決可否を pre-check し、無ければ声を上げる**。`startEngine()` は daemon については既に pre-check している（`:2078-2086`）のに、**その engine を走らせる node については何も見ていない** — 同じ形の穴である。
 
@@ -489,7 +509,7 @@ const extArgs = EXT_MODE === 'dev' ? [`--extensionDevelopmentPath=${EXTENSION_DE
   → 拡張 activate（extension.ts:286）→ MCP を 127.0.0.1 に bind（:451-456・ポート設定時のみ）
   → フォルダを開く → workspace trust（層 2 で既定 off・§3.4）
   → run_selection → startEngine（:2044）→ isTrusted ガード（§3.3）
-  → spawn('node', engine/dist/cli-audio.js repl)（:2159）  ← 🔴 node は PATH 頼み（§6.3）
+  → spawn(process.execPath, engine/dist/cli-audio.js repl) ← ✅ PATH 非依存（§6.3 Q-656-8b・PR #889）
   → engine が daemon を解決（daemon-client.ts:246-250 = extension-bundle）→ spawn
   → daemon が 127.0.0.1:0 に bind（server.rs:19）→ child を current_exe の隣から spawn（outproc_effect.rs:453-456）
   → child が std-plugins/Gain.clap を隣から解決 → 音
@@ -535,6 +555,7 @@ $ grep -rn "workspace.trust\|untrustedWorkspaces" --include='*' . （node_module
 ./docs/planning/2026-09-03-issue-triage.md
 （= コードにも package.json にも一切無い。設定名の一次情報は #385 本文の probe だけ）
 
+# 🔴 2026-09-03 時点の結果。PR #889 以降 packages/ からは 0 件（§6.3 Q-656-8b）
 $ grep -rn "spawn('node'" packages/ tests/
 tests/vscode-extension/engine-command-awaits.spec.ts:180:    expect(() => child_process.spawn('node', ['/unit-test/cli-audio.js', 'repl'])).toThrowError(
 packages/vscode-extension/src/extension.ts:2159:    engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -642,7 +663,7 @@ exit code を信じると、拡張が入らないまま起動して **60 秒の 
 | **PR-R4** `feat(release): sign and notarize OrbitStudio.app` | §5.1-5.3 の署名段 / entitlements（実測後） / `CODESIGN_PIPELINE.md` 改訂 | #656 の署名・公証・実機確認 | `make-local-release.sh` +90 / 新規 plist / `CODESIGN_PIPELINE.md` 全面 | PR-R3 | E2E-D4（署名済み `.app` で 3rd-party が鳴る）。**§5.3 の停止条件あり** | 🔴 **署名 identity・bundle id**（裁定待ち (5)） |
 | **PR-R5** `ci(release): publish the signed app on tag push` | §5.4 (b) の app ジョブ | #656 の CI 項 | `release.yml` +45 | PR-R4 + 裁定待ち (3) | tag を打って 1 回通す | 配布物名 |
 | **PR-C1** `test(e2e): run the gated suite against the release artifact` | §6.2 の `ORBIT_GATED_EXT_MODE` / E2E-D3・D4 / #138 の基準書き直し | #138 全項目 | gated spec +80 / issue 本文 | PR-R3 | E2E-D3 が実際に落ちるか（PATH を絞って） | — |
-| **PR-C2** `fix(studio): pre-check the node runtime before spawning the engine` | §6.3 の pre-check（+ 結果次第で A/B） | #138 の新規基準 | `extension.ts` +30 | PR-C1（測ってから） | E2E-D3 の PATH 絞り | 🔴 A（Electron を node として使う）を採るなら**一方通行**（裁定待ち (8)） |
+| ~~**PR-C2** `fix(studio): pre-check the node runtime before spawning the engine`~~ → **A を採ったので pre-check 自体が不要**（ランタイムが必ず存在する）。**PR #889 で完了**（§6.3 Q-656-8b） | — | — | — | — | `tests/e2e/vsix-cold-install-gated.spec.ts`（strict = node の無い PATH） | ✅ |
 
 **先に着手できるのは PR-T1 / PR-R1 / PR-R2**（裁定待ち 0 件）。
 
@@ -657,7 +678,7 @@ exit code を信じると、拡張が入らないまま起動して **60 秒の 
 | `security.workspace.trust.enabled` という設定名 | 中（出どころは #385 本文の probe のみ） | VS Code / VSCodium の設定 UI で `security.workspace.trust` を検索するか、`code --list-extensions` を持つ実機で `settings.json` に書いて効くか見る。**egress が塞がれている本セッションでは docs を読めない** |
 | entitlements 無しの hardened runtime で 3rd-party CLAP/VST3 が読める | **低（未確認）** | §5.3 の段 1-3。`CODESIGN_PIPELINE.md` に記述が無いので推測しない |
 | quarantine 付きの `.app` から daemon / child が exec できる | 低〜中 | E2E-D3。`CODESIGN_PIPELINE.md:129-146` は SC の署名済みバイナリ前提の記述で、自前 ad-hoc には当てはまらない |
-| `node` が cold-install で解決できない | **中（未測定）** | E2E-D3 の PATH 絞り。VS Code の shell env 解決が効けば通るが、**node を持たない利用者**は別途 red になる |
+| ~~`node` が cold-install で解決できない~~ | **解消（2026-09-12 実測）** | node の無い PATH かつシェル env 解決が効かない条件で cold install し、**音が出る**ところまで確認（`npm run test:e2e:cold-install` の strict）。変異で red・復元で green も実走。§6.3 Q-656-8b |
 | `verify-vsix.sh` の切り出しで検査が弱まらない | 高 | 切り出し後に `release.yml` の PR smoke が緑。さらに `engine/node_modules/yaml` を意図的に削って `exit 1` になることを 1 回だけ確かめる（#654 の再現） |
 | app 版 = 拡張版が成立し続ける | 高 | `EDITOR_HOST_AND_APP_SIZE.md:286-294`（アプリ側に固有実装 0 行）。**workbench を直接いじった瞬間に崩れる**（同 `:296-299`） |
 | Open VSX / Marketplace が source-available ライセンスを許す | **不明（未確認）** | 各 publisher 規約を一次で読む。#184 に着手する時の最初の作業 |

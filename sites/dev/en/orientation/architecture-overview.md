@@ -153,20 +153,47 @@ Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_E
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2001-2007
+// packages/vscode-extension/src/extension.ts:2001-2034
   // Spawn engine process
+  // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
+  // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
+  // 無い。engine は `spawn node ENOENT` で起動せず、症状は「エンジンが起動しない」だけなので
+  // 原因が PATH だと利用者には分からない。VS Code がログインシェルの環境を解決してくれる時は
+  // 通るが、それは実装詳細への暗黙の依存で、2026-09-12 に通らない条件を実測で特定した
+  // （cold install した `.vsix` を CLI ラッパ経由 + 最小 PATH で起動すると確定で ENOENT）。
+  //
+  // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
+  // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
+  // `ELECTRON_RUN_AS_NODE=1` が要る。**実測の出典: #878 / PR #889・2026-09-12・この開発機**
+  // （VS Code **1.134.0** / Electron 42.8.1）: 同梱 Node は 24.18.1 でルートの
+  // `engines.node >=22.0.0` を満たし、`@julusian/midi` の prebuild も素の node と同じく読めた
+  // （port count が一致）。後者は偶然ではない — `pkg-prebuilds` のローダは **N-API の時
+  // Electron 判定へ入らず** `node-napi-v7.node` に決定論的に落ちる（`pkg-prebuilds/bindings.js`）。
+  // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
+  //
+  // 🔴 「Electron の `runAsNode` fuse を将来 VS Code が無効化したら、`spawn` は成功するのに
+  // Node として動かず、ENOENT も出ないまま偽の『起動した』になるのでは」— レビューで出た問い。
+  // **VS Code はこの fuse を無効化できない**: 自身の CLI が
+  // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
+  // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
+  // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
   try {
-    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
     })
 ```
 
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2747-2748
+// packages/vscode-extension/src/extension.ts:2774-2775
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -348,7 +375,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `DaemonClient.start()` proceeds in the order "spawn → read the ready line from stdout → connect the WebSocket → receive the handshake."
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:297-335 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:319-357 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -372,7 +399,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:887-897
+// packages/engine/src/audio/rust-engine/daemon-client.ts:909-922
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -382,12 +409,15 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
     // `--audio-device <name>` は daemon 起動時のみ honor される（#484 D1・ランタイム切替は D2）。
     // 名前が不一致でも daemon は起動を落とさず stderr に警告して host 既定へ縮退する。
     const args = audioDevice ? ['--audio-device', audioDevice] : []
-    const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(binary, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: daemonEnv(process.env),
+    })
     this.child = child
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:961-975
+// packages/engine/src/audio/rust-engine/daemon-client.ts:986-1000
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -412,7 +442,7 @@ The daemon-side code that writes this ready line (`run()` in `main.rs`) and the 
 The search order for the daemon binary is in `resolveDaemonBinaryPath()`: explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:224-260 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:246-282 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []

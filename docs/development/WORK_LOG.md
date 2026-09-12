@@ -17,6 +17,179 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor/test(engine): fold the #889 review rounds — env containment, wiring coverage, a trigger (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `878-engine-spawn-without-path`（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）
+**担当**: レビュー = `/simplify` 4 観点 + pr-review-team 4 体 + Fable 監査（並行）/ 裁定と fix = main
+
+#878 の修正本体（1 つ前の項）に対するレビュー 3 波を畳んだ記録。**本項が無かったのは
+`simplify-commits-still-need-worklog` の再発**で、Fable 監査に指摘されて足している。
+
+#### 1. 🔴 `ELECTRON_RUN_AS_NODE` が daemon とプラグイン子まで漏れていた（altitude）
+
+`spawnDaemon()` は `env` を渡しておらず全継承だった。Rust 側は `Command::new` の際に
+`env_clear` / `env_remove` を**一切呼んでいない**（実測 0 件）ので、**第三者のプラグイン
+ホストまで**届いていた。Node ↔ ネイティブの唯一の受け渡し地点に `daemonEnv()` を置いて断つ。
+
+🔴 **根拠は「自分が足したものを自分の出口で戻す」**に限定した。Fable 監査の指摘どおり、
+「ホスト由来の変数を第三者へ渡さない」を根拠にすると**不十分**である — 拡張ホストの env には
+`VSCODE_*` や他の `ELECTRON_*` も乗っており（VS Code 自身は端末を起こす時
+`sanitizeProcessEnvironment` で `/^(ELECTRON|VSCODE)_.+$/` を丸ごと落とす）、ここは素通しする。
+そこまでやるなら別の設計判断。
+
+#### 2. 🔴 純関数は守られ、**配線が無防備**だった（変異で実証）
+
+| | 結果 |
+|---|---|
+| `env: daemonEnv(process.env)` → `env: process.env`（呼び出し側が helper を迂回） | **62 件すべて緑** |
+
+`consumerless-code-is-unprotected` そのもの。既存の実 spawn ハーネス（`#484 D1` の argv
+recorder）に env のダンプを足し、**子プロセスの env を直接見る**テストを追加。同じ変異で
+**red**、復元で **green（63/63）** を実走で確認した。
+
+🔴 「`ELECTRON_RUN_AS_NODE` が無いこと」だけを見ると env ごと空にする実装でも通るので、
+**他の変数が届いていること**（`PATH=`）まで見る。
+
+#### 3. 🔴 cold install テストに**実行の引き金が無かった**
+
+`ORBIT_GATED_COLD_INSTALL` を参照する npm script も workflow も**存在しなかった** —
+`a-test-that-exists-may-never-run` の形で、#878 の修正を守る唯一のテストが誰にも
+走らされない位置にあった。
+
+- `npm run test:e2e:cold-install`（`pretest:` で build → `.vsix` パッケージ）を追加
+- CLAUDE.md のマージ前ゲートに**無条件の 1 行**として追記
+
+レビュアーは `release.yml`（macos-14）への追加を提案したが、**GitHub の macOS runner には
+VS Code が入っておらず音声デバイスも無い**。`test:e2e:gated` と同じく**手元が唯一の実行経路**
+であることを明記した。
+
+#### 4. 一次ソースで裏を取った 3 件
+
+| 問い | 結果 |
+|---|---|
+| Electron の `runAsNode` fuse を VS Code が将来切ったら偽の「起動した」になるのでは（silent-failure レビュー） | **切れない**。VS Code 自身の CLI が `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動き（`Contents/Resources/app/bin/code`）、拡張ホストの fork（`out/bootstrap-fork.js`）も依存する。切れば `code` が壊れる |
+| N-API prebuild が読めたのは偶然か | **偶然ではない**。ローダは `node-gyp-build` ではなく **`pkg-prebuilds`** で、**N-API の時は Electron 判定へ入らず** `node-napi-v7.node` に決定論的に落ちる（`pkg-prebuilds/bindings.js`） |
+| 素の node との意味論差は無いか | **1 つある**。`ELECTRON_RUN_AS_NODE` の子では asar フックが生きており、`fs` が「`.asar` で終わるディレクトリ」をアーカイブ扱いする。engine は利用者の与えたパスを読むので、`ELECTRON_NO_ASAR=1` を併記して差を消した |
+
+#### 5. 直した事実誤り
+
+- コメントの「VS Code **1.104 系**」→ **1.134.0**（この機の実測値。出典を足したコミットで版を間違えていた）
+- `resetExtensionEngineTestState()` が `__set*ForTest` の**全部ではなく 4 本**であること、残り 2 本の
+  使い手、**完全性を強制する仕組みが無い**ことを明記（誤解を与える記述だった）
+- `656-release-design.md` の**7 箇所**が「PATH の `node`」のまま（§2 現在地 / §9 データの通り道 /
+  §10 grep 貼付 / §14 PR-C2 / §15 確信度 / §16 裁定待ち / §6.3 冒頭）。`IMPLEMENTATION_PLAN` と
+  `USER_OUTCOMES` の PR-S-C2 行にも注記。**裁定を更新したのに追従していない層**が残る
+  （`one-layer-of-the-spec-lags-the-ruling`）を、今回は 7 層で踏んでいた
+
+#### 6. 🔴 自分で作った CI の赤
+
+`/simplify` で `extension.ts` の 1 行を畳んだ後、`docs:check` を回し直さずに push し、
+**CI で 74 件**落として初めて気づいた。`pre-push` に `docs:check` を足して仕組みで止めた
+（🔴 **rust ゲートより前**に置く — 後ろだと rust を触らない push で走らない）。
+
+#### 採らなかった指摘
+
+| 指摘 | 裁定 |
+|---|---|
+| 遅延クラッシュが auto-start 経路でしか通知されない | #533 からの**既存構造**で本 PR 起因ではない。#890 へ切り出し |
+| ユニット 3 本を 1 本に畳む | 畳むと最初の `expect` で止まり残り 2 つの結果が見えない。回帰ゲートには独立した失敗信号の方が価値がある |
+| 拡張の `package.json` に `engines.node` を足す | **逆効果**。VS Code 同梱の Node を使う以上、利用者に node を要求しない方が正しい |
+| `selectRootPids` での teardown | `--user-data-dir` が `mkdtemp` で一意なので blanket `pkill` の故障モードが成立しない |
+| 起動フラグ列の共通定数化 | 45 本の gated suite 本体を触る。#888 へ |
+| `which claude`（`extension.ts`）も同じ PATH 依存 | 同じ故障クラスだが node ではなく、直すには設計が要る（別 issue 候補） |
+
+`npm test` **2,354 passed / 0 failed**・lint 緑・`typecheck:e2e` 緑・引用 **948 / 0 failed**・
+**cold install 2/2**（`npm run test:e2e:cold-install` で実走）。実機 gated は main と同一の
+既知 red 1 件（`ph654`・PR #884 が修正済み）。
+
+Part of #878
+
+---
+
+### fix(extension): start the engine with VS Code's own Node instead of PATH (#878) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `878-engine-spawn-without-path`（base = `main`）
+**担当**: 実測・実装・検証 = main
+
+#883 の cold install 検証（4.0.0 のリリース前倒し確認）の副産物として、**#878 が確定で再現する条件を
+特定した**ので直した。
+
+#### 何が壊れていたか
+
+`extension.ts` は engine をこう起動していた:
+
+```ts
+child_process.spawn('node', [enginePath, ...args], { ... })
+```
+
+**`node` を PATH から引いている。** Finder / launchd から起動された VS Code の PATH は `/etc/paths` の
+最小構成で、`nodenv` / Homebrew で node を入れている環境（珍しくない）ではそこに node が無い。
+engine は `spawn node ENOENT` で起動せず、**症状は「エンジンが起動しない」だけ**なので原因が PATH だとは
+利用者にまず分からない。
+
+#878 は「VS Code のシェル環境解決に救われて**実際には通った**」と記録されていた。本日、**通らない条件**を
+実測で特定した:
+
+| 起動のしかた | 結果 |
+|---|---|
+| `Contents/MacOS/Code`（Finder 相当） | 音が出る |
+| `bin/code`（CLI ラッパ）+ node の無い PATH | 🔴 **`spawn node ENOENT`** |
+| `bin/code` + `SHELL` あり + node の無い PATH | 🔴 **同じく起動しない** |
+
+CLI ラッパ経由だと VS Code は**ログインシェルの環境解決を省く**（端末から引き継ぐ前提）。
+`code .` を、nodenv を初期化しないログインシェルから叩けば同じ条件になる。
+
+#### 直し方 — 🔴 裁定を更新した（Q-656-8b）
+
+`docs/design/656-release-design.md` §6.3 は同じ問題に対して **(A) `process.execPath` +
+`ELECTRON_RUN_AS_NODE=1`** と **(B) node を同梱** を挙げ、**2026-09-03 に owner が B を裁定**していた。
+
+**その裁定の前提は 2026-09-10（#827）で変わっている。** 当時の配布物は VSCodium フォークの `.app` で、
+指定された同梱先も `.app/Contents/...` だった。フォークを畳んで**拡張線は `.vsix` のみ**になった今、
+`.vsix` は Node を持っているホスト（VS Code）の中で動くので、B は 50MB 超の同梱と署名対象 +1 を払って
+**ホストが既に持っているもの**を二重に運ぶことになる。
+
+→ owner 裁定（2026-09-12・**Q-656-8b**）: **拡張線は A**。B は**ネイティブ `.app` 向けとして残る**
+（借りる VS Code が無いのでそちらでは A が使えない）。配布物が違うので矛盾しない。
+
+#### A が成立することの実測（仮定していない）
+
+| 確かめたこと | 結果 |
+|---|---|
+| `process.execPath` は素のままで Node か | ❌ **ならない**（`Unable to find helper app` で落ちる）→ `ELECTRON_RUN_AS_NODE=1` が要る |
+| VS Code 同梱の Node 版 | **24.18.1**（本リポジトリの要求は `>=22.0.0`）✅ |
+| ネイティブアドオン（`@julusian/midi` の N-API v7 prebuild）が読めるか | ✅ **素の node と同じ**（port count 14 で一致）。`electron-` prefix の prebuild は無いので事前に疑ったが、実際には解決された |
+| PATH 依存の spawn が他に無いか | ✅ **1 箇所だけ**（`fork()` も Rust 側からの node 起動も無し） |
+
+#### 積んだテスト
+
+- `tests/vscode-extension/engine-spawn-runtime.spec.ts`（3 本・ユニット）— 何を spawn したか。
+  「絶対パスであること」だけを見ると `/usr/local/bin/node` 決め打ちでも通るので、**`process.execPath`
+  そのもの**であることと `ELECTRON_RUN_AS_NODE=1` を見る
+- 🔴 `tests/e2e/vsix-cold-install-gated.spec.ts`（2 本・`ORBIT_GATED_COLD_INSTALL=1` でゲート）—
+  **dev host はこの層を構造的に通らない**（`dev-host-is-blind-to-the-packaged-artifact`）。
+  空の extensions-dir へ `.vsix` を入れ、`--extensionDevelopmentPath` **無し**で起動して
+  **capture WAV の RMS まで**見る。**strict**（CLI ラッパ + node の無い PATH + `SHELL` 無し）が #878 を、
+  **finder**（app 本体を直接起動）が #873 を守る
+
+#### 変異検証（実走・自己申告ではない）
+
+| | 結果 |
+|---|---|
+| 変異（`process.execPath` → `'node'`・env を戻す）→ 再パッケージ → strict | 🔴 **red**（`🛑 Engine process error: spawn node ENOENT`） |
+| 復元 → 再パッケージ → 2 本とも | ✅ **green**（19.4 s） |
+
+#### ゲート
+
+`npm test` **2,350 passed / 69 skipped / 0 failed**・`typecheck:e2e` 緑・lint 緑・
+引用 948 / 0 failed・**cold install 2/2**（strict / finder）。
+
+dev サイトの 6 箇所は `--fix` では直らなかった（行番号ではなく**中身**が変わったため）ので、
+引用ブロックと本文・mermaid ラベルを手で追従させた。
+
+Closes #878
 ### fix(dsl): make the missing-output diagnostic read the whole chain (#883 束 S・レビュー round 1) (Sep 12, 2026)
 
 **Date**: 2026-09-12

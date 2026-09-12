@@ -17,6 +17,7 @@ import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn
 import {
   DaemonClient,
   createDaemonStderrLineRouter,
+  daemonEnv,
   isDaemonNonErrorTracingLine,
   resolveDaemonBinaryPath,
 } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
@@ -720,15 +721,18 @@ describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   let tmpDir: string
   let recorderBin: string
   let argvFile: string
+  let envFile: string
 
   beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-audio-device-'))
     argvFile = path.join(tmpDir, 'argv.txt')
+    envFile = path.join(tmpDir, 'env.txt')
     recorderBin = await createWarmExecutable(
       tmpDir,
       'orbit-audio-daemon',
       `#!/bin/sh
 printf '%s\n' "$@" > "${argvFile}"
+env > "${envFile}"
 exit 1
 `,
     )
@@ -740,8 +744,9 @@ exit 1
 
   beforeEach(() => {
     client = new DaemonClient()
-    // warm up の空 spawn が書いた argv を持ち越さない。各 it は自分の spawn の結果だけを見る。
+    // warm up の空 spawn が書いた argv / env を持ち越さない。各 it は自分の spawn の結果だけを見る。
     fs.rmSync(argvFile, { force: true })
+    fs.rmSync(envFile, { force: true })
   })
 
   afterEach(async () => {
@@ -770,6 +775,33 @@ exit 1
       await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
       const argv = fs.readFileSync(argvFile, 'utf-8')
       expect(argv.trim()).toBe('')
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  // 🔴 **配線のテスト**。`daemonEnv()` 自体は純関数として別に検証しているが、
+  // **呼び出し側がそれを使うのをやめても純関数のテストは緑のまま**である（実際、レビューで
+  // `env: daemonEnv(process.env)` を `env: process.env` に戻す変異を当てたら 62 件すべて
+  // 通った）。このリポジトリで最も出荷されている欠陥の型なので、実 spawn で子の env を見る。
+  it(
+    'daemon の子プロセスへ ELECTRON_RUN_AS_NODE を渡さない (#878)',
+    async () => {
+      const previous = process.env.ELECTRON_RUN_AS_NODE
+      process.env.ELECTRON_RUN_AS_NODE = '1'
+      try {
+        await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+          /daemon exited before ready/,
+        )
+        await vi.waitFor(() => expect(fs.existsSync(envFile)).toBe(true))
+        const childEnv = fs.readFileSync(envFile, 'utf-8')
+
+        expect(childEnv).not.toMatch(/^ELECTRON_RUN_AS_NODE=/m)
+        // 🔴 「無いこと」だけを見ると、env ごと空にする実装でも通る。**他が届いている**ことまで見る。
+        expect(childEnv).toMatch(/^PATH=/m)
+      } finally {
+        if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+        else process.env.ELECTRON_RUN_AS_NODE = previous
+      }
     },
     SPAWN_TEST_TIMEOUT_MS,
   )
@@ -1153,5 +1185,31 @@ describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)
     // ISO timestamp 直後のみ）。緩めると本物のエラーが log から消える側に倒れる。
     expect(isDaemonNonErrorTracingLine('plugin said: INFO is my name')).toBe(false)
     expect(isDaemonNonErrorTracingLine('loaded INFO panel for plugin')).toBe(false)
+  })
+})
+
+describe('daemonEnv (#878)', () => {
+  it('drops ELECTRON_RUN_AS_NODE so the daemon and its plugin children never inherit it', () => {
+    const result = daemonEnv({
+      PATH: '/usr/bin',
+      ELECTRON_RUN_AS_NODE: '1',
+      ORBIT_CAPTURE_WAV: '/x.wav',
+    })
+
+    expect(result.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    // 🔴 「消したこと」だけを見ると、env ごと空にする実装でも通ってしまう。
+    // **他の変数が残っている**ことまで見る（daemon は audio device 名や capture の seam を env で受ける）。
+    expect(result).toEqual({ PATH: '/usr/bin', ORBIT_CAPTURE_WAV: '/x.wav' })
+  })
+
+  it('does not mutate the source env', () => {
+    const source = { ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' }
+    daemonEnv(source)
+    // engine 自身の `process.env` を壊すと、以後の子プロセスの env が呼び出し順に依存する。
+    expect(source.ELECTRON_RUN_AS_NODE).toBe('1')
+  })
+
+  it('passes through an env that never had the variable', () => {
+    expect(daemonEnv({ PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin' })
   })
 })

@@ -769,7 +769,7 @@ export type WireLineOp =
 送信側は 1 行です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:706-709
+// packages/engine/src/audio/rust-engine/daemon-client.ts:728-731
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
