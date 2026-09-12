@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move the instrument slot types and plugin UI wiring out (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-instrument-slot-types`
+
+#888 子 1 の**第 10 束**。instrument slot の型群とプラグイン UI の配線（606 行）を 2 ファイルへ
+（`instrument_slot_types.rs` 392 / `plugin_ui_wiring.rs` 144）。
+`engine_wrap.rs` は **1,989 → 1,468** コード行。
+
+**可視性**: `pub(super)` を 63 箇所（第 9 束の知見どおり**フィールドにも**）。
+`PluginUiWiring` 等 5 つは `outproc_effect.rs` / `outproc_respawn_guard.rs` からも使われるので
+`pub(crate)` のまま、親から再エクスポート。
+
+🔴 **再エクスポートの cfg を狭く書いて 1 象限落とした。** `outproc-instrument` と書いたが、
+定義側は `any(outproc-effect, outproc-instrument)` だった。**cfg は定義側と一致させる** —
+第 9 束と同じ誤りを繰り返した。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
 ### refactor(daemon): move the effect slot types and env parsing into a child module (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-effect-slot-types`
