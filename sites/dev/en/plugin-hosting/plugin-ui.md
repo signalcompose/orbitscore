@@ -336,7 +336,7 @@ being pointed at right now" (destination); the latter is "which window this is a
 
 ### The daemon layer: `open_outproc_plugin_ui`
 
-When the daemon's `engine_wrap.rs` receives `OpenPluginUI`, it (1) checks that the child is READY,
+When the daemon's `engine_wrap/plugin_ui.rs` receives `OpenPluginUI`, it (1) checks that the child is READY,
 (2) for a rack child, checks `index_binding` (current index → token) for an existing binding,
 (3) reserves the lifecycle as `Opening` via `UiEventPump::begin_open(window)`, (4) registers
 `window → PluginUiTarget` in the route registry, and then (5) posts `CMD_OPEN_UI` (single-plugin
@@ -1231,8 +1231,8 @@ must be CLAP.
 - `rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374` — the per-window `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame names
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` is Phase A acceptance only
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/plugin_ui.rs:36-127` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/wire_types.rs:58-69` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1 (using close as the oracle)
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0–UIH.8 — the normative spec
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — the #474 P0–P6 implementation design and owner decisions Q1–Q8

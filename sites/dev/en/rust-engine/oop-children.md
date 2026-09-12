@@ -252,7 +252,7 @@ The third value, `CHILD_STATUS_LOAD_FAILED`, is exactly what its name says: the 
 raises right before it exits because loading failed. When the rack child's
 `RackController::load_initial` fails to load a plugin, it first publishes the details of that
 failure to `cmd_result_detail` and only **afterwards** stores this status and exits. On the daemon
-side (the Root 3-3 branch in `engine_wrap.rs`), this status is read **before** the watchdog signal
+side (the Root 3-3 branch in `engine_wrap/outproc_effect_chain.rs:170`), this status is read **before** the watchdog signal
 that catches an early child exit. So what reaches the host is not the generic "the child died" but
 the specific reason: "the load at index n failed like this". The PR-1c (#441) watchdog has not lost
 its job — it remains the path that catches, without waiting for a timeout, a child that dies

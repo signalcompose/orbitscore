@@ -158,7 +158,7 @@ export const AUX_BUS_PREFIX = 'aux-bus-'
 export const MIXER_BUS_POOL_SIZE = 4
 ```
 
-対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
+対応する Rust 側の定数は daemon の `engine_wrap/effect_slot_types.rs` にあります。
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:436-449
@@ -185,7 +185,7 @@ TS が `"drum" → "sum-bus-0"` と束縛し、daemon へは常に `sum-bus-0` �
 `ORBIT_EFFECT_BUS_POOL` と同じ機構・[RE-3](/rust-engine/insert-bus) 参照）。
 
 面白いのは、daemon が bus の「種類」を prefix 文字列からではなく構築時の enum
-`BusKind { Insert, Sum, Aux }`（`engine_wrap.rs:1950-1961`）で持っている点です。doc コメントは
+`BusKind { Insert, Sum, Aux }`（`engine_wrap/effect_slot_types.rs:311-322`）で持っている点です。doc コメントは
 「`SetBusRouting` の検証を prefix 文字列比較に依存させないため、構築時に確定した値として明示的に
 持つ」と説明しています。この `BusKind` が、後で見る `SetBusRouting` の検証（output 先は sum のみ・send 先は aux のみ）の
 根拠になります。名前の規則と種類の検証を分離しておくことで、prefix を変えても検証ロジックが
@@ -894,14 +894,14 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 verb 宛ての `Output` が 1.0 から目標（例えば 0.25）まで数 ms かけて ramp し直され、その間だけ
 本来より大きな信号がリバーブへ流れます。
 
-対策が `engine_wrap.rs` の `line_republish_seeds` です。旧 program の `Vec<LineOp>`
+対策が `engine_wrap/effect_slot_types.rs` の `line_republish_seeds` です。旧 program の `Vec<LineOp>`
 と、`LineProgramInstaller::current_gains()`（次節）で読み取った旧 program の実効値を、**op の
 種類ごとの出現序数**で対応付けます —— `Gain` は Gain 同士の何番目か、`Pan` は Pan 同士、
 `Output` は宛先（`OutputDest`）が一致する何番目かです。対応する旧 op が見つかった新 op は
 その実効値を seed にし、`LineProgram::with_seeds(ops, seeds)` へ渡します。対応する旧 op が
 無い（新規に増えた）op は `Gain → 1.0` / `Pan → 目標値そのもの` / `Output → 0.0`（無音からの
 フェードイン）で埋めます。同じ処理は `master` 行き（`bus == "master"` の分岐、
-`engine_wrap.rs:7044-7061`）でも `self.master_line.current_gains()` を読んで行われています。
+`engine_wrap/bus_lines.rs:131-141`）でも `self.master_line.current_gains()` を読んで行われています。
 
 #### `master` も同じ publish に乗った
 
@@ -943,7 +943,7 @@ PR #823 の時点ではそのとおりでしたが、O-wire-b のレビュー修
 **`set_global_gain` は atomic を書くだけに戻り**、裁定 F2（設計 611-o-surface §0・「写さない」）で
 今後もこの形が続くと確定しています。
 
-現在の `set_global_gain`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）は
+現在の `set_global_gain`（`rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs`）は
 `master_gain.store(...)` の 1 行だけで、line-program installer を**呼びません**。
 ユニットテスト `set_global_gain_only_updates_the_compatibility_atomic` が
 「SetGlobalGain must not republish a fresh master LineProgram」「must leave the SetBusLine
@@ -1537,7 +1537,7 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - **`SetBusRouting` の `routing_override` エンコード（0 / 1 / index+2）と `SourceDestCell` の
   帯域分割** — 2 種類の atomic routing が native 側でどう decode されるか（`output.rs:286-330`）
 - **`validate_bus_topology` と bus 配列の構築順** — insert → sum → aux の順が
-  `build_effect_bus_stages` でどう固定されるか（`engine_wrap.rs:2050-2130` 付近）
+  `build_effect_bus_stages` でどう固定されるか（`engine_wrap/bus_stages.rs:19-95` 付近）
 - **respawn 後の再適用 3 兄弟**（`reapplyBusRoutingAfterRespawn` / `reapplySourceRoutingAfterRespawn`
   / `reapplyGlobalGainAfterRespawn`）の呼び出し順と失敗時の独立性
 - **ミキサーの出口（#611）** — #643 設計 §1.5 が「未設計」と認めた「どの bus がデバイスの
@@ -1575,8 +1575,8 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:949-969` — `setBusRouting`（intent-first キャッシュ）
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1023-1035` — `reapplyGlobalGainAfterRespawn`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259` — `setGlobalGain`（intent 記録）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum・aux pool prefix と既定サイズ
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing`（検証 → line program の 1 回 publish → 旧 atomic へのミラー・#611 PR-O3a）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:311-322,436-449` — `BusKind` / sum・aux pool prefix と既定サイズ
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:265-438` — `set_bus_routing`（検証 → line program の 1 回 publish → 旧 atomic へのミラー・#611 PR-O3a）
 - `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` ハンドラ
 - `rust/crates/orbit-audio-native/src/output.rs:900-915` — `BlockSource` / `SourceDest`
 - `rust/crates/orbit-audio-native/src/output.rs:2141-2173` — `collect_source_feeds`
@@ -1589,8 +1589,8 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-daemon/src/session.rs:299-361` — `set_bus_line_malformed` / `parse_set_bus_line_params`（wire 形式の検証・`MALFORMED_REQUEST`）
 - `rust/crates/orbit-audio-daemon/src/session.rs:435-464` — `validate_set_bus_line_device_channels`（`PARAM_OUT_OF_RANGE`）
 - `rust/crates/orbit-audio-daemon/src/session.rs:2633-2656` — `SetBusLine` の dispatch と feature 無効時の `UNSUPPORTED`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6499-6687` — `EngineWrap::set_bus_line`（forward-only・master 分岐・全検証後の 1 回 publish）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9266-9294` — `EngineWrap::set_global_gain`（master line への再 publish が 1 段増えた）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:67-249` — `EngineWrap::set_bus_line`（forward-only・master 分岐・全検証後の 1 回 publish）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:231-234` — `EngineWrap::set_global_gain`（master line への再 publish が 1 段増えた）
 - `rust/crates/orbit-audio-native/src/output.rs:739-742` — `MasterLine.line` / `explicit_line`
 - `rust/crates/orbit-audio-native/src/output.rs:1765-1821` — `execute_master_line`（publish 後の master 実行）
 - `packages/engine/src/audio/rust-engine/protocol-types.ts:33-34` — `CommandMethod` への `'SetBusLine'` 追加

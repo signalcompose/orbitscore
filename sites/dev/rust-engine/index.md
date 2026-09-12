@@ -843,7 +843,7 @@ dispatch が `engine.output_channels()` を渡して間に挟まります。
 `set_bus_line` の `bus` 宛ては forward-only（後段の index であること）しか見ておらず、
 **kind では制限しません**。これは設計 611 の裁定（循環だけを拒否し kind では縛らない）に沿った
 振る舞いで、`set_bus_line_accepts_a_forward_aux_destination`
-（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3349-3371`）がそれを固定しています。
+（`rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:1090-1111`）がそれを固定しています。
 
 ### master line の 2 本立て
 
@@ -898,7 +898,7 @@ PR-O3b の前と 1 命令も違わないので、O0 golden（`OUTPUT_LINE_GOLDEN
 読むので、master line が publish された後は `MasterLine::advance_gain`（`SetGlobalGain` が書く
 atomic を読む関数）が呼ばれません。つまり publish 後の `SetGlobalGain` は、誰も読まない atomic を
 更新するだけになります。PR-O3b の単体テスト `set_global_gain_only_updates_the_compatibility_atomic`
-（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3286-3309`）は、まさにこの
+（`rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:1114-1136`）は、まさにこの
 「`SetGlobalGain` は master program を publish し直さない」ことを固定しています。
 2 つのゲイン経路が繋がるのは、TS の `global.gain()` が `SetBusLine("master", …)` へ切り替わる
 PR-O4 で、再 publish 時に実効値を引き継ぐ機構と同時です。
@@ -1119,10 +1119,10 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run`（handshake・writer task・UI event 転送）と `handle_command` の match arm（コマンド表の出典）
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750` — `EngineWrap::set_global_gain`（PR-O3b では **atomic のみ**。master line への写しは PR-O4 と同時・`ramp_sec` は wire 互換のみ）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:231-234` — `EngineWrap::set_global_gain`（PR-O3b では **atomic のみ**。master line への写しは PR-O4 と同時・`ramp_sec` は wire 互換のみ）
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device`（直行デバイスライン・#611 PR-O3a）
 - `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params`（wire 形の検証）と `SetBusLine` の dispatch arm（#611 PR-O3b）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line`（名前 → RT index の解決・全検証後に一度だけ publish）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:67-249` — `EngineWrap::set_bus_line`（名前 → RT index の解決・全検証後に一度だけ publish）
 - `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line`（#611 PR-O3b）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine`（呼び出し元は PR-O4）
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — 束 O-wire（line program 化・互換維持）

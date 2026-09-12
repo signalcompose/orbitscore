@@ -109,11 +109,11 @@ daemon と child の間の共有メモリ transport。file-backed mmap の SPSC 
 
 ### insert bus（`seq-bus-<n>`）
 
-`seq.effect()` が使う per-sequence の insert bus。daemon は起動時に inactive な bus を既定 8 本プールし（`ORBIT_EFFECT_BUS_POOL`）、宣言＝activation で有効化します。prefix `seq-bus-` は TS（`sequence-effect-manager.ts`）と Rust（`engine_wrap.rs`）で一致させる契約です。詳細は [RE-3](/rust-engine/insert-bus)。
+`seq.effect()` が使う per-sequence の insert bus。daemon は起動時に inactive な bus を既定 8 本プールし（`ORBIT_EFFECT_BUS_POOL`）、宣言＝activation で有効化します。prefix `seq-bus-` は TS（`sequence-effect-manager.ts`）と Rust（`engine_wrap/effect_slot_types.rs`）で一致させる契約です。詳細は [RE-3](/rust-engine/insert-bus)。
 
 ### sum bus / aux bus（`sum-bus-<n>` / `aux-bus-<n>`）
 
-`global.sum()` / `global.aux()` が使うミキサーバス。TS `mixer-manager.ts` の `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` と Rust `engine_wrap.rs` の既定プール prefix が一致する契約で、v1 は同時 4 本ずつ（`MIXER_BUS_POOL_SIZE`）。詳細は [SC-2](/signal-chain/mixer-audio-line)。
+`global.sum()` / `global.aux()` が使うミキサーバス。TS `mixer-manager.ts` の `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` と Rust `engine_wrap/effect_slot_types.rs` の既定プール prefix が一致する契約で、v1 は同時 4 本ずつ（`MIXER_BUS_POOL_SIZE`）。詳細は [SC-2](/signal-chain/mixer-audio-line)。
 
 ### receiver id（`sum:<name>` / `aux:<name>`）
 

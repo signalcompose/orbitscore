@@ -161,7 +161,7 @@ export const AUX_BUS_PREFIX = 'aux-bus-'
 export const MIXER_BUS_POOL_SIZE = 4
 ```
 
-The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
+The corresponding Rust constants live in the daemon's `engine_wrap/effect_slot_types.rs`.
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:436-449
@@ -189,7 +189,7 @@ insert bus's `ORBIT_EFFECT_BUS_POOL` (see [RE-3](/en/rust-engine/insert-bus)).
 
 What is interesting is that the daemon holds the "kind" of a bus not by parsing the prefix string
 but as an enum fixed at construction time, `BusKind { Insert, Sum, Aux }`
-(`engine_wrap.rs:1950-1961`). Its doc comment explains that the value is held explicitly "so that
+(`engine_wrap/effect_slot_types.rs:311-322`). Its doc comment explains that the value is held explicitly "so that
 `SetBusRouting` validation does not depend on prefix string comparison". This `BusKind` is the
 basis of the `SetBusRouting` validation we see later (output targets must be sum; send targets
 must be aux). Separating the naming rule from the kind check means the validation logic survives a
@@ -920,7 +920,7 @@ the very next block jumps by one sample**. Even a partial update, such as adding
 after `kick.send(verb, -12)`, re-ramps the `Output` bound for `verb` from 1.0 down to its target
 (say 0.25) over a few ms, sending an oversized signal into the reverb for that span.
 
-The fix is `line_republish_seeds` in `engine_wrap.rs`. It matches the old program's
+The fix is `line_republish_seeds` in `engine_wrap/effect_slot_types.rs`. It matches the old program's
 `Vec<LineOp>` against the effective values read through
 `LineProgramInstaller::current_gains()` (next section) by **the ordinal on which each op kind
 occurs** — `Gain` against `Gain`, `Pan` against `Pan`, and `Output` against `Output` whose
@@ -928,7 +928,7 @@ destination (`OutputDest`) is equal. A new op with a matching old op seeds from 
 value and is passed to `LineProgram::with_seeds(ops, seeds)`. A new op with no match (a freshly
 added tap) seeds at `Gain → 1.0` / `Pan → its own target` / `Output → 0.0` (fading in from
 silence). The same thing happens on the `master` path (the `bus == "master"` branch,
-`engine_wrap.rs:7044-7061`), which reads `self.master_line.current_gains()`.
+`engine_wrap/bus_lines.rs:131-141`), which reads `self.master_line.current_gains()`.
 
 #### `master` joined the same publication
 
@@ -971,7 +971,7 @@ store on ARM64, but control can now read it safely.
 O-wire-b review fix (`9e22e427`) put `set_global_gain` back to writing only the atomic, and ruling
 F2 (design 611-o-surface §0, "do not mirror it") settles that this is the shape going forward.
 
-Today `set_global_gain` (`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`) is a single
+Today `set_global_gain` (`rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs`) is a single
 `master_gain.store(...)` and does **not** touch the line-program installer. The unit test
 `set_global_gain_only_updates_the_compatibility_atomic` asserts that SetGlobalGain "must not
 republish a fresh master LineProgram" and "must leave the SetBusLine shadow untouched". So
@@ -1592,7 +1592,7 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
   `SourceDestCell`** — how the two kinds of atomic routing are decoded on the native side
   (`output.rs:286-330`)
 - **`validate_bus_topology` and the construction order of the bus array** — how the insert → sum →
-  aux order is fixed in `build_effect_bus_stages` (around `engine_wrap.rs:2050-2130`)
+  aux order is fixed in `build_effect_bus_stages` (around `engine_wrap/bus_stages.rs:19-95`)
 - **The three respawn re-application siblings** (`reapplyBusRoutingAfterRespawn` /
   `reapplySourceRoutingAfterRespawn` / `reapplyGlobalGainAfterRespawn`): their call order and
   independence on failure
@@ -1630,8 +1630,8 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:949-969` — `setBusRouting` (intent-first cache)
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1023-1035` — `reapplyGlobalGainAfterRespawn`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259` — `setGlobalGain` (intent recording)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum and aux pool prefixes and default sizes
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing` (validation → one line-program publication → mirror into the old atomics, #611 PR-O3a)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:311-322,436-449` — `BusKind` / sum and aux pool prefixes and default sizes
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:265-438` — `set_bus_routing` (validation → one line-program publication → mirror into the old atomics, #611 PR-O3a)
 - `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` handler
 - `rust/crates/orbit-audio-native/src/output.rs:900-915` — `BlockSource` / `SourceDest`
 - `rust/crates/orbit-audio-native/src/output.rs:2141-2173` — `collect_source_feeds`
@@ -1644,8 +1644,8 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `rust/crates/orbit-audio-daemon/src/session.rs:299-361` — `set_bus_line_malformed` / `parse_set_bus_line_params` (wire shape validation, `MALFORMED_REQUEST`)
 - `rust/crates/orbit-audio-daemon/src/session.rs:435-464` — `validate_set_bus_line_device_channels` (`PARAM_OUT_OF_RANGE`)
 - `rust/crates/orbit-audio-daemon/src/session.rs:2633-2656` — the `SetBusLine` dispatch and the `UNSUPPORTED` arm for a build without the feature
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6499-6687` — `EngineWrap::set_bus_line` (forward-only, the master branch, one publish after all validation)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9266-9294` — `EngineWrap::set_global_gain` (one more step: republishing the master line)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:67-249` — `EngineWrap::set_bus_line` (forward-only, the master branch, one publish after all validation)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:231-234` — `EngineWrap::set_global_gain` (one more step: republishing the master line)
 - `rust/crates/orbit-audio-native/src/output.rs:739-742` — `MasterLine.line` / `explicit_line`
 - `rust/crates/orbit-audio-native/src/output.rs:1765-1821` — `execute_master_line` (master execution after a publish)
 - `packages/engine/src/audio/rust-engine/protocol-types.ts:33-34` — `'SetBusLine'` added to `CommandMethod`

@@ -164,7 +164,7 @@ let a `SetBusRouting` that lands mid-callback make the two passes see different 
 
 ## The daemon's default bus pool — `ORBIT_EFFECT_BUS_POOL`
 
-At startup, `orbit-audio-daemon`'s `engine_wrap.rs` reserves N inactive
+At startup, `orbit-audio-daemon`'s `engine_wrap/bus_stages.rs` reserves N inactive
 `InsertBusStage`s named `seq-bus-0` through `seq-bus-N` as a pool (default 8,
 configurable via `ORBIT_EFFECT_BUS_POOL`, disabled with `"0"`). This prefix is
 a contract that must match the TS-side `SequenceEffectManager` both numerically
@@ -476,8 +476,9 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 - `rust/crates/orbit-audio-native/src/output.rs:1001-1026` — `OutputDest` / `LineOutput` / `LineOp` (`Pan` wired in #611 PR-O4)
 - `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources`'s zero-bus fallback (bit-identical path)
 - `rust/crates/orbit-audio-native/src/output.rs:823-846` — the active-flag snapshot in `render_engine_with_insert_buses_and_source_outputs`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2026-2075` — `EffectBusBuild` and `build_effect_bus_stages` (insert/sum/aux ordering)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:264-308` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:507-525` — `EffectBusBuild`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:19-95` — `build_effect_bus_stages` (insert/sum/aux ordering)
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:157-161` — `ERROR_CODE_UNROUTABLE_EVENTS`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:1-162` — `SequenceEffectManager` (constants, `ensureBus`, the rollback in `effect()`)
 - `packages/engine/src/core/global/effect-slot.ts:454-472,980-1011` — mode selection in `EffectChainMap.applyRack`, `BusPool`

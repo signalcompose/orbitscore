@@ -835,7 +835,7 @@ pub struct EffectChainPlan {
 
 ### Which route does the daemon apply through?
 
-`apply_outproc_effect_chain` in `engine_wrap.rs` picks one of three routes from the slot state and
+`apply_outproc_effect_chain` in `engine_wrap/outproc_effect_slots.rs` picks one of three routes from the slot state and
 the mode.
 
 ```rust
@@ -1611,7 +1611,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - The failure path of `RackController::apply`: where the already-built new instances are
   destroyed when a `PreparedStage::Load` fails midway (past the `?` at `lib.rs:731-742`), and
   how TS handles a `Busy` rejection (its relation to `APPLY_CHAIN_MAILBOX_TIMEOUT` = 60 s)
-- The conditions of `effect_chain_registry_is_intact` (`engine_wrap.rs:5153`) — what identifies
+- The conditions of `effect_chain_registry_is_intact` (`engine_wrap/slot_helpers.rs:318`) — what identifies
   an "unhealthy Active slot" (`current_child_pid` / `measurement_invalid` / `CMD_RESULT_CHILD_EXITED`)
 - The asynchronous registration `save_dropped` → `registerSavedState` (`effect-slot.ts:670-680`)
   and the shape of the `states/` entries in `project.yaml`
@@ -1644,7 +1644,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1170-1214,1341-1364` — the `loadedEffectRacks` ledger and the rebuild after respawn
 - `rust/crates/orbit-audio-sandbox/src/rack_wire.rs:1-142` — the single definition of the wire types and the record of the serde defect caused by duplication
 - `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:55-138,163-184,453-461,644-679` — `ChainStageConfig` / `EffectChainPlan`, manifest writing, child spawn
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5180` — route selection in `apply_outproc_effect_chain`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:144-237` — route selection in `apply_outproc_effect_chain`
 - `rust/crates/orbit-effect-rack-child/src/lib.rs:1-6,85-102,196-217,330-426,491-824` — rack child core (stage list, generation swap, `RackController::apply`)
 - `rust/crates/orbit-effect-rack-child/src/macos.rs:345-372` — stage loading (host selected by extension, standard plugins from `std-plugins/`)
 - `rust/crates/orbit-std-gain/src/lib.rs:1-104,269-309` — the standard `Gain`'s contract, conversion, and process

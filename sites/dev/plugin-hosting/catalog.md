@@ -1368,9 +1368,9 @@ LOOP(drums)
 - `packages/engine/src/core/global.ts:1337-1378` — `prepareInstrumentReplacement`（UI close → state 保存）
 - `packages/engine/src/core/global.ts:1380-1402` — `prepareEffectReplacement`（UI close のみ）
 - `packages/engine/src/core/global/effect-replace-notice.ts:1-24` — 「続行する通知」の唯一の出口
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088` — `apply_outproc_effect_chain`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522` — `replace_outproc_effect_plugin`（#625 in-place）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022` — `replace_outproc_instrument_plugin`（#618 prepare-commit）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:144-152` — `apply_outproc_effect_chain`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_replace.rs:21-29` — `replace_outproc_effect_plugin`（#625 in-place）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_instrument_slots.rs:68-80` — `replace_outproc_instrument_plugin`（#618 prepare-commit）
 - `packages/vscode-extension/src/plugin-catalog-reader.ts:1-15` / `:174-202` / `:259-266` — 拡張側 reader・バイナリ探索・`--probe-artifacts` spawn
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — ラック文脈スキャナ・候補フィルタ・Quick Pick 行
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — 解決規則のミラーと合意テスト

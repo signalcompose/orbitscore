@@ -331,7 +331,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 
 ### daemon 層: `open_outproc_plugin_ui`
 
-daemon の `engine_wrap.rs` は `OpenPluginUI` を受けると、(1) child が READY か、
+daemon の `engine_wrap/plugin_ui.rs` は `OpenPluginUI` を受けると、(1) child が READY か、
 (2) ラック child なら `index_binding`（現 index → token）に既存の束縛がないか、を検査し、
 (3) `UiEventPump::begin_open(window)` で lifecycle を `Opening` に予約し、(4) route registry に
 `window → PluginUiTarget` を登録してから、(5) コマンドメールボックスへ `CMD_OPEN_UI`
@@ -1211,8 +1211,8 @@ CLAP を使う必要があります。
 - `rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374` — per-window の `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame 名
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` はフェーズ A 受理のみ
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/plugin_ui.rs:36-127` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/wire_types.rs:58-69` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1（close をオラクルにする）
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0〜UIH.8 — 仕様正本
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — #474 の P0〜P6 実装設計と owner 裁定 Q1〜Q8

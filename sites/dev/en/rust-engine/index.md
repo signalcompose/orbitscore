@@ -869,7 +869,7 @@ send targets are aux buses", whereas `set_bus_line` only checks forward-only-nes
 be a later index) for a `bus` destination and **does not constrain the kind**. That matches the
 ruling in design 611 (reject cycles only, do not constrain by kind), and
 `set_bus_line_accepts_a_forward_aux_destination`
-(`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3349-3371`) pins the behaviour down.
+(`rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:1090-1111`) pins the behaviour down.
 
 ### Two master line paths
 
@@ -927,7 +927,7 @@ written in the program**, so once a master line has been published, `MasterLine:
 (the function that reads the atomic `SetGlobalGain` writes) is never called. In other words, a
 `SetGlobalGain` after publication only updates an atomic nobody reads. The PR-O3b unit test
 `set_global_gain_only_updates_the_compatibility_atomic`
-(`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3286-3309`) pins exactly that: `SetGlobalGain`
+(`rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:1114-1136`) pins exactly that: `SetGlobalGain`
 does not republish the master program. The two gain paths are joined in PR-O4, when TS's
 `global.gain()` switches over to `SetBusLine("master", …)`, together with the mechanism that
 carries the effective value across a re-publication.
@@ -1159,10 +1159,10 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs:231-234` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
 - `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params` (wire-shape validation) and the `SetBusLine` dispatch arm (#611 PR-O3b)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line` (name → RT index resolution, published exactly once after every check)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:67-249` — `EngineWrap::set_bus_line` (name → RT index resolution, published exactly once after every check)
 - `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line` (#611 PR-O3b)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine` (the caller arrives in PR-O4)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — bundle O-wire (line-program conversion, compatibility preserved)

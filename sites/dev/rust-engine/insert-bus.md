@@ -159,7 +159,7 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 
 ## daemon の既定 bus プール — `ORBIT_EFFECT_BUS_POOL`
 
-`orbit-audio-daemon` の `engine_wrap.rs` は起動時に `seq-bus-0`〜`seq-bus-N`
+`orbit-audio-daemon` の `engine_wrap/bus_stages.rs` は起動時に `seq-bus-0`〜`seq-bus-N`
 という名前の inactive `InsertBusStage` を N 個（既定 8、`ORBIT_EFFECT_BUS_POOL`
 で変更可・`"0"` で無効化）プールとして確保します。この prefix は TS 側の
 `SequenceEffectManager` と数値・文字列とも一致させる必要がある契約です。
@@ -463,8 +463,9 @@ WORK_LOG の記述であり、本ページの再読（2026-09-01）でも `outpr
 - `rust/crates/orbit-audio-native/src/output.rs:1001-1026` — `OutputDest` / `LineOutput` / `LineOp`（`Pan` は #611 PR-O4 で配線済み）
 - `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources` の bus 0 個フォールバック（bit-identical 経路）
 - `rust/crates/orbit-audio-native/src/output.rs:823-846` — `render_engine_with_insert_buses_and_source_outputs` の active flag snapshot
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2026-2075` — `EffectBusBuild` と `build_effect_bus_stages`（insert/sum/aux の並び）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:264-308` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:507-525` — `EffectBusBuild`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:19-95` — `build_effect_bus_stages`（insert/sum/aux の並び）
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:157-161` — `ERROR_CODE_UNROUTABLE_EVENTS`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:1-162` — `SequenceEffectManager`（定数・`ensureBus`・`effect()` のロールバック）
 - `packages/engine/src/core/global/effect-slot.ts:454-472,980-1011` — `EffectChainMap.applyRack` の mode 決定、`BusPool`
