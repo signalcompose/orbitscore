@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): move note dispatch and sample playback into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-notes-samples`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 3 束**。🔴 **純粋な移動**。2 グループを 2 ファイルへ:
+
+- プラグインへのノート送出（CLAP / out-of-process instrument）→ `engine_wrap/notes.rs`（286 コード行）
+- サンプル再生・トランスポート・オフライン render → `engine_wrap/playback.rs`（180 コード行）
+
+`engine_wrap.rs` は **5,585 → 5,127** コード行。`excluded` は 7,730 で不変。
+
+### 🔴 設計 E3「可視性の変更 0 件」には条件がある（第 3 束で実測）
+
+「**子モジュールは親の private に到達できる**」は正しいが、**逆は成り立たない**。
+親は子の private メソッドを呼べない。
+
+`lock_active_notes`（`#[cfg(feature = "outproc-instrument")]` の private ヘルパー）を
+`notes.rs` へ動かしたところ、`engine_wrap.rs` に残った 2 箇所とインラインテスト 2 箇所から
+呼べなくなり **`outproc-instrument` の 2 象限が E0624 で落ちた**。
+
+**残る側が使うヘルパーは移さない**（親へ戻す）のが正しい。`pub(super)` にするのは
+「移動」ではなく「変更」なので residual に出る。設計文書に **E3′** として記録した。
+
+### 🔴 ゲート (i) が発火した（`moved+ 602 ≠ moved− 603`）— 調査手順が定まった
+
+1 行差だったので、**削除行と追加行を多重集合で照合**したところ
+「**削除されたが追加されていない行 = 0 件**」で、コードは 1 行も失われていなかった。
+新規追加 24 行はすべて新設モジュールのヘッダと `mod` 宣言。
+git のブロック照合が空行を片方だけ移動と認めたための **false positive** である。
+
+**正しい向きの false positive**（「怪しいから見ろ」と言われて見たら確定的に否定できた）。
+この多重集合判定を**子 0b の `move-residual.sh` に組み込む**価値がある。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
+
+
 ### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
