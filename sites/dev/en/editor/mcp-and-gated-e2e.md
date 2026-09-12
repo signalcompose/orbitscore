@@ -68,7 +68,7 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-378
+// packages/vscode-extension/src/extension.ts:362-376
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -95,7 +95,7 @@ function resolveDevDocsUrl(): string | null {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:285-296
+// packages/vscode-extension/src/extension.ts:283-294
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -233,7 +233,7 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2564-2601
+// packages/vscode-extension/src/extension.ts:1499-1536
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -292,7 +292,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1074-1082
+// packages/vscode-extension/src/engine-handlers.ts:248-256
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -359,7 +359,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2694-2705
+// packages/vscode-extension/src/extension.ts:1629-1640
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -397,7 +397,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:155-166
+// packages/vscode-extension/src/extension.ts:153-164
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -1344,31 +1344,14 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` is invisible in normal mode
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:809-833
-function shouldFilterLine(line: string): boolean {
+// packages/vscode-extension/src/engine-handlers.ts:43-50
+export function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
   // Machine-readable playhead markers (#390): parsed by setupStdoutHandler
   // from the raw stream BEFORE this filter runs; pure noise for humans
   // (~pattern-length lines per bar per seq), so keep them out of the channel.
   if (line.includes('[STEP]')) {
-    return true
-  }
-
-  // Correlated REPL bridge envelopes are consumed above before human-log
-  // transcription. Keep successful/error payloads (which may contain project
-  // paths) out of the output channel; malformed envelopes get their own loud warning.
-  //
-  // 🔴 `{"evalMark"` を落とすのは見た目の問題ではない: envelope は失敗診断の本文
-  // （例: `[OUTPROC_ATTACH_FAILED] ...`）を丸ごと含むので、transcribe されると
-  // 同じ失敗が log に**二重に**現れ、get_log を数える側（E2E・LLM の自己検証）の
-  // 前後比較が全部ずれる（#614 の導入時にこの除外が漏れていた実害）。
-  if (
-    trimmed.startsWith('{"savePluginState"') ||
-    trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"') ||
-    trimmed.startsWith('{"engineState"')
-  ) {
     return true
 ```
 

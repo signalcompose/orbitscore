@@ -99,16 +99,15 @@ graph TD
 engine の起動は `startEngine()` が担います。**2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**され、唯一のバックエンドである Rust daemon 向けの起動だけが残りました。最初にやるのは **engine を spawn する前にバックエンドのバイナリ解決を先行させる** ことです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1721-1730
+// packages/vscode-extension/src/engine-process.ts:76-84
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
-    outputChannel?.appendLine(
-      '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
-    )
-    vscode.window.showErrorMessage(
-      '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
-    )
-    return false
+    bundleStatusItem.show()
+    bundleStatusItem.text = '$(error) daemon: not found'
+    bundleStatusItem.tooltip =
+      'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
   }
 ```
 
@@ -132,7 +131,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 この `env` 変数へ積むのは debug フラグと capture seam（#307）だけです（spawn の直前にもう 2 つ足されます。すぐあとで出てきます）。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1762-1776
+// packages/vscode-extension/src/engine-process.ts:313-327
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +152,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。ここで問題になるのが「**どの** Node.js か」です。**2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、PATH から `node` を引くのをやめて VS Code 自身が同梱している Node を借りる**ようになりました。Finder や launchd から起動された VS Code の PATH は `/etc/paths` の最小構成で、nodenv や Homebrew で node を入れている環境ではそこに `node` がありません。engine は `spawn node ENOENT` で起動せず、しかも利用者から見える症状は「エンジンが起動しない」だけなので、原因が PATH だとは分かりません。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` を渡して初めて Node になります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1778-1811
+// packages/vscode-extension/src/engine-process.ts:329-362
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -195,7 +194,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2554-2555
+// packages/vscode-extension/src/engine-process.ts:628-629
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -223,7 +222,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:291-296
+// packages/vscode-extension/src/extension.ts:289-294
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0

@@ -552,7 +552,7 @@ The extension has its own `plugin-catalog-reader.ts`, a separate implementation 
 JSON shape and the same mtime cache** as the engine side. Its header explains why.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-370
+// packages/vscode-extension/src/extension.ts:362-368
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -591,7 +591,7 @@ go through the daemon: **the extension spawns the scanner binary directly**. The
 follows the same convention as the daemon lookup.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-378
+// packages/vscode-extension/src/extension.ts:362-376
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -751,7 +751,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3232-3242
+// packages/vscode-extension/src/extension.ts:2167-2177
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -854,7 +854,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3663-3679
+// packages/vscode-extension/src/extension.ts:2598-2614
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

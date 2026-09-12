@@ -542,7 +542,7 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 別実装で持っています。冒頭コメントがその理由を説明しています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-370
+// packages/vscode-extension/src/extension.ts:362-368
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -580,7 +580,7 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 **拡張がスキャナバイナリを直接 spawn** します。バイナリの探索順は daemon の探索と同じ流儀です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-378
+// packages/vscode-extension/src/extension.ts:362-376
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -739,7 +739,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3232-3242
+// packages/vscode-extension/src/extension.ts:2167-2177
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -839,7 +839,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3663-3679
+// packages/vscode-extension/src/extension.ts:2598-2614
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

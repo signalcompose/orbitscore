@@ -1042,10 +1042,10 @@ struct UiEventHubCore {
     })
 ```
 
-`extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
+`engine-handlers.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1069-1073
+// packages/vscode-extension/src/engine-handlers.ts:243-247
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {

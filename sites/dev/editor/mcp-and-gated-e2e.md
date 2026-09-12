@@ -68,7 +68,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-378
+// packages/vscode-extension/src/extension.ts:362-376
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -95,7 +95,7 @@ function resolveDevDocsUrl(): string | null {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:285-296
+// packages/vscode-extension/src/extension.ts:283-294
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -233,7 +233,7 @@ export interface DiagnosticEntry {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2564-2601
+// packages/vscode-extension/src/extension.ts:1499-1536
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -292,7 +292,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1074-1082
+// packages/vscode-extension/src/engine-handlers.ts:248-256
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -359,7 +359,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2694-2705
+// packages/vscode-extension/src/extension.ts:1629-1640
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -397,7 +397,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:155-166
+// packages/vscode-extension/src/extension.ts:153-164
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -1334,31 +1334,14 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:809-833
-function shouldFilterLine(line: string): boolean {
+// packages/vscode-extension/src/engine-handlers.ts:43-50
+export function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
   // Machine-readable playhead markers (#390): parsed by setupStdoutHandler
   // from the raw stream BEFORE this filter runs; pure noise for humans
   // (~pattern-length lines per bar per seq), so keep them out of the channel.
   if (line.includes('[STEP]')) {
-    return true
-  }
-
-  // Correlated REPL bridge envelopes are consumed above before human-log
-  // transcription. Keep successful/error payloads (which may contain project
-  // paths) out of the output channel; malformed envelopes get their own loud warning.
-  //
-  // 🔴 `{"evalMark"` を落とすのは見た目の問題ではない: envelope は失敗診断の本文
-  // （例: `[OUTPROC_ATTACH_FAILED] ...`）を丸ごと含むので、transcribe されると
-  // 同じ失敗が log に**二重に**現れ、get_log を数える側（E2E・LLM の自己検証）の
-  // 前後比較が全部ずれる（#614 の導入時にこの除外が漏れていた実害）。
-  if (
-    trimmed.startsWith('{"savePluginState"') ||
-    trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"') ||
-    trimmed.startsWith('{"engineState"')
-  ) {
     return true
 ```
 

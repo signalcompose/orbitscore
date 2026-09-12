@@ -121,7 +121,7 @@ After this come four **bridges** that wait for JSON lines coming back on the eng
 The entry point is `activate()` in `extension.ts`. It is called once immediately after VS Code loads the extension. Let's look at the first half.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:139-195
+// packages/vscode-extension/src/extension.ts:137-193
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -194,7 +194,7 @@ The rest of `activate()` is roughly five jobs:
 The last two are written like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:285-339 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:283-337 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -313,8 +313,8 @@ There are **two** status bar indicators. Their priority values differ, determini
 **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch.** `updateBundleStatus()`, which decides the display of `bundleStatusItem`, no longer looks at the engine kind at all — it only looks at whether the daemon resolves.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:507-520
-function updateBundleStatus(): void {
+// packages/vscode-extension/src/engine-process.ts:74-84
+export function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
@@ -325,9 +325,6 @@ function updateBundleStatus(): void {
     bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     return
   }
-  // 既定（健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の意味がない）。
-  bundleStatusItem.hide()
-}
 ```
 
 When the daemon is found (= the normal state), the indicator is **hidden**. It is shown only as `$(error) daemon: not found` when the daemon cannot be resolved (see [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle) — a historical record of the decision for the scsynth resolver this ADR covers; that resolver itself was removed in the 2026-09-10 ruling #827 / #502).
@@ -339,7 +336,7 @@ When the daemon is found (= the normal state), the indicator is **hidden**. It i
 Let's organize the commands `activate()` registers. There are 15 listed in `contributes.commands` (down from 17 — `forceKillScsynth` / `selectAudioDevice` were removed in #502), plus 2 internal commands invoked only from TreeView nodes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:207-242
+// packages/vscode-extension/src/extension.ts:205-240
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -464,7 +461,7 @@ position.
 Assembling the candidates happens on the `extension.ts` side.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3404-3417
+// packages/vscode-extension/src/extension.ts:2339-2352
       case 'output-string':
         return makeItems(
           [
@@ -489,7 +486,7 @@ One trigger character was added too. Without `(`, nothing appears right after `.
 completion is invoked explicitly.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3274-3284
+// packages/vscode-extension/src/extension.ts:2209-2219
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,
@@ -525,7 +522,7 @@ interface MethodChainContext {
 The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test enforces that it matches the engine's `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` / `BUS_DSL_METHODS` character for character. Because the extension process is designed not to import engine modules, duplication is unavoidable; the trade-off is to make drift red via the test instead.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-370
+// packages/vscode-extension/src/extension.ts:362-368
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -538,7 +535,7 @@ The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test e
 Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` as of 2026-05, but #384 extended them to "when opened," "when closed," and "documents already open at activation."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:254-283
+// packages/vscode-extension/src/extension.ts:252-281
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -576,7 +573,7 @@ There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For
 #883 added one more line next to the diagnostic registration: **the quick fix**. `registerOutputCodeActionProvider(context)` returns an "add `<name>.output()`" CodeAction for the two diagnostic codes `output-missing` and `dry-not-routed`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:245-248
+// packages/vscode-extension/src/extension.ts:243-246
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)
@@ -592,8 +589,8 @@ The provider itself lives at `extension.ts:3482-3520` and pushes the return valu
 Before spawning the engine, the extension pre-checks "does the audio process's executable really exist?" There is an interesting implementation pattern here: **the JS of the Extension Host (compiled from TypeScript) runtime-loads the engine package's compiled JS via `require`**. Before it was removed by the **2026-09-10 ruling (#827 / #502)**, this wrapper existed in symmetric pairs for scsynth (`resolveScsynthForUI()`) and the daemon (`resolveDaemonForUI()`); with the SC path gone, **only `resolveDaemonForUI()` remains**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:490-498
-function resolveDaemonForUI(): { path: string; source: string } | null {
+// packages/vscode-extension/src/engine-process.ts:57-64
+export function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
     return resolveDaemonBinaryForExtension()
   } catch (err) {
@@ -601,7 +598,6 @@ function resolveDaemonForUI(): { path: string; source: string } | null {
     outputChannel?.appendLine(`❌ daemon resolver failed: ${reason}`)
     return null
   }
-}
 ```
 
 The daemon-side `require` is carved out into a small module, `engine-startup-runtime.ts`. This lets unit tests replace this boundary, so the logic of `startEngine()` can be tested even in an environment without the extension's build artifacts (`engine/dist/`).
@@ -643,27 +639,18 @@ Then [#838](https://github.com/signalcompose/orbitscore/pull/838) (part of bundl
 The pre-check is quoted in the former III-3 chapter, now removed from the site (recorded in [ADR-003](/en/decisions/adr-003-scsynth-bundle)), so here we read from assembling args and env through the spawn.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1753-1766
+// packages/vscode-extension/src/engine-process.ts:304-308
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
     args.push('--audio-device', audioDevice)
-  }
-  if (effectiveDebugMode) {
-    args.push('--debug')
-  }
-
-  // Set environment
-  const env = { ...process.env }
-  if (effectiveDebugMode) {
-    env.ORBITSCORE_DEBUG = '1'
   }
 ```
 
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1762-1811
+// packages/vscode-extension/src/engine-process.ts:313-362
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -725,7 +712,7 @@ Both variables enter the engine process, so they would also flow on to the daemo
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1831-1841
+// packages/vscode-extension/src/engine-process.ts:382-392
   // Setup handlers
   setupStdoutHandler(spawnedProcess, effectiveDebugMode)
   setupStderrHandler(spawnedProcess)
@@ -748,7 +735,7 @@ Of those five, `setupStderrHandler` is the one that copies the engine's stderr i
 A small helper therefore sits in between, reassembling the chunk stream into lines.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1197-1217
+// packages/vscode-extension/src/engine-handlers.ts:371-383
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -762,14 +749,6 @@ export function createLinePrefixer(emit: (line: string) => void): {
       for (const line of lines) {
         if (line.trim() !== '') emit(line)
       }
-    },
-    flush(): void {
-      const remaining = partial
-      partial = ''
-      if (remaining.trim() !== '') emit(remaining)
-    },
-  }
-}
 ```
 
 There are three things to read here. The first is carrying `partial` over: a naive `chunk.split('\n')` does not fix this, because **chunk boundaries do not coincide with line boundaries**, so the tail of a line would be treated as an independent line and get a second `ERROR:` prefix. The second is the existence of `flush()`: once output is reassembled into lines, the **final piece of output that does not end in a newline** stays in the buffer when the process exits. That would have the change meant to fix an undercount open the very same hole in the other direction, so the `end` event always drains it. The third is the check that skips empty lines: emitting a bare `ERROR: ` line would **inflate** the count instead.
@@ -777,7 +756,7 @@ There are three things to read here. The first is carrying `partial` over: a nai
 `setupStderrHandler` itself is now just `push` / `flush` wired up inside `logHandlerFailure` containment.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1233-1255
+// packages/vscode-extension/src/engine-handlers.ts:407-419
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -791,16 +770,6 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
     } catch (err) {
       logHandlerFailure('setupStderrHandler', err)
     }
-  })
-  // 改行で終わらなかった最後の 1 行を取りこぼさない。
-  process.stderr?.on('end', () => {
-    try {
-      prefixer.flush()
-    } catch (err) {
-      logHandlerFailure('setupStderrHandler', err)
-    }
-  })
-}
 ```
 
 Incidentally, there are **four** routes from "chunk stream" to "lines" across the repository. The implementation comment enumerates all four precisely so that nobody fixes `createLinePrefixer` and assumes the set is now consistent: this one for engine stderr; `createDaemonStderrLineRouter` for daemon stderr (`packages/engine/src/audio/rust-engine/daemon-client.ts`, [#777](https://github.com/signalcompose/orbitscore/issues/777)); `setupStdoutHandler` for engine stdout ([#773](https://github.com/signalcompose/orbitscore/issues/773)); and the ring proxy seen at the start of this chapter (the part that does `value.split('\n')` on `append` and copies into the ring). The extension package does not depend on `@orbitscore/engine`, so at least the first two cannot be shared as things stand. Decisions about newline handling, empty lines, and the trailing flush can propagate to all four sites — that is the conclusion the implementation comment draws.
@@ -810,7 +779,7 @@ Incidentally, there are **four** routes from "chunk stream" to "lines" across th
 The third of them, `setupStdoutHandler`, became a caller of `createLinePrefixer` on 2026-09-08 in [#811](https://github.com/signalcompose/orbitscore/pull/811) (bundle O-wire). Until then it split each chunk with `output.split('\n')` and fed the pieces straight into the four branches for `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"`, so **when a bridge JSON envelope was cut at a chunk boundary, both fragments were lost**: the first half matched none of the prefixes, and the second half did not start with `{`, so it matched none of them either.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1054-1061
+// packages/vscode-extension/src/engine-handlers.ts:228-235
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
@@ -826,7 +795,7 @@ The detail worth noticing is that `bridgeLines` is created **inside the handler*
 The other device is `StringDecoder`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1091-1094
+// packages/vscode-extension/src/engine-handlers.ts:265-268
   // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
   // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
   // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
@@ -836,7 +805,7 @@ The other device is `StringDecoder`.
 `data.toString()` interprets a chunk as UTF-8 on its own, so a multi-byte character straddling a chunk boundary **turns into `U+FFFD` right there**. Rejoining the lines afterwards cannot bring the character back. `StringDecoder` carries an incomplete byte sequence over to the next chunk, which guards the step before. As the comment states, the replacement covers **only the bridge dispatch path**: the `output` / `lines` handed to logging and the playhead still come from `data.toString()` as before. That is the line drawn to leave the existing calling convention and timing untouched, and it also records that the same hazard on stderr is out of scope for this change.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1109-1110
+// packages/vscode-extension/src/engine-handlers.ts:283-284
       const bridgeOutput = bridgeDecoder.write(data)
       if (bridgeOutput) bridgeLines.push(bridgeOutput)
 ```
@@ -844,7 +813,7 @@ The other device is `StringDecoder`.
 And, as on the stderr side, everything is flushed on `end`. `bridgeDecoder.end()` comes first because the decoder's pending bytes have to be turned back into characters before they reach the prefixer; otherwise the last line would be emitted already mangled.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1153-1161
+// packages/vscode-extension/src/engine-handlers.ts:327-335
   process.stdout?.on('end', () => {
     try {
       const bridgeRemainder = bridgeDecoder.end()
@@ -872,46 +841,14 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2518-2556
-function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:592-598
+export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
     outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
     return false
   }
-  let codeToSend = rawCode
-  if (documentDir) {
-    // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
-    // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
-    // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
-    // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
-    codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      setGlobalInitialized(true)
-    } else if (globalInitialized) {
-      codeToSend = setDirCommand + '\n' + codeToSend
-    }
-  }
-
-  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
-  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
-  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
-  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
-  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
-
-  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
-  if (statusBarItem?.text.includes('🐛')) {
-    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
-  }
-  engineProcess.stdin.write(codeToSend + '\n')
-  return true
-}
 ```
 
 A return value of `true` only means "it reached stdin." Parse errors and runtime errors are merely emitted asynchronously by the engine to stderr / stdout. A human notices via red squiggles in the editor or the Output Channel, but an LLM going through MCP only receives `ok` — which is why `//#evalMark` was added in #614. Because the REPL processes lines FIFO (#476), sending a marker right after the code lets us say "by the time the marker is reached, evaluation is done."
@@ -947,7 +884,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1112-1148 (effects の中身を一部省略)
+// packages/vscode-extension/src/engine-handlers.ts:286-322 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -1014,7 +951,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1855-1903
+// packages/vscode-extension/src/engine-process.ts:406-454
 export function stopEngine(): boolean {
   bumpEngineGeneration()
   if (engineProcess && !engineProcess.killed) {

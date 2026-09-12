@@ -99,16 +99,15 @@ graph TD
 `startEngine()` is responsible for starting the engine. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch entirely**, leaving only the startup path for the sole remaining backend, the Rust daemon. The first thing it does is **have backend binary resolution precede spawning the engine**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1721-1730
+// packages/vscode-extension/src/engine-process.ts:76-84
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
-    outputChannel?.appendLine(
-      '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
-    )
-    vscode.window.showErrorMessage(
-      '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
-    )
-    return false
+    bundleStatusItem.show()
+    bundleStatusItem.text = '$(error) daemon: not found'
+    bundleStatusItem.tooltip =
+      'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
   }
 ```
 
@@ -132,7 +131,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 Only the debug flag and the capture seam (#307) go into this `env` variable (two more are added right before the spawn; they show up in a moment). **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1762-1776
+// packages/vscode-extension/src/engine-process.ts:313-327
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +152,7 @@ Only the debug flag and the capture seam (#307) go into this `env` variable (two
 The engine process itself is then started with `child_process.spawn` running Node.js. The question that matters here is **which** Node.js. On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) the extension **stopped looking up `node` on PATH and started borrowing the Node that VS Code itself bundles**. A VS Code launched from Finder or launchd has the minimal PATH from `/etc/paths`, and on machines where node is installed through nodenv or Homebrew there is no `node` there. The engine then fails to start with `spawn node ENOENT`, and because the only visible symptom is "the engine does not start", the user has no way to tell that PATH is the cause. The extension host is Electron, so `process.execPath` does not run as Node on its own; it becomes Node only once `ELECTRON_RUN_AS_NODE=1` is passed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1778-1811
+// packages/vscode-extension/src/engine-process.ts:329-362
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -195,7 +194,7 @@ The two env vars added here enter the engine process. The process tree continues
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2554-2555
+// packages/vscode-extension/src/engine-process.ts:628-629
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -223,7 +222,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:291-296
+// packages/vscode-extension/src/extension.ts:289-294
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0

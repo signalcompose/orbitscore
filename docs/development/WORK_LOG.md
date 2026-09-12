@@ -17,6 +17,46 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): move the engine wiring out of extension.ts (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
+
+#887 の**束 B**。束 A で代入を setter に替えたので、ここは**純粋な移動**。
+
+| 新設 | コード行 | 中身 |
+|---|---|---|
+| `engine-handlers.ts` | **321** | stdout / stderr / exit / error のハンドラ 9 本 |
+| `engine-process.ts` | **423** | engine パス解決・`startEngine` / `stopEngine` / `toggleEngine` ほか 11 本 |
+
+`extension.ts` は 2,662 → **1,991** コード行。
+
+### 🔴 `engine-lifecycle.ts` へ戻さなかったことが、テストで証明された
+
+issue #887 の本文は「stdout/exit ハンドラは `engine-lifecycle.ts`（既存）へ」と書いていたが、
+設計（Fable 起案・main が `grep` で裏取り）がこれを覆した。
+`extension-wiring.spec.ts:48` が `engine-lifecycle` を `vi.mock` して `applyEngineExit` /
+`applyEngineError` を spy にしており、**同一モジュール内の呼び出しは mock を通らない**。
+戻した瞬間に spy が一度も呼ばれなくなり、テストを書き換えるしかなくなる。
+
+**`extension-wiring.spec.ts` が 58 passed であることが、mock 境界の外側に置けた証拠**である。
+
+### 引用 122 件 — 束 A で作った手順がそのまま効いた
+
+`--fix`（行番号のみ）70 → 本文をソースから再生成して再アンカー 52。
+束 A で書いた再アンカー手順を `$TMPDIR` のスクリプトとして再利用した。
+
+🔴 **引用が緑でも散文は検査されない（2 回目）。** `plugin-ui.md` が
+「**`extension.ts` の** stdout ルータはこの結果行を拾います」と書いているのに、
+引用は `engine-handlers.ts` を指していた。ja/en とも帰属を直した。
+移した関数名 7 つで横断検索し、他に同型が無いことも確認した。
+
+### 検証
+
+`npm test` **2,488 passed**（束 0 / A と同値・**既存テストの期待値の変更 0 件**。
+`tests/` の差分はラチェットの baseline のみ）/ `npm run lint` / `npm run typecheck:e2e` /
+`npm run build` / `npm run docs:check` 982 引用 / `extension-wiring.spec` 58 passed /
+`public-surface.spec` 38 passed。
+
 ### refactor(extension): move module state to a leaf and turn 31 assignments into setters (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `887-extension-split`

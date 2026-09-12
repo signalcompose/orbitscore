@@ -121,7 +121,7 @@ export let mcpServerHandle: McpServerHandle | null = null
 エントリポイントは `extension.ts` の `activate()` です。VS Code が extension を読み込んだ直後に一度だけ呼ばれます。前半を見てみましょう。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:139-195
+// packages/vscode-extension/src/extension.ts:137-193
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -194,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:285-339 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:283-337 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -313,8 +313,8 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 **2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**されました。`bundleStatusItem` の表示を決める `updateBundleStatus()` はもう engine kind を見ず、daemon の解決結果だけを見ます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:507-520
-function updateBundleStatus(): void {
+// packages/vscode-extension/src/engine-process.ts:74-84
+export function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
@@ -325,9 +325,6 @@ function updateBundleStatus(): void {
     bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     return
   }
-  // 既定（健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の意味がない）。
-  bundleStatusItem.hide()
-}
 ```
 
 daemon が見つかる (= 通常の状態) ときはインジケータを **隠します**。見つからない時だけ `$(error) daemon: not found` を表示します ([ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) 参照。ADR が扱う scsynth resolver 自体は 2026-09-10 の裁定 #827 / #502 で削除済みで、歴史的記録として残っています)。
@@ -339,7 +336,7 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
 `activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 15 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります（`forceKillScsynth` / `selectAudioDevice` は #502 で削除）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:207-242
+// packages/vscode-extension/src/extension.ts:205-240
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -464,7 +461,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補の組み立ては `extension.ts` 側です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3404-3417
+// packages/vscode-extension/src/extension.ts:2339-2352
       case 'output-string':
         return makeItems(
           [
@@ -489,7 +486,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 候補が出てきません。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3274-3284
+// packages/vscode-extension/src/extension.ts:2209-2219
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     dslCompletionItemProvider,
@@ -525,7 +522,7 @@ interface MethodChainContext {
 補完候補の語彙は `dsl-method-catalog.ts` に複製されていて、engine 側の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` / `BUS_DSL_METHODS` と一字一句一致することをテストが強制します。拡張プロセスは engine のモジュールを import しない設計なので、複製は避けられず、代わりにテストで乖離を赤にする、という割り切りです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:364-370
+// packages/vscode-extension/src/extension.ts:362-368
 /**
  * Canonical local URL of the dev learning site, or null (with the shared error
  * message shown) when the MCP server is not running. Single source for every
@@ -538,7 +535,7 @@ interface MethodChainContext {
 診断 (`updateDiagnostics`) は、2026-05 時点では `onDidChangeTextDocument` だけで駆動していましたが、#384 で「開いたとき」「閉じたとき」「activation 時に既に開いていたもの」にも広がりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:254-283
+// packages/vscode-extension/src/extension.ts:252-281
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -576,7 +573,7 @@ interface MethodChainContext {
 診断を出すだけの登録に、#883 で **quick fix の登録**が 1 行足されました。`registerOutputCodeActionProvider(context)` が `output-missing` / `dry-not-routed` の 2 つの診断 code に対して「`<名前>.output()` を足す」CodeAction を返します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:245-248
+// packages/vscode-extension/src/extension.ts:243-246
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)
@@ -592,8 +589,8 @@ provider 本体は `extension.ts:3482-3520` にあり、`vscode.languages.regist
 engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造です。**2026-09-10 の裁定（#827 / #502）で削除される前**は、この wrapper が scsynth (`resolveScsynthForUI()`) と daemon (`resolveDaemonForUI()`) の 2 つ symmetric な形で存在していましたが、SC 経路の削除により **`resolveDaemonForUI()` だけが残ります**。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:490-498
-function resolveDaemonForUI(): { path: string; source: string } | null {
+// packages/vscode-extension/src/engine-process.ts:57-64
+export function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
     return resolveDaemonBinaryForExtension()
   } catch (err) {
@@ -601,7 +598,6 @@ function resolveDaemonForUI(): { path: string; source: string } | null {
     outputChannel?.appendLine(`❌ daemon resolver failed: ${reason}`)
     return null
   }
-}
 ```
 
 daemon 側の `require` は `engine-startup-runtime.ts` という小さなモジュールに切り出されています。ユニットテストがこの境界を差し替えられるようにするためで、拡張のビルド成果物 (`engine/dist/`) が無い環境でも `startEngine()` のロジックをテストできます。
@@ -643,27 +639,18 @@ daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > ex
 事前チェックは削除済みの旧 III-3 章（[ADR-003](/decisions/adr-003-scsynth-bundle) に記録）に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1753-1766
+// packages/vscode-extension/src/engine-process.ts:304-308
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
     args.push('--audio-device', audioDevice)
-  }
-  if (effectiveDebugMode) {
-    args.push('--debug')
-  }
-
-  // Set environment
-  const env = { ...process.env }
-  if (effectiveDebugMode) {
-    env.ORBITSCORE_DEBUG = '1'
   }
 ```
 
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1762-1811
+// packages/vscode-extension/src/engine-process.ts:313-362
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -725,7 +712,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1831-1841
+// packages/vscode-extension/src/engine-process.ts:382-392
   // Setup handlers
   setupStdoutHandler(spawnedProcess, effectiveDebugMode)
   setupStderrHandler(spawnedProcess)
@@ -748,7 +735,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 そこで chunk 列を行へ組み直す小さなヘルパが挟まっています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1197-1217
+// packages/vscode-extension/src/engine-handlers.ts:371-383
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -762,14 +749,6 @@ export function createLinePrefixer(emit: (line: string) => void): {
       for (const line of lines) {
         if (line.trim() !== '') emit(line)
       }
-    },
-    flush(): void {
-      const remaining = partial
-      partial = ''
-      if (remaining.trim() !== '') emit(remaining)
-    },
-  }
-}
 ```
 
 読みどころは 3 つです。1 つ目は `partial` の持ち越しで、素朴に `chunk.split('\n')` するだけでは **chunk 境界と行境界が一致しない**ため、行の後半が独立した 1 行として扱われて `ERROR:` が二重に付いてしまいます。2 つ目は `flush()` の存在で、行に整えると「**改行で終わらない最後の出力**」が buffer に残ったままプロセスが終わります。過小カウントを直すはずの変更が逆方向に同じ穴を開けることになるので、`end` イベントで必ず吐き出します。3 つ目は空行を emit しない判定で、`ERROR: ` だけの行を作ると今度は件数が**水増し**されます。
@@ -777,7 +756,7 @@ export function createLinePrefixer(emit: (line: string) => void): {
 `setupStderrHandler` 側は、この `push` / `flush` を `logHandlerFailure` で包んで繋ぐだけになりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1233-1255
+// packages/vscode-extension/src/engine-handlers.ts:407-419
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -791,16 +770,6 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
     } catch (err) {
       logHandlerFailure('setupStderrHandler', err)
     }
-  })
-  // 改行で終わらなかった最後の 1 行を取りこぼさない。
-  process.stderr?.on('end', () => {
-    try {
-      prefixer.flush()
-    } catch (err) {
-      logHandlerFailure('setupStderrHandler', err)
-    }
-  })
-}
 ```
 
 ちなみに、この「chunk 列 → 行」の経路はリポジトリ全体で **4 つ**あります。実装のコメントが 4 つとも列挙していて、`createLinePrefixer` を直しただけで全部揃ったと思わないように、と注意書きが付いています。engine stderr のここ、daemon stderr の `createDaemonStderrLineRouter` (`packages/engine/src/audio/rust-engine/daemon-client.ts`、[#777](https://github.com/signalcompose/orbitscore/issues/777))、engine stdout の `setupStdoutHandler` ([#773](https://github.com/signalcompose/orbitscore/issues/773))、そして本章冒頭で見た ring proxy (`append` を `value.split('\n')` して ring へ写す部分) です。拡張パッケージは `@orbitscore/engine` に依存しないので、少なくとも前 2 つは今のところ共有できません。改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる、というのが実装コメントの結論です。
@@ -810,7 +779,7 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 3 つ目の `setupStdoutHandler` は、2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (束 O-wire) で `createLinePrefixer` を使う側に回りました。それまでは chunk を `output.split('\n')` して、その場で `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"` の 4 分岐へ流していたので、**bridge の JSON 封筒が chunk 境界で割れると両方の断片が失われました**。前半は prefix チェーンのどれにも一致せず、後半は `{` で始まらないので、やはりどれにも一致しないからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1054-1061
+// packages/vscode-extension/src/engine-handlers.ts:228-235
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
@@ -826,7 +795,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 もう 1 つの仕掛けが `StringDecoder` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1091-1094
+// packages/vscode-extension/src/engine-handlers.ts:265-268
   // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
   // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
   // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
@@ -836,7 +805,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 `data.toString()` は chunk を単独で UTF-8 として解釈するので、マルチバイト文字が chunk をまたぐと **その場で `U+FFFD` に化けます**。行を繋ぎ直しても文字が壊れたあとでは戻りません。`StringDecoder` は不完全なバイト列を次の chunk まで持ち越すので、その手前で守れます。コメントが明言しているとおり、この置き換えは **bridge dispatch の経路だけ**で、ログと playhead へ渡す `output` / `lines` は従来どおり `data.toString()` のままです。既存の呼び出し規約とタイミングを変えないための線引きで、stderr 側の同じ危険はこの変更の対象外だとも書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1109-1110
+// packages/vscode-extension/src/engine-handlers.ts:283-284
       const bridgeOutput = bridgeDecoder.write(data)
       if (bridgeOutput) bridgeLines.push(bridgeOutput)
 ```
@@ -844,7 +813,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 そして stderr 側と同じく、`end` で必ず吐き出します。`bridgeDecoder.end()` が先に来るのは、decoder が抱えている未完のバイト列を文字へ戻してから prefixer へ渡さないと、最後の 1 行が化けたまま emit されるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1153-1161
+// packages/vscode-extension/src/engine-handlers.ts:327-335
   process.stdout?.on('end', () => {
     try {
       const bridgeRemainder = bridgeDecoder.end()
@@ -872,46 +841,14 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2518-2556
-function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:592-598
+export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
     outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
     return false
   }
-  let codeToSend = rawCode
-  if (documentDir) {
-    // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
-    // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
-    // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
-    // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
-    codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-      setGlobalInitialized(true)
-    } else if (globalInitialized) {
-      codeToSend = setDirCommand + '\n' + codeToSend
-    }
-  }
-
-  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
-  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
-  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
-  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
-  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
-
-  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
-  if (statusBarItem?.text.includes('🐛')) {
-    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
-  }
-  engineProcess.stdin.write(codeToSend + '\n')
-  return true
-}
 ```
 
 返り値の `true` は「stdin に届いた」までしか意味しません。パースエラーや実行エラーは engine が非同期に stderr / stdout に出すだけです。人間ならエディタ上の赤線や Output Channel で気づけますが、MCP 経由の LLM には `ok` しか届かない、というのが #614 で `//#evalMark` が足された理由です。REPL は行を FIFO で処理する (#476) ので、コードの直後にマーカーを送れば「マーカーに到達した時点で評価は終わっている」と言えます。
@@ -947,7 +884,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1112-1148 (effects の中身を一部省略)
+// packages/vscode-extension/src/engine-handlers.ts:286-322 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -1014,7 +951,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1855-1903
+// packages/vscode-extension/src/engine-process.ts:406-454
 export function stopEngine(): boolean {
   bumpEngineGeneration()
   if (engineProcess && !engineProcess.killed) {
