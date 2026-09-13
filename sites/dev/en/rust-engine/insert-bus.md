@@ -1,12 +1,12 @@
 ---
 title: "RE-3. Per-Sequence Insert Bus (seq.effect())"
 chapter-id: "RE-3"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: f2245bb
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the point where `LineOp::Pan` was wired into RT by the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the point where `LineOp::Pan` was wired into RT by the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`).
 
 # RE-3. Per-Sequence Insert Bus (seq.effect())
 
@@ -123,7 +123,10 @@ pub enum LineOp {
 `LineOp::Pan` existed only as a type through PR-O3a, rejected at install time by
 `validate_line_program` as not wired into RT. The follow-up #611 PR-O4 (this bundle) removes that
 rejection, and it now executes in both the post-loop and master-line execution (pan on a bus
-applies `√2 · equal_power_pan(p)` rather than the plain law — see the "line program" section of
+applies an **attenuate-only balance**, `balance_pan(p)`, rather than the plain law; the
+`√2 · equal_power_pan(p)` of #834 was replaced by
+[#922](https://github.com/signalcompose/orbitscore/pull/922) (#921 / `#851` B-3, ruling D′,
+2026-09-13) — see the "line program" section of
 [SC-2](/en/signal-chain/mixer-audio-line)). Where a bus's output is actually summed remains the
 subject of the SC-2 chapter.
 

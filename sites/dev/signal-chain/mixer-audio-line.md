@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f575f27
-verified-at: "2026-09-12"
+verified-against: f2245bb
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化と PR-O3b（[#823](https://github.com/signalcompose/orbitscore/pull/823)）の `SetBusLine` wire まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）のバス上 `Pan`・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化と PR-O3b（[#823](https://github.com/signalcompose/orbitscore/pull/823)）の `SetBusLine` wire まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）のバス上 `Pan`・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -700,42 +700,77 @@ pub enum LineOp {
 受理してしまうと「呼び出しは成功したのに callback は無視する」という、いちばん見つけにくい
 種類の silent failure になります。
 
-#### `Pan` — バス上の等パワー・パンニング（#611 PR-O4）
+#### `Pan` — バス上のバランス（#611 PR-O4・#921 で減衰のみへ）
 
 `LineOp::Pan` は `OutputDest` と同じ理由で、この束まで `validate_line_program` に拒否されて
 いました。この束はその拒否を外し、master line の実行（`execute_master_line`）と post-loop の
 両方にある `LineOp::Pan(_)` 腕を、実際に L/R を掛ける処理へ置き換えます。
 
-```rust
-// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
-#[inline]
-pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
-    ready && scratch_len >= block
-}
-```
-
 位置から L/R 係数を作るのは `line_pan_coefficients` に切り出されています（#859・2026-09-11）。
 `apply_line_pan` はもうここを直接計算せず、**ランプの始点と終点でこの関数を呼ぶだけ**です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
+// rust/crates/orbit-audio-native/src/output/dsp.rs:63-66
 #[inline]
-pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
-    ready && scratch_len >= block
+pub(super) fn line_pan_coefficients(pan: f32) -> (f32, f32) {
+    balance_pan(pan)
 }
 ```
 
-要点は `equal_power_pan` そのものではなく **`√2` を掛けた値**を使っていることです。発音側の
-`Scheduler` は center パンで既に `(1/√2, 1/√2)` を掛けています（`pan_center_applies_equal_power_minus_3db`）。
-バス上でもう一度素の等パワー関数を掛けると、`seq.pan(0)`（center・何もしていないのと同じはず）
-を書いただけで −3 dB 下がってしまいます。`√2` で正規化すると center は `(1, 1)`（unity）に、
-hard-left は `(√2, 0)` になり、発音側の center 適用と合成すると `(1/√2·√2, 0) = (1, 0)` ——
-今日の発音側の hard-left とちょうど同じ振幅になります。つまり **rack を持たないラインの pan
-golden は丸め誤差以外動かず**、動くのは「rack を挟んでから pan する」構成（適用点がラックの
-後ろへ移る）だけです。
+この 1 行が、[#922](https://github.com/signalcompose/orbitscore/pull/922)（#921 /
+`#851` B-3 の owner 裁定 D′・2026-09-13）で入れ替わった部分です。PR-O4 前半
+（[#834](https://github.com/signalcompose/orbitscore/pull/834)）の時点では
+`equal_power_pan(p)` に `√2` を掛けていましたが、今は `balance_pan(p)` をそのまま返します。
+
+```rust
+// rust/crates/orbit-audio-core/src/scheduler.rs:130-137
+pub fn balance_pan(pan: f32) -> (f32, f32) {
+    if pan == 0.0 {
+        return (1.0, 1.0);
+    }
+    let (left, right) = equal_power_pan(pan);
+    let peak = left.max(right);
+    (left / peak, right / peak)
+}
+```
+
+やっていることは単純で、**等パワー則の形はそのままに、ピークで割って正規化している**だけです。
+中央は `(1, 1)`、hard-left は `(1, 0)`、hard-right は `(0, 1)` になります。つまり
+**生き残る側を持ち上げない**ので、どこへ振っても入力のフルスケールを超えません。
+`pan == 0.0` を早期 return しているのは丸め誤差の除去で、f32 では `cos(π/4)` と `sin(π/4)` が
+1 ULP ずれうるため、割り算のままだと中央がぴったり `(1, 1)` にならない場合があるからです。
+
+面白いのは、**発音側（`Scheduler`）も同じ関数を使うようになった**ことです。
+
+```rust
+// rust/crates/orbit-audio-core/src/scheduler.rs:302-306
+        let (pan_l, pan_r) = if self.output_channels == 2 {
+            balance_pan(event.pan)
+        } else {
+            (1.0, 1.0)
+        };
+```
+
+両段とも減衰のみなので、2 段を合成しても減衰のみです。`√2` のような「打ち消しあう前提の係数」が
+どちらにも残っていないため、片方だけを読んでももう片方を気にしなくてよくなりました。
+
+では、なぜ `√2` をやめたのでしょうか。裁定の根拠は設計
+[`docs/design/611-o-surface-bundle-design.md`](https://github.com/signalcompose/orbitscore/blob/f2245bb/docs/design/611-o-surface-bundle-design.md)
+§4.1 に置かれています。要旨は 2 点です。1 つめは、この系には**リミッタもクランプも無い**こと
+（`limiter()` / `compressor()` / `normalizer()` は #502 で実装ごと消え、float 出力にクランプは
+ありません）。1.0 を超えた値はそのままデバイスへ行くので、持ち上げる則は代金が高い、という
+判断です。2 つめは、バス上の `Pan` が**バランス**（すでにある L/R をそれぞれ掛ける）であって、
+モノ音源を左右へ**分配**する等パワー則とは前提が違うこと。端へ振ると片チャンネルの中身を実際に
+捨てているので、`√2` は**存在しないエネルギーを足していた**ことになります。
+
+帰結として、**`pan` を書かない譜面でも audio の絶対レベルが `√2` 倍（+3 dB）になりました**。
+発音側が中央で掛けていた `1/√2` が無くなったためです。実機 golden もこの PR で測り直されて
+いて、`tests/e2e/output-line-expectations.ts:134` の `noBus` は `0.0846173` から `0.1230601`
+（= 旧実測 `0.08701663` × `√2`）へ更新されています。
 
 `pan` の位置そのものは `current_gain`（後述）に −1..1 の値として保持され、`gain` と同じ
-`advance_line_ramp` で目標へ ramp します。三角関数（`equal_power_pan`）の計算は
+`advance_line_ramp` で目標へ ramp します。三角関数（`balance_pan` の内側の `equal_power_pan`）の
+計算は
 **ブロックにつき 2 回**（開始位置と終了位置の係数）だけで、その間は **L/R 係数を線形補間**します。
 
 🔴 **この節は以前「位置が動いてもクリックは出ません」と書いていたが、それは偽だった**

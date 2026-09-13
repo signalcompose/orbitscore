@@ -108,6 +108,14 @@ A **fixed** value such as `gain(-6)` lines up with `effect()`, `send()` and `out
 A **random** value such as `gain(random(...))` is still applied per note, as before, and does not become an element of the line.
 :::
 
+::: info pan() only ever turns sound down
+`pan()` places a sound by keeping the side you pan toward and **turning the other side down**. Panning further never makes anything louder. With `pan(-100)` the right channel goes silent, and the left channel stays at exactly the level it had at `pan(0)`.
+
+This means the further you pan, the quieter the result sounds overall. Add `gain()` if you want to bring the level back up.
+
+This rule changed on 2026-09-13. Before that, panning fully to one side lifted the surviving side by about 1.4x (+3 dB), and audio-file playback itself was turned down by 1/1.4 (-3 dB) to compensate. Neither correction exists now. **The same score plays audio files about 1.4x (+3 dB) louder**, so add `gain(-3)` if you want to match the previous level.
+:::
+
 #### Volume Reference
 
 | Value | Effect |

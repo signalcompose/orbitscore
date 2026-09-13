@@ -1994,6 +1994,28 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 > （`packages/engine/src/audio/rust-engine/daemon-client.ts:715-718` の `setBusLine` に呼び出し元が
 > 無い）。したがって **`seq.pan()` / `mix.output(3)` の譜面から見える振る舞いは今日も旧経路のまま**
 > であり、DSL 表面の切り替えは後半の束（`611-output-line`）で入る。
+>
+> 🔴 **pan 則の改訂（2026-09-13・#921 / `#851` B-3 の owner 裁定 D′・[#922](https://github.com/signalcompose/orbitscore/pull/922) マージ）**:
+> 上の **`√2 · equal_power_pan(p)`** は**もう使われていない**。**発音側とライン側の両方**が
+> **減衰のみ**の `balance_pan` になった（`rust/crates/orbit-audio-core/src/scheduler.rs:130-137` /
+> 同 `:302-306` / `rust/crates/orbit-audio-native/src/output/dsp.rs:63-66`）。
+>
+> | 段 | 中央 | 端 |
+> |---|---|---|
+> | 発音側 `balance_pan(event.pan)` | `(1, 1)`（素通り） | `(1, 0)` |
+> | ライン `LineOp::Pan` | `(1, 1)`（素通り） | `(1, 0)` |
+>
+> 形は等パワー則のまま**ピークで正規化**しただけで、**生き残る側を持ち上げない**ため、
+> どこへ振っても入力のフルスケールを超えない。根拠（リミッタもクランプも無い・バス上の Pan は
+> バランスであって分配ではない）は設計
+> [`docs/design/611-o-surface-bundle-design.md`](../design/611-o-surface-bundle-design.md) §4.1。
+>
+> 🔴 **破壊的変更**: 発音側の中央 `1/√2` が消えたので、**`pan` を書かない譜面でも audio の絶対
+> レベルが `√2` 倍（+3 dB）になる**。instrument（feed 経路）は不変で、両者が同じ絶対レベルに
+> 揃う。実機 golden は測り直した（`tests/e2e/output-line-expectations.ts:134` の `noBus`:
+> `0.0846173` → `0.1230601`）。**補正機能（constant power へ戻す則）は作らない** — `.gain(db)`
+> で書けるため。ただし pan をスイープさせる時は補正量が位置で変わるので `.gain()` では追随
+> できず、そこが必要になったら `global.panLaw()` を検討する（設計 611 §4.1）。
 
 ### MX.5 v1 制約（実装事実の開示）
 
