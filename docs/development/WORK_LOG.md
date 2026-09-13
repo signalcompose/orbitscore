@@ -17,6 +17,83 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: fold the four pending docs-sync PRs into one branch (Sep 13, 2026)
+
+**Issue**: #931。bot の docs 同期 PR **4 本**（#923 / #916 / #925 / #915）をまとめて取り込んだ。
+
+#### 🔴 1 本ずつ入れると、入れるたびに残りが衝突し直す
+
+4 本とも `WORK_LOG.md` を触るので、**1 本 main へ入れた瞬間に残り 3 本が衝突する**。
+実際 4.1.0 の作業で #927 を入れた直後、4 本が一斉に `CONFLICTING` になった。
+1 つの枝で解消すれば、衝突解消もゲートも 1 回で済む。判定は GitHub の
+`mergeStateStatus` が `UNKNOWN` を返し続けたので **`git merge-tree --write-tree` で手元実測**した。
+
+#### 🔴 #916 が「黙って」取り込めていなかった
+
+ループで 4 本を merge した時、**#916 だけマージコミットが作られていなかった**。
+原因は**サンドボックス**で、#916 は `.claude/hooks/README.md` を触るが、このディレクトリは
+**Bash も git も書き込み拒否**される（[[hook-guards-must-check-the-path-not-just-the-branch]]）。
+`git merge` はエラーを出していたが、私の `grep -E 'CONFLICT|Merge made'` がその行を落としていた。
+
+**「4 本回した」は根拠にならない。** `git merge-base --is-ancestor <head> HEAD` を
+4 本すべてに対して回して初めて分かった。**ループの結果は件数ではなく到達性で検算する。**
+
+#### zsh は未クォート変数を単語分割しない
+
+`U=$(git diff --name-only --diff-filter=U)` を `for f in $U` で回したが、zsh では
+**分割されず 1 つの文字列として渡り**、`FileNotFoundError` になった。bash の癖で書いていた。
+
+#### 衝突の解消方針
+
+| 対象 | 方針 |
+|---|---|
+| `WORK_LOG.md` の新規エントリ同士 | **両側保持**（別の作業の記録なので落とすものが無い） |
+| 既にアーカイブ済みの 3 エントリ | **HEAD（空）を採る** — `### ` 見出しの集合演算で本体 × アーカイブの重複 0 を確認 |
+| `mcp-and-gated-e2e.md` の Note | HEAD が追従チェーンの上位集合（#917 まで）なので HEAD を採り、#915 固有の分割告知だけ足す |
+| アーカイブの索引行 | 両方の説明を統合 |
+
+#### 検査（bot は但し書きを読まない）
+
+#915 の貼り直しは**散文中のファイル参照**で、`docs:check` の対象外（逐語一致するのは
+`// file:start-end` の引用ブロックだけ）。**5 件を抜き取って実ファイルと突き合わせ**、
+`autoStartConfiguredRustEngine()` / 括弧バランス判定 / `deactivate()` / `EvalMarkBridge` /
+`setupErrorHandler` のいずれも正しい位置に着地していることを確認した。
+
+`docs:check` exit 0 / lint exit 0 / `tests/docs` + `tests/repo` 86 passed。
+本体が 1,970 行になったので `test: add a file-size ratchet` を 1 件アーカイブへ移した（162 行）。
+
+Closes #931
+
+---
+
+### docs(hooks): follow PR #914 in the hook docs (Sep 13, 2026)
+
+PR [#914](https://github.com/signalcompose/orbitscore/pull/914)（merge commit `7061245`）が
+`.claude/hooks/pre-edit-check.sh` の判定を「ブランチ名だけ」から
+「ブランチ名 + **編集先が repo 配下か**」に変えたので、フックの挙動を書いている
+ドキュメント 2 箇所を実装に追従させた（ドキュメントのみ・実装とテストは変更なし）。
+
+#### 変更内容
+
+- `.claude/hooks/README.md` §1: 「対象外 / 判定できない入力の倒し方」の表を追加。
+  plan file（#153）と **repo 外の絶対パス**（#913）が allow、相対パス・`..` を含む絶対パス・
+  `file_path` 無しは deny 側へ倒れることを明記。テストの所在（`tests/repo/pre-edit-hook.spec.ts`）も追記
+- `CLAUDE.md` "Hook Protection": `pre-edit-check.sh` の説明に「**リポジトリ配下のみ**」を追記
+
+#### 差分外だが同じ節にあった誤り（併せて訂正）
+
+`.claude/hooks/README.md` はブロック方式を **exit 2** と書いていたが、実装は
+Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して **exit 0** である
+（`.claude/hooks/pre-edit-check.sh:91-92`）。#914 の差分ではないが、書き換えた同じ箇条書きの
+中にあったため放置せず訂正した。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: DSL の構文・意味論は無変更
+- `sites/user/` / `sites/dev/`: 両サイトとも `pre-edit-check` / Claude Code hooks に言及していない
+  （`grep -rl "pre-edit" sites/` が 0 件）。バイリンガル追従の対象も発生しない
+- `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
+  退避した既存エントリ。過去ログなので触らない
 ### chore(release): bump the extension to 4.1.0 (Sep 13, 2026)
 
 **Issue**: #926。出すのは **#922（振る舞いの修正）** + #918 / #920（テストのみ）。
@@ -61,6 +138,45 @@ CI 4 チェック全 pass。
 
 audio が +3 dB / 🔴 **ヘッドルームが 3 dB 減る**（リミッタが無い系なので重ねたミックスは
 0 dBFS に近づく）/ pan がフルスケールを超えなくなった / gated が skip 0 の 46 件に。
+
+### docs: follow PR #918 — the self-launching test placement rule, and two WORK_LOG separators (Sep 13, 2026)
+
+PR [#918](https://github.com/signalcompose/orbitscore/pull/918)（マージ `77a1790`）の追従。
+実装は触らない（差分は `tests/` と `CLAUDE.md` と WORK_LOG のみ）。
+
+#### 1. 自前アプリのテストの配置規則が CLAUDE.md にしか無かった
+
+元 PR は `launchIsolatedOrbitStudio()` が冒頭で `killHarnessInstances()` を呼ぶため、
+自己完結のテストを共有セッションの途中に置くと後続が `ECONNREFUSED` で落ちることを
+実測し、spec の境界にコメントを残した（`tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553`）。
+これはハーネスの不変条件なので、以下へ展開した:
+
+- `docs/testing/E2E_HARNESS_SPEC.md` §3.1（新設）— 共有セッション / 自己完結の 2 種別と順序規則
+- `sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/editor/mcp-and-gated-e2e.md`
+  — `killHarnessInstances()` の節の直後に節を 1 つ追加（引用は 6550-6553）。
+  `verified-against` を `77a1790` へ、Note の追従先に #917 / #918 を追記
+
+#### 2. WORK_LOG の区切りが 2 箇所崩れていた
+
+| ファイル | 症状 |
+|---|---|
+| `docs/development/WORK_LOG.md` | #918 のエントリと次のエントリの間に `---` が無く、本文の次の行が `###` 見出しになっていた |
+| `docs/archive/WORK_LOG_2026-09.md` | アーカイブへの追記で `---` が 2 連続になっていた |
+
+どちらも他のエントリの形（空行 + `---` + 空行）に揃えた。
+
+#### 検証
+
+`npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` / `npm run docs:check`。
+
+#### 追従しなかったもの（PR 本文に出す）
+
+- `sites/user/getting-started/engine-settings.md:29,33` の「チャンネル = ステレオ（2ch）」/
+  「マルチチャンネル出力は未実装」が、同じサイトの `sites/user/mixing/routing.md:115` と
+  食い違う。元 PR は 8ch デバイスで ch3/4 に音が出ることを実測しているが、
+  この警告文の「マルチチャンネル出力」が DSL の宛先を指すのか設定 UI を指すのかは
+  差分から確定できないので、書き換えずに報告に回した
+
 
 ---
 
@@ -138,6 +254,22 @@ docs を追従（実装・テストは変更なし）。`docs/core/INSTRUCTION_O
 🔴 SC-2 `Pan` 節のコードブロック 2 つが `line_pan_coefficients` を説明しながら `bus_topology.rs:226-229`（`channel_egress_active`）を引用していた誤りも直した。逐語一致なので `docs:check` は緑のまま通っていた — **引用チェッカは「正しい関数を引用しているか」を見ない**。
 
 🔴 直さず報告: `INSTRUCTION_ORBITSCORE_DSL.md:1771`「`pan(random)` は発音側のまま」と #922 の前提「`event.pan` は本番コードで一度も設定されない」が食い違う（`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:125`）。仕様判断なので追従作業では決めない。
+
+### docs: record the #920 doc-sync audit (no spec follow-up needed) (Sep 13, 2026)
+
+[#920](https://github.com/signalcompose/orbitscore/pull/920)（merge `59511c9`）の追従監査。
+差分は `scheduler.rs` の `mod tests` 内テスト 1 本と #920 自身の WORK_LOG entry だけで、
+**振る舞いを 1 行も変えていない**ため spec / site の追従は不要。`docs:check` 982 引用 0 失敗。
+
+🔴 #920 が固定した「端で +3 dB」は **20 分後の #922（裁定 D′）が置き換えた**ので、
+仕様文書へ書き写していない。書けば main と食い違う記述を新規に作ることになる。
+
+追従できなかった点（E2E の穴・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1992` の旧法則残存・
+E2E-P の比のみアサーション）は **PR 本文に path:line 付きで列挙した**。E2E と baseline は触っていない。
+
+
+
+---
 
 ### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
 
@@ -323,6 +455,54 @@ restore 後はいずれも 6 passed。
 Closes #913
 
 ---
+
+### docs(dev-site): re-anchor the extension-split file references and record the new module layout (Sep 13, 2026)
+
+PR [#909](https://github.com/signalcompose/orbitscore/pull/909)（#887・`extension.ts` /
+`mcp-server.ts` の 19 モジュール分割、マージコミット `ca745e8`）への**ドキュメント追従のみ**。
+`packages/` と `rust/` とテストは 1 行も触っていない。
+
+#### 何を直したか
+
+dev 学習サイトの散文にある `extension.ts` / `mcp-server.ts` への行参照を、分割後の位置へ
+付け替えた（ja / en 同時・合計 160 参照）。
+
+- 範囲付き参照（`<file>:<a>-<b>`）: **110 件のうち 96 件**を再アンカー
+- 基底名だけの参照（`` `extension.ts:3405` `` 等）: **62 件**を再アンカー
+- `sites/dev/editor/vscode-architecture.md` の drift 節に、**分割の対応表**（主題 → 分割後の
+  ファイル）と MCP `tools/list` の順序復帰（`8561210`）を追記
+- 誤った地の文 2 件を修正: 「候補の組み立ては `extension.ts` 側」→ `dsl-providers.ts`、
+  `EngineViewProvider` (`extension.ts` 側) → `engine-view-provider.ts`
+
+#### 🔴 参照は分割より前から既に腐っていた
+
+再アンカーの方法として、まず**分割前の `extension.ts` のその行範囲の中身**を新モジュール群から
+内容一致で探した。**54 組中 17 組しか一致しなかった。**
+
+原因は、**分割より前の時点で散文の行番号が既にずれていたこと**である。実測（`0f930f3` =
+マージ直前の main）:
+
+| 散文が指していた範囲 | 実際にそこに在ったもの | 記述 |
+|---|---|---|
+| `extension.ts:286-498` | `if (playheadActiveRanges.size > 0) {` | `activate()` 全体 |
+| `extension.ts:500-521` | `decorationType.dispose()` | `deactivate()`（実際は 489 行目） |
+| `extension.ts:2044-2198` | `globalInitialized = false` | `startEngine()`（実際は 1927 行目） |
+| `extension.ts:3716-3726` | `function registerHoverProvider(` | カタログ不在の案内 |
+
+**「範囲内」は「正しい」を意味しない**（#911 が同じ指摘をしている）。したがって内容一致では
+引けず、**箇条書きが明示しているシンボル名で引き直した** — 各シンボルの定義位置を現在の
+ツリーで読んで範囲を確定させている。
+
+#### 直していないもの
+
+- **#502 で削除された関数を指す 14 件**（`getConfiguredEngineKind()` /
+  `resolveScsynthForUI()` / `startEngine()` の `sc` 分岐 / `bundleStatusItem` の engine kind
+  コメント）。`sites/dev/decisions/adr-003-scsynth-bundle.md` と
+  `sites/dev/editor/vscode-architecture.md:1066` に在る。**指す先が存在しない**ので範囲の
+  付け替えでは直らず、箇条書きの文章そのものを書き換える判断が要る（#911 の 3 番）
+- **`check-citations.mjs` に散文の範囲外検査を足すこと**（#911 の 1 番・本体）。仕組みの追加は
+  テスト / スクリプトの変更なので、この追従 PR の範囲外
+
 
 ### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
 
@@ -1661,169 +1841,6 @@ doc コメント + シグネチャで正しい）。
 CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
 
 
-### test: add a file-size ratchet for Rust and TS sources (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**ブランチ**: `888-file-size-ratchet`
-**担当**: 設計 = Fable / 実装 = Sonnet subagent（🔴 **Codex CLI は一度も起動していない**。
-`codex:rescue` のラッパが自分で実装した。`codex-companion status` の `recent` が空で
-`latestFinished` が null であることで確認）/ 検証・裁定 = main
-
-#888 子タスク 0「仕組みだけ入れる（振る舞い不変）」。設計は
-`docs/design/888-file-size-ratchet-design.md`。ソースは1行も変えていない。
-
-**やったこと**:
-
-- `tests/repo/code-lines.ts`: 「コード行」を数える純関数 `countCodeLines`。行単位の状態機械
-  （通常 / 文字列 / raw 文字列 / テンプレートリテラル / ブロックコメント）で、空行・コメント
-  専用行を除き、複数行の文字列やテンプレートリテラルの内側は中身に関わらず数える。Rust の
-  `#[cfg(test)] mod`（`#[cfg(all(test, ...))]` を含む）はブロックごと除外する。終端で異常状態
-  （閉じていない文字列・test mod）のまま終わったら例外を投げる（迷ったら数える側に倒す）。
-- `tests/repo/file-size-targets.ts`: `git ls-files -z`（`:(glob)` magic 付き）で測定対象を列挙。
-  Rust は `rust/crates/**/*.rs` から `tests/` `examples/` `benches/` `build.rs` `src/**/tests.rs`
-  を除いたもの、TS は `packages/*/src/**/*.ts`。真空防止（除外適用前の生の列挙件数で判定）。
-- `tests/repo/file-size-baseline.json`: 閾値超過ファイルだけを列挙した baseline（25件・Rust 15 /
-  TS 10）。**実装のカウンタが出した現寸をそのまま登録**した。
-- `tests/repo/file-size-ratchet.spec.ts`: 既存3本（`worklog-size.spec.ts` /
-  `dsl-e2e-coverage.spec.ts` / `planning-issue-state.spec.ts`）と同型のラチェット+honesty。
-  baseline を超えた成長は red、baseline が古くなった（消えた・実際より緩い）ら red。
-- `tests/repo/code-lines.spec.ts`: `countCodeLines` の機能テスト（設計 §9.1 の F-1〜F-19 相当）。
-- `tests/repo/file-size-targets.spec.ts`: 列挙そのもののテスト（設計 §9.2 の L-1 / L-2）。
-  **レビューで未実装が判明して後から足した**（下記）。
-
-**設計からの逸脱・補足**:
-
-- 真空防止の閾値判定は、`tests/` 等の除外を適用した**後**の件数ではなく、`git ls-files` の
-  **生の**結果に対して行うよう修正した。除外後の件数（Rust 95件）で判定すると、正当な除外で
-  100件を割り、真空防止が誤って発火する。
-- `listMeasuredFiles` に既定値付きの第2引数（pathspec 差し替え口）を足した。L-2 が真空防止の
-  発火そのものを確かめるための注入口で、既定の挙動は変わらない。
-- 🔴 **baseline の数値は設計文書 §5.1 の試作値と 25 件中 8 件で食い違い、main が「実装側が正しい」と
-  裁定した**（設計 §11 の反証条件がそのまま発火したケース。設計文書の表は実装値に差し替え済み）。根拠:
-  - **TS 10 件**: TypeScript 自身の**パーサ**を独立オラクルにして測り（`ts.createSourceFile` の葉
-    トークンが占める文字を印し、JSDoc ノードは除外）、**実装の値と 10/10 完全一致**。
-    `extension.ts` は **2,779**（試作の 3,004 は正規表現リテラル未対応による過大）
-  - **Rust**: main が独立に `#[cfg(test)] mod` の除外レンジを列挙し 4 件中 3 件で一致。唯一ずれた
-    `engine_wrap.rs` は **main の列挙の側のバグ**だった（Rust のフォーマット文字列の中の `{` `}` を
-    brace として数え、`mod outproc_load_error_test_support` を 12279 行で早期終了。実際の終端は
-    12557 行で、差の 278 行が実装との差と正確に一致した）
-
-**🔴 レビューで塞いだ穴 — 「仕事が成功した時に開く」型**:
-
-初回実装には設計 §4.1・§9.2 が名指しで要求していた **L-1（列挙に既知の代表ファイルが含まれることの
-検査）が無かった**。真空防止のしきい値（Rust/TS とも 100 件）だけでは、pathspec が `:(glob)` magic を
-欠いて `src/` 直下を落とす事故を**検出できない** — TS は非 glob でも 109 件（> 100）返るためである。
-
-いまは `extension.ts` が baseline にあるため honesty 検査が偶然 red にするが、**子 4/5 でそのファイルを
-分割して baseline から外した瞬間にその防御は消える。** main が再現した fail-before: baseline から 2 件を
-外し（= 分割後の姿）`:(glob)` を落とすと、**23 ファイルが黙って測定対象から消えたままスイートは緑**
-だった。L-1 を足した後は、同じ条件で red（exit=1）になることを main が確認している。
-
-**検証**（すべて main が sandbox 外で実行。委譲先の緑は根拠にしていない）:
-`npx vitest run --dir tests --config vitest.config.ts tests/repo`（**36件緑**）/
-`npm test`（**166 files・2424 passed / 76 skipped**）/ `npm run lint`（緑）/
-`npm run docs:check`（948 引用・0 failed）。**既存テストの期待値は 1 つも変えていない。**
-
-変異検証（main が実行・5 件すべて red → restore 後 緑・baseline は byte 一致）: baseline 値の
-+1 / −1 / エントリ削除 / 架空パス追加 / `threshold` を 600 へ。
-
-**`/simplify` で適用した整理**（4 観点を並行レビュー・PR #894）:
-
-- `code-lines.ts`: `pendingBuffer: Array<{isCode:boolean}>` → `pendingCount: number`。
-  バッファに積まれる行は `isTestCfgAttrLine` / `ATTRIBUTE_LINE` / `MOD_OPEN_LINE` のどれかに
-  **完全一致**した行だけで、行コメントや末尾コメント付きの行は一致しない。よって `isCode` は
-  常に `true` で、持つ意味が無かった（main が正規表現を読んで検算）
-- `file-size-ratchet.spec.ts`: 2 つの `it` が独立に呼んでいた `measureAll()` を `beforeAll` へ集約。
-  同じ PR の `file-size-targets.spec.ts` が既に測定を共有しており、**同一 PR 内で同じ問題に 2 つの
-  書き方が混在**していた。`beforeAll` を選んだのは、`measureAll()` が throw した時に collection
-  エラーではなく**ファイル名付きのテスト失敗**として出るため
-- `code-lines.spec.ts`: 3 つの `it` が共有していた `F-18` ラベルを `F-18a/b/c` に分けた
-  （設計 §9.1 の F-18 は 1 行で 3 シナリオを束ねているので重複自体は仕様に忠実だが、識別できない）
-
-**却下した指摘 1 件**（altitude 観点・`listMeasuredFiles` の第 2 引数が #887 の `__*ForTest` と同型という指摘）:
-
-1. #887 が問題視しているのは**出荷される** `extension.ts` の裏口。`tests/repo/file-size-targets.ts`
-   はテスト基盤そのもので出荷されない。既定値付き引数は通常の引数化である
-2. 提案された「真空防止を純関数へ切り出す」は、**`listMeasuredFiles` がそれを呼んでいるかの配線が
-   検証されなくなる**（CLAUDE.md が名指しで警告している形）
-3. 指摘の「該当言語の pathspec が無ければチェックが素通りする」は事実誤認。ループは
-   `Object.keys(MIN_FILES_PER_LANG)`（固定の `{rust, ts}`）を回しており、片方が欠ければ
-   `0 < 100` で throw する（穴ではなくガードが働いている姿）
-
-**リファクタ後の再検証**（main が実行）: 変異 5 件すべて再び red / `code-lines.ts` の
-`commitPending` を殺す変異 2 種も red（除外側 4 件・code 側 2 件）/ `npm test` 2424 passed /
-lint・`docs:check`・`typecheck:e2e` 緑。**baseline 25 件の値は 1 つも変わっていない**
-（honesty 検査が `baseline == 実際` を要求するので、これが振る舞い保存の検算になる）。
-
-**`/code:pr-review-team`（4 名）+ Fable 設計監査（並行）のラウンド 1**:
-
-Critical 0。Important 5 件・Minor 17 件を main が集約し、**故障の向き**で仕分けた。
-
-🔴 **修正前に置いたポリシー**（CLAUDE.md「横断的関心事は先にポリシーを書いてから一括適用」）:
-
-> ラチェットの信用は「数え方が正しい」ことに依存する。数え方の誤りは **(a) 多く数える = 安全** /
-> **(b) 少なく数える = 穴** に分かれ、§3.3 は (b) を禁じている。しかし heuristic を含む字句解析で
-> (b) を*構成的に*排除することはできない。したがって **heuristic を改良するだけで済ませず、
-> 独立したオラクルで全件を検算する**形に変える。
-
-**直した 6 件**:
-
-| # | 内容 |
-|---|---|
-| **F-1** | 🔴 **`code-lines-oracle.spec.ts` 新設** — TypeScript の**パーサ**を独立オラクルにして TS 全 132 件を検算。既知の差は shebang 1 件のみで許容リストに明示（設計 D9・§3.4） |
-| **F-2** | **入れ子テンプレートリテラルで黙って少なく数える**穴を塞いだ。`templateStack` で `${…}` 置換の brace 深さを追う |
-| **F-3** | 真空防止を **pathspec エントリ単位**にした。従来は lang 合計だったので、将来足すエントリが `:(glob)` を忘れて 0 件でも既存 132 件が支えて緑だった |
-| **F-4** | ラチェット判定を純関数 `findViolations` / `findHonestyProblems` に切り出し、**合成データで §5.2 (a)〜(f) を網羅**。実データの 2 つの `it` は同じ関数を呼び続ける（配線を失わない） |
-| **F-5** | throw メッセージに**壊れ始めた行番号**を入れた（設計 §8.1 が要求していたが未実装だった） |
-| **F-6** | baseline JSON の**キー辞書順**を honesty 検査で強制（設計 §5.1 が要求） |
-
-**直さなかった 3 件**（いずれも**安全側**に倒れ、現リポジトリに該当 0 件）:
-`=>` 直後の正規表現（**throw する**）/ BOM のみの行（多く数える）/ `#[cfg(test)]` と `mod` の間の空行（除外されず多く数える）。
-
-🔴 **Fable 監査が main の検証の穴を突いた**（設計 §13.8 に反映）: main の敵対ケース 4 件は
-すべて「ブロックを塊のまま動かす」形だった。塊を崩す 2 型は residual をすり抜ける —
-**(E) 1 文を関数間で移動**（振る舞いが変わるのに residual 0。git は 20 英数字以上なら 1 行でも
-移動と認める）/ **(F) 消して 2 回足す**（複製が見えない）。対策として §13.4 に
-`moved+ == moved−` と「短い moved ブロックは residual 扱い」の 2 ゲートを追加。
-Fable はまた **TS オラクルを baseline の 10 件ではなく測定対象 132 件全件**に適用して
-131/132 一致を確認しており、main の検証範囲が狭かったことも示した。
-
-**設計文書の訂正**（main）: §3.1 の「誤判定は必ず例外で red になる」という**安全性の主張を撤回**
-（偶数個のクォート / backtick で黙って通る経路が実在）・§4.2「Rust 96 件」→ **95 件**
-（文書自身の算式も実測も 95）・§13.8〜§13.10 を新設・決定表に **D9 / D10** を追加。
-
-**検証**（すべて main が sandbox 外で実行・委譲先の緑は根拠にしていない）:
-`npm test` **167 files・2445 passed / 76 skipped**（+21 件）/ lint・`docs:check`（948 引用 0 failed）・
-`typecheck:e2e` 緑 / `tests/repo` **57 件**。
-
-**マージ前ゲート**（main が sandbox 外で実行）: `npm run build` ✅ / `bundle-macos.sh` + 
-`rack-child --lib -- --ignored` **3 passed** + `--lib` **16 passed** ✅ /
-**実機 gated E2E 45 passed / 1 skipped / 0 failed** ✅ / **cold install 2 passed** ✅ /
-CI 3/3 pass ✅。
-
-🔴 **実機 E2E は 1 回目が「走っていなかった」。** sandbox 内で `mktemp` が
-`Operation not permitted` になり、しかも `| tail` のせいで **exit code 0 に化けていた**
-（タスク通知も「completed (exit code 0)」と報告した）。出力の中身を読んで気づき、
-sandbox 外で `set -o pipefail` 付きで回し直した。**終了コードと通知だけでは区別がつかない。**
-
-### 🔴 owner 裁定: 分割束の上限は residual で数える（2026-09-12）
-
-> フルレビュー 40 回はちょっと作業として重すぎる
-
-`BUNDLE_BRANCH_WORKFLOW.md` に **§5.1a** を制定した。分割（純粋な移動）の束は
-**residual 行数で 1,500 を判定**し、加えて **(i) `moved+ == moved−`**（複製・移動先の作り忘れ）と
-**(ii) K 行未満の短い moved ブロックは residual 扱い**（1 文の関数間移動）の 2 ゲートを課す。
-**最終防波堤は「既存テストの期待値を 1 つも変えていない」。**
-
-根拠は実測（設計 §13.6〜§13.8）: 実素材の抽出で **686 変更行 → residual 2 行（0.3%）**。
-敵対ケース 4 件は全部捕まえるが、**Fable 監査が見つけた抜け道 2 型**（1 文の関数間移動 = residual 0 /
-消して 2 回足す = 複製が見えない）は追加ゲートが要る。
-
-**見込み**: #888 の子 1〜3 は素の変更行なら約 40 束、residual なら **8〜9 束**。
-fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
-**オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
-baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
-
 ## Archived sections
 
 Older entries have been archived by month for readability:
@@ -1836,4 +1853,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-12）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1 と #888 子 1／#878 を含む
+- [2026-09（前半・09-01〜09-12）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1、#883 束 S / 本体 (#883)、#888 子 1、#878 を含む

@@ -1,8 +1,8 @@
 ---
 title: "0-2. アーキテクチャ全景"
 chapter-id: "0-2"
-verified-against: 56c34c3
-verified-at: "2026-09-11"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -669,14 +669,14 @@ export const DSL_VERSION = '2.0'
 ## Sources
 
 - `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring、ステータスバー 2 本、コマンド登録
-- `packages/vscode-extension/src/extension.ts:445-470` — MCP サーバーの起動条件 (`ORBITSCORE_MCP_PORT` > 設定) とハンドラ束
-- `packages/vscode-extension/src/extension.ts:628-642` — `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界 (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
-- `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: kind 判定 → pre-check → env → spawn
-- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
-- `packages/vscode-extension/src/extension.ts:3040-3047` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
+- `packages/vscode-extension/src/extension.ts:237-291` — MCP サーバーの起動条件 (`ORBITSCORE_MCP_PORT` > 設定) とハンドラ束
+- `packages/vscode-extension/src/engine-process.ts:57-65` — `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界 (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
+- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: kind 判定 → pre-check → env → spawn
+- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
+- `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)
-- `packages/vscode-extension/src/mcp-server.ts:1177-1347` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
+- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
 - `packages/engine/src/cli-audio.ts:1-41` — CLI entry point
 - `packages/engine/src/cli/execute-command.ts:105-113` — `repl` サブコマンドのルーティング
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: interpreter 生成 → boot → REPL 開始

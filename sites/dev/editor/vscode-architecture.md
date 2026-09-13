@@ -1,12 +1,14 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: f575f27
+verified-against: ca745e8
 verified-at: "2026-09-12"
 status: draft
 ---
 
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しましたと束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・`registerOutputCodeActionProvider()` の登録）まで、さらに #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動）まで**engine spawn 節だけ**追従しました。
+>
+> 🔴 2026-09-12: #887（PR [#909](https://github.com/signalcompose/orbitscore/pull/909)）で `extension.ts` / `mcp-server.ts` が 19 モジュールへ分割されました。**振る舞いは変わっていません**（既存テストの期待値は 1 つも変わっていない）。本ページのファイル参照は分割後の位置へ付け替えてあります。対応表は [IV-1 の drift 節](/editor/vscode-architecture#_887-extension-ts-mcp-server-ts-の分割-pr-909)にあります。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -252,7 +254,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 ```
 
-省略したブロックが `startOrbitScoreMcpServer()` に 25 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`extension.ts:1699-1723`)。
+省略したブロックが `startOrbitScoreMcpServer()` に 25 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`engine-process.ts:187-210`)。
 
 ### 出荷物では `activate()` の手前で落ちていた (#873)
 
@@ -263,7 +265,7 @@ Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
   at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
 ```
 
-なぜ読み込みの時点なのでしょうか。`extension.ts` は `./mcp-server` から import していて (`extension.ts:43`)、その `mcp-server.ts` は MCP SDK をトップレベルの `require` で読み込むからです。
+なぜ読み込みの時点なのでしょうか。`extension.ts` は `./mcp-server` から import していて (`extension.ts:14`)、その `mcp-server.ts` は MCP SDK をトップレベルの `require` で読み込むからです。
 
 ```typescript
 // packages/vscode-extension/src/mcp-sdk.ts:37-43
@@ -430,8 +432,8 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 `registerCompletionProviders(context)` と `registerHoverProvider(context)` が IntelliSense を担当します。補完は 4 系統に増えました。
 
 1. **メソッドチェーン文脈補完**: `completion-context.ts` の `analyzeMethodChain()` と `getContextualCompletions()`。`.` をトリガに、チェーンのどの段階かを見て候補を並べ替えます
-2. **pitch scope 補完**: `.play(` の括弧が閉じていない位置で `).` と打ったときは `getPitchScopeCompletions()` に切り替わります (`extension.ts:3652-3672`)
-3. **plugin catalog 名前補完**: `effect(` / `instrument(` の文字列引数の中で `"` をトリガに catalog の名前を出します (#463 C3、`extension.ts:3689-` 以降)。深掘りは [PH-3. プラグインカタログと差し替え](/plugin-hosting/catalog)
+2. **pitch scope 補完**: `.play(` の括弧が閉じていない位置で `).` と打ったときは `getPitchScopeCompletions()` に切り替わります (`dsl-providers.ts:64-75`)
+3. **plugin catalog 名前補完**: `effect(` / `instrument(` の文字列引数の中で `"` をトリガに catalog の名前を出します (#463 C3、`dsl-providers.ts:92-172` 以降)。深掘りは [PH-3. プラグインカタログと差し替え](/plugin-hosting/catalog)
 4. **`.output(` の宛先補完**: `.output(` を打った時点で候補を出します（#883 束 C・PR #884）。文字列引数の中（`"` トリガ）では `master` + 宣言済みの sum / aux 名、括弧直後の識別子位置（`(` トリガ）では `master` + 宣言済みのミキサーノード変数（`mix.sum` / `mix.aux` / `mix.output(...)`）を並べます
 
 `.output(` の宛先補完は 2 つのコンテキストに分かれています。`dsl-completion-context.ts` の
@@ -458,7 +460,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
 の `output(` が**宛先を取る `output()` ではなく、物理アウトノードの宣言**だからです。ここで
 除外しないと、チャンネル番号を打つ位置に `master` が出ます。
 
-候補の組み立ては `extension.ts` 側です。
+候補の組み立ては `dsl-providers.ts` 側です。
 
 ```typescript
 // packages/vscode-extension/src/dsl-providers.ts:291-299
@@ -574,7 +576,7 @@ interface MethodChainContext {
   registerOutputCodeActionProvider(context)
 ```
 
-provider 本体は `extension.ts:3482-3520` にあり、`vscode.languages.registerCodeActionsProvider` の返り値を `context.subscriptions` へ push します。中身は [IV-2](/editor/execution-feedback) で扱います。
+provider 本体は `dsl-providers.ts:176-213` にあり、`vscode.languages.registerCodeActionsProvider` の返り値を `context.subscriptions` へ push します。中身は [IV-2](/editor/execution-feedback) で扱います。
 
 ---
 
@@ -1021,7 +1023,7 @@ export function applyEngineExit(
 }
 ```
 
-`deactivate()` は engine を `kill()` し、playhead の decoration type と MCP サーバ、Webview panel を dispose します (`extension.ts:500-521`)。
+`deactivate()` は engine を `kill()` し、playhead の decoration type と MCP サーバ、Webview panel を dispose します (`extension.ts:293-314`)。
 
 ---
 
@@ -1058,25 +1060,59 @@ flowchart TD
 
 ## 2026-09 時点の drift
 
+### 🔴 #887: `extension.ts` / `mcp-server.ts` の分割 (PR [#909](https://github.com/signalcompose/orbitscore/pull/909))
+
+**本章の大半は、この分割より前の `extension.ts` を読んで書かれています。** 2026-09-12 に
+`extension.ts` は 2,779 → 300 コード行、`mcp-server.ts` は 1,161 → 272 コード行へ縮み、
+`packages/vscode-extension/src/` の全ファイルが 500 コード行以下になりました
+(`tests/repo/file-size-ratchet.spec.ts` のラチェット・#888)。
+
+🔴 **振る舞いは変わっていません。** PR #909 は既存テストの期待値を 1 つも変えずにマージされました。
+つまり本章の「何が起きるか」の記述は有効で、**変わったのは「どのファイルに書いてあるか」だけ**です。
+本章の引用と `## Sources` は分割後の位置へ付け替えてあります。
+
+`activate()` から辿れる主な移動先は次のとおりです。
+
+| 本章で扱っている主題 | 分割後のファイル |
+|---|---|
+| `activate()` / `deactivate()` / `showCommands()` / `restartEngine()` | `extension.ts` |
+| モジュールレベル状態と setter | `extension-state.ts` |
+| daemon 解決・spawn・停止・stdin 書き込み (`startEngine()` / `stopEngine()` / `writeCodeToEngine()`) | `engine-process.ts` |
+| stdout / stderr / stdin / `'error'` の各ハンドラと `createLinePrefixer()` / `shouldFilterLine()` | `engine-handlers.ts` |
+| 補完・hover・code action の登録 (`registerCompletionProviders()` ほか) | `dsl-providers.ts` |
+| 診断の組み立て (`updateDiagnostics()`) | `diagnostics-provider.ts` |
+| 選択実行 (`runSelection()` / `getLineSubject()` / flash) | `run-selection.ts` |
+| MCP ハンドラ実装 (`evaluateForAgent()` ほか) | `agent-handlers.ts` |
+| Engine ビュー | `engine-view-provider.ts` |
+| playhead decoration | `playhead-decorations.ts` |
+| MCP ツール登録 | `mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` / `mcp-docs.ts` |
+
+🔴 **MCP の `tools/list` の順序は分割前と同一に戻されています** (`8561210`)。MCP SDK は
+`Object.entries(this._registeredTools)` をそのまま返すので登録順が一覧順になり、分割の途中で
+3 本が繰り上がっていました。いまは `tests/vscode-extension/mcp-server.spec.ts` が実サーバを叩いて
+順序を配列で固定しています。
+
+分割の設計判断 (D1〜D10) は `docs/design/887-extension-split-design.md` にあります。
+
 2026-05-05 の初稿 (0a4b598) から 69dc968 までに拡張へ入った主な変更を、1 行ずつ出典付きで並べます。深掘りは各リンク先に譲ります。
 
 | 変更 | Issue | 出典 |
 |---|---|---|
 | `.vsix` に `orbit-audio-daemon` を同梱し、`resolveDaemonBinaryPath()` の最終候補に追加 | #306 | `docs/archive/WORK_LOG_2026-07.md` §6.185 (2026-07-03) |
 | `orbitscore.engine` 設定 (既定 `rust`) と `getConfiguredEngineKind()` による 4 サイトの分岐、`ORBITSCORE_ENGINE` の明示 set | #377 / #366 | §6.186 (2026-07-07)、`extension.ts:653-669` |
-| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:414-443` |
-| MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 25 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:445-495`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
+| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:203-236` |
+| MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 25 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:237-291`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
 | `[STEP]` 行による live playhead highlight (per-seq 色・nested argPath・`orbitscore.playheadPalette`) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
-| dev 学習サイトのローカル配信と `openDevDocs` / Webview panel / Walkthrough / Activity Bar の Learning view | #450 / #457 | §6.260-6.261 (2026-07-17)、`extension.ts:530-651` |
-| `//#documentDirectory` メタ行で基準ディレクトリを帯域外先渡し (import 対応) | #456 | §6.266 (2026-07-17)、`extension.ts:3009-3013` |
-| plugin catalog の名前補完 + `rescanPlugins` (3 面: コマンド / 右クリック / MCP) | #463 | §6.279 (2026-07-17)、`extension.ts:3689-` |
+| dev 学習サイトのローカル配信と `openDevDocs` / Webview panel / Walkthrough / Activity Bar の Learning view | #450 / #457 | §6.260-6.261 (2026-07-17)、`docs-panels.ts:52-129` |
+| `//#documentDirectory` メタ行で基準ディレクトリを帯域外先渡し (import 対応) | #456 | §6.266 (2026-07-17)、`engine-process.ts:600-605` |
+| plugin catalog の名前補完 + `rescanPlugins` (3 面: コマンド / 右クリック / MCP) | #463 | §6.279 (2026-07-17)、`dsl-providers.ts:92-172` |
 | REPL 行処理の FIFO 直列化 (evalMark の前提) | #476 | §6.271 (2026-07-17) |
 | Engine ビュー (`orbitscore.engineView`)、デバイス表示/選択、走行中デバイス切替 (`DeviceSwitchBridge`)、選択=電源モデル、auto-start | #484 D2.5 / D3 / D3.5 | §6.280-6.283 (2026-07-17/18)、`engine-view.ts`、`device-switch-bridge.ts` |
 | engine ライフサイクルの判断を `engine-lifecycle.ts` に抽出、identity guard、handler 例外の隔離、`setTransportStatus(state)` への畳み込み | #528 / #527 | §6.295-6.300 (2026-07-27) |
-| spawn `'error'` ハンドラ、`proc.killed` 誤用の修正 (SIGKILL 昇格) | #532 / #533 | §6.301 (2026-07-27)、`extension.ts:2228-2242` |
+| spawn `'error'` ハンドラ、`proc.killed` 誤用の修正 (SIGKILL 昇格) | #532 / #533 | §6.301 (2026-07-27)、`engine-handlers.ts:515-530` |
 | `get_log` の silent truncation をやめ、上限をリング容量 1000 に | #567 | `log-ring.ts:1-18` |
-| `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:1501-1509` |
-| `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`extension.ts:2285-2298`、`extension.ts:4095-4112` → [PH-3](/plugin-hosting/catalog) |
+| `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`engine-handlers.ts:248-256` |
+| `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`plugin-commands.ts:35-99`、`diagnostics-provider.ts:160-168` → [PH-3](/plugin-hosting/catalog) |
 | `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"（本体はローテーション済み）、`package.json:34-43` |
 | 拡張自身の実行時依存 (`@modelcontextprotocol/sdk` / `zod`) を `dist/node_modules` へ同梱。cold install では hoist によりこれらが `.vsix` に入らず、`activate()` がモジュール読み込みの時点で落ちていた | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)"、`packages/vscode-extension/package.json:419-420`、`scripts/install-bundle-deps.sh` |
 
@@ -1105,7 +1141,7 @@ flowchart TD
 ## 次の深掘り候補
 
 - `setupStdoutHandler` の bridge 振り分け (`{"savePluginState"` / `{"pluginUi"` / `{"evalMark"`) と `applyEngineStdoutChunk` の 2 段構成 — なぜ bridge 系だけ手前で拾うのか
-- `EngineViewProvider` (`extension.ts` 側) と `engine-view.ts` の純関数の境界 — `DeviceFetchState` の lazy fetch と `--list-audio-devices` の spawn
+- `EngineViewProvider` (`engine-view-provider.ts`) と `engine-view.ts` の純関数の境界 — `DeviceFetchState` の lazy fetch と `--list-audio-devices` の spawn
 - `autoStartConfiguredRustEngine()` の `engineGeneration` による「後から起きた操作を誤警告しない」仕組み
 - `registerCompletionProviders` の 3 系統の優先順位 — `.play(` の括弧バランスで pitch scope に切り替える判定の境界ケース
 - `deactivate()` と detached な plugin scanner プロセス (`terminateActivePluginScans()`) の関係
@@ -1121,21 +1157,21 @@ flowchart TD
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — マニフェスト読み取りの共有ヘルパー (`readExtensionManifest()` / `declaredConfigurationKeys()`)
 - `packages/vscode-extension/src/extension.ts:104-134` — モジュールレベル状態と 4 つの bridge
 - `packages/vscode-extension/src/extension.ts:150-284` — live playhead の decoration 管理 (#390)
-- `packages/vscode-extension/src/extension.ts:286-498` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
-- `packages/vscode-extension/src/extension.ts:500-521` — `deactivate()`
-- `packages/vscode-extension/src/extension.ts:628-642` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
-- `packages/vscode-extension/src/extension.ts:644-664` — `updateBundleStatus()` (`maybeShowBundleNotice()` は scsynth 専用だったため #502 で削除)
-- `packages/vscode-extension/src/extension.ts:666-683` — `showCommands()` (engine kind による分岐は #502 で削除・常に Engine ビューを focus) / `restartEngine()` / `reloadWindow()`
-- `packages/vscode-extension/src/extension.ts:1479-1587` — `setupStdoutHandler()`: `createLinePrefixer` + `StringDecoder` による bridge 振り分けと `applyEngineStdoutChunk` 呼び出し (#773)
-- `packages/vscode-extension/src/extension.ts:1589-1642` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756 / #773)
-- `packages/vscode-extension/src/extension.ts:1644-1680` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
+- `packages/vscode-extension/src/extension.ts:91-291` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
+- `packages/vscode-extension/src/extension.ts:293-314` — `deactivate()`
+- `packages/vscode-extension/src/engine-process.ts:57-65` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
+- `packages/vscode-extension/src/engine-process.ts:74-87` — `updateBundleStatus()` (`maybeShowBundleNotice()` は scsynth 専用だったため #502 で削除)
+- `packages/vscode-extension/src/extension.ts:316-333` — `showCommands()` (engine kind による分岐は #502 で削除・常に Engine ビューを focus) / `restartEngine()` / `reloadWindow()`
+- `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`: `createLinePrefixer` + `StringDecoder` による bridge 振り分けと `applyEngineStdoutChunk` 呼び出し (#773)
+- `packages/vscode-extension/src/engine-handlers.ts:371-391` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756 / #773)
+- `packages/vscode-extension/src/engine-handlers.ts:407-429` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
 - Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) / PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — stdout の bridge 封筒が chunk 境界で割れて両断片とも失われる問題
 - `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
-- `packages/vscode-extension/src/extension.ts:1699-1723` — `autoStartConfiguredRustEngine()`
-- `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
-- `packages/vscode-extension/src/extension.ts:2204-2252` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL
-- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
-- `packages/vscode-extension/src/extension.ts:3638-3700` — `registerCompletionProviders()`: chain / pitch scope / plugin catalog の 3 系統
+- `packages/vscode-extension/src/engine-process.ts:187-210` — `autoStartConfiguredRustEngine()`
+- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
+- `packages/vscode-extension/src/engine-process.ts:406-455` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL
+- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
+- `packages/vscode-extension/src/dsl-providers.ts:41-173` — `registerCompletionProviders()`: chain / pitch scope / plugin catalog の 3 系統
 - `packages/vscode-extension/src/engine-lifecycle.ts:35-46` / `:76-85` / `:113-152` / `:177-192` — `transportStatusText` / `classifyEngineStdoutLine` / `applyEngineStdoutChunk` / `applyEngineExit`
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-24` — daemon resolver の runtime require 境界
 - `packages/vscode-extension/src/engine-view.ts:47-54` / `:207-216` — Engine ビューのルートノードとデバイスクリックの意味論

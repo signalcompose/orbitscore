@@ -1,8 +1,8 @@
 ---
 title: "PH-3. プラグインカタログ — 名前指し・補完・差し替え"
 chapter-id: "PH-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ca745e8
+verified-at: "2026-09-12"
 status: draft
 ---
 
@@ -787,7 +787,7 @@ export function buildPluginPickItems(
 
 行は `filterCatalogEntries` を**再利用**して作ります。補完が挿入する文字列と 1 文字も違わないため、
 `format/name` / `vendor/name` の曖昧性解消がリストからの選択でも保たれる、というのが設計の
-要点です。`browsePlugins()`（`extension.ts:2298-2362`）はカーソルが `effect(` / `instrument(` の
+要点です。`browsePlugins()`（`plugin-commands.ts:35-99`）はカーソルが `effect(` / `instrument(` の
 文字列の中にあればそこから role を取って打ちかけの断片を置換し、文脈の外なら種別を訊いて
 `"名前"` を挿入します。
 
@@ -1361,9 +1361,9 @@ LOOP(drums)
 - `packages/vscode-extension/src/plugin-catalog-reader.ts:1-15` / `:174-202` / `:259-266` — 拡張側 reader・バイナリ探索・`--probe-artifacts` spawn
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — ラック文脈スキャナ・候補フィルタ・Quick Pick 行
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — 解決規則のミラーと合意テスト
-- `packages/vscode-extension/src/extension.ts:3716-3726` / `:4096-4112` — カタログ不在の案内・Warning 診断
+- `packages/vscode-extension/src/plugin-commands.ts:42-48` / `diagnostics-provider.ts:160-168` — カタログ不在の案内・Warning 診断
 - `packages/vscode-extension/package.json:120-131` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
-- `packages/vscode-extension/src/mcp-server.ts:1022-1032` — MCP `list_plugins`
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:183-200` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — engine resolver との合意テスト
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:3406-3414` — #618 E1-E6 の周波数オラクル
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:3557-3570` / `:3699-3705` / `:3917-3932` — #625 R-E2 / R-E6 / R-E3（#628 で反転した期待）

@@ -12,6 +12,185 @@
 
 ### 09-12 分の移設（4.1.0 リリースの追記で超過・2026-09-13）
 
+### 09-12 分の移設（docs-sync 4 本の取り込みで超過・2026-09-13）
+
+### 09-12 分の追加移設（routine docs-sync PR #909 の追記で 2,000 行超過・2026-09-13）
+
+### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: 実装・実機検証完了（レビュー前）
+**版**: 🔴 **4.0.0 / `DSL_VERSION` 2.0**（破壊的変更）
+**担当**: 実装 = Codex（`gpt-5.6-sol` / effort **xhigh**）/ 裁定と検証 = main
+
+#883 の**振る舞いを変える**半分。束 0+C（PR #884）の上に載る。
+
+#### 閉じた 4 実体（§0.1）— **1 箇所ではない**
+
+| 実体 | 変更 |
+|---|---|
+| **A** `program()` の暗黙終端 | 合成を削除（`[rack]` の前置は残す） |
+| **B** バス無し audio の直接描画 | `resolveDispatchChannel()` に skip。🔴 **`isNoteSequence()` の早期 return より後ろ**（前だと MIDI が無音・#282 の再発） |
+| **C** daemon のバス既定ライン | `legacy(Master, [])` → **`[Rack]`（無音）** |
+| **D** instrument の source routing | `SetSourceRouting.target` を**明示 3 値**（`none` / `master` / `bus`）へ。🔴 **一方通行の wire 変更** |
+
+#### 🔴 横断規則を 6 箇所へ適用（main の審査で要求したもの）
+
+> routing 状態が「書かれていない」「表現できない」「失われた」いずれかの時、その信号はどこにも加算されない。
+> **master へ倒すことは最下層に暗黙 master を作り直すこと**である。
+
+| 箇所 | 実装 |
+|---|---|
+| `SourceDestCell::encode` | `Bus(_) \| Link(_) => Self::NONE` ← **Fable の監査も見ていなかった箇所** |
+| `SourceDestCell::decode` | `_ => SourceDest::None` |
+| `SourceDest::default()` | `#[default] None` |
+| `FeedDest` 変換 ×2 | `None => Discard` / `Link(_) => Discard` |
+| slot 解放時 | `store(SourceDest::None)` ×2 |
+
+**除外は master トラック自身の device 出口のみ**（owner 裁定で 1,2 固定＝定数なので規則の定義域外）。
+
+#### 🔴 実機 gated が 4 件落ちた — **すべて譜面・harness の誤り**（実装は無変更）
+
+| 失敗 | 原因 |
+|---|---|
+| 既存 `sum-bus insert across restart` | **移行漏れ** — 束 S で「出口を書かない sum は無音」になったので `sum("drum").output()` が要る |
+| X1 / X4 / X5 | 🔴 **`LOOP()` は追加ではなく置換** — `LOOP(a)` の次の `LOOP(b)` が a を止める。根拠は `calculateLoopDiff()`（`process-statement.ts:679`）→ `stopSequences(toStop)`（`:777`） |
+
+**main が先に潰した仮説**（unit で実測）: `ref883.output()` は skip されず（`{kind:'hardware'}`）、
+4 イベントをスケジュールし、`loop()` も throw しない。**TS 層は正しい**。
+崩れたのは「では実機の無音は実装のせい」という推論の方で、**`LOOP` の意味論**が抜けていた
+（個別に `loop()` を呼ぶ unit では原理的に再現しない形）。
+
+Codex は同じ誤用があった **X8 も落ちる前に先回りで修正**し、**静的回帰テストも追加**した
+（`gated-assertion-hygiene.spec.ts:557`）。
+
+⚠️ **ただしその検査は名指しの 4 ファイルしか守らない。** 3 本の新 fixture が揃って踏んだ性質なので、
+**一般化する価値がある**（例: gated fixture 内に `LOOP(` が 2 回以上現れたら red）。別途扱う。
+
+#### 実機 gated の実測（main が sandbox 外で）
+
+```
+Tests  45 passed | 1 skipped (46) | 0 failed
+
+[#883 X1] explicit-reference + orphan RMS: 0.08701663328815765      ← 漏れれば 2 倍
+[#883 X2] omitted=0.0870166332954772  explicit=0.08701663328808863
+[#883 X3] sendRms=0.0436116233054862  plainRms=0.0870166332927243
+          ratio=0.5011872058848396                                   ← 期待 10^(-6/20)=0.5012
+[#883 X4] reference + unterminated-sum member RMS: 0.087016633295434
+[#883 X5] withSilentInstrument=0.08701663329662541  refRms=0.08701663329662539
+```
+
+🔴 **X3 が #883 の実害そのもの**（`send(sum)` の dry が master へ二重に届く）**を実測で塞いだ証拠**。
+🔴 **X5 は小数点以下 16 桁が一致** — 出口を書かない instrument は基準の音に **1 bit も足していない**。
+
+#### ゴールの収束条件
+
+1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
+
+---
+
+### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: ✅ 束 S 実装
+
+出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
+未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
+`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
+確定するため、#282 の挙動を維持する。
+
+編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
+(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
+実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
+
+この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
+`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
+
+### fix: make send() require a destination in both implementations (#883 round 2) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: ✅ ラウンド 2 収束（PR #884）
+
+#### 🔴 縮小レビューが **fix 起因の Critical** を捕まえた
+
+ラウンド 1 で置いたポリシーを、main が**片翼にしか適用していなかった**。
+
+| | ガード |
+|---|---|
+| `Sequence.send()` | ✅ あり |
+| `MixerBusHandle.send()` | ❌ **無い** |
+
+レビュアーが実際に走らせて wire の中身まで示した:
+
+```
+mix.sum('drum').send(db: -6)
+  → processArguments が [undefined, {db:-6}] に整形（ラウンド 1 の修正）
+  → MixerBusHandle.send(undefined, ...) → resolveDest(undefined) → {kind:'master'}
+  → setBusLine に output(master, thru:true, -6dB) が**追加で 1 本**
+  → 既存の直結と合わせて **master へ二重に鳴る**
+```
+
+🔴 **#883 が消そうとしている「dry が master へ漏れる」の派生形を、修正が自分で作っていた。**
+
+#### 直し方 — 契約を 1 関数へ
+
+```ts
+// audio-line.ts — この 1 関数が両方の send() の契約
+export function assertSendDestination(value: unknown, call: string): void
+```
+
+`send()` の宛先は **`output()` と違い必須**（どこにも送らない send は無い）。両方の `send()` が
+これを呼ぶので、**片翼だけに書けるコードでなくなった**。
+
+あわせて `resolveDest` / `send` のエラー文言が常に「null」と決め打ちしていたのを、
+**実際に来た型**を出すよう直した（数値や真偽値を渡した人に嘘の情報を与えていた）。
+
+#### 変異検証（main が実走）
+
+| 変異 | 結果 |
+|---|---|
+| `MixerBusHandle` のガードを削除 | **red**（1 件） |
+| 文言を "null" 決め打ちに戻す | **red**（3 件） |
+| restore | **green**（4 件） |
+
+#### 波及
+
+Codex がラウンド 1 で書いたテスト 2 箇所が**旧文言**を期待していたので整合させ、
+「なぜ `send()` は `output()` と文言が違うのか」と**この Critical への回帰検査であること**を
+コメントに残した。
+
+#### 🔴 実機 gated が 1 回 flake した（規律どおり再実行して確定させた）
+
+1 回目: `#611 E2E-3` が **`ENGINE_LOCK_CONTENTION`** で落ちた。
+
+```
+[warning] ENGINE_LOCK_CONTENTION: engine lock contention (1 total);
+          a block was silently zero-filled — this self-heals next block
+```
+
+これは **`severity=warning` として設計された事象**（`rust/crates/orbit-audio-daemon/tests/protocol.rs:1204`）
+だが、`mem:stderr-is-classified-as-error`（engine の warn は全部 ERROR 行）により
+`expectNoNewErrors` が ERROR として数える。
+
+**`mem:implementation-right-oracle-wrong`（赤を実装のせいにする前に同じテストを走らせる）に従い、
+断定せず再実行** — load 5.62 → 2.76 で**緑**。孤児 daemon 0 / 残存 dev host 0 も確認済み。
+
+🔴 **残る論点（この束とは独立）**: `expectNoNewErrors` は「新規 ERROR が 0」を要求するが、
+CLAUDE.md の規律は「ERROR 件数は固定 500 行窓なので**厳密等価にしない**（`<=`）」。
+`ENGINE_LOCK_CONTENTION` は負荷次第で正当に発生するので、**分類器が warning を ERROR へ畳んでいる**
+ことを別途扱う余地がある。
+
+#### 検証（すべて main が sandbox 外で実測）
+
+```
+npm test    2364 passed | 68 skipped | 0 failed
+lint 緑 / docs:check 948 引用 0 failed
+実機 gated  39 passed | 1 skipped | 0 failed
+[#883 X2] omittedRms=0.08701663329564219  explicitRms=0.08701663329564278
+```
+---
+
+
 ### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
 
 owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。
@@ -11251,8 +11430,6 @@ Tests  45 passed | 1 skipped (46) | 0 failed
 
 ---
 
----
-
 ### fix(dsl): make the missing-output diagnostic read the whole chain (#883 束 S・レビュー round 1) (Sep 12, 2026)
 
 **Date**: 2026-09-12
@@ -11522,3 +11699,168 @@ dev サイトの 6 箇所は `--fix` では直らなかった（行番号では�
 引用ブロックと本文・mermaid ラベルを手で追従させた。
 
 Closes #878
+
+---
+
+### test: add a file-size ratchet for Rust and TS sources (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `888-file-size-ratchet`
+**担当**: 設計 = Fable / 実装 = Sonnet subagent（🔴 **Codex CLI は一度も起動していない**。
+`codex:rescue` のラッパが自分で実装した。`codex-companion status` の `recent` が空で
+`latestFinished` が null であることで確認）/ 検証・裁定 = main
+
+#888 子タスク 0「仕組みだけ入れる（振る舞い不変）」。設計は
+`docs/design/888-file-size-ratchet-design.md`。ソースは1行も変えていない。
+
+**やったこと**:
+
+- `tests/repo/code-lines.ts`: 「コード行」を数える純関数 `countCodeLines`。行単位の状態機械
+  （通常 / 文字列 / raw 文字列 / テンプレートリテラル / ブロックコメント）で、空行・コメント
+  専用行を除き、複数行の文字列やテンプレートリテラルの内側は中身に関わらず数える。Rust の
+  `#[cfg(test)] mod`（`#[cfg(all(test, ...))]` を含む）はブロックごと除外する。終端で異常状態
+  （閉じていない文字列・test mod）のまま終わったら例外を投げる（迷ったら数える側に倒す）。
+- `tests/repo/file-size-targets.ts`: `git ls-files -z`（`:(glob)` magic 付き）で測定対象を列挙。
+  Rust は `rust/crates/**/*.rs` から `tests/` `examples/` `benches/` `build.rs` `src/**/tests.rs`
+  を除いたもの、TS は `packages/*/src/**/*.ts`。真空防止（除外適用前の生の列挙件数で判定）。
+- `tests/repo/file-size-baseline.json`: 閾値超過ファイルだけを列挙した baseline（25件・Rust 15 /
+  TS 10）。**実装のカウンタが出した現寸をそのまま登録**した。
+- `tests/repo/file-size-ratchet.spec.ts`: 既存3本（`worklog-size.spec.ts` /
+  `dsl-e2e-coverage.spec.ts` / `planning-issue-state.spec.ts`）と同型のラチェット+honesty。
+  baseline を超えた成長は red、baseline が古くなった（消えた・実際より緩い）ら red。
+- `tests/repo/code-lines.spec.ts`: `countCodeLines` の機能テスト（設計 §9.1 の F-1〜F-19 相当）。
+- `tests/repo/file-size-targets.spec.ts`: 列挙そのもののテスト（設計 §9.2 の L-1 / L-2）。
+  **レビューで未実装が判明して後から足した**（下記）。
+
+**設計からの逸脱・補足**:
+
+- 真空防止の閾値判定は、`tests/` 等の除外を適用した**後**の件数ではなく、`git ls-files` の
+  **生の**結果に対して行うよう修正した。除外後の件数（Rust 95件）で判定すると、正当な除外で
+  100件を割り、真空防止が誤って発火する。
+- `listMeasuredFiles` に既定値付きの第2引数（pathspec 差し替え口）を足した。L-2 が真空防止の
+  発火そのものを確かめるための注入口で、既定の挙動は変わらない。
+- 🔴 **baseline の数値は設計文書 §5.1 の試作値と 25 件中 8 件で食い違い、main が「実装側が正しい」と
+  裁定した**（設計 §11 の反証条件がそのまま発火したケース。設計文書の表は実装値に差し替え済み）。根拠:
+  - **TS 10 件**: TypeScript 自身の**パーサ**を独立オラクルにして測り（`ts.createSourceFile` の葉
+    トークンが占める文字を印し、JSDoc ノードは除外）、**実装の値と 10/10 完全一致**。
+    `extension.ts` は **2,779**（試作の 3,004 は正規表現リテラル未対応による過大）
+  - **Rust**: main が独立に `#[cfg(test)] mod` の除外レンジを列挙し 4 件中 3 件で一致。唯一ずれた
+    `engine_wrap.rs` は **main の列挙の側のバグ**だった（Rust のフォーマット文字列の中の `{` `}` を
+    brace として数え、`mod outproc_load_error_test_support` を 12279 行で早期終了。実際の終端は
+    12557 行で、差の 278 行が実装との差と正確に一致した）
+
+**🔴 レビューで塞いだ穴 — 「仕事が成功した時に開く」型**:
+
+初回実装には設計 §4.1・§9.2 が名指しで要求していた **L-1（列挙に既知の代表ファイルが含まれることの
+検査）が無かった**。真空防止のしきい値（Rust/TS とも 100 件）だけでは、pathspec が `:(glob)` magic を
+欠いて `src/` 直下を落とす事故を**検出できない** — TS は非 glob でも 109 件（> 100）返るためである。
+
+いまは `extension.ts` が baseline にあるため honesty 検査が偶然 red にするが、**子 4/5 でそのファイルを
+分割して baseline から外した瞬間にその防御は消える。** main が再現した fail-before: baseline から 2 件を
+外し（= 分割後の姿）`:(glob)` を落とすと、**23 ファイルが黙って測定対象から消えたままスイートは緑**
+だった。L-1 を足した後は、同じ条件で red（exit=1）になることを main が確認している。
+
+**検証**（すべて main が sandbox 外で実行。委譲先の緑は根拠にしていない）:
+`npx vitest run --dir tests --config vitest.config.ts tests/repo`（**36件緑**）/
+`npm test`（**166 files・2424 passed / 76 skipped**）/ `npm run lint`（緑）/
+`npm run docs:check`（948 引用・0 failed）。**既存テストの期待値は 1 つも変えていない。**
+
+変異検証（main が実行・5 件すべて red → restore 後 緑・baseline は byte 一致）: baseline 値の
++1 / −1 / エントリ削除 / 架空パス追加 / `threshold` を 600 へ。
+
+**`/simplify` で適用した整理**（4 観点を並行レビュー・PR #894）:
+
+- `code-lines.ts`: `pendingBuffer: Array<{isCode:boolean}>` → `pendingCount: number`。
+  バッファに積まれる行は `isTestCfgAttrLine` / `ATTRIBUTE_LINE` / `MOD_OPEN_LINE` のどれかに
+  **完全一致**した行だけで、行コメントや末尾コメント付きの行は一致しない。よって `isCode` は
+  常に `true` で、持つ意味が無かった（main が正規表現を読んで検算）
+- `file-size-ratchet.spec.ts`: 2 つの `it` が独立に呼んでいた `measureAll()` を `beforeAll` へ集約。
+  同じ PR の `file-size-targets.spec.ts` が既に測定を共有しており、**同一 PR 内で同じ問題に 2 つの
+  書き方が混在**していた。`beforeAll` を選んだのは、`measureAll()` が throw した時に collection
+  エラーではなく**ファイル名付きのテスト失敗**として出るため
+- `code-lines.spec.ts`: 3 つの `it` が共有していた `F-18` ラベルを `F-18a/b/c` に分けた
+  （設計 §9.1 の F-18 は 1 行で 3 シナリオを束ねているので重複自体は仕様に忠実だが、識別できない）
+
+**却下した指摘 1 件**（altitude 観点・`listMeasuredFiles` の第 2 引数が #887 の `__*ForTest` と同型という指摘）:
+
+1. #887 が問題視しているのは**出荷される** `extension.ts` の裏口。`tests/repo/file-size-targets.ts`
+   はテスト基盤そのもので出荷されない。既定値付き引数は通常の引数化である
+2. 提案された「真空防止を純関数へ切り出す」は、**`listMeasuredFiles` がそれを呼んでいるかの配線が
+   検証されなくなる**（CLAUDE.md が名指しで警告している形）
+3. 指摘の「該当言語の pathspec が無ければチェックが素通りする」は事実誤認。ループは
+   `Object.keys(MIN_FILES_PER_LANG)`（固定の `{rust, ts}`）を回しており、片方が欠ければ
+   `0 < 100` で throw する（穴ではなくガードが働いている姿）
+
+**リファクタ後の再検証**（main が実行）: 変異 5 件すべて再び red / `code-lines.ts` の
+`commitPending` を殺す変異 2 種も red（除外側 4 件・code 側 2 件）/ `npm test` 2424 passed /
+lint・`docs:check`・`typecheck:e2e` 緑。**baseline 25 件の値は 1 つも変わっていない**
+（honesty 検査が `baseline == 実際` を要求するので、これが振る舞い保存の検算になる）。
+
+**`/code:pr-review-team`（4 名）+ Fable 設計監査（並行）のラウンド 1**:
+
+Critical 0。Important 5 件・Minor 17 件を main が集約し、**故障の向き**で仕分けた。
+
+🔴 **修正前に置いたポリシー**（CLAUDE.md「横断的関心事は先にポリシーを書いてから一括適用」）:
+
+> ラチェットの信用は「数え方が正しい」ことに依存する。数え方の誤りは **(a) 多く数える = 安全** /
+> **(b) 少なく数える = 穴** に分かれ、§3.3 は (b) を禁じている。しかし heuristic を含む字句解析で
+> (b) を*構成的に*排除することはできない。したがって **heuristic を改良するだけで済ませず、
+> 独立したオラクルで全件を検算する**形に変える。
+
+**直した 6 件**:
+
+| # | 内容 |
+|---|---|
+| **F-1** | 🔴 **`code-lines-oracle.spec.ts` 新設** — TypeScript の**パーサ**を独立オラクルにして TS 全 132 件を検算。既知の差は shebang 1 件のみで許容リストに明示（設計 D9・§3.4） |
+| **F-2** | **入れ子テンプレートリテラルで黙って少なく数える**穴を塞いだ。`templateStack` で `${…}` 置換の brace 深さを追う |
+| **F-3** | 真空防止を **pathspec エントリ単位**にした。従来は lang 合計だったので、将来足すエントリが `:(glob)` を忘れて 0 件でも既存 132 件が支えて緑だった |
+| **F-4** | ラチェット判定を純関数 `findViolations` / `findHonestyProblems` に切り出し、**合成データで §5.2 (a)〜(f) を網羅**。実データの 2 つの `it` は同じ関数を呼び続ける（配線を失わない） |
+| **F-5** | throw メッセージに**壊れ始めた行番号**を入れた（設計 §8.1 が要求していたが未実装だった） |
+| **F-6** | baseline JSON の**キー辞書順**を honesty 検査で強制（設計 §5.1 が要求） |
+
+**直さなかった 3 件**（いずれも**安全側**に倒れ、現リポジトリに該当 0 件）:
+`=>` 直後の正規表現（**throw する**）/ BOM のみの行（多く数える）/ `#[cfg(test)]` と `mod` の間の空行（除外されず多く数える）。
+
+🔴 **Fable 監査が main の検証の穴を突いた**（設計 §13.8 に反映）: main の敵対ケース 4 件は
+すべて「ブロックを塊のまま動かす」形だった。塊を崩す 2 型は residual をすり抜ける —
+**(E) 1 文を関数間で移動**（振る舞いが変わるのに residual 0。git は 20 英数字以上なら 1 行でも
+移動と認める）/ **(F) 消して 2 回足す**（複製が見えない）。対策として §13.4 に
+`moved+ == moved−` と「短い moved ブロックは residual 扱い」の 2 ゲートを追加。
+Fable はまた **TS オラクルを baseline の 10 件ではなく測定対象 132 件全件**に適用して
+131/132 一致を確認しており、main の検証範囲が狭かったことも示した。
+
+**設計文書の訂正**（main）: §3.1 の「誤判定は必ず例外で red になる」という**安全性の主張を撤回**
+（偶数個のクォート / backtick で黙って通る経路が実在）・§4.2「Rust 96 件」→ **95 件**
+（文書自身の算式も実測も 95）・§13.8〜§13.10 を新設・決定表に **D9 / D10** を追加。
+
+**検証**（すべて main が sandbox 外で実行・委譲先の緑は根拠にしていない）:
+`npm test` **167 files・2445 passed / 76 skipped**（+21 件）/ lint・`docs:check`（948 引用 0 failed）・
+`typecheck:e2e` 緑 / `tests/repo` **57 件**。
+
+**マージ前ゲート**（main が sandbox 外で実行）: `npm run build` ✅ / `bundle-macos.sh` + 
+`rack-child --lib -- --ignored` **3 passed** + `--lib` **16 passed** ✅ /
+**実機 gated E2E 45 passed / 1 skipped / 0 failed** ✅ / **cold install 2 passed** ✅ /
+CI 3/3 pass ✅。
+
+🔴 **実機 E2E は 1 回目が「走っていなかった」。** sandbox 内で `mktemp` が
+`Operation not permitted` になり、しかも `| tail` のせいで **exit code 0 に化けていた**
+（タスク通知も「completed (exit code 0)」と報告した）。出力の中身を読んで気づき、
+sandbox 外で `set -o pipefail` 付きで回し直した。**終了コードと通知だけでは区別がつかない。**
+
+### 🔴 owner 裁定: 分割束の上限は residual で数える（2026-09-12）
+
+> フルレビュー 40 回はちょっと作業として重すぎる
+
+`BUNDLE_BRANCH_WORKFLOW.md` に **§5.1a** を制定した。分割（純粋な移動）の束は
+**residual 行数で 1,500 を判定**し、加えて **(i) `moved+ == moved−`**（複製・移動先の作り忘れ）と
+**(ii) K 行未満の短い moved ブロックは residual 扱い**（1 文の関数間移動）の 2 ゲートを課す。
+**最終防波堤は「既存テストの期待値を 1 つも変えていない」。**
+
+根拠は実測（設計 §13.6〜§13.8）: 実素材の抽出で **686 変更行 → residual 2 行（0.3%）**。
+敵対ケース 4 件は全部捕まえるが、**Fable 監査が見つけた抜け道 2 型**（1 文の関数間移動 = residual 0 /
+消して 2 回足す = 複製が見えない）は追加ゲートが要る。
+
+**見込み**: #888 の子 1〜3 は素の変更行なら約 40 束、residual なら **8〜9 束**。
+fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
+**オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
+baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
