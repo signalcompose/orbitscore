@@ -1430,6 +1430,83 @@ mod tests {
         );
     }
 
+    /// 🔴 **instrument feed は発音側の pan 則を通らない**ことを数値で固定する（#919 / #851 B-3）。
+    ///
+    /// `#851` B-3 は「audio event は中央が既に −3 dB なので端が unity に着地するが、
+    /// instrument feed は発音側の pan を通らないため端で +3 dB」と主張していた。
+    /// **その前半（この非対称）を、両者を同じ条件に並べて測る。**
+    ///
+    /// 構成:
+    /// - **event**: 振幅 1.0・`pan(0)`（中央）→ `equal_power_pan(0)` = `(1/√2, 1/√2)` を通る
+    /// - **feed**:  振幅 1.0 → `render_multi_feeds` の `*dst += *sample` で**素のまま**加算される
+    ///
+    /// したがって feed / event = √2。**この比がライン pan の `× √2`
+    /// （`orbit-audio-native` の `line_pan_coefficients`）と掛かって、端で
+    /// event は unity・feed は +3 dB に着地する。**
+    ///
+    /// 🔴 **この比を「正しい」と主張するテストではない。** pan 則を変えるかどうかは
+    /// `#851` B-3 の owner 裁定であり、ここは**現状を数値で見えるようにするだけ**である。
+    /// 裁定で法則が変わったら、この期待値も一緒に変えてよい。
+    ///
+    /// 🔴 **なぜ `equal_power_pan(0) * SQRT_2` の掛け算で済ませないか**: それでは
+    /// **feed の経路を一度も通らない**ので、あとで誰かが feed にも発音側 pan を掛けるように
+    /// しても緑のまま通る。`render_multi_feeds` を実際に走らせることが要件である
+    /// （変異で確認済み: feed に `1/√2` を掛けると赤くなる）。
+    #[test]
+    fn instrument_feed_skips_the_event_pan_law_so_it_lands_3db_above_a_centered_event() {
+        let mut empty_channels: [(&str, &mut [f32]); 0] = [];
+
+        // event 単独: 振幅 1.0 を中央（pan=0）で鳴らす。
+        let mut event_only = vec![0.0f32; 8];
+        {
+            let mut scheduler = Scheduler::new(48_000, 2);
+            scheduler.schedule(
+                ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 8], 48_000, 1))
+                    .with_pan(0.0)
+                    .with_region(0, 8),
+            );
+            scheduler.render_multi(&mut event_only, &mut empty_channels);
+        }
+
+        // feed 単独: 同じ振幅 1.0 を feed として渡す（イベントは無し）。
+        let mut feed_only = vec![0.0f32; 8];
+        {
+            let feed = vec![1.0f32; 8];
+            let mut scheduler = Scheduler::new(48_000, 2);
+            scheduler.render_multi_feeds(
+                &mut feed_only,
+                &mut empty_channels,
+                &[(feed.as_slice(), FeedDest::Hardware)],
+            );
+        }
+
+        // 中央の event は各チャンネル 1/√2 ≈ 0.7071（equal-power の定義どおり）。
+        let centered = std::f32::consts::FRAC_1_SQRT_2;
+        for (index, sample) in event_only.iter().enumerate() {
+            assert!(
+                (sample - centered).abs() <= 1e-6,
+                "centered event must be 1/sqrt(2); index={index} actual={sample}"
+            );
+        }
+
+        // feed は素通り = 1.0。
+        for (index, sample) in feed_only.iter().enumerate() {
+            assert!(
+                (sample - 1.0).abs() <= 1e-6,
+                "feed must pass through unattenuated; index={index} actual={sample}"
+            );
+        }
+
+        // 非対称そのもの: feed / event = √2（+3 dB）。
+        let ratio = feed_only[0] / event_only[0];
+        assert!(
+            (ratio - std::f32::consts::SQRT_2).abs() <= 1e-6,
+            "feed sits sqrt(2) (+3dB) above a centered event; feed={} event={} ratio={ratio}",
+            feed_only[0],
+            event_only[0],
+        );
+    }
+
     #[test]
     fn render_multi_feeds_empty_matches_render_multi_bit_for_bit() {
         let make_scheduler = || {
