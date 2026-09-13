@@ -11154,3 +11154,22 @@ lint 緑 / docs:check 948 引用 0 failed
 ```
 
 ---
+
+---
+
+### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: ✅ 束 S 実装
+
+出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
+未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
+`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
+確定するため、#282 の挙動を維持する。
+
+編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
+(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
+実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
+
+この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
+`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
