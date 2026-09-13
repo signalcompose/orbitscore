@@ -30,7 +30,7 @@ OrbitScore は VS Code の拡張機能として動作します。この章では
 [GitHub Releases](https://github.com/signalcompose/orbitscore/releases) を開き、最新バージョンの `orbitscore-darwin-arm64-*.vsix` ファイルをダウンロードします。ページ下部の **Assets** の中にあります。
 
 ::: tip 最新版に直接行く
-[最新リリース](https://github.com/signalcompose/orbitscore/releases/latest) を開くと、そのページにインストール手順も載っています。
+[最新リリース](https://github.com/signalcompose/orbitscore/releases/latest) を開くと、いちばん新しい `.vsix` の **Assets** にそのまま行けます。リリースページの先頭には、動作環境の注意と、このページへのリンクが置かれます。手順そのものは、このページが正本です。
 :::
 
 ### ステップ 2: VS Code に拡張機能をインストールする
