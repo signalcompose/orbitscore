@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(core): pin the instrument-feed vs centered-event pan asymmetry (Sep 13, 2026)
+
+`#851` B-3 の裁定材料。**裁定そのものは owner**（#919）。
+
+#### 🔴 まず訂正: 「未検証」は不正確だった
+
+`#851` に「B-3 はまだ事実かは未検証」と書いたが、**「端で +3 dB」自体は cargo test が
+既に固定していた**（`orbit-audio-native/src/output/startup.rs:2590` の `hard_left = SQRT_2`）。
+
+未検証だったのは「**instrument feed が発音側の pan を通らない**」という**非対称の方**である。
+
+#### 一次ソースで確認した事実
+
+`render_multi_feeds` は feed を `*dst += *sample` と**素のまま加算**しており、
+`equal_power_pan` を一切通らない。一方 audio event は通る（中央 0.707）。
+
+| 素材 | 発音側 | ライン pan（端） | 着地 |
+|---|---|---|---|
+| audio event | 0.707（`equal_power_pan(0)`） | × √2 | **1.0 = unity** |
+| instrument feed | **1.0（素通り）** | × √2 | **1.414 = +3 dB** |
+
+#### 数値で固定した
+
+`orbit-audio-core` に、**両者を同じ条件に並べて測る**テストを足した。
+実測 `centered event = 0.70710677` / `feed = 1.0` / `ratio = √2`。
+
+🔴 **`equal_power_pan(0) * SQRT_2` の掛け算では済ませていない。** それでは
+**feed の経路を一度も通らない**ので、あとで誰かが feed にも発音側 pan を掛けても
+緑のまま通る。`render_multi_feeds` を実際に走らせている。
+
+変異 2 種で確認:
+
+| 変異 | 結果 |
+|---|---|
+| feed にも発音側 pan を掛ける（= 非対称を解消する変更） | red（`feed must pass through unattenuated; actual=0.70710677`） |
+| `equal_power_pan` を `(1,1)` にする | red（`centered event must be 1/sqrt(2); actual=1`） |
+
+#### 🔴 未コミットのまま変異を当てて、新テストを消した
+
+`git checkout -- <file>` で変異を戻そうとしたが、**テスト自体が未コミットだったので
+一緒に消えた**。書き直して**先にコミットしてから**変異を当て直した。
+memory `mutation-backup-must-use-tmpdir` は「コミット済みなら `git checkout --` が確実」と
+書いているが、**その前提（コミット済み）を自分で満たしていなかった**。
+
+#### 裁定に残る事実
+
+**+3 dB は事実だが「クリップする」かは素材の振幅次第**（ピーク 0.708 超で 1.0 を超える）。
+その先のリミッタ/飽和は未確認。選択肢 A（現状維持）/ B（feed にも発音側 pan）/
+C（ライン pan の正規化を外す）と実測値は **`#851` のコメント**に整理した。
+**B と C はどちらも既存の譜面の音を変える。**
+
+---
+
 ### fix(hooks): let pre-edit-check.sh allow writes outside the repo on main (Sep 13, 2026)
 
 owner 指摘:
