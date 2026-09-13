@@ -101,7 +101,7 @@ export function handleStepLine(step: StepEvent): void {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:237-248
+// packages/vscode-extension/src/extension.ts:241-252
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -369,7 +369,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:107-118
+// packages/vscode-extension/src/extension.ts:108-119
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -642,7 +642,7 @@ async function killHarnessInstances(): Promise<void> {
 `killHarnessInstances()` は teardown 専用の関数ではありません。`launchIsolatedOrbitStudio()` が **冒頭で** これを呼ぶので、自前のアプリを立てるテストは「走り出した瞬間に、そのとき生きているハーネス由来の VS Code をすべて落とす」という副作用を持ちます。gated spec の大半は `describe` のセットアップが 1 回だけ起動した**共有セッション**に相乗りしているので、自前アプリのテストをその並びの途中に置くと、後ろに残った共有セッションのテストは接続先を失います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:6640-6643
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -1334,7 +1334,7 @@ export function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2731-2742
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2821-2832
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1350,13 +1350,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2750-2751
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2840-2841
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2807-2809
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2897-2899
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

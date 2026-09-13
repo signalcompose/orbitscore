@@ -769,7 +769,8 @@ MCP は LLM agent とツールを繋ぐ標準プロトコル。本プロトコ�
 🔴 **`open_plugin_ui` の path 化（#628）**: MCP ツール `open_plugin_ui` は引数を数値 `index` から
 **`chain_path`（0 始まりの整数配列）** へ改める。DSL 表面から数値 index が撤回された
 （core spec PH.2c / SC.10.10）ため、**index を露出する経路は MCP にも残さない**。
-LLM は `ui("名前")` と MCP の両方から UI を開ける（人間の主経路はエディタの Cmd+Click）。
+LLM は `ui("名前")` と MCP の両方から UI を開ける（人間の主経路はエディタでプラグイン名を
+右クリック → `OrbitScore: Open Plugin UI`）。
 
 ---
 

@@ -276,32 +276,40 @@ export function pluginUiAddressFor(target: PluginUiCursorTarget):
 
 ## 3. 🔴 最初に潰す不確実性 — 右クリックはカーソルを動かすか
 
-**一次ソース**（VS Code main ブランチ `contextmenu.ts` `_onContextMenu`・2026-09-13 取得）:
+> ### ✅ 実機の結果（main + owner・2026-09-14）— **F1 は真**
+>
+> `set_selection(1,1)` でカーソルを 1 行目に置き、**エディタにフォーカスがある状態で**
+> 6 行目の 3 つ目のプラグイン名を右クリック → Esc:
+>
+> ```
+> cursor = line 6, char 64     ← 3 つ目のリテラル（53-71 列）の中
+> ```
+>
+> **右クリック単体でカーソルがクリック位置へ動く。** `contextmenu.ts` の `setPosition` の
+> 読みどおりで、**§3.2 の代案（ホバー）は発動しない**。メニュー 1 段で完結する。
+>
+> 🔴 **main の交絡（訂正）**: 最初の計測は「動かなかった」と出て、main は **F1 を偽と 2 回断定し
+> 設計にもそう書いた**。原因は**エディタが非フォーカスだった**こと — 非フォーカスのウィンドウへの
+> 最初のクリックは**前面化に消費され**、カーソルが動かない。**条件を揃えずに測って前提を
+> 覆しかけた**。→ [[measure-with-focus-before-declaring-a-ui-premise-false]]
+>
+> ### 手動ゲートの実測（2026-09-14・§5.5 の全項目）
+>
+> | 確認 | 結果 |
+> |---|---|
+> | メニュー項目が実在してコマンドを起動する | ✅ |
+> | **右クリック単体**（左クリック不要） | ✅ |
+> | effect・同名 2 つ + `Gain` → 3 つ目で **index 3** | ✅ |
+> | effect・実 VST3（`ValhallaVintageVerb`） | ✅ |
+> | **instrument・実 VST3**（`Kontakt 8` = `kit:0`） | ✅ |
+>
+> 🔴 **main のもう 1 つの事故**: 最初の手動ゲートは**変異 M1 を当てたままの `dist/` で走っていた**。
+> gated 実行後にソースは復元したが **`npm run build` を回さずに dev host を起動**したため、
+> dev host（`--extensionDevelopmentPath` は `dist/` を読む）が変異版を動かしていた。
+> 「3 つ目を指しても index 1」「窓が開かない」はすべてこれで説明がつき、**実装は正しかった**。
+> → [[ts-mutations-need-a-rebuild-before-real-machine]]
 
-```ts
-if (e.target.position) {
-	let hasSelectionAtPosition = false;
-	for (const selection of this._editor.getSelections()) {
-		if (selection.containsPosition(e.target.position)) {
-			hasSelectionAtPosition = true;
-			break;
-		}
-	}
-	if (!hasSelectionAtPosition) {
-		this._editor.setPosition(e.target.position);
-	}
-}
-```
-
-読み: **クリック位置が既存の選択に含まれていなければ `setPosition`（カーソル移動・選択解除）。含まれていれば動かさない。** 対象は `CONTENT_TEXT` / `CONTENT_EMPTY` / `TEXTAREA`。
-
-**設計への帰結**:
-
-- ハンドラは `editor.selection.active` を読む（F7 と整合）
-- **選択がある時**: 選択がリテラル 1 つに収まっていればその site（人間は名前をダブルクリックで選択してから右クリックする — この時 `containsPosition` が真なので動かないが、active は選択内にある）。はみ出していれば `selection-spans-outside` で loud（§2.3）。「前のカーソル位置を黙って開く」経路を**作らない**
-- コマンドの引数に `{ line, character }` を**任意で**受ける形にしておく（§3.2 の代案が来た時に解決器の署名を変えないため）。メニューからは来ない（F7）ので v1 では常に undefined
-
-### 3.1 実機での確認手順（実装前・所要 1 分・**現行ビルドで可能**）
+## 3.1 実機での確認手順（実装前・所要 1 分・**現行ビルドで可能**）
 
 1. gated 手順どおり dev host を起動し、`.orbs` を開く
 2. `set_selection(start_line: 1, start_char: 1)` でカーソルを 1 行目先頭に置く
@@ -393,7 +401,9 @@ MCP open_plugin_ui_at_cursor ──▶ executeCommand('orbitscore.openPluginUiAt
 
 ### 5.3 🔴 実機 gated E2E（本体）— `tests/e2e/orbitstudio-mcp-gated.spec.ts` に 1 本
 
-**置き場所**: `#633 E2E-2` の**直後**（共有セッションを使う既存群の並びに入れる。自前アプリを起動しない）。名前: `'#939 E2E opens only the plugin under the cursor when the same plugin is inserted three times'`。
+**置き場所**: `#633 E2E-2` の**直後**（共有セッションを使う既存群の並びに入れる。自前アプリを起動しない）。名前: `'#939 E2E opens only the plugin under the cursor when the same plugin is inserted twice around a standard Gain'`。
+🔴 起案時の名前は `... inserted three times` だったが、§0b でフィクスチャを `[clap, Gain, clap]` へ変えた時に
+**名前だけが取り残されていた**（実プラグインは 2 つ）。テスト名は名乗りでしかないので実体に合わせる。
 
 **フィクスチャ**（`tmpRoot` に `939-cursor.orbs` を書く。`#643` の `dslPath` の作法・`:1000-1011`）:
 
@@ -492,6 +502,69 @@ CLAP だけで閉じると「VST3 の insert を右クリックしたら何が�
 
 これも結果を PR 本文に日付つきで記録する。ここが倒れた場合は #939 のスコープ外
 （VST3 の UI ホスティング自体の問題）として切り出し、**CLAP だけで出荷してよいかを owner 裁定に上げる**。
+
+---
+
+## 5b. 🔴 追補: プラグイン窓を OrbitStudio の前面に出す（#940・owner 裁定 2026-09-14 で本 PR に畳む）
+
+### なぜ本 PR に入れるか
+
+owner 裁定: 「**振る舞いとしては同じ関心**」。利用者から見れば「楽譜から UI を開く」ひとつの体験で、
+**本設計の手動ゲート中に発見された**。加えて**手動ゲートは人手が要る一番高い工程**なので、
+分けると owner に 2 回やってもらうことになる。
+
+main が当初「§6 の検算の機会で切る」を理由に分離を提案したのは**筋違い**だった — あの規律は
+「振る舞いを**変えない**変更を、変える変更と混ぜるな」であり、本件は両方とも変え、互いの検算を潰さない。
+
+### 現状（一次ソースで確認・2026-09-14）
+
+`rust/crates/orbit-child-runtime/src/window.rs:138` が `makeKeyAndOrderFront` を呼ぶだけで、
+**ウィンドウレベルは既定（`NSNormalWindowLevel`）のまま**。プラグイン UI は**別プロセス（child）**が
+持つので、VS Code をクリックすると VS Code が前面に来てプラグイン窓が裏に回る。
+
+### 方式: child 自己完結 — **wire 変更なし**
+
+| 前提 | 確認 |
+|---|---|
+| child が `NSApplication` runloop を持つ | ✅ `orbit-child-runtime/src/lib.rs:3, 481` |
+| 活性化ポリシー | `NSApplicationActivationPolicy::Accessory`（`:482`）— Dock に出ない |
+| spawn に引数を足せる | ✅ `--shm` / `--chain` / `--sample-rate` の列（`outproc_effect.rs:656-661`） |
+
+child が `NSWorkspace` の `didActivateApplicationNotification` を購読し、
+**前面が「ホストまたは自分自身」なら `NSFloatingWindowLevel`、それ以外なら `NSNormalWindowLevel`** を
+**child の中だけ**で判定する。ホストの bundle id は **spawn 時に 1 回渡す固定値**。
+
+🔴 **ライブな wire コマンドを作らない理由**: 拡張の `onDidChangeWindowState` は
+**VS Code ウィンドウのフォーカスしか見ない**ので、**プラグイン窓をクリックすると
+VS Code が非フォーカスになり floating が外れる**。child なら「自分が前面」を直接見られるので、
+この罠が**設計上そもそも発生しない**。
+
+### 決めること
+
+1. ホスト bundle id の渡し方（`--host-bundle-id` 引数 / env）。**daemon がどこから得るか**も決める
+   （拡張 → daemon の spawn 時。拡張は自分の実行ファイルパスから `.app` を辿れる）
+2. 未指定時の既定。🔴 **黙って floating にしない** — 指定が無ければ**従来どおり normal**（後方互換）
+3. 開いている**全窓**に適用する保持（child は複数窓を持ち得る）
+4. child は複数プロセスあり得る（effect rack / CLAP instrument / VST3 instrument）が、
+   **各 child が独立に判定する**ので broadcast は不要
+
+### 失敗モード ↔ 検証手段
+
+| 失敗モード | 検証 |
+|---|---|
+| bundle id の受け渡しが壊れる | **ユニット**（引数パース・未指定時の既定） |
+| 前面判定の論理が逆 / 自分自身を数えない | **ユニット**（前面 bundle id → 期待レベルの純関数に切り出す） |
+| 🔴 **窓の重なり順が実際に変わるか** | **手動ゲートのみ**（重なり順は自動で観測できない） |
+
+🔴 **自動テストで窓の重なり順は観測できない。** 純関数に切り出せる部分（前面 bundle id → 期待レベル）
+だけをユニットで固定し、**実際の重なりは手動ゲート**で見る。ここを E2E で見たことにしない。
+
+### 手動ゲート（§5.5 に追加する項目）
+
+1. VS Code を前面 → **プラグイン窓が上に出る**
+2. 他アプリ（ブラウザ等）を前面 → **被さらない**
+3. 🔴 **プラグイン窓自体をクリック → floating が外れない**（上記の罠の確認）
+4. ホスト bundle id を渡さないビルド → **従来どおり normal**（後方互換）
 
 ---
 

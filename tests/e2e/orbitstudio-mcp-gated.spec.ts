@@ -2555,6 +2555,96 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
+    '#939 E2E opens only the plugin under the cursor when the same plugin is inserted twice around a standard Gain',
+    async () => {
+      expect(client, '#939 E2E must initialize the MCP client').toBeDefined()
+      expect(tmpRoot, '#939 E2E must initialize the scratch root').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      // 🔴 `startR28Engine` を呼ばない。この helper は `🎵 Live coding mode` が **anchor より後に
+      // 新しく出る**のを待つが、engine が既に起動済みだと `start_engine` はそのマーカーを出さず
+      // 30 秒でタイムアウトする（main の実機 1 周目で実測・2026-09-14）。#633 E2E-1 が起動した
+      // engine を E2E-2 と同じ作法でそのまま使う（共有セッション群の並びに入っているため）。
+      const name = requireCatalogFixtures().clapEffectName
+      const dslLines = [
+        'var global = init GLOBAL',
+        'var cursorSeq = init global.seq',
+        `cursorSeq.effect([${JSON.stringify(name)}, Gain(db: -6), ${JSON.stringify(name)}])`,
+      ]
+      const dslText = dslLines.join('\n')
+      const dslPath = path.join(tmpRoot, '939-cursor.orbs')
+      fs.writeFileSync(dslPath, `${dslText}\n`)
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split('ERROR:').length - 1
+
+      const openedFile = await activeClient.call('open_file', { path: dslPath })
+      expect(openedFile.isError, openedFile.text).toBe(false)
+      const evaluated = await activeClient.call('evaluate_orbitscore', { code: dslText })
+      expect(evaluated.isError, evaluated.text).toBe(false)
+      await sleep(8000)
+
+      // 🔴 カーソルは **evaluate の後・使う直前**に置いて、その場で検算する。先に置くと、
+      // 評価がアクティブエディタを動かした場合に「解決器が間違えた」と見分けがつかない。
+      const thirdLiteralOffset = dslText.lastIndexOf(JSON.stringify(name))
+      const thirdLiteralLineStart = dslText.lastIndexOf('\n', thirdLiteralOffset) + 1
+      const thirdLiteralStartChar = thirdLiteralOffset - thirdLiteralLineStart + 2
+      const selected = await activeClient.call('set_selection', {
+        start_line: 3,
+        start_char: thirdLiteralStartChar,
+      })
+      expect(selected.isError, selected.text).toBe(false)
+      const editorState = await activeClient.call('get_editor_state')
+      expect(editorState.isError, editorState.text).toBe(false)
+      expect(JSON.parse(editorState.text), 'cursor must sit on the third literal').toMatchObject({
+        path: dslPath,
+        cursor: { line: 3 },
+      })
+
+      const opened = await activeClient.call('open_plugin_ui_at_cursor')
+      expect(opened.isError, opened.text).toBe(false)
+      expect(JSON.parse(opened.text)).toMatchObject({ receiver: 'cursorSeq', index: 3 })
+      await sleep(2000)
+
+      // This is the distinguishing assertion: ui("name")-style "open all" would make it fail.
+      const closeFirst = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorSeq',
+        index: 1,
+      })
+      expect(closeFirst.isError, closeFirst.text).toBe(true)
+      expect(closeFirst.text).toContain('no plugin UI opened')
+
+      const closeThird = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorSeq',
+        index: 3,
+      })
+      expect(closeThird.isError, closeThird.text).toBe(false)
+      expect(JSON.parse(closeThird.text)).toMatchObject({ completion: 'safepoint-completed' })
+
+      const closeThirdAgain = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorSeq',
+        index: 3,
+      })
+      expect(closeThirdAgain.isError, closeThirdAgain.text).toBe(true)
+
+      const movedOffPlugin = await activeClient.call('set_selection', {
+        start_line: 1,
+        start_char: 1,
+      })
+      expect(movedOffPlugin.isError, movedOffPlugin.text).toBe(false)
+      const failedOpen = await activeClient.call('open_plugin_ui_at_cursor')
+      expect(failedOpen.isError, failedOpen.text).toBe(true)
+      expect(failedOpen.text).toContain('not on a plugin name')
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split('ERROR:').length - 1,
+        `#939 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
     'rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture',
     async () => {
       expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()

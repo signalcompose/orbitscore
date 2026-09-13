@@ -123,7 +123,7 @@ export let mcpServerHandle: McpServerHandle | null = null
 エントリポイントは `extension.ts` の `activate()` です。VS Code が extension を読み込んだ直後に一度だけ呼ばれます。前半を見てみましょう。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:91-147
+// packages/vscode-extension/src/extension.ts:92-148
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -196,7 +196,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:237-291 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:241-296 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -238,6 +238,7 @@ export async function activate(context: vscode.ExtensionContext) {
           openPluginUi: (receiver, index, expectedName) =>
             pluginUiForAgent('open', receiver, index, expectedName),
           closePluginUi: (receiver, index) => pluginUiForAgent('close', receiver, index),
+          openPluginUiAtCursor: () => openPluginUiAtCursorForAgent(),
           registerMcpServer: (args) => registerMcpServerForAgent(args),
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
@@ -285,7 +286,7 @@ export const { StreamableHTTPServerTransport } =
 対策は、ビルドの最後に拡張自身の依存を同梱先へ入れ直すことです。
 
 ```json
-// packages/vscode-extension/package.json:419-421
+// packages/vscode-extension/package.json:430-432
     "build": "npm run build:engine && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
     "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
     "build:engine": "cd ../engine && npm run build && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
@@ -335,10 +336,10 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
 
 ## Command 登録
 
-`activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 15 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります（`forceKillScsynth` / `selectAudioDevice` は #502 で削除）。
+`activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 16 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります（`forceKillScsynth` / `selectAudioDevice` は #502 で削除）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:159-194
+// packages/vscode-extension/src/extension.ts:160-198
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -352,6 +353,9 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
     vscode.commands.registerCommand('orbitscore.browsePlugins', browsePlugins),
+    vscode.commands.registerCommand('orbitscore.openPluginUiAtCursor', (arg) =>
+      openPluginUiAtCursor(vscode.window.activeTextEditor, arg),
+    ),
     // viewsWelcome コンテンツは view に provider が登録されて初めて描画される
     // （空 TreeView で十分 — 章ツリーの本実装は #451 確定後の follow-up）。
     vscode.window.registerTreeDataProvider('orbitscore.learningView', {
@@ -390,6 +394,7 @@ daemon が見つかる (= 通常の状態) ときはインジケータを **隠�
 | `orbitscore.registerMcpServer` | `registerMcpServer` | `.mcp.json` に Claude Code 用エントリを書く (#388) | 表示 |
 | `orbitscore.rescanPlugins` | `rescanPlugins` | plugin catalog の再スキャン (#463) | 表示 + `editor/context` |
 | `orbitscore.browsePlugins` | `browsePlugins` | catalog から名前を選んで挿入 (#638) | 表示 |
+| `orbitscore.openPluginUiAtCursor` | `openPluginUiAtCursor` | カーソル位置の個別 plugin UI を開く (#939) | 表示 + `editor/context` |
 | `orbitscore.engineViewSelectDevice` | `engineViewSelectDevice` | Engine ビューのデバイスノードをクリック (#484 D3) | 非表示 |
 | `orbitscore.openDocs` | `openUserDocs` | user 向け学習サイトをブラウザで開く | 表示 + `editor/title` |
 | `orbitscore.openDevDocs` | `openDevDocs` | dev 学習サイト (本サイト) をブラウザで開く (#450) | 表示 |
@@ -531,7 +536,7 @@ interface MethodChainContext {
 診断 (`updateDiagnostics`) は、2026-05 時点では `onDidChangeTextDocument` だけで駆動していましたが、#384 で「開いたとき」「閉じたとき」「activation 時に既に開いていたもの」にも広がりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:206-235
+// packages/vscode-extension/src/extension.ts:210-239
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -569,7 +574,7 @@ interface MethodChainContext {
 診断を出すだけの登録に、#883 で **quick fix の登録**が 1 行足されました。`registerOutputCodeActionProvider(context)` が `output-missing` / `dry-not-routed` の 2 つの診断 code に対して「`<名前>.output()` を足す」CodeAction を返します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:197-200
+// packages/vscode-extension/src/extension.ts:201-204
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)

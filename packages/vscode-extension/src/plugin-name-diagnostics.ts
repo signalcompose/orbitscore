@@ -19,6 +19,8 @@
  * thing that goes away.
  */
 
+import * as path from 'path'
+
 import type { DiagnosticIssue } from './diagnostics-analysis'
 import { normalizeCatalogKey } from './plugin-catalog-completion'
 import type { PluginCatalogEntry } from './plugin-catalog-reader'
@@ -45,6 +47,16 @@ export function isPluginPathSpec(spec: string): boolean {
 /** Mirrors `plugin-resolver.ts` `isStateFileSpec` (#540 P2 — a saved tone, not a name). */
 export function isStateFileSpec(value: string): boolean {
   return /\.(vstpreset|state)$/i.test(value)
+}
+
+/** Mirrors engine `normalizePluginInstanceName` for the UI expected-name guard. */
+export function normalizePluginInstanceNameForGuard(spec: string): string {
+  const normalized = spec.trim().normalize('NFC').replace(/\\/g, '/')
+  const unqualified = path.basename(normalized)
+  const extension = path.extname(unqualified).toLowerCase()
+  return KNOWN_PLUGIN_EXTENSIONS.includes(extension)
+    ? unqualified.slice(0, -extension.length)
+    : unqualified
 }
 
 export type CatalogSpecRole = 'effect' | 'instrument'
@@ -140,11 +152,25 @@ export interface CatalogSpecSite {
   readonly startCol: number
   /** Column just past the closing quote (0-based). */
   readonly endCol: number
+  /** UIH.5 receiver notation; undefined when the owner cannot be resolved on this line. */
+  readonly receiver: string | undefined
+  /** Position within the enclosing effect/instrument chain, before conversion to an index. */
+  readonly chainPath: readonly number[]
 }
 
 interface CallFrame {
   /** The role catalog names in this frame resolve against; undefined = not a catalog context. */
   readonly role: CatalogSpecRole | undefined
+  readonly word: string
+  readonly receiver: string | undefined
+  readonly elementCounters: number[] | undefined
+  /** The outer array of effect()/instrument() is the root chain and adds no path component. */
+  directArraySeen: boolean
+}
+
+interface BracketFrame {
+  readonly owner: CallFrame | undefined
+  readonly pushedCounter: boolean
 }
 
 /**
@@ -163,12 +189,15 @@ interface CallFrame {
 export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
   const sites: CatalogSpecSite[] = []
   const stack: CallFrame[] = []
+  const brackets: BracketFrame[] = []
+  const derivedReceivers = collectDerivedReceivers(text)
   let line = 0
   let lineStart = 0
   let i = 0
 
   const currentRole = (): CatalogSpecRole | undefined =>
     stack.length === 0 ? undefined : stack[stack.length - 1]?.role
+  const currentFrame = (): CallFrame | undefined => stack[stack.length - 1]
 
   while (i < text.length) {
     const ch = text[i]
@@ -206,21 +235,89 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
       if (text[i] === quote) {
         i += 1
         const role = currentRole()
+        const frame = currentFrame()
         if (role !== undefined) {
-          sites.push({ spec: value, role, line: startLine, startCol, endCol: i - lineStart })
+          sites.push({
+            spec: value,
+            role,
+            line: startLine,
+            startCol,
+            endCol: i - lineStart,
+            receiver: frame?.receiver,
+            chainPath: [...(frame?.elementCounters ?? [0])],
+          })
         }
       }
       continue
     }
 
     if (ch === '(') {
-      stack.push({ role: roleForCallWord(wordBefore(text, i), currentRole()) })
+      const call = callWordBefore(text, i)
+      const parent = currentFrame()
+      const role = roleForCallWord(call.word, parent?.role)
+      const isCatalogRoot = call.word === 'effect' || call.word === 'instrument'
+      stack.push({
+        role,
+        word: call.word,
+        receiver: isCatalogRoot
+          ? receiverBefore(text, call.start, derivedReceivers)
+          : role === undefined
+            ? undefined
+            : parent?.receiver,
+        elementCounters: isCatalogRoot
+          ? [0]
+          : role === undefined
+            ? undefined
+            : parent?.elementCounters,
+        directArraySeen: false,
+      })
       i += 1
       continue
     }
 
     if (ch === ')') {
       stack.pop()
+      i += 1
+      continue
+    }
+
+    if (ch === '[') {
+      const frame = currentFrame()
+      let pushedCounter = false
+      if (frame?.elementCounters) {
+        const transparentRootArray =
+          (frame.word === 'effect' || frame.word === 'instrument' || frame.word === 'chain') &&
+          !frame.directArraySeen
+        frame.directArraySeen = true
+        if (!transparentRootArray && frame.word !== 'plugin') {
+          frame.elementCounters.push(0)
+          pushedCounter = true
+        }
+      }
+      brackets.push({ owner: frame, pushedCounter })
+      i += 1
+      continue
+    }
+
+    if (ch === ']') {
+      const bracket = brackets.pop()
+      if (bracket?.pushedCounter) bracket.owner?.elementCounters?.pop()
+      i += 1
+      continue
+    }
+
+    if (ch === ',') {
+      const frame = currentFrame()
+      if (
+        frame?.elementCounters &&
+        (frame.word === 'effect' ||
+          frame.word === 'instrument' ||
+          frame.word === 'layer' ||
+          frame.word === 'chain')
+      ) {
+        const last = frame.elementCounters.length - 1
+        frame.elementCounters[last] = (frame.elementCounters[last] ?? 0) + 1
+      }
       i += 1
       continue
     }
@@ -232,12 +329,42 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
 }
 
 /** The identifier immediately preceding `parenIndex`, ignoring whitespace. */
-function wordBefore(text: string, parenIndex: number): string {
+function callWordBefore(text: string, parenIndex: number): { word: string; start: number } {
   let end = parenIndex
   while (end > 0 && /\s/.test(text[end - 1] ?? '')) end -= 1
   let start = end
   while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1] ?? '')) start -= 1
-  return text.slice(start, end)
+  return { word: text.slice(start, end), start }
+}
+
+/** Collect `var d = mix.sum` / `.aux` before resolving any call site. */
+function collectDerivedReceivers(text: string): ReadonlyMap<string, string> {
+  const receivers = new Map<string, string>()
+  for (const line of text.split('\n')) {
+    const code = line.split('//', 1)[0] ?? ''
+    const match = code.match(
+      /^\s*var\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*[A-Za-z_$][A-Za-z0-9_$]*\.(sum|aux)\s*$/,
+    )
+    if (match?.[1] && match[2]) receivers.set(match[1], `${match[2]}:${match[1]}`)
+  }
+  return receivers
+}
+
+/** Resolve the receiver expression immediately to the left of effect/instrument on this line. */
+function receiverBefore(
+  text: string,
+  wordStart: number,
+  derivedReceivers: ReadonlyMap<string, string>,
+): string | undefined {
+  const lineStart = text.lastIndexOf('\n', wordStart - 1) + 1
+  const prefix = text.slice(lineStart, wordStart)
+  const busCall = prefix.match(/(?:global\.)?(sum|aux)\(\s*(["'])(.*?)\2\s*\)\.\s*$/)
+  if (busCall?.[1] && busCall[3] !== undefined) return `${busCall[1]}:${busCall[3]}`
+
+  const ident = prefix.match(/([A-Za-z_$][A-Za-z0-9_$]*)\.\s*$/)?.[1]
+  if (!ident) return undefined
+  if (ident === 'global') return 'master'
+  return derivedReceivers.get(ident) ?? ident
 }
 
 function roleForCallWord(

@@ -101,7 +101,7 @@ export function handleStepLine(step: StepEvent): void {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:237-248
+// packages/vscode-extension/src/extension.ts:241-252
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -369,7 +369,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:107-118
+// packages/vscode-extension/src/extension.ts:108-119
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -642,7 +642,7 @@ The pattern must never be widened to an app or process name, it says in more tha
 `killHarnessInstances()` is not only a teardown helper. `launchIsolatedOrbitStudio()` calls it **as its first step**, so any test that launches its own app carries a side effect: the moment it starts running, every harness-owned VS Code instance alive at that point is taken down. Most of the gated spec rides on the **shared session** that the `describe` setup launched once, so putting a self-launching test in the middle of that run leaves the shared-session tests behind it with nothing to connect to.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:6640-6643
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -1344,7 +1344,7 @@ export function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2731-2742
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2821-2832
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1360,13 +1360,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2750-2751
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2840-2841
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2807-2809
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2897-2899
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

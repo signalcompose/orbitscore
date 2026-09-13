@@ -17,6 +17,44 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(extension): open one plugin's UI from the cursor position (#939) (Sep 14, 2026)
+
+楽譜上のプラグイン名を右クリックし、`OrbitScore: Open Plugin UI` からそのインスタンスだけを
+開く経路を追加した。同名の insert はカーソル位置から `chainPath` で区別し、engine へ渡す直前の
+1 箇所だけで UIH.5 index に変換する。標準プラグイン（`Gain(...)`）もチェーン位置を消費し、
+派生 sum / aux bus、master、直指定 bus の receiver を解決する。
+
+MCP の `open_plugin_ui_at_cursor` は引数なしで同じ VS Code command id を `executeCommand` し、
+メニューと同じ成功・失敗経路を通る。純関数・配線・manifest のユニット、同名 + `Gain` の gated
+E2E を追加した。実機 E2E と右クリック手動ゲートは sandbox 外で実施する。
+
+#### main の検証（工程 ④⑤・実装は Codex / 検証は main）
+
+🔴 **委譲先の報告ではなく差分を読んで確かめた。** トラップ 4 点はいずれも正しく処理されていた:
+
+| トラップ | 実装 |
+|---|---|
+| `Gain(...)` を数える | `,` を数えるのは `effect`/`instrument`/`layer`/`chain` の**フレーム直下のみ**。`Gain(db: -6, label: "x")` 内の `,` は数えず、`Gain(` 自体は要素を 1 つ進める |
+| MCP が `executeCommand` を通る | `openPluginUiAtCursorForAgent` が command id を `executeCommand`。モック（`tests/mocks/vscode.ts:229-232`）も**登録済みハンドラへ委譲する形**に直っている |
+| E2E の区別力 | `close_plugin_ui(index: 1)` が `no plugin UI opened` で**失敗**することを assert |
+| engine 不可侵 | `packages/engine/**` / `rust/**` の差分ゼロ |
+
+既存テストを触った 3 箇所（`mcp-server.spec.ts` / `engine-command-awaits.spec.ts` / `tests/mocks/vscode.ts`）は
+**すべて追加または委譲化**で、期待値の変更は 1 つも無い。
+
+🔴 **`npm test` は Codex の環境では完走していない**（sandbox の loopback 制限で
+`listen EPERM 127.0.0.1` → `rust-engine-player.spec.ts` が 44 件 timeout）。
+main が sandbox 外で回し直して **2,541 passed / 77 skipped / exit 0**。
+500 行ラチェットの失敗も**新規ファイルが未追跡だったための人工物**で、index に入れれば 70 passed。
+**「委譲先が緑と言った」では済ませない**という規律がそのまま効いた形。
+
+#### main が直した 2 点
+
+1. 🔴 **テスト名が実体と食い違っていた** — `'... the same plugin is inserted three times'` だが、
+   フィクスチャは同名 CLAP **2 つ + `Gain`**。設計 §0b でフィクスチャを変えた時に**名前だけ
+   取り残されていた**（Codex が報告で指摘してきた）。名前を実体に合わせ、設計側も同期した
+2. **本エントリの見出しが日本語だった** — 規約は「タイトルは英語・本文は日本語」
+
 ### docs(design): design the cursor-based route to one plugin's UI (#939) (Sep 13, 2026)
 
 **Issue**: #939（#474 の後継）。起案 = Fable subagent / レビュー = main（工程 ①→②）。
@@ -1915,41 +1953,6 @@ OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクト
 🔴 **再エクスポートの cfg を狭く書いて 1 象限落とした。** `outproc-instrument` と書いたが、
 定義側は `any(outproc-effect, outproc-instrument)` だった。**cfg は定義側と一致させる** —
 第 9 束と同じ誤りを繰り返した。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move the effect slot types and env parsing into a child module (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-effect-slot-types`
-
-#888 子 1 の**第 9 束**。`OutProcControl` / `EffectSlotEntry` / `BusKind` 系の型と
-`ORBIT_*` 環境変数の解析（512 行）を `engine_wrap/effect_slot_types.rs`（390 コード行）へ。
-🔴 **`engine_wrap.rs` が 2,000 行を切った**（2,362 → **1,989** コード行）。
-
-### 🔴 構造体フィールドの可視性 — 第 8 束より一段深い
-
-第 8 束は関数と型に `pub(super)` を付ければ済んだが、本束は **187 件が「フィールドが private」**
-のエラーだった。親が構造体のフィールドを**直接触っている**ため、**フィールド 44 個**にも
-`pub(super)` が要った（関数・型 30 個と合わせて 74 箇所）。
-
-### 🔴 `session.rs` からの外部参照 — 再エクスポートが要った
-
-`BusKind` / `BusLineDest` / `BusLineOp` / `SourceRoutingTarget` は **`session.rs` が
-`crate::engine_wrap::` から名前で import** していた。親から `pub(crate) use` で再エクスポートした。
-
-**cfg は定義側と一致させる必要があった**: `SourceRoutingTarget` だけ
-`any(test, all(outproc-effect, outproc-instrument))` で他の 3 つと条件が違い、
-まとめて 1 行にすると default ビルドで `unresolved import` になった。
-
-### 🔴 引用の追随に新しい型が出た — 行番号ではなく**本文**が変わる
-
-`pub(super)` を付けると**引用しているコード行そのものが変わる**。`--fix` は行番号しか直さないので
-効かない。1 行ずつ置換したが**収束しなかった**（8 ラウンド回して残った）ので、
-**引用ブロックの本文を実ファイルから再生成する**スクリプトを書いて解決した
-（scratchpad の `resync-citations.mjs`）。差分は追加 40 / 削除 40 で対応しており、
-**引用の追随以外の変更が無い**ことを確認済み。
 
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。

@@ -229,7 +229,10 @@ export const commands = {
     registeredCommandHandlers.set(command, handler)
     return fakeDisposable()
   },
-  executeCommand: async () => undefined,
+  executeCommand: async <T>(command: string, ...args: unknown[]): Promise<T | undefined> => {
+    const handler = registeredCommandHandlers.get(command)
+    return (await handler?.(...args)) as T | undefined
+  },
 }
 
 /**
