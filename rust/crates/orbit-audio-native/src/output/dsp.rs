@@ -41,37 +41,28 @@ pub(super) fn apply_ramped_gain(buf: &mut [f32], channels: usize, ramp: LineRamp
     }
 }
 
-/// Return the normalized L/R coefficients for a bus-level pan.
+/// Return the L/R coefficients for a bus-level balance.
 ///
-/// 🔴 The `√2` is **not** an extra boost — it makes this stage unity at center.
+/// 🔴 **減衰のみ**（#921 / `#851` B-3 の owner 裁定 D′・2026-09-13）。中央 `(1, 1)`・
+/// 端 `(1, 0)`。**生き残る側を持ち上げない**ので、どこへ振っても入力のフルスケールを超えない。
 ///
-/// The source side already applies `equal_power_pan` when it schedules an event
-/// (`orbit_audio_core::scheduler`), so a centered event arrives here having been multiplied by
-/// `(1/√2, 1/√2)`. Applying the raw equal-power law a second time would drop a further 3 dB, so
-/// **writing `pan(0)` would make a score quieter than not writing it at all**. Scaling by `√2`
-/// makes center `(1, 1)`, and hard-left `(√2, 0)` composes with the source-side center to `(1, 0)`
-/// — the same as today's source-side hard left. The two stages compose to the original law for
-/// every position.
+/// 発音側（`orbit_audio_core::scheduler`）も**同じ [`balance_pan`] を使う**ので、
+/// 2 段は素直に合成する（どちらも減衰のみ → 合成も減衰のみ）。
 ///
-/// Do not remove the factor as "double compensation": the compensation is what keeps this stage
-/// transparent. The source side cannot drop its own center application without breaking bit
-/// identity for existing scores (design `docs/design/611-o-surface-bundle-design.md` §4.1).
+/// ## 旧版（`× √2`）を捨てた理由
+///
+/// 旧版は「発音側が `equal_power_pan` で中央 `1/√2` を掛けるので、その補正として `√2` を掛ける」
+/// 設計だった。**audio についてはそれで標準の pan 則に合成されていた**が、2 つの問題があった:
+///
+/// 1. 🔴 **instrument feed は発音側を通らない**（`render_multi_feeds` は `*dst += *sample` と
+///    素のまま加算する）。だから `√2` がそのまま残り、**端で `1.414` = +3 dB** になった。
+///    この系には**リミッタもクランプも無い**ので、1.0 超はそのままデバイスへ行く
+/// 2. 発音側の `equal_power_pan(event.pan)` は `event.pan` が常に 0 だったため、
+///    定位ではなく**全 audio への固定 −3 dB** だった。結果 **audio が instrument より
+///    常時 3 dB 小さい**状態になっていた
 #[inline]
 pub(super) fn line_pan_coefficients(pan: f32) -> (f32, f32) {
-    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
-    //
-    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
-    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
-    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
-    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
-    if pan == 0.0 {
-        return (1.0, 1.0);
-    }
-    let (left, right) = equal_power_pan(pan);
-    (
-        left * std::f32::consts::SQRT_2,
-        right * std::f32::consts::SQRT_2,
-    )
+    balance_pan(pan)
 }
 
 /// Apply a bus-level pan ramp to an interleaved stereo buffer.

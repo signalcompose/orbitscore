@@ -170,7 +170,39 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 
 **どちらも等パワー則で、中央比では同じ +3 dB** である（audio event は中央が既に −3 dB 下がっているぶん、両端が unity に着地する）。違うのは**絶対レベル**で、フルスケールの instrument を端まで振ると 0 dBFS を超える。
 
-🔴 **owner 裁定事項**: instrument feed にも中央 `1/√2` を掛けて audio event と絶対レベルをそろえるか（＝pan を書かない instrument が一律 3 dB 下がる）、現状のまま「中央 unity・両端 +3 dB」を pan 則として受け入れるか。**束 A では到達不能**（凍結版の TS は `SetBusLine` を送らない）。**束 B で `synth.pan(...)` が到達可能になる**（§5.2 の規則で instrument は必ずバスを確保してラインで pan する）ので、束 B の締めまでに決める。
+🔴 **owner 裁定（2026-09-13・#921 / `#851` B-3）— どちらでもなく「両段を減衰のみへ揃える」**（案 D′）。
+
+上の表と「両端 +3 dB」の記述は**この裁定より前のもの**として残す（経緯）。決定後の実装はこうである:
+
+| | 中央 | 端 |
+|---|---|---|
+| 発音側 `balance_pan(event.pan)` | `(1, 1)` 素通り | `(1, 0)` |
+| ライン `LineOp::Pan` | `(1, 1)` 素通り | `(1, 0)` |
+
+**`√2` の正規化を捨てた。** 代わりに両段とも**ピーク正規化した減衰のみ**（`balance_pan`）にする。
+
+**なぜ裁定が「揃える」ではなく「両方変える」になったか**（調査で前提が覆った）:
+
+1. 🔴 **`event.pan` は本番コードで一度も設定されない。** DSL の `pan` は wire 上
+   `BusLineOp::Pan` = ライン側へ行く（`session/params.rs:141`）。したがって発音側の
+   `equal_power_pan(event.pan)` は**定位ではなく、全 audio への固定 −3 dB** として働いていた
+2. その結果 **audio event は instrument feed より常時 3 dB 小さい**状態だった（pan の有無に無関係）。
+   ライン側の `√2` は「audio を unity へ戻す補正」として働き、**発音側を通らない feed だけを
+   +3 dB へ押し上げて**いた
+3. 🔴 **この系にはリミッタもクランプも無い。** `limiter()` / `compressor()` / `normalizer()` は
+   #502 で実装ごと消滅し代替経路が無く、float 出力にクランプも無い（クランプは i16/i32/u16 変換時のみ）。
+   **1.0 超はそのままデバイスへ行く**ので、持ち上げる則は代金が高すぎる
+4. ライン Pan は**バランス**（既存の L/R をそれぞれ掛ける）であり、端へ振ると片チャンネルの
+   中身を実際に捨てている。音量が下がるのは物理的に正直な挙動で、`√2` は
+   **存在しないエネルギーを足していた**
+
+**影響**: `pan` を書かない譜面でも **audio が √2 倍（+3 dB）になる**。instrument は不変。
+両者が同じ絶対レベルに揃う。E2E の絶対 RMS golden（`noBus` / `sumOutput`）は**実機で測り直す**。
+
+**補正（constant power に戻す）機能は作らない。** `.gain(db)` で書けるため
+（memory `audio-line-order-is-the-model`「pre/post フラグもフェーダー段も作らない」）。
+🔴 ただし **pan をスイープさせる時は補正量が位置で変わる**ので `.gain()` では追随できない。
+そこが必要になったら `global.panLaw()`（DAW はプロジェクト設定に置く前例）を検討する。
 
 **ramp**: Pan は `current_gain[k]` に **pan 位置 p（−1..1）** を保持し、block ごとに `advance_ramped_gain`（`output.rs:713-717`）で目標へ寄せ、その p から `(gL, gR)` を計算する（trig は block ごと 1 回・alloc/lock 無し）。`settled` / seed の値は目標そのもの（§4.3）。Pan の位置変更でクリックを出さないため。
 

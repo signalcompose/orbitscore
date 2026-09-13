@@ -11154,3 +11154,97 @@ lint 緑 / docs:check 948 引用 0 failed
 ```
 
 ---
+
+---
+
+### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: ✅ 束 S 実装
+
+出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
+未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
+`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
+確定するため、#282 の挙動を維持する。
+
+編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
+(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
+実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
+
+この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
+`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
+
+---
+
+### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**Status**: 実装・実機検証完了（レビュー前）
+**版**: 🔴 **4.0.0 / `DSL_VERSION` 2.0**（破壊的変更）
+**担当**: 実装 = Codex（`gpt-5.6-sol` / effort **xhigh**）/ 裁定と検証 = main
+
+#883 の**振る舞いを変える**半分。束 0+C（PR #884）の上に載る。
+
+#### 閉じた 4 実体（§0.1）— **1 箇所ではない**
+
+| 実体 | 変更 |
+|---|---|
+| **A** `program()` の暗黙終端 | 合成を削除（`[rack]` の前置は残す） |
+| **B** バス無し audio の直接描画 | `resolveDispatchChannel()` に skip。🔴 **`isNoteSequence()` の早期 return より後ろ**（前だと MIDI が無音・#282 の再発） |
+| **C** daemon のバス既定ライン | `legacy(Master, [])` → **`[Rack]`（無音）** |
+| **D** instrument の source routing | `SetSourceRouting.target` を**明示 3 値**（`none` / `master` / `bus`）へ。🔴 **一方通行の wire 変更** |
+
+#### 🔴 横断規則を 6 箇所へ適用（main の審査で要求したもの）
+
+> routing 状態が「書かれていない」「表現できない」「失われた」いずれかの時、その信号はどこにも加算されない。
+> **master へ倒すことは最下層に暗黙 master を作り直すこと**である。
+
+| 箇所 | 実装 |
+|---|---|
+| `SourceDestCell::encode` | `Bus(_) \| Link(_) => Self::NONE` ← **Fable の監査も見ていなかった箇所** |
+| `SourceDestCell::decode` | `_ => SourceDest::None` |
+| `SourceDest::default()` | `#[default] None` |
+| `FeedDest` 変換 ×2 | `None => Discard` / `Link(_) => Discard` |
+| slot 解放時 | `store(SourceDest::None)` ×2 |
+
+**除外は master トラック自身の device 出口のみ**（owner 裁定で 1,2 固定＝定数なので規則の定義域外）。
+
+#### 🔴 実機 gated が 4 件落ちた — **すべて譜面・harness の誤り**（実装は無変更）
+
+| 失敗 | 原因 |
+|---|---|
+| 既存 `sum-bus insert across restart` | **移行漏れ** — 束 S で「出口を書かない sum は無音」になったので `sum("drum").output()` が要る |
+| X1 / X4 / X5 | 🔴 **`LOOP()` は追加ではなく置換** — `LOOP(a)` の次の `LOOP(b)` が a を止める。根拠は `calculateLoopDiff()`（`process-statement.ts:679`）→ `stopSequences(toStop)`（`:777`） |
+
+**main が先に潰した仮説**（unit で実測）: `ref883.output()` は skip されず（`{kind:'hardware'}`）、
+4 イベントをスケジュールし、`loop()` も throw しない。**TS 層は正しい**。
+崩れたのは「では実機の無音は実装のせい」という推論の方で、**`LOOP` の意味論**が抜けていた
+（個別に `loop()` を呼ぶ unit では原理的に再現しない形）。
+
+Codex は同じ誤用があった **X8 も落ちる前に先回りで修正**し、**静的回帰テストも追加**した
+（`gated-assertion-hygiene.spec.ts:557`）。
+
+⚠️ **ただしその検査は名指しの 4 ファイルしか守らない。** 3 本の新 fixture が揃って踏んだ性質なので、
+**一般化する価値がある**（例: gated fixture 内に `LOOP(` が 2 回以上現れたら red）。別途扱う。
+
+#### 実機 gated の実測（main が sandbox 外で）
+
+```
+Tests  45 passed | 1 skipped (46) | 0 failed
+
+[#883 X1] explicit-reference + orphan RMS: 0.08701663328815765      ← 漏れれば 2 倍
+[#883 X2] omitted=0.0870166332954772  explicit=0.08701663328808863
+[#883 X3] sendRms=0.0436116233054862  plainRms=0.0870166332927243
+          ratio=0.5011872058848396                                   ← 期待 10^(-6/20)=0.5012
+[#883 X4] reference + unterminated-sum member RMS: 0.087016633295434
+[#883 X5] withSilentInstrument=0.08701663329662541  refRms=0.08701663329662539
+```
+
+🔴 **X3 が #883 の実害そのもの**（`send(sum)` の dry が master へ二重に届く）**を実測で塞いだ証拠**。
+🔴 **X5 は小数点以下 16 桁が一致** — 出口を書かない instrument は基準の音に **1 bit も足していない**。
+
+#### ゴールの収束条件
+
+1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
+
+---

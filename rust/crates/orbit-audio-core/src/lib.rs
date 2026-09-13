@@ -17,5 +17,6 @@ mod scheduler;
 pub use engine::{Engine, EngineError};
 pub use sample::Sample;
 pub use scheduler::{
-    equal_power_pan, resolve_slice_region, sanitize_rate, FeedDest, ScheduledSample, Scheduler,
+    balance_pan, equal_power_pan, resolve_slice_region, sanitize_rate, FeedDest, ScheduledSample,
+    Scheduler,
 };

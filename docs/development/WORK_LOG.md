@@ -17,6 +17,81 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
+
+`#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの
+`balance_pan`（中央は素通り・端で持ち上げない）へ揃えた。
+
+#### 🔴 調査で前提が覆った
+
+裁定の選択肢は当初 A（現状維持）/ B（feed にも発音側 pan）/ C（DAW の pan 流儀）だったが、
+**`event.pan` が本番コードで一度も設定されない**ことが分かって前提が変わった
+（DSL の `pan` は wire 上 `BusLineOp::Pan` = ライン側へ行く・`session/params.rs:141`）。
+
+つまり発音側の `equal_power_pan(event.pan)` は**定位ではなく、全 audio への固定 −3 dB**。
+その結果:
+
+- **audio は instrument feed より常時 3 dB 小さかった**（pan の有無に無関係）
+- ライン側の `× √2` は「audio を戻す補正」として働き、**発音側を通らない feed だけを
+  +3 dB へ押し上げて**いた
+
+🔴 **一度 D（ライン側だけ減衰のみにする）を推奨して、実装前に撤回した。**
+`dsp.rs` の doc コメントが `Do not remove the factor as "double compensation"` と
+明示しており、発音側との合成を見ていなかった。**ライン側だけ変えると audio が端で
+0.707 になって壊れる。** 発音側と対にして初めて成立する（それが D′）。
+
+#### なぜ持ち上げをやめたか
+
+🔴 **この系にはリミッタもクランプも無い**（実測）。`limiter()` / `compressor()` /
+`normalizer()` は #502 で実装ごと消滅し代替経路が無く、float 出力にクランプも無い
+（クランプは i16/i32/u16 変換時のみ）。**1.0 超はそのままデバイスへ行く。**
+加えてライン Pan は**バランス**で、端へ振ると片チャンネルの中身を実際に捨てている。
+`× √2` は**存在しないエネルギーを足していた**。
+
+#### 旧則を固定していたテストは 16 件。うち pan のテストは 2 件だけだった
+
+残る 14 件は `render_block_one_bus_applies_effect_then_sums` のような**合成・配線**のテストで、
+期待値の式に `√0.5` が埋まっていた:
+
+```
+// center pan の equal-power gain は √0.5。tagged=2.0×√0.5×0.5、untagged=3.0×√0.5
+```
+
+**全 audio が一律に減衰されていたせいで、無関係なテストの算術にまで係数が漏れていた。**
+これが「pan の設計判断ではなく audio 全体のレベルの問題だった」ことの裏づけになった。
+
+🔴 置換は**網羅を確認してから**行った（18 箇所を grep で列挙し、期待件数を `assert` で固定）。
+目的が「係数」でないテスト（channel stride / global gain）は、係数を落としても
+**目的が残っているか**を見てから直した。
+
+#### 実機の実測が予測と厳密に一致した
+
+旧実測 `0.08701663` → 新実測 **`0.12306010509914503`**。比は **1.41421356 = √2**。
+3 回の実測が 11 桁一致し、`noBus` と `sumOutput` も一致した（同じ信号が同じ経路を通るので
+一致するのが正しい。旧 golden では 0.03% ずれていた）。
+
+🔴 **旧 golden `0.0846173` は実測より 2.8% 低い緩い基準だった**（許容 12% に収まるので
+誰も気づかない）。今回は実測値を根拠に置き換えたので基準が締まった。
+
+#### 🔴 TS 側のユニットテストは 1 件も動かなかった
+
+audio の絶対レベルが変わる変更なのに `npm test` 2,497 件が全部通った。
+**この層を守っているのは E2E の golden だけ**である。
+
+#### 補正機能は作らない
+
+`.gain(db)` で書けるため。🔴 ただし **pan をスイープさせる時は補正量が位置で変わる**ので
+`.gain()` では追随できない。必要になったら `global.panLaw()` を検討する。
+
+#### 検証
+
+`cargo test --workspace` 97 suite 緑 / fmt / clippy / cfg 4 象限 緑 /
+`npm test` 2,497 passed / lint / `typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 /
+実機 gated **45 passed**（残る 1 件は E2E-4/E2E-5 の `unimplemented`。実装は PR #918 側で
+このブランチには無い）。
+
+---
+
 ### test(core): pin the instrument-feed vs centered-event pan asymmetry (Sep 13, 2026)
 
 `#851` B-3 の裁定材料。**裁定そのものは owner**（#919）。
@@ -1893,96 +1968,6 @@ Closes #878
 Part of #883
 
 ---
-
-### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: 実装・実機検証完了（レビュー前）
-**版**: 🔴 **4.0.0 / `DSL_VERSION` 2.0**（破壊的変更）
-**担当**: 実装 = Codex（`gpt-5.6-sol` / effort **xhigh**）/ 裁定と検証 = main
-
-#883 の**振る舞いを変える**半分。束 0+C（PR #884）の上に載る。
-
-#### 閉じた 4 実体（§0.1）— **1 箇所ではない**
-
-| 実体 | 変更 |
-|---|---|
-| **A** `program()` の暗黙終端 | 合成を削除（`[rack]` の前置は残す） |
-| **B** バス無し audio の直接描画 | `resolveDispatchChannel()` に skip。🔴 **`isNoteSequence()` の早期 return より後ろ**（前だと MIDI が無音・#282 の再発） |
-| **C** daemon のバス既定ライン | `legacy(Master, [])` → **`[Rack]`（無音）** |
-| **D** instrument の source routing | `SetSourceRouting.target` を**明示 3 値**（`none` / `master` / `bus`）へ。🔴 **一方通行の wire 変更** |
-
-#### 🔴 横断規則を 6 箇所へ適用（main の審査で要求したもの）
-
-> routing 状態が「書かれていない」「表現できない」「失われた」いずれかの時、その信号はどこにも加算されない。
-> **master へ倒すことは最下層に暗黙 master を作り直すこと**である。
-
-| 箇所 | 実装 |
-|---|---|
-| `SourceDestCell::encode` | `Bus(_) \| Link(_) => Self::NONE` ← **Fable の監査も見ていなかった箇所** |
-| `SourceDestCell::decode` | `_ => SourceDest::None` |
-| `SourceDest::default()` | `#[default] None` |
-| `FeedDest` 変換 ×2 | `None => Discard` / `Link(_) => Discard` |
-| slot 解放時 | `store(SourceDest::None)` ×2 |
-
-**除外は master トラック自身の device 出口のみ**（owner 裁定で 1,2 固定＝定数なので規則の定義域外）。
-
-#### 🔴 実機 gated が 4 件落ちた — **すべて譜面・harness の誤り**（実装は無変更）
-
-| 失敗 | 原因 |
-|---|---|
-| 既存 `sum-bus insert across restart` | **移行漏れ** — 束 S で「出口を書かない sum は無音」になったので `sum("drum").output()` が要る |
-| X1 / X4 / X5 | 🔴 **`LOOP()` は追加ではなく置換** — `LOOP(a)` の次の `LOOP(b)` が a を止める。根拠は `calculateLoopDiff()`（`process-statement.ts:679`）→ `stopSequences(toStop)`（`:777`） |
-
-**main が先に潰した仮説**（unit で実測）: `ref883.output()` は skip されず（`{kind:'hardware'}`）、
-4 イベントをスケジュールし、`loop()` も throw しない。**TS 層は正しい**。
-崩れたのは「では実機の無音は実装のせい」という推論の方で、**`LOOP` の意味論**が抜けていた
-（個別に `loop()` を呼ぶ unit では原理的に再現しない形）。
-
-Codex は同じ誤用があった **X8 も落ちる前に先回りで修正**し、**静的回帰テストも追加**した
-（`gated-assertion-hygiene.spec.ts:557`）。
-
-⚠️ **ただしその検査は名指しの 4 ファイルしか守らない。** 3 本の新 fixture が揃って踏んだ性質なので、
-**一般化する価値がある**（例: gated fixture 内に `LOOP(` が 2 回以上現れたら red）。別途扱う。
-
-#### 実機 gated の実測（main が sandbox 外で）
-
-```
-Tests  45 passed | 1 skipped (46) | 0 failed
-
-[#883 X1] explicit-reference + orphan RMS: 0.08701663328815765      ← 漏れれば 2 倍
-[#883 X2] omitted=0.0870166332954772  explicit=0.08701663328808863
-[#883 X3] sendRms=0.0436116233054862  plainRms=0.0870166332927243
-          ratio=0.5011872058848396                                   ← 期待 10^(-6/20)=0.5012
-[#883 X4] reference + unterminated-sum member RMS: 0.087016633295434
-[#883 X5] withSilentInstrument=0.08701663329662541  refRms=0.08701663329662539
-```
-
-🔴 **X3 が #883 の実害そのもの**（`send(sum)` の dry が master へ二重に届く）**を実測で塞いだ証拠**。
-🔴 **X5 は小数点以下 16 桁が一致** — 出口を書かない instrument は基準の音に **1 bit も足していない**。
-
-#### ゴールの収束条件
-
-1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
-
----
-
-### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: ✅ 束 S 実装
-
-出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
-未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
-`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
-確定するため、#282 の挙動を維持する。
-
-編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
-(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
-実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
-
-この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
-`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
 
 ## Archived sections
 
