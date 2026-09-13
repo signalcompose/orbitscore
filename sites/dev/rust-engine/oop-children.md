@@ -654,7 +654,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 ## Sources
 
 - `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`（spawn し得る child の正本）
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:67-97,127-239` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost`（pipelined submit/read 状態機械、RT-safe `process_block`）
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard`（child teardown の RAII ガード：QUIT → reap → kill フォールバック → shm 削除）
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124`（全文） — `ParentWatch`（`getppid()` ベースの親死活監視、rate-limit 済み、`orphaned_for_tests`）

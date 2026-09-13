@@ -1357,7 +1357,7 @@ plugin 名は手打ちせず `lib.rs` の定数から読み出します。
 shm パスでした。`ActualFixture::new` はパスの一意化に `line!()` を使っていたのですが、`line!()` は
 **マクロを書いた行**で展開される定数なので、呼び出し元がいくつあっても値は 1 つです。結果として
 4 つの fixture が同じ `orbit-rack-gain-{pid}-652.shm` を共有し、`create_shared`
-（`orbit-audio-sandbox/src/transport.rs:2031-2041`）の `.truncate(true)` が、**別のテストが
+（`orbit-audio-sandbox/src/transport/shm.rs:171-186`）の `.truncate(true)` が、**別のテストが
 mmap したまま使っている領域を切り詰めて**いました。書き込みが EOF の外側に落ちて SIGBUS になる、
 という筋です。単一スレッドでは落ちず並列でだけ落ちるのも、これがテスト**間**の衝突だからです。
 

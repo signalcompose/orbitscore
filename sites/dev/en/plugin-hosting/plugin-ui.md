@@ -1223,12 +1223,12 @@ must be CLAP.
 - `rust/crates/orbit-child-ui/src/lib.rs:203-225` — `open_command` (drain gate; separated details)
 - `rust/crates/orbit-child-ui/src/lib.rs:268-319` — `tick` (the Phase B trigger and release order)
 - `rust/crates/orbit-child-ui/src/lib.rs:321-342` — `begin_close` (the reentry guard where three paths converge)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:79-87` — `EVT_SLOTS = 2` and the const assert
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:265-277` — the evt ring and `dirty_epoch` fields of `SharedRegion`
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:359-378` — `ReleaseAcquireSeq` (ordering fixed by the type)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:512-538` — `EventRingChild::service` (slot-reuse invariant; retain and retry)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:1213-1225` — `UiPumpNotification`
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374` — the per-window `UiPumpState`
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:33-41` — `EVT_SLOTS = 2` and the const assert
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-234` — the evt ring and `dirty_epoch` fields of `SharedRegion`
+- `rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:37-56` — `ReleaseAcquireSeq` (ordering fixed by the type)
+- `rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:192-218` — `EventRingChild::service` (slot-reuse invariant; retain and retry)
+- `rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45` — `UiPumpNotification`
+- `rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82` — the per-window `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame names
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` is Phase A acceptance only
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
