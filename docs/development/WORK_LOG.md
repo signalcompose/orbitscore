@@ -379,6 +379,54 @@ Closes #913
 
 ---
 
+### docs(dev-site): re-anchor the extension-split file references and record the new module layout (Sep 13, 2026)
+
+PR [#909](https://github.com/signalcompose/orbitscore/pull/909)（#887・`extension.ts` /
+`mcp-server.ts` の 19 モジュール分割、マージコミット `ca745e8`）への**ドキュメント追従のみ**。
+`packages/` と `rust/` とテストは 1 行も触っていない。
+
+#### 何を直したか
+
+dev 学習サイトの散文にある `extension.ts` / `mcp-server.ts` への行参照を、分割後の位置へ
+付け替えた（ja / en 同時・合計 160 参照）。
+
+- 範囲付き参照（`<file>:<a>-<b>`）: **110 件のうち 96 件**を再アンカー
+- 基底名だけの参照（`` `extension.ts:3405` `` 等）: **62 件**を再アンカー
+- `sites/dev/editor/vscode-architecture.md` の drift 節に、**分割の対応表**（主題 → 分割後の
+  ファイル）と MCP `tools/list` の順序復帰（`8561210`）を追記
+- 誤った地の文 2 件を修正: 「候補の組み立ては `extension.ts` 側」→ `dsl-providers.ts`、
+  `EngineViewProvider` (`extension.ts` 側) → `engine-view-provider.ts`
+
+#### 🔴 参照は分割より前から既に腐っていた
+
+再アンカーの方法として、まず**分割前の `extension.ts` のその行範囲の中身**を新モジュール群から
+内容一致で探した。**54 組中 17 組しか一致しなかった。**
+
+原因は、**分割より前の時点で散文の行番号が既にずれていたこと**である。実測（`0f930f3` =
+マージ直前の main）:
+
+| 散文が指していた範囲 | 実際にそこに在ったもの | 記述 |
+|---|---|---|
+| `extension.ts:286-498` | `if (playheadActiveRanges.size > 0) {` | `activate()` 全体 |
+| `extension.ts:500-521` | `decorationType.dispose()` | `deactivate()`（実際は 489 行目） |
+| `extension.ts:2044-2198` | `globalInitialized = false` | `startEngine()`（実際は 1927 行目） |
+| `extension.ts:3716-3726` | `function registerHoverProvider(` | カタログ不在の案内 |
+
+**「範囲内」は「正しい」を意味しない**（#911 が同じ指摘をしている）。したがって内容一致では
+引けず、**箇条書きが明示しているシンボル名で引き直した** — 各シンボルの定義位置を現在の
+ツリーで読んで範囲を確定させている。
+
+#### 直していないもの
+
+- **#502 で削除された関数を指す 14 件**（`getConfiguredEngineKind()` /
+  `resolveScsynthForUI()` / `startEngine()` の `sc` 分岐 / `bundleStatusItem` の engine kind
+  コメント）。`sites/dev/decisions/adr-003-scsynth-bundle.md` と
+  `sites/dev/editor/vscode-architecture.md:1066` に在る。**指す先が存在しない**ので範囲の
+  付け替えでは直らず、箇条書きの文章そのものを書き換える判断が要る（#911 の 3 番）
+- **`check-citations.mjs` に散文の範囲外検査を足すこと**（#911 の 1 番・本体）。仕組みの追加は
+  テスト / スクリプトの変更なので、この追従 PR の範囲外
+
+
 ### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
 
 `/code:peer-review-team` の comment-analyzer が出した 2 件。**コメントのみの変更**で、
@@ -1891,4 +1939,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-12）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1 と #888 子 1／#878 を含む
+- [2026-09（前半・09-01〜09-12）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1、#883 束 S / 本体 (#883)、#888 子 1、#878 を含む
