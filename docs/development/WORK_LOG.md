@@ -262,6 +262,37 @@ Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して 
   （`grep -rl "pre-edit" sites/` が 0 件）。バイリンガル追従の対象も発生しない
 - `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
   退避した既存エントリ。過去ログなので触らない
+
+### docs: record the 4.1.0 follow in the dev-site provenance Notes (Sep 13, 2026)
+
+PR [#928](https://github.com/signalcompose/orbitscore/pull/928)（#926・4.1.0 バンプ）への
+docs 追従（実装・テストは変更なし）。
+
+#928 は dev サイト 4 ページ（`orientation/architecture-overview.md` と
+`decisions/adr-002-dsl-v3-pivot.md` の ja + en）の**本文の版表記だけ**を 4.1.0 に上げ、
+同じページの冒頭 Note は「2026-09-12 に #883（拡張 **4.0.0**）まで追従しました」のままだった。
+**本文と来歴注記が同一ファイル内で食い違う**ので、Note に 2026-09-13 の 4.1.0 追従を追記した。
+
+`verified-against` / `verified-at` は**据え置き**。STYLE_GUIDE §4「`verified-against` の更新
+ポリシー」では「小規模 cross-link / 体裁修正のみ」は更新しない、であり、版表記の差し替えは
+本文と code の対応関係を変えない。2026-09-12 の #883 追従も同じ 4 ページで `56c34c3` /
+`2026-09-11` を据え置いており、その前例に合わせた。
+
+🔴 直さず報告（PR 本文へ）:
+
+- **版表記の同期を守らせる仕組みが無い。** #928 の記述（本ログ上方）自身が「4.0.1 でも
+  取りこぼして `10d3c7eb` を後から出した」「**2 回連続で同じ形**」と書いているのに、
+  `packages/vscode-extension/package.json` の版と doc の版を突合するテストは存在しない
+  （`tests/docs/` は `planning-issue-state` と `worklog-size` のみ）。CLAUDE.md の
+  「規律を足す時は、同時にそれを守らせる仕組みを足すこと」に対して、仕組みだけが欠けている
+- **`CHANGELOG.md` が 1.1.0（2026-05-06）で止まっている。** 2.0.0 / 3.0.0 / 4.0.0 / 4.0.1 /
+  4.1.0 のどれも項が無く、`[Unreleased]` は #212 の内容のまま。どの版を遡って書き起こすかは
+  リリース判断なので追従作業では決めない
+
+Part of #926
+
+---
+
 ### chore(release): bump the extension to 4.1.0 (Sep 13, 2026)
 
 **Issue**: #926。出すのは **#922（振る舞いの修正）** + #918 / #920（テストのみ）。

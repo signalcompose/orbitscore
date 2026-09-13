@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12, and **only the engine / daemon spawn sections** brought up to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889) — starting the engine on VS Code's bundled Node and not passing `ELECTRON_RUN_AS_NODE` on to the daemon) on the same day. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12, and **only the engine / daemon spawn sections** brought up to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889) — starting the engine on VS Code's bundled Node and not passing `ELECTRON_RUN_AS_NODE` on to the daemon) on the same day. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**.
 
 # 0-2. Architecture Overview
 
