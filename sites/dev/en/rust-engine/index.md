@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: f2245bb
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`).
 
 # RE-1. Daemon Architecture Overview
 
@@ -811,9 +811,11 @@ position) and `output` (an exit), and the array order is the signal order.
 rejected by `validate_line_program` on the grounds that RT could not execute it. The first half of
 #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) removed both: a `pan` op
 in `-1..=1` is now on the wire and RT executes it. The pan law on a bus is not the raw equal-power
-one but `√2 · equal_power_pan(p)`; the reason (the source side already applies `1/√2` at center)
-is in the "`Pan` — equal-power panning on a bus" section of
-[SC-2](/en/signal-chain/mixer-audio-line).
+one but an **attenuate-only balance** (`balance_pan`): center passes through as `(1, 1)` and an
+extreme is `(1, 0)`. As of #834 it was `√2 · equal_power_pan(p)`;
+[#922](https://github.com/signalcompose/orbitscore/pull/922) (#921 / `#851` B-3, ruling D′,
+2026-09-13) made it attenuate-only to match the source side. The reasoning is in the
+"`Pan` — balance on the bus" section of [SC-2](/en/signal-chain/mixer-audio-line).
 
 Validation is split across two layers, which is the thing worth noticing when reading it. The
 **JSON shape** (spelling of `op`, a duplicated `rack`, the range of `gain`, the shape of `dest`)
@@ -1136,13 +1138,24 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 ```
 
 **Expected value (verified on real hardware, 2026-07-17)**: playing
-`test-assets/audio/sine_880.wav` (a sine of amplitude 1.0) once yields a measured capture-WAV
-peak of **0.70711** (= 1.0 × the equal-power center-pan gain √0.5; the engine applies
-equal-power panning, so a mono asset's capture peak is its amplitude × √0.5). For the plugin
-oracles, clap-test-synth's known amplitude 0.25 is observed as exactly **0.25000** in the
-capture (WORK_LOG 6.258 / 6.262 — also matching the gated tests' `post_mix_peak` stats,
+`test-assets/audio/sine_880.wav` (a sine of amplitude 1.0) once yielded a measured capture-WAV
+peak of **0.70711** (= 1.0 × the center-pan gain √0.5 of the day; the engine applied
+equal-power panning at center too, so a mono asset's capture peak was its amplitude × √0.5). For
+the plugin oracles, clap-test-synth's known amplitude 0.25 is observed as exactly **0.25000** in
+the capture (WORK_LOG 6.258 / 6.262 — also matching the gated tests' `post_mix_peak` stats,
 i.e. two independent measurement paths agreeing at the same tap point). These figures are the
 2026-07-17 measurements; they were not re-run during the 2026-09-01 re-read.
+
+🔴 **0.70711 predates #921.**
+[#922](https://github.com/signalcompose/orbitscore/pull/922) (ruling D′, 2026-09-13) moved the
+source side to `balance_pan`, so **the `1/√2` at center pan is no longer applied**
+(`rust/crates/orbit-audio-core/src/scheduler.rs:302-306`; the unit test was renamed from
+`pan_center_applies_equal_power_minus_3db` to `pan_center_passes_through_unattenuated`). The
+procedure above therefore **needs re-measuring on real hardware** — this follow-up did not measure
+it, so no new expected value is written here. What that PR did re-measure is the E2E RMS golden
+`tests/e2e/output-line-expectations.ts:134`, which moved from `0.0846173` to `0.1230601` (= ×√2).
+clap-test-synth's **0.25000 does not move, because it is an instrument (the feed path)** — ruling
+D′ changed the source stage and the line stage, and feeds are summed as-is.
 
 ## Next exploration candidates
 
