@@ -242,7 +242,7 @@ npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を 
 ### Hook Protection
 
 **Automated Guards:**
-- `pre-edit-check.sh` blocks Edit/Write on main branch
+- `pre-edit-check.sh` blocks Edit/Write on main branch（**リポジトリ配下のみ**。repo 外の絶対パス = memory / scratchpad / `~/.cvi` は対象外 — #913）
 - `pre-commit-check.sh` blocks Serena memory commits on main
 - `session-start.sh` shows reminders at session start
 - `post-push-verify.sh` compares local HEAD with `origin/<branch>` after `git push` and reports a mismatch (does not block — #742)
