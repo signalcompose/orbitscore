@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f575f27
-verified-at: "2026-09-12"
+verified-against: f2245bb
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to #883 bundle C (PR [#884](https://github.com/signalcompose/orbitscore/pull/884) — the omitted `output()` destination, realization elision, and `.output(` destination completion) on 2026-09-12 (citation line numbers are anchored at `f575f27`; **bundle S (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) is not reflected on this page yet**).
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to #883 bundle C (PR [#884](https://github.com/signalcompose/orbitscore/pull/884) — the omitted `output()` destination, realization elision, and `.output(` destination completion) on 2026-09-12 (citation line numbers are anchored at `f575f27`; **bundle S (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) is not reflected on this page yet**). It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`).
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -720,46 +720,84 @@ it directly into RT. Details in the next heading).
 The style is "introduce the type ahead of time, but do not let an install succeed while RT cannot
 execute it". Accepting one would produce the hardest kind of silent failure to find: the call
 reports success and the callback ignores the program (`Pan` was the first op to graduate out of
-this gate; the "`Pan` — equal-power panning on the bus" section below covers the wiring).
+this gate; the "`Pan` — balance on the bus" section below covers the wiring).
 
-#### `Pan` — equal-power panning on the bus (#611 PR-O4)
+#### `Pan` — balance on the bus (#611 PR-O4, attenuate-only since #921)
 
 `LineOp::Pan` was rejected by `validate_line_program` for the same reason as `OutputDest`, up
 through this bundle. This bundle removes that rejection and replaces the `LineOp::Pan(_)` arm in
 both master-line execution (`execute_master_line`) and the post-loop with code that actually scales
 L/R.
 
-```rust
-// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
-#[inline]
-pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
-    ready && scratch_len >= block
-}
-```
-
 Turning a position into L/R coefficients was factored out into `line_pan_coefficients`
 (#859, 2026-09-11). `apply_line_pan` no longer computes them itself — it just calls this function
 **at the ramp's start and end positions**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output/bus_topology.rs:226-229
+// rust/crates/orbit-audio-native/src/output/dsp.rs:63-66
 #[inline]
-pub(super) fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
-    ready && scratch_len >= block
+pub(super) fn line_pan_coefficients(pan: f32) -> (f32, f32) {
+    balance_pan(pan)
 }
 ```
 
-The point is that this uses **`equal_power_pan` scaled by `√2`**, not the raw function. The source
-side (`Scheduler`) already multiplies by `(1/√2, 1/√2)` at center pan
-(`pan_center_applies_equal_power_minus_3db`). Applying the plain equal-power law a second time on
-the bus would drop 3 dB the moment a chain writes `seq.pan(0)` (center — supposedly a no-op).
-Normalizing by `√2` makes center `(1, 1)` (unity) and hard-left `(√2, 0)`; combined with the
-source's existing center scaling, `(1/√2·√2, 0) = (1, 0)` — exactly today's source-side hard-left
-amplitude. So **a pan golden for a line with no rack moves only by rounding error**; the only
-configuration that changes is "rack, then pan" (the point of application moves behind the rack).
+That single line is what [#922](https://github.com/signalcompose/orbitscore/pull/922) (#921 /
+`#851` B-3, owner ruling D′, 2026-09-13) replaced. As of the first half of PR-O4
+([#834](https://github.com/signalcompose/orbitscore/pull/834)) it multiplied `equal_power_pan(p)`
+by `√2`; it now returns `balance_pan(p)` unchanged.
+
+```rust
+// rust/crates/orbit-audio-core/src/scheduler.rs:130-137
+pub fn balance_pan(pan: f32) -> (f32, f32) {
+    if pan == 0.0 {
+        return (1.0, 1.0);
+    }
+    let (left, right) = equal_power_pan(pan);
+    let peak = left.max(right);
+    (left / peak, right / peak)
+}
+```
+
+What it does is simple: **the shape of the equal-power law is kept, and the result is normalized by
+its peak**. Center becomes `(1, 1)`, hard-left `(1, 0)`, hard-right `(0, 1)`. In other words the
+surviving side is **never lifted**, so no position can exceed the input's full scale. The early
+return on `pan == 0.0` removes rounding error: in f32 `cos(π/4)` and `sin(π/4)` can differ by 1 ULP,
+so the division alone would not land center exactly on `(1, 1)`.
+
+The interesting part is that **the source side (`Scheduler`) now calls the same function**.
+
+```rust
+// rust/crates/orbit-audio-core/src/scheduler.rs:302-306
+        let (pan_l, pan_r) = if self.output_channels == 2 {
+            balance_pan(event.pan)
+        } else {
+            (1.0, 1.0)
+        };
+```
+
+Both stages attenuate only, so composing the two also attenuates only. Neither side carries a
+"coefficient that assumes the other side cancels it" any more, which means reading one stage no
+longer requires holding the other in mind.
+
+So why was the `√2` dropped? The grounds for the ruling live in the design document
+[`docs/design/611-o-surface-bundle-design.md`](https://github.com/signalcompose/orbitscore/blob/f2245bb/docs/design/611-o-surface-bundle-design.md)
+§4.1, and come down to two points. First, this system has **no limiter and no clamp**
+(`limiter()` / `compressor()` / `normalizer()` lost their implementations in #502, and the float
+output is not clamped). Anything above 1.0 goes straight to the device, so a law that lifts is
+judged too expensive. Second, `Pan` on a bus is a **balance** (it scales the L/R that already
+exist), not the **distribution** of a mono source that the equal-power law assumes. Panning to an
+extreme really does throw away the contents of one channel, so the `√2` was **adding energy that
+does not exist**.
+
+The consequence is that **audio is now `√2` (+3 dB) louder in absolute terms even for a score that
+never writes `pan`**, because the `1/√2` the source side applied at center is gone. The
+real-machine goldens were re-measured in the same PR: `noBus` in
+`tests/e2e/output-line-expectations.ts:134` moved from `0.0846173` to `0.1230601`
+(= the old measurement `0.08701663` × `√2`).
 
 The pan position itself is held in `current_gain` (next section) as a value in −1..1 and ramps
-toward its target with the same `advance_line_ramp` used for gain. The trig (`equal_power_pan`) is
+toward its target with the same `advance_line_ramp` used for gain. The trig (`equal_power_pan`,
+inside `balance_pan`) is
 computed **twice per block** — the coefficients for the start and end positions — and the **L/R
 coefficients are interpolated linearly** between them.
 

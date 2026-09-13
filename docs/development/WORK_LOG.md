@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the attenuate-only pan ruling into the specs and both sites (Sep 13, 2026)
+
+PR [#922](https://github.com/signalcompose/orbitscore/pull/922)（#921 / `#851` B-3 の裁定 D′）へ
+docs を追従（実装・テストは変更なし）。`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 に
+「pan 則の改訂」を追記し、dev サイト SC-2 / RE-1 / RE-3 と user サイト `methods.md` /
+`USER_MANUAL`（いずれも ja + en）を `balance_pan`（中央素通り・端 `(1, 0)`）へ更新。audio が
++3 dB になる破壊的変更と `gain(-3)` の回避策を user 側に明記した。RE-1 の capture peak `0.70711` は「#921 より前の値・要再測定」と注記するに留めた（実機で測っていないため）。
+
+🔴 SC-2 `Pan` 節のコードブロック 2 つが `line_pan_coefficients` を説明しながら `bus_topology.rs:226-229`（`channel_egress_active`）を引用していた誤りも直した。逐語一致なので `docs:check` は緑のまま通っていた — **引用チェッカは「正しい関数を引用しているか」を見ない**。
+
+🔴 直さず報告: `INSTRUCTION_ORBITSCORE_DSL.md:1771`「`pan(random)` は発音側のまま」と #922 の前提「`event.pan` は本番コードで一度も設定されない」が食い違う（`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:125`）。仕様判断なので追従作業では決めない。
+
 ### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
 
 `#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの

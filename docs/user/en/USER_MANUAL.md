@@ -211,6 +211,18 @@ kick.gain(-3)         // Apply immediately
 kick.pan(-50)         // Apply immediately
 ```
 
+> 🔴 **`pan()` attenuates only (changed 2026-09-13, #921 / PR
+> [#922](https://github.com/signalcompose/orbitscore/pull/922))**
+>
+> `pan()` places a sound by keeping the side you pan toward and **turning the other side down**.
+> Panning further never makes anything louder: at `pan(-100)` the right channel is silent and the
+> left channel stays at the level it had at `pan(0)`. The further you pan, the quieter the result
+> sounds overall — add `gain()` if you want to bring it back up.
+>
+> The same change removed the -3 dB the source side used to apply at center, so **the same score
+> plays audio files about 1.4x (+3 dB) louder**. Add `gain(-3)` to match the previous level
+> (instrument levels are unchanged).
+
 ### 4. Method Chaining
 
 All methods return `this`, enabling fluent syntax:
