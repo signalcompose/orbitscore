@@ -1104,9 +1104,7 @@ mod tests {
         active.store(true, Ordering::Release);
         let mut hw = vec![0.0; 4];
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        assert!(hw
-            .iter()
-            .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
+        assert!(hw.iter().all(|&sample| (sample - 1.0_f32).abs() < 1e-6));
     }
 
     #[test]
@@ -1144,11 +1142,9 @@ mod tests {
         let mut hw = vec![0.0; 4];
         let mut link = None;
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        // center pan の equal-power gain は √0.5。tagged=2.0×√0.5×0.5、
-        // untagged=3.0×√0.5 なので、両者の sum = 2√2 を値で pin する。
-        assert!(hw
-            .iter()
-            .all(|&sample| (sample - 2.0_f32.sqrt() * 2.0).abs() < 1e-6));
+        // 🔴 #921（裁定 D′）で中央は素通りになった。tagged=2.0×0.5、untagged=3.0 なので
+        // 両者の sum = 4.0。以前はここに発音側の固定 −3 dB（√0.5）が掛かっていた。
+        assert!(hw.iter().all(|&sample| (sample - 4.0_f32).abs() < 1e-6));
     }
 
     #[test]
@@ -1215,10 +1211,8 @@ mod tests {
         let mut hw = vec![0.0; 4];
         let mut link = None;
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        // kick の寄与（2.0 × equal-power pan √0.5）が drum の 0.5×gain を経て hw に現れる。
-        assert!(hw
-            .iter()
-            .all(|&sample| (sample - 2.0_f32.sqrt() * 0.5).abs() < 1e-6));
+        // kick の寄与（2.0・#921 で中央は素通り）が drum の 0.5×gain を経て hw に現れる。
+        assert!(hw.iter().all(|&sample| (sample - 1.0_f32).abs() < 1e-6));
     }
 
     #[test]
@@ -1261,10 +1255,10 @@ mod tests {
         let mut hw = vec![0.0; 4];
         let mut link = None;
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        // raw = 2.0 × equal-power pan √0.5（post-pan・pre-insert）。
+        // raw = 2.0（#921 で中央は素通り・post-pan / pre-insert）。
         // dry = raw × 0.5（insert 後）が Master へ、wet = dry × 0.5（send gain・post-fader）が
         // aux 経由で Master へ。hw = dry + wet = raw × 0.75。
-        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        let raw = 2.0_f32;
         assert!(hw.iter().all(|&sample| (sample - raw * 0.75).abs() < 1e-6));
     }
 
@@ -1432,7 +1426,7 @@ mod tests {
         let frames = 48;
         let program = LineProgram::with_seeds(vec![LineOp::Pan(1.0)], vec![-1.0]);
         let ramp = line_ramp(&program, 0, 1.0, frames, 240);
-        let centered = 0.5_f32.sqrt();
+        let centered = 1.0_f32;
         let mut next_block = vec![centered; frames * 2];
         apply_line_pan(&mut next_block, frames, ramp);
 
@@ -1502,7 +1496,7 @@ mod tests {
             ]),
             2,
         );
-        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        let raw = 2.0_f32;
         assert_eq!(
             hw.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>(),
             vec![raw.to_bits(); 4]
@@ -1528,7 +1522,7 @@ mod tests {
             ]),
             2,
         );
-        let expected = (2.0_f32 * 0.5_f32.sqrt()) * 3.0;
+        let expected = 2.0_f32 * 3.0;
         assert_eq!(
             hw.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>(),
             vec![expected.to_bits(); 4]
@@ -1597,7 +1591,7 @@ mod tests {
             }),
         ]);
         let hw = render_tagged_line(program, 48);
-        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        let raw = 2.0_f32;
         assert!(
             (hw[0] - raw).abs() < 1e-6,
             "the first frame must use the starting gain: {hw:?}"
@@ -2119,7 +2113,7 @@ mod tests {
 
         // override 前: 明示 static Master へ直接加算される（drum の 0.5×gain を経ない）。
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        let raw = 2.0_f32;
         assert!(hw.iter().all(|&sample| (sample - raw).abs() < 1e-6));
 
         // override 書き込み（= `SetBusRouting` が control 側から行う操作の模擬）。
@@ -2177,7 +2171,7 @@ mod tests {
 
         // override 前: dry のみ Master へ。
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        let raw = 2.0_f32;
         assert!(hw.iter().all(|&sample| (sample - raw).abs() < 1e-6));
 
         // send gain override 書き込み（`SetBusRouting` の模擬）。
@@ -2267,9 +2261,7 @@ mod tests {
         let mut hw = vec![0.0; 4];
         let mut link = None;
         render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
-        assert!(hw
-            .iter()
-            .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
+        assert!(hw.iter().all(|&sample| (sample - 1.0_f32).abs() < 1e-6));
     }
 
     #[test]
@@ -2584,10 +2576,11 @@ mod tests {
         let mut hw = vec![0.0f32; frames * 2];
         execute_master_line(&mut master, frames, 2, &mut hw);
 
-        // apply_line_pan(pan=-1.0) の実測ゲインは (√2, 0)。buffer をすべて 1.0 に揃えているので
+        // 🔴 #921（裁定 D′）で apply_line_pan(pan=-1.0) は (1, 0) になった（減衰のみ）。
+        // buffer をすべて 1.0 に揃えているので
         // hw の値はそのままこのゲインになる（`LineOp::Pan(_) => {}` に戻すと hw は 1.0 のまま
         // なので、この差で退行を検出できる）。
-        let hard_left = std::f32::consts::SQRT_2;
+        let hard_left = 1.0_f32;
         for frame in hw.as_chunks::<2>().0 {
             assert!(
                 (frame[0] - hard_left).abs() <= 1e-6,

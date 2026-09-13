@@ -47,7 +47,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use thiserror::Error;
 
-use orbit_audio_core::{equal_power_pan, Engine, FeedDest};
+use orbit_audio_core::{balance_pan, Engine, FeedDest};
 
 use crate::link_audio_ring::{PostMixSink, RingTapSink};
 use crate::post_processor::{CallbackTimeStats, PostProcessor};

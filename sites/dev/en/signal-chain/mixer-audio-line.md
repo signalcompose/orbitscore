@@ -1184,7 +1184,7 @@ event mixing → feed addition (`422-441`: `*dst += *sample` into `hardware_out`
 quoted.
 
 ```rust
-// rust/crates/orbit-audio-core/src/scheduler.rs:450-463
+// rust/crates/orbit-audio-core/src/scheduler.rs:486-499
         // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
         // gain を適用する（バッファごとに進めると ramp が多重に進み desync するため frame ループは 1 つ）。
         for frame in 0..frames_to_render {
@@ -1481,7 +1481,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output/startup.rs:2491-2496
+// rust/crates/orbit-audio-native/src/output/startup.rs:2483-2488
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(
