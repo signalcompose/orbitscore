@@ -17,6 +17,66 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): implement E2E-4/E2E-5 against a real >=4ch device (Sep 13, 2026)
+
+owner が Loopback で **`OrbitScore E2E`（8ch）** を作成したので、`#611` O-surface で
+唯一 skip されていた `E2E-4 / E2E-5` の本体を書いた。**実機 gated が初めて skip 0 の
+46 passed になった**（#917 / #851 B-2）。
+
+#### 固定したもの
+
+| | 期待値 | 実測（4 周） |
+|---|---|---|
+| **E2E-5** `output(master, thru: true).output("3,4", db: -20)` | ch1/2 : ch3/4 = `10^(20/20)` | **9.999999818**（8 桁一致） |
+| **E2E-4** `output(master, thru: false).output(cue)` | 終端の後ろには到達しない | `cutCue` = **厳密に 0** |
+
+8ch あるので **ch5/6 を「誰も宛先にしていない対照」**として使い、E2E-4 の無音を
+「小さい」ではなく「**未使用チャンネルと同じ床**」で判定している（4ch デバイスでは飛ばす）。
+
+#### 🔴 Monitors を繋がなくてよいことを実測で確かめた
+
+capture は **cpal へ渡す最終 `hw` を読み取り専用で tap** している
+（`orbit-audio-native/src/output/render.rs:56-59`「tap であって mutation ではない」）ので、
+デバイスがその先へ流すかに依存しない。クロックも刻む（**first callback 12 ms**）。
+→ **BlackHole は不要**（設計 §8.3 の元案）。
+
+#### red-first ではない。変異で代替した
+
+O-surface の実装は v4.0.0 で出荷済みなので「実装前に書いて赤」は成立しない。
+代わりに**期待値を壊す変異 2 種**で、この判定が区別できることを確かめた:
+
+| 変異 | 結果 |
+|---|---|
+| E2E-5 の期待比 `10 → 3` | red（`expected 2.33 to be <= 0.12`） |
+| E2E-4 が ch3/4 ではなく **ch1/2 を見る**（off-by-one） | red（`cutCue` が `cutMaster` と同値・`cutLeak = 1`） |
+
+後者が重要で、**DSL は 1 始まり・`channelRms` は 0 始まり**なので取り違えが最も起きやすい。
+
+#### 🔴 自分の誤り 3 つ
+
+1. **配置**: 共有セッションのブロックの真ん中に置いたので、`launchIsolatedOrbitStudio` の
+   `killHarnessInstances()` が共有アプリを殺し、後続の `#606 T1` / `E2E-K3` が
+   `ECONNREFUSED` で落ちた。自前アプリ群の側へ移し、**境界にコメントを残した**
+2. **後始末**: `fs.rmSync` を裸で呼んでいて `ENOTEMPTY` で 2 周続けて赤くなった
+   （アサーションは全部通っていた）。**既に `removeHarnessTree` が
+   kill → 終了待ち → best-effort 削除を持っていた**ので、手書きをやめてそれを使った
+3. **Spotlight を索引中だと誤断**した。CPU は 0.0〜0.1% で、12 日間常駐していただけ。
+   **メモリ使用量だけを見て動いていると推測した**のが誤り
+
+#### 実機ゲートが 2 回メモリ不足で kill された
+
+`claude` プロセスが **89 個 / 5.28GB**（11 日 23 時間動く `--resume` が 17 個）積み上がり、
+free が 0.1GB まで落ちていた（swap は 0）。owner の許可を得て自分以外の **47 セッション**を停止し、
+free 0.2GB → **8.5GB**。その後 1 周で全件緑。
+
+#### 🔴 `-t` の限界を CLAUDE.md に足した
+
+`-t 'E2E-4/E2E-5'` は 2 分で回る（自己完結テストなので）。**だが `-t` は
+「そのテストが後続を壊すこと」を原理的に検出できない** — 上の誤り 1 は単独実行では
+**自分だけ緑**になる。**開発は `-t`、影響の確認とマージ前ゲートは全件**。
+
+---
+
 ### fix(hooks): let pre-edit-check.sh allow writes outside the repo on main (Sep 13, 2026)
 
 owner 指摘:
@@ -1913,23 +1973,6 @@ Tests  45 passed | 1 skipped (46) | 0 failed
 1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
 
 ---
-
-### feat: require explicit output routing across TS, wire, and the Rust runtime (#883) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: ✅ 束 S 実装
-
-出口を書かない audio / instrument と、出口を持たない sum / aux を無音にした。routing の
-未設定・表現不能・喪失は master へ倒さず discard する 1 規則に統一し、wire の source routing は
-`none` / `master` / `bus` の明示 3 値になった。MIDI は audio の skip より先に hardware dispatch を
-確定するため、#282 の挙動を維持する。
-
-編集時には出口無しを Warning (`output-missing`)、aux send だけを Information
-(`dry-not-routed`) として `.play()` に示し、どちらにも `.output()` の quick fix を提供する。
-実機 gated E2E X1 / X3 / X4 / X5 / X6 / X8 は追加のみ行い、sandbox 外で実行する。
-
-この互換性のない変更に合わせ、拡張を **4.0.0**、`DSL_VERSION` を **2.0** にした。
-`ENGINE_VERSION` は独立軸なので **2.0.0** のまま。
 
 ## Archived sections
 

@@ -6433,32 +6433,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS * 2,
   )
 
-  {
-    // #611 §8.3 (owner 2026-09-10): E2E-4 (thru: false terminates the chain) and E2E-5
-    // (a physical multi-output split is -20dB relative to master) need a >= 4ch output
-    // device. This machine has none as of the design date (2ch built-in speaker + 2ch Pro
-    // Tools Aggregate I/O only) — `it.skip` with a warning rather than writing an assertion
-    // body no device here can verify. Implement per design 611-o-surface-bundle §8.3 once a
-    // >= 4ch device exists (e.g. a Loopback.app virtual device).
-    const multiChannelDevice = appAvailable ? outputLineMultiChannelDevice() : undefined
-    if (appAvailable && multiChannelDevice === undefined) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[E2E-4/E2E-5] no >=4ch output device — install/configure one (e.g. Loopback.app) to run',
-      )
-    }
-    it.skipIf(!appAvailable || multiChannelDevice === undefined)(
-      '#611 E2E-4/E2E-5 (needs >=4ch device) — thru: false terminates the chain, and a physical multi-output split is -20dB relative to master',
-      async () => {
-        throw new Error(
-          'E2E-4/E2E-5 is unimplemented — a >=4ch device was detected but no test body exists ' +
-            'yet. Implement per design 611-o-surface-bundle-design.md §8.3.',
-        )
-      },
-      TEST_TIMEOUT_MS,
-    )
-  }
-
   // ──────────────────────────────────────────────────────────────────
   // #606 PR-K-A2 — plugin all-notes-off (T1 / E2E-K3)
   // ──────────────────────────────────────────────────────────────────
@@ -6572,6 +6546,180 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS,
   )
+
+  // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
+  // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
+  // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
+  // `#606 E2E-K3` が `ECONNREFUSED` で落ちた（2026-09-13 実測・#917）。
+
+  {
+    // #611 §8.3 (owner 2026-09-10): E2E-4 (thru: false terminates the chain) and E2E-5
+    // (a physical multi-output split is -20dB relative to master) need a >= 4ch output
+    // device. This machine has none as of the design date (2ch built-in speaker + 2ch Pro
+    // Tools Aggregate I/O only) — `it.skip` with a warning rather than writing an assertion
+    // body no device here can verify. Implement per design 611-o-surface-bundle §8.3 once a
+    // >= 4ch device exists (e.g. a Loopback.app virtual device).
+    const multiChannelDevice = appAvailable ? outputLineMultiChannelDevice() : undefined
+    if (appAvailable && multiChannelDevice === undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[E2E-4/E2E-5] no >=4ch output device — install/configure one (e.g. Loopback.app) to run',
+      )
+    }
+    it.skipIf(!appAvailable || multiChannelDevice === undefined)(
+      '#611 E2E-4/E2E-5 (needs >=4ch device) — thru: false terminates the chain, and a physical multi-output split is -20dB relative to master',
+      async () => {
+        // 🔴 **red-first ではない。** O-surface の実装は既に出荷済み（v4.0.0 以降）なので、
+        // 「実装前に書いて赤」は成立しない。代わりに**期待値を壊す変異**で、この判定が
+        // 本当に区別できることを確かめた（#917 の報告に実出力あり）。
+        //
+        // 🔴 `expectNoNewErrors` は呼ばない。この suite は自前のアプリを立てるので
+        // ERROR 行のベースラインが主セッションと別になる上、#908（`severity=warning` の
+        // 自己修復診断が `ERROR:` として数えられる）で間欠的に赤くなる。兄弟の
+        // `#661 D-0` も同じ理由で呼んでいない。
+        const requestedName = multiChannelDevice as string
+        const launched = await launchIsolatedOrbitStudio({
+          tmpPrefix: `${HARNESS_TMP_PREFIX}mch-`,
+          settings: {
+            'orbitscore.audioDevice': requestedName,
+            'orbitscore.engineDebug': false,
+          },
+          env: { ...process.env },
+          portBase: 39700,
+          prepareWorkspace: (mchTmpRoot) => {
+            fs.mkdirSync(path.join(mchTmpRoot, 'test-assets/audio'), { recursive: true })
+            fs.cpSync(
+              path.join(REPO_ROOT, 'test-assets/audio'),
+              path.join(mchTmpRoot, 'test-assets/audio'),
+              { recursive: true },
+            )
+          },
+        })
+        const { child, client, tmpRoot } = launched
+        try {
+          const session = createGatedSession(client, tmpRoot, {
+            clapSynthPath: '',
+            clapEffectPath: '',
+            vst3SynthPath: '',
+            vst3EffectPath: '',
+            clapSynthName: '',
+            clapEffectName: '',
+            vst3SynthName: '',
+            vst3EffectName: '',
+          })
+          // 🔴 デバイスの検査は**鳴っている間**に取る（`#661 D-0` と同じ理由: `runScore` から
+          // 戻った時点で engine は停止済みで `GetStatus` が返らない）。
+          let mchOutput: Record<string, unknown> | undefined
+          const result = await runScore(
+            session,
+            {
+              slug: '611-e2e45-device-pair',
+              fixturePath: 'tests/fixtures/mcp-e2e/output_line_device_pair.orbs',
+            },
+            async (ctx) => {
+              await captureSteady(ctx, 'split')
+              mchOutput = await requireDaemonOutput(client, '#611 E2E-4/E2E-5')
+              // `split` を止めて `cut` へ。同時に鳴らすと両方が master へ加算されて測れない。
+              await ctx.evaluate('split.stop()\nLOOP(cut)')
+              await captureSteady(ctx, 'cut')
+            },
+            { capture: true },
+          )
+          expect(result, 'E2E-4/E2E-5 must return captured windows').toBeDefined()
+          if (!result) throw new Error('E2E-4/E2E-5 did not return captured windows')
+
+          // 🔴 **要求したデバイスで鳴ったことを先に固定する。** RMS だけ見ると、
+          // `orbitscore.audioDevice` が黙って無視されて 2ch 既定デバイスへ落ちた場合に
+          // 「ch3/4 が無音」が**理由の違う緑**になりうる（`#661 D-0` の教訓）。
+          expect(mchOutput!.device_name, 'E2E-4/5 must honor the requested device').toBe(
+            requestedName,
+          )
+          expect(mchOutput!.device_fell_back, 'E2E-4/5 must not fall back').toBe(false)
+          const channels = result.analysis.format.channels
+          expect(channels, 'E2E-4/5 requires a >=4ch capture').toBeGreaterThanOrEqual(4)
+
+          /** チャンネル対のレベル（2 本の二乗平均）。DSL は 1 始まり・`channelRms` は 0 始まり。 */
+          const pairRms = (segment: string, firstChannel1Based: number): number => {
+            const a = result.channelRms(segment, firstChannel1Based - 1, STEADY_CAPTURE.guardSec)
+            const b = result.channelRms(segment, firstChannel1Based, STEADY_CAPTURE.guardSec)
+            return Math.sqrt((a * a + b * b) / 2)
+          }
+
+          const splitMaster = pairRms('split', 1)
+          const splitCue = pairRms('split', 3)
+          const cutMaster = pairRms('cut', 1)
+          const cutCue = pairRms('cut', 3)
+          const splitRatio = splitMaster / splitCue
+          const cutLeak = cutCue / cutMaster
+          // eslint-disable-next-line no-console
+          console.log(
+            '[#611 E2E-4/E2E-5] device-pair RMS:',
+            JSON.stringify({
+              device: requestedName,
+              channels,
+              splitMaster,
+              splitCue,
+              splitRatio,
+              cutMaster,
+              cutCue,
+              cutLeak,
+            }),
+          )
+
+          // E2E-5: `output(master, thru: true).output("3,4", db: -20)` → ch1/2 : ch3/4 = 10^(20/20)
+          expect(
+            splitCue,
+            `E2E-5 ch3/4 must carry the -20dB split (not silence); actual=${splitCue}`,
+          ).toBeGreaterThan(0)
+          expect(
+            relativeDelta(splitRatio, 10),
+            `E2E-5 ch1/2 : ch3/4 must be 10^(20/20); master=${splitMaster} cue=${splitCue} ` +
+              `ratio=${splitRatio}`,
+          ).toBeLessThanOrEqual(0.12)
+
+          // E2E-4: `output(master, thru: false).output(cue)` → 終端の後ろには到達しない
+          expect(
+            cutMaster,
+            `E2E-4 ch1/2 must still be audible; actual=${cutMaster}`,
+          ).toBeGreaterThan(0)
+          expect(
+            cutLeak,
+            `E2E-4 thru: false must terminate the chain, so ch3/4 stays silent; ` +
+              `master=${cutMaster} cue=${cutCue}`,
+          ).toBeLessThanOrEqual(0.05)
+
+          // 🔴 「静か」ではなく「**何も書かれていない**」ことを、使っていないチャンネルとの
+          // 比較で示す（8ch デバイスなら ch5/6 は誰も宛先にしていない）。4ch デバイスでは
+          // 対照が取れないので、その時はこの検査を飛ばす。
+          if (channels >= 6) {
+            const unused = pairRms('cut', 5)
+            // eslint-disable-next-line no-console
+            console.log('[#611 E2E-4] unused ch5/6 reference RMS:', unused)
+            expect(
+              cutCue,
+              `E2E-4 ch3/4 must sit at the unused-channel floor, not merely be quiet; ` +
+                `cue=${cutCue} unused=${unused}`,
+            ).toBeLessThanOrEqual(Math.max(unused, 1e-9) * 2 + 1e-6)
+          }
+        } finally {
+          try {
+            await client.call('stop_engine')
+          } catch {
+            // best-effort cleanup
+          }
+          // 🔴 **後始末の失敗でテストを落とさない。** 最初は `fs.rmSync(tmpRoot, RM_TREE)` を
+          // 裸で呼んでいて、アサーションが全部通っているのに
+          // `ENOTEMPTY: rmdir '.../user-data'` で 2 周続けて赤くなった（2026-09-13 実測・#917）。
+          // VS Code は `kill()` の後も `agent-host/sdk-cache/` 等へ書き続ける。
+          //
+          // `removeHarnessTree` が **kill → 終了待ち → best-effort 削除 → 残ったら警告**を
+          // 既に持っている（ハーネス本体と同じ扱い）。手で書き直さずこれを使う。
+          await removeHarnessTree(tmpRoot, child)
+        }
+      },
+      TEST_TIMEOUT_MS * 2,
+    )
+  }
 
   it.skipIf(!appAvailable)(
     '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
