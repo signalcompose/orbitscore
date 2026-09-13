@@ -239,7 +239,7 @@ pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 3 つ目の `CHILD_STATUS_LOAD_FAILED` は、名前のとおり child が load に失敗して終了する直前に立てる
 status です。rack child の `RackController::load_initial` が plugin のロードに失敗すると、まず
 失敗の詳細を `cmd_result_detail` へ publish し、**その後で**この status を store してから終了します。
-daemon 側（`engine_wrap.rs` の Root 3-3 分岐）は、child の早期終了を拾う watchdog signal
+daemon 側（`engine_wrap/outproc_effect_chain.rs:170` の Root 3-3 分岐）は、child の早期終了を拾う watchdog signal
 **より先に**この status を見ます。ですから host に上がるのは「child が死んだ」という汎用の文言では
 なく、「index n の load がこう失敗した」という具体的な理由になります。PR-1c（#441）の watchdog は
 役目を失ったわけではなく、この status を立てないまま死ぬ child（ロード以外の理由による早期終了）を

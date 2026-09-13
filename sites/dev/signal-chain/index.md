@@ -814,7 +814,7 @@ pub struct EffectChainPlan {
 
 ### daemon はどの経路で適用するか
 
-`engine_wrap.rs` の `apply_outproc_effect_chain` は、slot の状態と mode から 3 つの経路を
+`engine_wrap/outproc_effect_slots.rs` の `apply_outproc_effect_chain` は、slot の状態と mode から 3 つの経路を
 選びます。
 
 ```rust
@@ -1574,7 +1574,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `RackController::apply` の失敗経路: `PreparedStage::Load` が途中で失敗したときに構築済みの
   新インスタンスがどこで破棄されるか（`lib.rs:731-742` の `?` の先）と、`Busy` 拒否を TS が
   どう扱うか（`APPLY_CHAIN_MAILBOX_TIMEOUT` = 60 秒との関係）
-- `effect_chain_registry_is_intact` の判定条件（`engine_wrap.rs:5153`）— 「不健全な Active slot」を
+- `effect_chain_registry_is_intact` の判定条件（`engine_wrap/slot_helpers.rs:318`）— 「不健全な Active slot」を
   何で見分けているか（`current_child_pid` / `measurement_invalid` / `CMD_RESULT_CHILD_EXITED`）
 - `save_dropped` → `registerSavedState` の非同期登記（`effect-slot.ts:670-680`）と
   `project.yaml` の `states/` エントリの形
@@ -1606,7 +1606,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1170-1214,1341-1364` — 帳簿 `loadedEffectRacks` と respawn 後の rebuild
 - `rust/crates/orbit-audio-sandbox/src/rack_wire.rs:1-142` — wire 型の唯一の定義と、二重定義が生んだ serde 欠陥の記録
 - `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:55-138,163-184,453-461,644-679` — `ChainStageConfig` / `EffectChainPlan`・manifest 書き出し・child spawn
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5180` — `apply_outproc_effect_chain` の経路選択
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:144-237` — `apply_outproc_effect_chain` の経路選択
 - `rust/crates/orbit-effect-rack-child/src/lib.rs:1-6,85-102,196-217,330-426,491-824` — rack child の core（stage list・generation swap・`RackController::apply`）
 - `rust/crates/orbit-effect-rack-child/src/macos.rs:345-372` — stage のロード（拡張子でホスト選択・標準は `std-plugins/`）
 - `rust/crates/orbit-std-gain/src/lib.rs:1-104,269-309` — 標準 `Gain` の契約・変換・process

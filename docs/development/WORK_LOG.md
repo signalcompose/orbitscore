@@ -17,6 +17,60 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: re-anchor the dev-site prose citations that PR #895 moved out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr895`
+
+PR [#895](https://github.com/signalcompose/orbitscore/pull/895)（merge commit `9d39d2e`）の
+ドキュメント追従。`engine_wrap.rs` は 6,418 → 424 コード行になり、21 の子モジュールへ実体が移った。
+
+### 🔴 `docs:check` が見ていない引用が 40 件残っていた
+
+PR #895 は `// FILE:START-END` の**コードブロック引用**（`docs:check` が文字単位で突合する層）を
+すべて直していた。直っていなかったのは、**本文と「参考」節の散文引用**である。
+
+| 層 | #895 で直ったか | 機械検査 |
+|---|---|---|
+| ` ```rust // path:start-end ` のコードブロック | ✅ | `sites/dev/scripts/check-citations.mjs`（948 件） |
+| 本文の `` `engine_wrap.rs:6470-6560` `` 等 | ❌ **40 件が残存** | **無い** |
+
+`check-citations.mjs` はフェンス直後のヘッダ行しか見ないので、散文に書かれた path:line は
+**ラチェットの外側**にいる。今回はそこを実ファイルへ手で突き合わせて貼り直した。
+
+🔴 **この 40 件は #895 より前から line がずれていた**（base `0819a88` で実測。例:
+`engine_wrap.rs:4455` が指していたのは `path: &std::path::Path,` の行だった）。
+ただし #895 で**ファイルそのものが変わった**ので、行ずれではなく到達不能になった。
+
+### 直した範囲
+
+`sites/dev/`（ja）と `sites/dev/en/`（en）の 6 章 × 2 言語:
+`rust-engine/index.md` / `rust-engine/insert-bus.md` / `signal-chain/index.md` /
+`signal-chain/mixer-audio-line.md` / `plugin-hosting/catalog.md` / `plugin-hosting/plugin-ui.md` /
+`glossary.md` / `rust-engine/oop-children.md`。
+
+置換は 40 件の行番号付き引用と 18 件の散文言及で、**ja / en の件数一致を assert して**適用した
+（片方だけ直る事故を機械で防いだ）。
+
+### DSL 正本（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）も 5 箇所直した
+
+MX.4 の「今日の現在地」表が `SetBusRouting` の kind 拒否と forward-only 拒否を
+`engine_wrap.rs:7212-7216` / `:7237-7241` / `:5802-5806` / `:7207-7211` で引いていた。
+実体は `engine_wrap/bus_lines.rs` の `set_bus_routing` にある:
+
+| 規則 | 現在地 |
+|---|---|
+| `output '<name>' must be a sum bus` | `engine_wrap/bus_lines.rs:299-303` |
+| `send '<name>' must be an aux bus` | `engine_wrap/bus_lines.rs:325-329` |
+| forward-only（output） | `engine_wrap/bus_lines.rs:292-296` |
+| forward-only（send） | `engine_wrap/bus_lines.rs:318-322` |
+
+### frontmatter は触っていない（意図的）
+
+`verified-against` を新しい SHA へ上げると「章全体を再検証した」と主張することになる。
+本 PR が突き合わせたのは `engine_wrap/` 配下の引用だけで、同じ章が引いている
+`session.rs` / `output.rs` は **PR [#896](https://github.com/signalcompose/orbitscore/pull/896)
+（`9d39d2e` の直後にマージ）で分割済み**であり未検証である。`f23eb5d` のまま残すのが正しい。
+
 ### docs(dev-site): re-anchor the source pointers left behind by the #888 child-3 split (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr897` / **追従元**: PR [#897](https://github.com/signalcompose/orbitscore/pull/897)（merge `6dcd80bb2086fd6ced22e0c9711a7063e45ee535`）

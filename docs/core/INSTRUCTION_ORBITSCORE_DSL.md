@@ -1894,9 +1894,9 @@ sum / aux に `master` と名付けることは SC.2.1 規範 (7) で明示エ�
 > |---|---|
 > | `output(name)`（sum 名）・`mix.output(1, 2)` の物理アウト宣言 | ✅ **実装済み** |
 > | `output` の宛先は kind を問わない | ❌ **sum kind に限られる** — `SetBusRouting` が
->   `output '<name>' must be a sum bus` で拒否する（`engine_wrap.rs:7212-7216`）。
->   `send` 先も **aux kind に限られる**（同 `:7237-7241`） |
-> | forward-only（順序が前向きなら許す） | ✅ 実装済み（同 `:5802-5806` が index 比較で拒否） |
+>   `output '<name>' must be a sum bus` で拒否する（`engine_wrap/bus_lines.rs:299-303`）。
+>   `send` 先も **aux kind に限られる**（同 `:325-329`） |
+> | forward-only（順序が前向きなら許す） | ✅ 実装済み（同 `:292-296`（output）/ `:318-322`（send）が index 比較で拒否） |
 > | sum が別の sum へ出せる | ⚠️ wire の kind 検証は通るが、**DSL 側の経路は未整備**。
 >   旧 MX.5 は「sum ネスト不可」を v1 制約として挙げていた |
 > | `thru:` / `db:` / aux 宛て / `"3,4"` 形式 / mono 宛て / 同一ラインでの複数 `output` | ❌ **未実装**（PR-O3 → PR-O4） |
@@ -1969,10 +1969,10 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 > **v1 の現在地**（2026-09-10・束 O-wire-b = PR [#824](https://github.com/signalcompose/orbitscore/pull/824) マージ後）:
 > 🔴 **利用者から見える kind 制約は今日も生きている。** `SetBusRouting` は
 > 「output は sum のみ・send 先は aux のみ」を検証して拒否する
-> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7212-7216`・send 側は同 `:7237-7241`。
+> （`rust/crates/orbit-audio-daemon/src/engine_wrap/bus_lines.rs:299-303`・send 側は同 `:325-329`。
 > コード側のコメントは本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と
 > 規定するのは **到達点**である。
-> forward-only は今日も同じ規則で効いている（同 `:7207-7211`）。
+> forward-only は今日も同じ規則で効いている（同 `:292-296`（output）/ `:318-322`（send））。
 >
 > **PR-O3 の到達点（2026-09-10・[#824](https://github.com/signalcompose/orbitscore/pull/824) マージ）**:
 > `SetBusLine` の wire は入り、その `bus` 宛ては **forward-only しか検証しない**
