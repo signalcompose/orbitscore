@@ -17,6 +17,58 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: bring the README back in line with the shipped 4.1.0 (Sep 13, 2026)
+
+**Issue**: #937。README を実体と 1 行ずつ突き合わせ、**乖離 7 件**を直した。
+
+#### 🔴 最重要: 入門例が鳴らなかった
+
+`README.md` の `Basic DSL Syntax` は `kick.play(...)` を書いて **`.output()` が無かった**。
+#883（DSL 2.0・暗黙 master 終端の廃止）以降、**`output()` の無いシーケンスは無音**である。
+
+| | `.output()` |
+|---|---|
+| `examples/01_getting_started.orbs` | ✅ |
+| `sites/user/getting-started/first-sound.md:50` | ✅ |
+| **`README.md`** | 🔴 **無し** |
+
+`examples/` の audio 系 10 本はすべて `output(` を含む（0 は MIDI 専用の 2 本のみ）。
+**README だけが取り残されていた** — 読者が最初にコピペするコードなので実害が一番大きい。
+修正後の例は `parseAudioDSL` に通して **14 statements・エラー 0** を確認した。
+
+#### 直した残り 6 件
+
+| 箇所 | 何が古かったか |
+|---|---|
+| `Current Implementation Status` | **「2.0.0 is released」** — 同じ節の別行は 4.1.0 を名乗っており自己矛盾していた |
+| `Development Status` の Phase 7 | **「SuperCollider Integration」が `<details>` の外**＝現況として読めた（#502 で削除済み） |
+| `Testing` の件数 | `2271/58/2329`（2026-09-10）→ **`2497/76/2573`**（実測） |
+| 拡張のインストール手順 | **`Developer: Install Extension from Location...` でソースフォルダを読ませていた** — #873 / #878 が露出した層を丸ごと飛ばす経路。`npx vsce package` → `.vsix` へ変更し、`pretest:e2e:cold-install` と同じ手順に揃えた |
+| Technical Features | **セッションログ（`.orbslog`）に一言も触れていなかった**（既定 off・`ORBITSCORE_SESSION_LOG=1` で opt-in） |
+| `#138` の行 / `Syntax highlighting (2.0.0)` | 前者は自動化済みの注記を追加、後者は無意味な版表記を削除 |
+
+🔴 **ビルド手順も直した** — 旧手順は `cd packages/vscode-extension && npm run build` だったが、
+engine の `dist` と daemon / plugin-child のバイナリを拡張へ入れるのは**ルートの `npm run build`**
+である。拡張ディレクトリだけでビルドして package すると、中身の入っていない `.vsix` になる。
+
+#### 🔴 自分の誤り: 層を 1 つ見て「存在しない」と判断しかけた
+
+`seq.effect()` / `seq.instrument()` / `seq.ui()` について、`Sequence` クラスの public メソッドを
+列挙して**「存在しない」と結論しかけた**。実際は **interpreter の dispatch**
+（`packages/engine/src/interpreter/process-statement.ts:281,285`）と
+`signal-chain/runtime.ts:53,76` が DSL 表面として扱っており、README の記述は正しかった。
+**DSL の表面はクラスのメソッド一覧ではない。** [[enumeration-stops-one-level-too-early]]
+
+同様に検算して**乖離が無かった**もの: `compressor()`/`limiter()`/`normalizer()` の no-op
+（`rust-engine-player.ts:1462` が warn only）/ LinkAudio の default off（`Cargo.toml:23`）/
+ディレクトリ構造 11 項目 / 参照している issue 番号 10 件の状態。
+
+`docs:check` exit 0 / lint exit 0 / `tests/docs` + `tests/repo` 86 passed。
+
+Closes #937
+
+---
+
 ### docs: fold the remaining docs-sync PRs and fix the version claims they found (Sep 13, 2026)
 
 **Issue**: #933。#930 / #907 / #902 / #901 / #900 を取り込み、**#904 と #929 は close**した。
@@ -1926,36 +1978,6 @@ OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクト
 
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（1 件を再アンカー）。
-
-
-### refactor(daemon): move the instrument slots and plugin UI into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-instrument`
-
-#888 子 1 の**第 5 束**。out-of-process インストゥルメントとプラグイン UI（839 行）を 2 ファイルへ。
-`engine_wrap.rs` は **4,409 → 3,655** コード行（`outproc_instrument.rs` 455 / `plugin_ui.rs` 307）。
-
-### 🔴 第 4 束の欠陥を見つけて直した — doc コメントを途中で切っていた
-
-第 4 束で `load_outproc_plugin` の doc コメントを**分断**しており、頭 7 行が
-`engine_wrap.rs` に item を持たない孤児として残っていた。第 5 束の `cargo fmt --check` が
-その位置の重複空行を指摘して発覚した。
-
-**原因**: 抽出範囲の開始を「doc コメントの途中の行」に取っていた。設計 E1 が
-「属性と doc コメントを置き去りにするな」と警告していたのは**属性の付き替え**の話だったが、
-**コメント自体の分断**も同じ型の失敗である。孤児コメントは**コンパイルエラーにならない**ので、
-cfg 4 象限も `cargo test` も通ってしまった。
-
-**検出したもの**: `cargo fmt --check`（重複空行）。**振る舞いを変えない欠陥は fmt しか捕まえない。**
-
-### 可視性の変更 2 行（E3′ の適用）
-
-- `teardown_outproc_instrument_resources` — 親のインラインテスト 2 箇所から呼ばれる
-- `resolve_outproc_slot` — 兄弟 `plugin_ui.rs` から呼ばれる
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
 
 
 ## Archived sections
