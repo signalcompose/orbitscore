@@ -47,7 +47,7 @@ OrbitScore: seq ごとに出力バスを指定（output(1) ... output(8)）
    作る score-mode ドライバが要る（§4.3）。
 
 エンジンの出力は**ステレオのまま**（各バス上でプラグインも stereo/mono のまま）。
-`pan` の 2ch 前提（`scheduler.rs:250-257`）は本計画では**触る必要がなくなった**（§4.6）。
+`pan` の 2ch 前提（`scheduler.rs:302-306`）は本計画では**触る必要がなくなった**（§4.6）。
 
 ---
 
@@ -315,7 +315,7 @@ live 宛先どうし（LinkAudio channel ↔ sum bus）の相互排他は本 iss
 
 ### 4.6 スコープ外になったもの（将来課題としての記録）
 
-- **エンジンの >2ch 出力・placement DSL・`pan` の 2ch gate（`scheduler.rs:250-257`）・
+- **エンジンの >2ch 出力・placement DSL・`pan` の 2ch gate（`scheduler.rs:302-306`）・
   ch3 以降の R 複製（`scheduler.rs:536-545`）**: per-bus 書き出し + DAW 空間化の構成では
   OrbitScore が 2ch を超える interleaved 出力を作る局面が存在しないため、現行のままでよい。
   将来「OrbitScore 内での空間化」「8ch デバイスへの realtime モニタ」をやる場合の課題として
