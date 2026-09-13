@@ -646,7 +646,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output/dsp.rs:144-148
+// rust/crates/orbit-audio-native/src/output/dsp.rs:135-139
 pub(super) struct DeviceLineBuffer<'a> {
     pub(super) samples: &'a mut [f32],
     pub(super) channels: usize,

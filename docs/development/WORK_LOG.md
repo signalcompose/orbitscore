@@ -74,6 +74,131 @@ free 0.2GB → **8.5GB**。その後 1 周で全件緑。
 `-t 'E2E-4/E2E-5'` は 2 分で回る（自己完結テストなので）。**だが `-t` は
 「そのテストが後続を壊すこと」を原理的に検出できない** — 上の誤り 1 は単独実行では
 **自分だけ緑**になる。**開発は `-t`、影響の確認とマージ前ゲートは全件**。
+### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
+
+`#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの
+`balance_pan`（中央は素通り・端で持ち上げない）へ揃えた。
+
+#### 🔴 調査で前提が覆った
+
+裁定の選択肢は当初 A（現状維持）/ B（feed にも発音側 pan）/ C（DAW の pan 流儀）だったが、
+**`event.pan` が本番コードで一度も設定されない**ことが分かって前提が変わった
+（DSL の `pan` は wire 上 `BusLineOp::Pan` = ライン側へ行く・`session/params.rs:141`）。
+
+つまり発音側の `equal_power_pan(event.pan)` は**定位ではなく、全 audio への固定 −3 dB**。
+その結果:
+
+- **audio は instrument feed より常時 3 dB 小さかった**（pan の有無に無関係）
+- ライン側の `× √2` は「audio を戻す補正」として働き、**発音側を通らない feed だけを
+  +3 dB へ押し上げて**いた
+
+🔴 **一度 D（ライン側だけ減衰のみにする）を推奨して、実装前に撤回した。**
+`dsp.rs` の doc コメントが `Do not remove the factor as "double compensation"` と
+明示しており、発音側との合成を見ていなかった。**ライン側だけ変えると audio が端で
+0.707 になって壊れる。** 発音側と対にして初めて成立する（それが D′）。
+
+#### なぜ持ち上げをやめたか
+
+🔴 **この系にはリミッタもクランプも無い**（実測）。`limiter()` / `compressor()` /
+`normalizer()` は #502 で実装ごと消滅し代替経路が無く、float 出力にクランプも無い
+（クランプは i16/i32/u16 変換時のみ）。**1.0 超はそのままデバイスへ行く。**
+加えてライン Pan は**バランス**で、端へ振ると片チャンネルの中身を実際に捨てている。
+`× √2` は**存在しないエネルギーを足していた**。
+
+#### 旧則を固定していたテストは 16 件。うち pan のテストは 2 件だけだった
+
+残る 14 件は `render_block_one_bus_applies_effect_then_sums` のような**合成・配線**のテストで、
+期待値の式に `√0.5` が埋まっていた:
+
+```
+// center pan の equal-power gain は √0.5。tagged=2.0×√0.5×0.5、untagged=3.0×√0.5
+```
+
+**全 audio が一律に減衰されていたせいで、無関係なテストの算術にまで係数が漏れていた。**
+これが「pan の設計判断ではなく audio 全体のレベルの問題だった」ことの裏づけになった。
+
+🔴 置換は**網羅を確認してから**行った（18 箇所を grep で列挙し、期待件数を `assert` で固定）。
+目的が「係数」でないテスト（channel stride / global gain）は、係数を落としても
+**目的が残っているか**を見てから直した。
+
+#### 実機の実測が予測と厳密に一致した
+
+旧実測 `0.08701663` → 新実測 **`0.12306010509914503`**。比は **1.41421356 = √2**。
+3 回の実測が 11 桁一致し、`noBus` と `sumOutput` も一致した（同じ信号が同じ経路を通るので
+一致するのが正しい。旧 golden では 0.03% ずれていた）。
+
+🔴 **旧 golden `0.0846173` は実測より 2.8% 低い緩い基準だった**（許容 12% に収まるので
+誰も気づかない）。今回は実測値を根拠に置き換えたので基準が締まった。
+
+#### 🔴 TS 側のユニットテストは 1 件も動かなかった
+
+audio の絶対レベルが変わる変更なのに `npm test` 2,497 件が全部通った。
+**この層を守っているのは E2E の golden だけ**である。
+
+#### 補正機能は作らない
+
+`.gain(db)` で書けるため。🔴 ただし **pan をスイープさせる時は補正量が位置で変わる**ので
+`.gain()` では追随できない。必要になったら `global.panLaw()` を検討する。
+
+#### 検証
+
+`cargo test --workspace` 97 suite 緑 / fmt / clippy / cfg 4 象限 緑 /
+`npm test` 2,497 passed / lint / `typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 /
+実機 gated **45 passed**（残る 1 件は E2E-4/E2E-5 の `unimplemented`。実装は PR #918 側で
+このブランチには無い）。
+
+---
+
+### test(core): pin the instrument-feed vs centered-event pan asymmetry (Sep 13, 2026)
+
+`#851` B-3 の裁定材料。**裁定そのものは owner**（#919）。
+
+#### 🔴 まず訂正: 「未検証」は不正確だった
+
+`#851` に「B-3 はまだ事実かは未検証」と書いたが、**「端で +3 dB」自体は cargo test が
+既に固定していた**（`orbit-audio-native/src/output/startup.rs:2590` の `hard_left = SQRT_2`）。
+
+未検証だったのは「**instrument feed が発音側の pan を通らない**」という**非対称の方**である。
+
+#### 一次ソースで確認した事実
+
+`render_multi_feeds` は feed を `*dst += *sample` と**素のまま加算**しており、
+`equal_power_pan` を一切通らない。一方 audio event は通る（中央 0.707）。
+
+| 素材 | 発音側 | ライン pan（端） | 着地 |
+|---|---|---|---|
+| audio event | 0.707（`equal_power_pan(0)`） | × √2 | **1.0 = unity** |
+| instrument feed | **1.0（素通り）** | × √2 | **1.414 = +3 dB** |
+
+#### 数値で固定した
+
+`orbit-audio-core` に、**両者を同じ条件に並べて測る**テストを足した。
+実測 `centered event = 0.70710677` / `feed = 1.0` / `ratio = √2`。
+
+🔴 **`equal_power_pan(0) * SQRT_2` の掛け算では済ませていない。** それでは
+**feed の経路を一度も通らない**ので、あとで誰かが feed にも発音側 pan を掛けても
+緑のまま通る。`render_multi_feeds` を実際に走らせている。
+
+変異 2 種で確認:
+
+| 変異 | 結果 |
+|---|---|
+| feed にも発音側 pan を掛ける（= 非対称を解消する変更） | red（`feed must pass through unattenuated; actual=0.70710677`） |
+| `equal_power_pan` を `(1,1)` にする | red（`centered event must be 1/sqrt(2); actual=1`） |
+
+#### 🔴 未コミットのまま変異を当てて、新テストを消した
+
+`git checkout -- <file>` で変異を戻そうとしたが、**テスト自体が未コミットだったので
+一緒に消えた**。書き直して**先にコミットしてから**変異を当て直した。
+memory `mutation-backup-must-use-tmpdir` は「コミット済みなら `git checkout --` が確実」と
+書いているが、**その前提（コミット済み）を自分で満たしていなかった**。
+
+#### 裁定に残る事実
+
+**+3 dB は事実だが「クリップする」かは素材の振幅次第**（ピーク 0.708 超で 1.0 を超える）。
+その先のリミッタ/飽和は未確認。選択肢 A（現状維持）/ B（feed にも発音側 pan）/
+C（ライン pan の正規化を外す）と実測値は **`#851` のコメント**に整理した。
+**B と C はどちらも既存の譜面の音を変える。**
 
 ---
 
@@ -1807,173 +1932,6 @@ dev サイトの 6 箇所は `--fix` では直らなかった（行番号では�
 引用ブロックと本文・mermaid ラベルを手で追従させた。
 
 Closes #878
-### fix(dsl): make the missing-output diagnostic read the whole chain (#883 束 S・レビュー round 1) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**ブランチ**: `883-explicit-output-semantics`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）
-**担当**: レビュー = pr-review-team 4 体 + Fable 監査（並行）/ 裁定と fix = main
-
-束 S のレビュー round 1。**5 体の指摘を 4 つの機構に畳んで一度に当てた**（指摘単位のローカル
-パッチはしない）。
-
-#### 1. 診断がチェーンの途中の出口を読めていなかった（Important・**3 体が独立に到達**）
-
-`analyzeMissingOutput()` のレシーバ判定は、**「行がこのシーケンスのものか」と「どのメソッドか」を
-1 本の正規表現で兼ねていた**。名前の直後しか見ないので、チェーンの途中に置いた出口が消える。
-`.output(` だけが `chainReceiver` でチェーン対応しており、**非対称がそのまま残っていた**のが証拠。
-
-実測（fix 前・5 件とも red）:
-
-| 譜面 | 出ていた診断 | 正しい診断 |
-|---|---|---|
-| `kick.audio("k.wav").send("verb", -12)` | `output-missing`（"it will be silent"） | `dry-not-routed` |
-| `kick.gain(-3).master` | `output-missing` | なし（裸形 master は正当な出口） |
-| `kick.gain(-3).drums` | `output-missing` | なし |
-| `kick.send("verb",-12).send("drums",-6)` | `dry-not-routed` | なし（2 本目が sum） |
-| `kick.audio("k.wav").play(1)`（出口なし） | **なし** | `output-missing` |
-
-最後の 1 行は逆方向の取りこぼしで、**発火点の `play(` 自体がチェーン途中だと 1 件も警告されない**。
-レビュアー 2 体はここに触れていない — main が probe で列挙して見つけた。
-
-**直し方**: レシーバの 2 つの仕事を分けた。行の帰属は `\b<name>\b`、メソッドは
-レシーバを含まないモジュール定数（`OUTPUT_CALL` / `MASTER_ACCESS` / `SEND_CALL` / `PLAY_CALL` /
-`MIDI_CALL`）。**バス名のパターンも文書ごとに 1 度だけ**組み立てる（打鍵ごとに走る診断なので、
-シーケンス数 × 行数 × バス数 の再コンパイルを避ける）。1 行に 2 つ置いた `send` を両方読めるように
-なったのは副次効果。
-
-#### 2. 「無音へ倒す」時に痕跡を残す（Important 1 + Minor 1）
-
-§2.6 は「表現できない routing は無音」だが、**仕様上の無音と不変条件違反は区別が付かなければ
-ならない**。ライブ中に「書き忘れ」と「バグ」を切り分ける手段が要る。
-
-| 箇所 | 直す前 | 直した後 |
-|---|---|---|
-| `output.rs` `SourceDestCell::encode` の範囲外 fallback | `debug_assert!` のみ。`[profile.release]` は `debug-assertions` を上書きしていない（既定 false）ので**出荷ビルドでは何も残らない** | `eprintln!` を併記（`encode` の呼び手は制御プレーンのみ・実測） |
-| `output.rs` `decode` | — | **据え置き**。RT コールバック（`collect_source_feeds`）から呼ばれる。唯一の書き手が `encode` なので追える旨をコメントに |
-| `sequence.ts` `instrumentSourceRoutingTarget()` の inconsistent route | 無言で `{kind:'none'}` | 既存の `logSkipOnce()` を再利用（per-reason dedup 付き） |
-
-#### 3. wire の版を上げた（Fable 監査・②-4）
-
-本 PR で `SetSourceRouting.target` が非互換になった（`null` / 生文字列を受け付けない）のに
-`PROTOCOL_VERSION` は scaffold 以来 `'0.2'` のままだった。**版を上げないとずれは handshake ではなく
-最初の `SetSourceRouting` まで露見せず、その間 instrument は旧既定の master で鳴り続ける**
-（孤児 daemon を掴んだ時に実際に起きうる）。`'0.3'` へ。不一致は `daemon-client.ts` の
-両経路で loud に落ちる（実装済みの機構・新設ではない）。
-
-#### 4. 記録と前提条件
-
-- `tests/vscode-extension/output-code-action.spec.ts` が**ディスクにあるのに一度もコミットされて
-  いなかった**（pr-test-analyzer）。D8 の quick fix 配線が無防備だった。コミットに含めた
-- `InsertBusStage::with_output_target` / `with_sends` に前提条件を明記（`[Rack]` 既定の stage に
-  対しては前者が黙って捨て、後者が panic する）
-- `resolveDispatchChannel()` の skip を **LinkAudio 抜き**で押さえる unit を 1 本追加（既存の
-  1 本は `global.linkAudio()` を先に呼んでおり、LinkAudio ゲートと区別が付かなかった）
-
-#### D15 の変異表（Fable 監査が実走・各 1 行変異 → 対象 test → `git checkout --` で復元）
-
-設計 §2.6 の 6 箇所（+ `#[default]`）を Master に戻すと red になることの記録。**テストは効いており、
-欠けていたのは記録だけ**だった。
-
-| 変異 | red になった test |
-|---|---|
-| `encode` の範囲外 fallback `NONE` → `MASTER`（`output.rs`） | `source_dest_cell_roundtrips_every_destination_and_defaults_invalid_values` |
-| `decode` の `_ => None` → `Master` | 同上 |
-| `SourceDest` の `#[default]` を `None` → `Master` | 同上 |
-| `default_bus_line_ops` → `legacy(Master, &[])` | `tagged_event_with_unattached_bus_is_consumed_without_reaching_hardware` |
-| Bus 位置なしの `map_or(Discard, …)` → `Hardware` | `unregistered_source_bus_is_silent_…` |
-| `Link(_) => Discard` → `Hardware` | `unwired_link_source_is_silent_…` |
-| slot 解放時の `store(None)` → `store(Master)` ×2（`engine_wrap.rs`） | `r1_replace_migrates_all_unit_destinations_then_resets_every_freed_unit` |
-
-#### 採らなかった指摘と理由
-
-| 指摘 | 裁定 |
-|---|---|
-| 変数参照の `send(v, -6)` で `dry-not-routed` が沈黙する（silent-failure-hunter Important） | **誤検知**。`extractDeclaredBusNames()` は `scanVarDeclarations` で `var v = mix.aux(...)` も拾う。実測で `dry-not-routed` が出る |
-| `_insertBus` が一度確保すると解放されない（Minor） | 本 PR 以前からの性質。プール上限そのものは #663（撤廃）の土俵なので別 |
-| LinkAudio で `output-missing` が Error → Warning（Minor） | **仕様どおり**。owner の収束条件 3 が「Warning + quick fix」と明示している |
-| legacy `SetBusRouting` に暗黙 master が 1 箇所残る（Fable ③-2） | **本 PR では触らない**。#852 以降 DSL からは到達不能な legacy wire コマンドで、正しい翻訳は「拒否」か「出口なしの line」かの判断が要る。別 issue（下記）に切り出し、コマンドの撤去と一緒に閉じる |
-| `kick.output(1)`（render のみ）でエディタと実行時が逆を向く | #598 周辺。別 |
-
-`npm test` **2,383 passed / 74 skipped / 0 failed**・lint 緑・`cargo test --workspace`
-**627 passed / 0 failed**・引用 948 / 0 failed。
-
-Part of #883
-
----
-
-### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**Status**: 実装・実機検証完了（レビュー前）
-**版**: 🔴 **4.0.0 / `DSL_VERSION` 2.0**（破壊的変更）
-**担当**: 実装 = Codex（`gpt-5.6-sol` / effort **xhigh**）/ 裁定と検証 = main
-
-#883 の**振る舞いを変える**半分。束 0+C（PR #884）の上に載る。
-
-#### 閉じた 4 実体（§0.1）— **1 箇所ではない**
-
-| 実体 | 変更 |
-|---|---|
-| **A** `program()` の暗黙終端 | 合成を削除（`[rack]` の前置は残す） |
-| **B** バス無し audio の直接描画 | `resolveDispatchChannel()` に skip。🔴 **`isNoteSequence()` の早期 return より後ろ**（前だと MIDI が無音・#282 の再発） |
-| **C** daemon のバス既定ライン | `legacy(Master, [])` → **`[Rack]`（無音）** |
-| **D** instrument の source routing | `SetSourceRouting.target` を**明示 3 値**（`none` / `master` / `bus`）へ。🔴 **一方通行の wire 変更** |
-
-#### 🔴 横断規則を 6 箇所へ適用（main の審査で要求したもの）
-
-> routing 状態が「書かれていない」「表現できない」「失われた」いずれかの時、その信号はどこにも加算されない。
-> **master へ倒すことは最下層に暗黙 master を作り直すこと**である。
-
-| 箇所 | 実装 |
-|---|---|
-| `SourceDestCell::encode` | `Bus(_) \| Link(_) => Self::NONE` ← **Fable の監査も見ていなかった箇所** |
-| `SourceDestCell::decode` | `_ => SourceDest::None` |
-| `SourceDest::default()` | `#[default] None` |
-| `FeedDest` 変換 ×2 | `None => Discard` / `Link(_) => Discard` |
-| slot 解放時 | `store(SourceDest::None)` ×2 |
-
-**除外は master トラック自身の device 出口のみ**（owner 裁定で 1,2 固定＝定数なので規則の定義域外）。
-
-#### 🔴 実機 gated が 4 件落ちた — **すべて譜面・harness の誤り**（実装は無変更）
-
-| 失敗 | 原因 |
-|---|---|
-| 既存 `sum-bus insert across restart` | **移行漏れ** — 束 S で「出口を書かない sum は無音」になったので `sum("drum").output()` が要る |
-| X1 / X4 / X5 | 🔴 **`LOOP()` は追加ではなく置換** — `LOOP(a)` の次の `LOOP(b)` が a を止める。根拠は `calculateLoopDiff()`（`process-statement.ts:679`）→ `stopSequences(toStop)`（`:777`） |
-
-**main が先に潰した仮説**（unit で実測）: `ref883.output()` は skip されず（`{kind:'hardware'}`）、
-4 イベントをスケジュールし、`loop()` も throw しない。**TS 層は正しい**。
-崩れたのは「では実機の無音は実装のせい」という推論の方で、**`LOOP` の意味論**が抜けていた
-（個別に `loop()` を呼ぶ unit では原理的に再現しない形）。
-
-Codex は同じ誤用があった **X8 も落ちる前に先回りで修正**し、**静的回帰テストも追加**した
-（`gated-assertion-hygiene.spec.ts:557`）。
-
-⚠️ **ただしその検査は名指しの 4 ファイルしか守らない。** 3 本の新 fixture が揃って踏んだ性質なので、
-**一般化する価値がある**（例: gated fixture 内に `LOOP(` が 2 回以上現れたら red）。別途扱う。
-
-#### 実機 gated の実測（main が sandbox 外で）
-
-```
-Tests  45 passed | 1 skipped (46) | 0 failed
-
-[#883 X1] explicit-reference + orphan RMS: 0.08701663328815765      ← 漏れれば 2 倍
-[#883 X2] omitted=0.0870166332954772  explicit=0.08701663328808863
-[#883 X3] sendRms=0.0436116233054862  plainRms=0.0870166332927243
-          ratio=0.5011872058848396                                   ← 期待 10^(-6/20)=0.5012
-[#883 X4] reference + unterminated-sum member RMS: 0.087016633295434
-[#883 X5] withSilentInstrument=0.08701663329662541  refRms=0.08701663329662539
-```
-
-🔴 **X3 が #883 の実害そのもの**（`send(sum)` の dry が master へ二重に届く）**を実測で塞いだ証拠**。
-🔴 **X5 は小数点以下 16 桁が一致** — 出口を書かない instrument は基準の音に **1 bit も足していない**。
-
-#### ゴールの収束条件
-
-1 ✅（X1/X4/X5）/ 2 ✅（X3）/ 3 ✅（X6）/ 4 ✅ / 5 は次（4.0.0 リリース）。
-
----
-
 ## Archived sections
 
 Older entries have been archived by month for readability:

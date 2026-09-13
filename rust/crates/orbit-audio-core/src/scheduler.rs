@@ -110,6 +110,32 @@ pub fn equal_power_pan(pan: f32) -> (f32, f32) {
     (angle.cos(), angle.sin())
 }
 
+/// **減衰のみ**のバランス則（#921 / `#851` B-3 の owner 裁定 D′・2026-09-13）。
+///
+/// 中央で `(1, 1)`、端で `(1, 0)` / `(0, 1)`。**生き残る側を持ち上げない**ので、
+/// **どこへ振っても入力のフルスケールを超えない**。形は [`equal_power_pan`] のまま
+/// **ピークで正規化**しただけなので、中間位置の性格は変わらない。
+///
+/// 🔴 **なぜ equal-power をそのまま使わないか**: この系には**リミッタもクランプも無い**
+/// （`limiter()` / `compressor()` / `normalizer()` は #502 で実装ごと消滅し代替経路が無い。
+/// float 出力にクランプは無く、クランプは i16/i32/u16 変換時のみ）。
+/// **1.0 を超えた値はそのままデバイスへ行く**ので、持ち上げる則は代金が高すぎる。
+///
+/// 🔴 **これはバランス（既存の L/R をそれぞれ掛ける）であって pan ではない。**
+/// 端へ振ると片チャンネルの中身を実際に捨てているので、音量が下がるのは物理的に正直な挙動。
+/// equal-power 則は「モノ音源を**分配**する」ための則で、何も失われない前提に立っている。
+///
+/// 🔴 `pan == 0.0` を早期 return するのは丸め誤差の除去。f32 では `cos(π/4)` と `sin(π/4)` が
+/// 1 ULP 違いうるので、割り算だと中央が厳密に `(1, 1)` にならない場合がある。
+pub fn balance_pan(pan: f32) -> (f32, f32) {
+    if pan == 0.0 {
+        return (1.0, 1.0);
+    }
+    let (left, right) = equal_power_pan(pan);
+    let peak = left.max(right);
+    (left / peak, right / peak)
+}
+
 /// varispeed レートを正規化する（`<=0` / 非有限は 1.0 = 自然尺へ丸める）。誤った無音化や
 /// 逆走を起こさない。`with_rate` / `schedule` / daemon の出力尺計算 / 検証ハーネスが、
 /// `pub` field 直書きや JSON 由来の生値を含む全経路で同一規約を共有するための単一定義。
@@ -260,11 +286,21 @@ impl Scheduler {
         let fade_sec = (out_dur_sec * 0.04).min(0.008);
         let fade_frames = (fade_sec * self.output_sample_rate as f64).round() as usize;
 
-        // 等パワーパンの左右ゲインを schedule 時（cold path）に precompute。pan は再生中
+        // バランスの左右ゲインを schedule 時（cold path）に precompute。pan は再生中
         // 不変なので RT render から trig（sin/cos）と output_channels 分岐を追い出す。
         // ステレオ出力でのみ定位し、それ以外（モノ/サラウンド）は素のゲインに戻す。
+        //
+        // 🔴 **`equal_power_pan` から [`balance_pan`] へ変えた**（#921 / `#851` B-3 の裁定 D′）。
+        // 旧版は `event.pan` が常に 0 だったため、**全 audio に一律 `1/√2`（−3 dB）を掛ける
+        // 固定減衰**として働いていた（DSL の `pan` は wire 上 `BusLineOp::Pan` = ライン側へ行く。
+        // `event.pan` に値を入れる本番コードは存在しない）。
+        //
+        // その結果 **audio が instrument feed より常時 3 dB 小さく**なっており、
+        // ライン pan の `× √2` が「audio を戻す」補正として働く一方、**発音側を通らない
+        // feed を +3 dB へ押し上げて**いた。両段を減衰のみへ揃えることで、
+        // どちらの素材も**素のレベルで鳴り、端で 1.0 を超えない**。
         let (pan_l, pan_r) = if self.output_channels == 2 {
-            equal_power_pan(event.pan)
+            balance_pan(event.pan)
         } else {
             (1.0, 1.0)
         };
@@ -679,23 +715,32 @@ mod tests {
         let mut buf = vec![0.0f32; 200];
         s.render(&mut buf);
 
-        // 0.1 のサンプルが 0.5x global gain でスケールし、さらに pan=0（中央）の等パワー則で
-        // 1/√2 ≈ 0.707 が掛かる → 0.1 * 0.5 * 0.7071 ≈ 0.03536。ランプ無しなので一定。
+        // 0.1 のサンプルが 0.5x global gain でスケールする → 0.05。ランプ無しなので一定。
+        // 🔴 以前はここに pan=0 の `1/√2` が掛かっていたが、#921（裁定 D′）で中央は
+        // 素通りになった。このテストの目的は **global gain のスケール**で、pan は付随物。
         let peak = buf.iter().cloned().fold(0.0f32, f32::max);
-        let expected = 0.1 * 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        let expected = 0.1 * 0.5;
         assert!((peak - expected).abs() < 1e-5, "peak={peak}");
     }
 
     #[test]
-    fn pan_center_applies_equal_power_minus_3db() {
-        // pan=0（既定）→ 各チャンネル 0.1 * 1/√2 ≈ 0.0707（SC Pan2 中央 = -3dB）
+    /// 🔴 **中央は素通り**（#921 / `#851` B-3 の裁定 D′・2026-09-13）。
+    ///
+    /// 旧名は `pan_center_applies_equal_power_minus_3db` で、中央 `1/√2`（−3 dB）を固定していた。
+    /// だが `event.pan` は本番コードで**一度も設定されない**（DSL の `pan` は wire 上
+    /// `BusLineOp::Pan` = ライン側へ行く）ため、あれは定位ではなく
+    /// **全 audio への固定 −3 dB** として働いていた。結果 **audio が instrument feed より
+    /// 常時 3 dB 小さい**状態になっていた。
+    ///
+    /// [`balance_pan`] へ変えたので、**素材は録音されたレベルで鳴る**。
+    fn pan_center_passes_through_unattenuated() {
+        // pan=0（既定）→ 各チャンネル 0.1 のまま（減衰しない）
         let mut s = Scheduler::new(48_000, 2);
         s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
         let mut buf = vec![0.0f32; 200];
         s.render(&mut buf);
-        let expected = 0.1 * std::f32::consts::FRAC_1_SQRT_2;
-        assert!((buf[0] - expected).abs() < 1e-5, "L={}", buf[0]);
-        assert!((buf[1] - expected).abs() < 1e-5, "R={}", buf[1]);
+        assert!((buf[0] - 0.1).abs() < 1e-5, "L={}", buf[0]);
+        assert!((buf[1] - 0.1).abs() < 1e-5, "R={}", buf[1]);
     }
 
     #[test]
@@ -814,7 +859,7 @@ mod tests {
     #[test]
     fn slice_region_stereo_source_reads_correct_channel_frames() {
         // ステレオ素材で frame i の L=i, R=i+0.5。region [4,3] で frame 4,5,6 を読む。
-        // 中央パン（各 ch 1/√2 倍）で、L が L サンプル・R が R サンプルを読む
+        // 中央（#921 で素通り）で、L が L サンプル・R が R サンプルを読む
         // （channel stride = src_frame*channels + ch が正しい）ことを確認する。
         let frames = 20usize;
         let data: Vec<f32> = (0..frames)
@@ -829,8 +874,8 @@ mod tests {
         );
         let mut buf = vec![0.0f32; 40]; // 20 frames stereo
         s.render(&mut buf);
-        let k = std::f32::consts::FRAC_1_SQRT_2;
-        // 出力 frame 0 = 素材 frame 4: L=4.0, R=4.5（ch を取り違えていれば落ちる）
+        let k = 1.0f32; // 中央は素通り（#921・裁定 D′）。このテストの目的は channel stride
+                        // 出力 frame 0 = 素材 frame 4: L=4.0, R=4.5（ch を取り違えていれば落ちる）
         assert!((buf[0] - 4.0 * k).abs() < 1e-4, "f4 L={}", buf[0]);
         assert!((buf[1] - 4.5 * k).abs() < 1e-4, "f4 R={}", buf[1]);
         // 出力 frame 1 = 素材 frame 5: L=5.0
@@ -1427,6 +1472,71 @@ mod tests {
                 .map(|sample| sample.to_bits())
                 .collect::<Vec<_>>(),
             "feed は event 混合後・master gain 前に加算されるべき"
+        );
+    }
+
+    /// 🔴 **audio event と instrument feed が同じレベルで着地する**ことを固定する
+    /// （#921 / `#851` B-3 の裁定 D′・2026-09-13）。
+    ///
+    /// ## このテストは「非対称の記録」から「非対称が消えたことの記録」へ変わった
+    ///
+    /// 元（#919）は `centered event = 1/√2` / `feed = 1.0` / `ratio = √2` を固定していた。
+    /// **発音側が `event.pan` を一度も設定しないまま `equal_power_pan(0)` を掛けており、
+    /// 定位ではなく全 audio への固定 −3 dB として働いていた**ためである。
+    /// その結果 audio は instrument feed より常時 3 dB 小さかった。
+    ///
+    /// 裁定 D′ で発音側を [`balance_pan`]（減衰のみ・中央は素通り）へ変えたので、
+    /// **両者とも素のレベルで着地する**。
+    ///
+    /// 🔴 **feed の経路を実際に通すことが要件。** 係数の掛け算で期待値を組み立てると、
+    /// あとで片方の経路だけが変わっても緑のまま通る。`render_multi_feeds` を実際に走らせる。
+    #[test]
+    fn audio_event_and_instrument_feed_land_at_the_same_level() {
+        let mut empty_channels: [(&str, &mut [f32]); 0] = [];
+
+        // event 単独: 振幅 1.0 を中央（pan=0）で鳴らす。
+        let mut event_only = vec![0.0f32; 8];
+        {
+            let mut scheduler = Scheduler::new(48_000, 2);
+            scheduler.schedule(
+                ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 8], 48_000, 1))
+                    .with_pan(0.0)
+                    .with_region(0, 8),
+            );
+            scheduler.render_multi(&mut event_only, &mut empty_channels);
+        }
+
+        // feed 単独: 同じ振幅 1.0 を feed として渡す（イベントは無し）。
+        let mut feed_only = vec![0.0f32; 8];
+        {
+            let feed = vec![1.0f32; 8];
+            let mut scheduler = Scheduler::new(48_000, 2);
+            scheduler.render_multi_feeds(
+                &mut feed_only,
+                &mut empty_channels,
+                &[(feed.as_slice(), FeedDest::Hardware)],
+            );
+        }
+
+        for (index, sample) in event_only.iter().enumerate() {
+            assert!(
+                (sample - 1.0).abs() <= 1e-6,
+                "centered event must pass through unattenuated; index={index} actual={sample}"
+            );
+        }
+        for (index, sample) in feed_only.iter().enumerate() {
+            assert!(
+                (sample - 1.0).abs() <= 1e-6,
+                "feed must pass through unattenuated; index={index} actual={sample}"
+            );
+        }
+
+        let ratio = feed_only[0] / event_only[0];
+        assert!(
+            (ratio - 1.0).abs() <= 1e-6,
+            "audio and instrument must land at the same level; feed={} event={} ratio={ratio}",
+            feed_only[0],
+            event_only[0],
         );
     }
 
