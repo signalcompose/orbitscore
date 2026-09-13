@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): design the cursor-based route to one plugin's UI (#939) (Sep 13, 2026)
+
+**Issue**: #939（#474 の後継）。起案 = Fable subagent / レビュー = main（工程 ①→②）。
+設計文書のみ。実装は次。
+
+#### 何が問題か
+
+DSL の `ui("名前")` は**一致する insert を全部開く**（SC.10.10.1 規範 3・仕様どおり）。
+しかし**同じプラグインを 2 つ挿すと分離できない**。index 形は SC.10.10 規範 (2) で撤回済み
+（ラックは入れ子になり得るので 1 次元では指せない）。
+**MCP は `chain_path` で個別に指せるので、LLM は開けて人間だけが開けない。**
+
+#### 方式は右クリック（⌘クリックではない）
+
+仕様 SC.10.10 規範 (2) は ⌘クリックを主経路としているが、**実装手段が両方とも問題を抱える**:
+`DefinitionProvider` は **⌘ホバーの peek でも発火**する（名前を見ただけで窓が開く）。
+`DocumentLinkProvider` の target に `command:` URI を置く形は**公式 API ドキュメントに記載が無い**
+（Context7 で確認）。一方 command URI は**ホバーの `MarkdownString`（`isTrusted`）では公式サポート**。
+
+`contributes.menus` の `editor/context` は**既に存在**する（`orbitscore.rescanPlugins` が入っている）。
+🔴 **仕様改訂が要る**（§2.5 に文面・残存 4 箇所を列挙）。
+
+#### main のレビューで変えた 3 点
+
+1. 🔴 **E2E のフィクスチャを `[clap, vst3, clap]` → `[clap, Gain(db: -6), clap]`**。
+   旧案は**設計自身が §8 の筆頭に挙げたトラップ（`Gain` を数えない）を検出できない** —
+   3 つとも非標準だと index は数え方に関わらず 1/2/3 で同じになる。`Gain` を挟むと、
+   数えない実装は 3 つ目に index 2 を割り当て、**index 2 は `targets` に無い**ので loud に落ちる
+2. **変異を 1 件 → 2 件**（M2「`Gain` を数えない」を受け入れ条件へ）
+3. **手動ゲートに実 VST3 の右クリックを追加**（owner 指摘）。混在チェーンの index 演算は
+   `#633 E2E-2` が既に実証済みだが、**VST3 の UI が開くことは自動化できない**
+   （フィクスチャ `GainOracle.vst3` の `createView` がヘッドレスで null）
+
+#### main が閉じた穴
+
+起案は「`Gain` が offset を消費する」を **state 経路**（`pluginStateTargets`）から導いていた。
+**UI 経路でも成り立つかは書かれていなかった** — `openPluginUi` も `resolvePluginStateEntry` を
+呼ぶので index 空間は共有で、規則は有効。ここを確かめずに実装すると根拠が宙に浮いていた。
+
+VS Code の `contextmenu.ts` の引用も **`raw.githubusercontent.com` から取得して逐語一致を確認**した
+（委譲先の引用を鵜呑みにしない）。クリック位置が既存選択の外なら `setPosition` する。
+ただし**実機は未確認**なので、§3.1 に 1 分の確認手順、§3.2 にホバーへ倒す代案を置いた。
+**F1 が偽でも解決器・配線・E2E・MCP は無変更**で済む形にしてある。
+
+#### 規模
+
+**約 900〜1,300 変更行**（起案の 700 行は楽観的）。根拠は `#652` のエディタ側の切片で、
+`plugin-name-diagnostics.ts` を新規作成して 324 行 + spec 248 + 配線 102 = **674 行**。
+本件はそれを**拡張**する側。**半分近くがテスト**。
+**1 PR で通す**（owner 裁定）— 分割すると束 1 が消費者のいない層になる。
+
+Part of #939
+
+---
+
 ### docs: bring the README back in line with the shipped 4.1.0 (Sep 13, 2026)
 
 **Issue**: #937。README を実体と 1 行ずつ突き合わせ、**乖離 7 件**を直した。
@@ -1898,86 +1953,6 @@ OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクト
 
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move the out-of-process slot helpers into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-slot-helpers`
-
-#888 子 1 の**第 8 束**。`impl EngineWrap` の**外**にある自由関数・小さな型（598 行）を
-2 ファイルへ（`slot_helpers.rs` 397 / `slot_errors.rs` 122）。
-`engine_wrap.rs` は **2,857 → 2,362** コード行。
-
-### 🔴 これまでの束と性質が違う — モジュールレベルの item
-
-第 1〜7 束は `impl` の**メソッド**を動かしてきたが、本束は**モジュールレベルの item**
-（自由関数・`enum`・`struct`・`type`）が対象。2 つの新しい対処が要った:
-
-1. **`pub(super)` を 35 箇所**に付けた（モジュールレベル 22 + `impl` 内 13）。
-   メソッドと違い、自由関数は親と兄弟の両方から名前で呼ばれている
-2. 🔴 **`use slot_helpers::*;` を親に足す必要があった。** `pub(super)` は**可視性を上げるだけで、
-   名前をスコープへ持ち込まない**。これが無いと `cannot find function ... in this scope` になる
-
-### 🔴 `clap-host` 単独ビルドで import が未使用になった
-
-このモジュールの item は全部 `#[cfg(any(outproc-effect, outproc-instrument))]` なので、
-`clap-host` 単独だと**中身が空になり `use super::*;` が未使用**になる。CI は `-D warnings` なので
-落ちる。`#[allow(unused_imports)]` を付けた（中身が feature 次第で空になるモジュールの定型）。
-
-### rustfmt の折り返し
-
-`pub(super)` を足すと行が長くなり、rustfmt が引数の折り返しを要求する。
-該当パッケージにだけ `cargo fmt` をかけた（`git diff --stat` で**他のファイルが変わっていない**ことを確認済み）。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move the startup variants into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-start-lifecycle`
-
-#888 子 1 の**第 7 束**。cfg feature ごとの `start*()` variant（645 行）を 2 ファイルへ
-（`startup.rs` 292 / `startup_instrument.rs` 276）。
-`engine_wrap.rs` は **3,417 → 2,857** コード行。
-
-**可視性の変更 2 行**（E3′）: `resolve_outproc_both_buffer_frames`（親のテスト 3 箇所）と
-`start_outproc_both_with_options`（親に残る `start_with_options`）。
-
-### 🔴 抽出範囲を 2 度取り違えた — 複数行属性の罠
-
-`#[cfg(all(\n  feature = …,\n  …\n))]` は**複数行に跨る 1 つの属性**である。
-`pub fn` の行から遡って「`#[` で始まる行」だけを見ると、**属性の途中で切ってしまう**。
-実際 2 度失敗した:
-
-1. 終端を 5657 に取り、`))]` だけを親に残した → **`expected item after attributes`**
-2. 開始を 5017（`pub fn` の行）に取り、`#[cfg(all(` 〜 `))]` を親に残した → 同じエラー
-
-**正しい境界**は「doc コメントの先頭」から「次の item の属性が始まる直前」。
-第 4 束の doc コメント分断（fmt でしか気づけなかった）と違い、**こちらはコンパイルエラーになる**
-ので気づける。属性の分断と**コメントの分断は検出可能性が違う**。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move device switching and Link tempo into a child module (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-device-link`
-
-#888 子 1 の**第 6 束**。オーディオデバイス切替と Link テンポ（317 行）を
-`engine_wrap/device_link.rs`（242 コード行）へ。
-`engine_wrap.rs` は **3,655 → 3,417** コード行。
-
-**可視性の変更 2 行**（E3′）: `record_stream_config`（親の `finish_start` から）と
-`record_device_switch_result`（親のインラインテスト 3 箇所から）を `pub(super)` に。
-
-🔴 **第 5 束の教訓を仕組みにした**: 抽出範囲の開始を手で選ぶのをやめ、
-**doc コメントと属性を遡って item の真の開始行を求める関数**で決めた。
-第 4 束の doc コメント分断は、開始行を目で選んだために起きていた。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（1 件を再アンカー）。
 
 
 ## Archived sections

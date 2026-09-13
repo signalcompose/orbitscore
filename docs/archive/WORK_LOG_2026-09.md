@@ -12053,3 +12053,86 @@ cfg 4 象限も `cargo test` も通ってしまった。
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
 🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
+
+---
+
+### refactor(daemon): move device switching and Link tempo into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-device-link`
+
+#888 子 1 の**第 6 束**。オーディオデバイス切替と Link テンポ（317 行）を
+`engine_wrap/device_link.rs`（242 コード行）へ。
+`engine_wrap.rs` は **3,655 → 3,417** コード行。
+
+**可視性の変更 2 行**（E3′）: `record_stream_config`（親の `finish_start` から）と
+`record_device_switch_result`（親のインラインテスト 3 箇所から）を `pub(super)` に。
+
+🔴 **第 5 束の教訓を仕組みにした**: 抽出範囲の開始を手で選ぶのをやめ、
+**doc コメントと属性を遡って item の真の開始行を求める関数**で決めた。
+第 4 束の doc コメント分断は、開始行を目で選んだために起きていた。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（1 件を再アンカー）。
+
+---
+
+### refactor(daemon): move the startup variants into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-start-lifecycle`
+
+#888 子 1 の**第 7 束**。cfg feature ごとの `start*()` variant（645 行）を 2 ファイルへ
+（`startup.rs` 292 / `startup_instrument.rs` 276）。
+`engine_wrap.rs` は **3,417 → 2,857** コード行。
+
+**可視性の変更 2 行**（E3′）: `resolve_outproc_both_buffer_frames`（親のテスト 3 箇所）と
+`start_outproc_both_with_options`（親に残る `start_with_options`）。
+
+### 🔴 抽出範囲を 2 度取り違えた — 複数行属性の罠
+
+`#[cfg(all(\n  feature = …,\n  …\n))]` は**複数行に跨る 1 つの属性**である。
+`pub fn` の行から遡って「`#[` で始まる行」だけを見ると、**属性の途中で切ってしまう**。
+実際 2 度失敗した:
+
+1. 終端を 5657 に取り、`))]` だけを親に残した → **`expected item after attributes`**
+2. 開始を 5017（`pub fn` の行）に取り、`#[cfg(all(` 〜 `))]` を親に残した → 同じエラー
+
+**正しい境界**は「doc コメントの先頭」から「次の item の属性が始まる直前」。
+第 4 束の doc コメント分断（fmt でしか気づけなかった）と違い、**こちらはコンパイルエラーになる**
+ので気づける。属性の分断と**コメントの分断は検出可能性が違う**。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+---
+
+### refactor(daemon): move the out-of-process slot helpers into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-slot-helpers`
+
+#888 子 1 の**第 8 束**。`impl EngineWrap` の**外**にある自由関数・小さな型（598 行）を
+2 ファイルへ（`slot_helpers.rs` 397 / `slot_errors.rs` 122）。
+`engine_wrap.rs` は **2,857 → 2,362** コード行。
+
+### 🔴 これまでの束と性質が違う — モジュールレベルの item
+
+第 1〜7 束は `impl` の**メソッド**を動かしてきたが、本束は**モジュールレベルの item**
+（自由関数・`enum`・`struct`・`type`）が対象。2 つの新しい対処が要った:
+
+1. **`pub(super)` を 35 箇所**に付けた（モジュールレベル 22 + `impl` 内 13）。
+   メソッドと違い、自由関数は親と兄弟の両方から名前で呼ばれている
+2. 🔴 **`use slot_helpers::*;` を親に足す必要があった。** `pub(super)` は**可視性を上げるだけで、
+   名前をスコープへ持ち込まない**。これが無いと `cannot find function ... in this scope` になる
+
+### 🔴 `clap-host` 単独ビルドで import が未使用になった
+
+このモジュールの item は全部 `#[cfg(any(outproc-effect, outproc-instrument))]` なので、
+`clap-host` 単独だと**中身が空になり `use super::*;` が未使用**になる。CI は `-D warnings` なので
+落ちる。`#[allow(unused_imports)]` を付けた（中身が feature 次第で空になるモジュールの定型）。
+
+### rustfmt の折り返し
+
+`pub(super)` を足すと行が長くなり、rustfmt が引数の折り返しを要求する。
+該当パッケージにだけ `cargo fmt` をかけた（`git diff --stat` で**他のファイルが変わっていない**ことを確認済み）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
