@@ -6,7 +6,7 @@ verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the point where `LineOp::Pan` was wired into RT by the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`).
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the point where `LineOp::Pan` was wired into RT by the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`).> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the point where `LineOp::Pan` was wired into RT by the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-3. Per-Sequence Insert Bus (seq.effect())
 
@@ -474,14 +474,12 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 
 ## Sources
 
-- `rust/crates/orbit-audio-native/src/output.rs:377-412` — the `InsertBusStage` struct (meaning of `processor`/`active` and the mixer fields)
-- `rust/crates/orbit-audio-native/src/output.rs:1252-1275` — `InsertBusStage` after PR-O3a (four mixer fields → `line: LineSlot`)
-- `rust/crates/orbit-audio-native/src/output.rs:1001-1026` — `OutputDest` / `LineOutput` / `LineOp` (`Pan` wired in #611 PR-O4)
-- `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources`'s zero-bus fallback (bit-identical path)
-- `rust/crates/orbit-audio-native/src/output.rs:823-846` — the active-flag snapshot in `render_engine_with_insert_buses_and_source_outputs`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:264-308` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:507-525` — `EffectBusBuild`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:19-95` — `build_effect_bus_stages` (insert/sum/aux ordering)
+- `rust/crates/orbit-audio-native/src/output/line_program.rs:396-413` — the `InsertBusStage` struct (meaning of `processor`/`active`, and the `line: LineSlot` the four mixer fields were folded into in PR-O3a)
+- `rust/crates/orbit-audio-native/src/output/lines.rs:320-342` — `OutputDest` / `LineOutput` / `LineOp` (`Pan` wired in #611 PR-O4)
+- `rust/crates/orbit-audio-native/src/output/render.rs:283-302` — `render_engine_with_sources`'s zero-bus fallback (bit-identical path)
+- `rust/crates/orbit-audio-native/src/output/render_full.rs:28-32` — the active-flag snapshot in `render_engine_with_insert_buses_and_source_outputs`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2026-2075` — `EffectBusBuild` and `build_effect_bus_stages` (insert/sum/aux ordering)
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:157-161` — `ERROR_CODE_UNROUTABLE_EVENTS`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:1-162` — `SequenceEffectManager` (constants, `ensureBus`, the rollback in `effect()`)
 - `packages/engine/src/core/global/effect-slot.ts:454-472,980-1011` — mode selection in `EffectChainMap.applyRack`, `BusPool`

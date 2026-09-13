@@ -1988,9 +1988,9 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 > **PR-O4 前半の到達点（2026-09-11・[#834](https://github.com/signalcompose/orbitscore/pull/834) マージ）**:
 > `SetBusLine` に **`pan` op（`-1..=1`）** と **1 要素 `channels`（mono デバイス宛先）** が入り、
 > どちらも RT で実行される（`validate_line_program` の `Pan` 拒否が外れた・
-> `rust/crates/orbit-audio-native/src/output.rs:1444-1450`）。バス上の pan 則は
+> `rust/crates/orbit-audio-native/src/output/line_program.rs:364-370`）。バス上の pan 則は
 > **`√2 · equal_power_pan(p)`** で、発音側が center で既に `1/√2` を掛けている分を打ち消して
-> center を unity にする（同 `:2148-2182`）。🔴 **ただし TS からこの wire を送る経路は今も無い**
+> center を unity にする（`rust/crates/orbit-audio-native/src/output/dsp.rs:44-75` の `line_pan_coefficients`）。🔴 **ただし TS からこの wire を送る経路は今も無い**
 > （`packages/engine/src/audio/rust-engine/daemon-client.ts:715-718` の `setBusLine` に呼び出し元が
 > 無い）。したがって **`seq.pan()` / `mix.output(3)` の譜面から見える振る舞いは今日も旧経路のまま**
 > であり、DSL 表面の切り替えは後半の束（`611-output-line`）で入る。

@@ -6,7 +6,7 @@ verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）で `LineOp::Pan` が RT へ配線されたところまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）で `LineOp::Pan` が RT へ配線されたところまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。
 
 # RE-3. per-sequence insert bus（seq.effect()）
 
@@ -460,14 +460,12 @@ WORK_LOG の記述であり、本ページの再読（2026-09-01）でも `outpr
 
 ## Sources
 
-- `rust/crates/orbit-audio-native/src/output.rs:377-412` — `InsertBusStage` 構造体（`processor`/`active` と mixer 用フィールドの意味）
-- `rust/crates/orbit-audio-native/src/output.rs:1252-1275` — PR-O3a 後の `InsertBusStage`（mixer 用 4 フィールド → `line: LineSlot`）
-- `rust/crates/orbit-audio-native/src/output.rs:1001-1026` — `OutputDest` / `LineOutput` / `LineOp`（`Pan` は #611 PR-O4 で配線済み）
-- `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources` の bus 0 個フォールバック（bit-identical 経路）
-- `rust/crates/orbit-audio-native/src/output.rs:823-846` — `render_engine_with_insert_buses_and_source_outputs` の active flag snapshot
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:264-308` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:507-525` — `EffectBusBuild`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/bus_stages.rs:19-95` — `build_effect_bus_stages`（insert/sum/aux の並び）
+- `rust/crates/orbit-audio-native/src/output/line_program.rs:396-413` — `InsertBusStage` 構造体（`processor`/`active` の意味、および PR-O3a で mixer 用 4 フィールドが畳まれた `line: LineSlot`）
+- `rust/crates/orbit-audio-native/src/output/lines.rs:320-342` — `OutputDest` / `LineOutput` / `LineOp`（`Pan` は #611 PR-O4 で配線済み）
+- `rust/crates/orbit-audio-native/src/output/render.rs:283-302` — `render_engine_with_sources` の bus 0 個フォールバック（bit-identical 経路）
+- `rust/crates/orbit-audio-native/src/output/render_full.rs:28-32` — `render_engine_with_insert_buses_and_source_outputs` の active flag snapshot
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2026-2075` — `EffectBusBuild` と `build_effect_bus_stages`（insert/sum/aux の並び）
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:157-161` — `ERROR_CODE_UNROUTABLE_EVENTS`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:1-162` — `SequenceEffectManager`（定数・`ensureBus`・`effect()` のロールバック）
 - `packages/engine/src/core/global/effect-slot.ts:454-472,980-1011` — `EffectChainMap.applyRack` の mode 決定、`BusPool`

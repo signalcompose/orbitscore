@@ -14,6 +14,8 @@
 
 ### 09-12 分の移設（docs-sync 4 本の取り込みで超過・2026-09-13）
 
+### 09-12 分の移設（docs-sync 残り 7 本の取り込みで超過・2026-09-13）
+
 ### 09-12 分の追加移設（routine docs-sync PR #909 の追記で 2,000 行超過・2026-09-13）
 
 ### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
@@ -11864,3 +11866,75 @@ sandbox 外で `set -o pipefail` 付きで回し直した。**終了コードと
 fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
 **オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
 baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
+
+---
+
+### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 2 束**。🔴 **純粋な移動**。
+
+`device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` / `set_bus_line` /
+`set_bus_routing` / `set_source_routing`（元 6956-7451・496 行）を
+`src/engine_wrap/bus_lines.rs` へ。**ヘルパー 3 本を一緒に動かした**のは、置いていくと
+モジュールを跨いで `pub(crate)` 化が要り、それは「移動」ではなく「変更」だから。
+
+| | before | after |
+|---|---|---|
+| `engine_wrap.rs` | 6,014 コード行 | **5,585** |
+| `engine_wrap/bus_lines.rs` | — | 433 |
+| `excluded` | 7,730 | **7,730** |
+
+**residual**: 素の変更行 1,013 → moved+ 496 == moved− 496 → **residual 21**
+（うち 15 行は新設 doc コメント = **実質 6 行**）。ゲート (i) 通過。
+
+🔴 **引用が 14 件落ちた**（7 箇所 ×2 言語）。第 1 束と違い、**移動したコード自体が引用されていた**ので
+4 箇所は**ファイルパスごと** `bus_lines.rs` へ向け直した。残り 3 箇所は行番号のずれ。
+`docs:check` は**先頭行しか照合しない**ので、末尾が関数シグネチャの途中で終わっていた 1 件を
+引用元の文脈まで読んで確認した（「関数コメントが機構を一文で言い切っている」を見せる意図なので
+doc コメント + シグネチャで正しい）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
+**担当**: 設計 = Fable / 実装・検証 = main
+
+#888 子 1 の**第 1 束**。設計は `docs/design/888-child1-first-extraction.md`。
+🔴 **純粋な移動**（本文は 1 行も書き換えていない）。
+
+- `impl EngineWrap` の 40 メソッド（`clap_post_peak` 〜 `output_channels`・元 8972-9550）を
+  **子モジュール** `src/engine_wrap/stats.rs` へ。`use super::*;` + `impl EngineWrap { … }` で包む
+- 🔴 **可視性の変更 0 件**。子モジュールは親の private フィールド・private `use` に到達できる
+  （兄弟モジュールにすると `pub(crate)` 化が多数必要で、それは「移動」ではなく「変更」）
+- **インラインテスト mod は動かさない**（コード行に数えられず目標に寄与しない）。`excluded` は 7,730 で不変
+- `mod stats;` は**先頭ではなく impl の閉じ括弧の直後**に置いた。先頭だと行番号が +2 ずれて
+  dev サイトの引用が約 20 箇所動く
+
+**結果**: `engine_wrap.rs` **6,418 → 6,014** コード行 / `stats.rs` 408（500 以下なので baseline 無し）。
+
+**residual**（§5.1a の新ルールで初の実測）:
+
+```
+素の変更行 1,176  →  moved+ 579 == moved− 579  →  residual 18
+```
+
+うち 11 行は新設モジュールの doc コメントなので**実質 7 行**。移動した 579 行は 1 行も residual に出ていない。
+ゲート (i) `moved+ == moved−` 通過。
+
+**検証**（main が sandbox 外で実行）: `cargo fmt --check` / `clippy --all-targets -D warnings` /
+**`scripts/check-cfg-matrix.sh` 4 象限緑** + `clap-host` 単独 / `cargo test -p orbit-audio-daemon` /
+`npm test` **2,445 passed**（前と同数 = 期待値不変）/ lint / `docs:check` 948 引用 0 failed。
+
+🔴 **`docs:check` は一度落ちた**（4 件 = 引用 2 箇所 ×2 言語）。ソースを動かすと引用が必ず動く。
+`--fix` は行番号を合わせるだけなので、**新しい行を grep で探し、着地先の中身を目視で照合してから**
+書き換えた（構造体が `}` で閉じ、メソッドが `}` で閉じることを確認）。
+ずれ幅が −578 と −580 の 2 種類あるのは、`mod stats;` の挿入位置の前後で変わるため。
+
+🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
+しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
+CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。

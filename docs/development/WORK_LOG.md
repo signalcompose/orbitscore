@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: re-anchor the dev-site code pointers onto the #896 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr896`
+
+PR [#896](https://github.com/signalcompose/orbitscore/pull/896)（#888 子 2・`session.rs` 2,605 → 439 /
+`output.rs` 2,587 → 322 コード行）へのドキュメント追従。
+
+#896 は `// FILE:START-END` 引用ブロックを分割後のモジュールへ張り直しており、`npm run docs:check`
+は 948 件すべて緑である。**しかし `check-citations.mjs` が見ているのは引用ブロックだけ**で、
+本文中のインライン参照と各章末「参考にしたコード」の `path:line` は検査対象外だった。
+その結果、**dev サイトに 44 箇所の宙に浮いた参照が残っていた**（`output.rs:3290-3322` など、
+445 行しかないファイルへの参照）。
+
+本コミットはそれらを**シンボルから引き直して**再アンカーした（ja / en 両方）:
+
+- `sites/dev/rust-engine/index.md` — コマンド表の出典が単一 `match` ではなくなった旨を追記し、
+  `session/run_loop.rs` / `session/dispatch.rs` / `dispatch_plugin.rs` / `dispatch_transport.rs` へ分解
+- `sites/dev/rust-engine/insert-bus.md` — `InsertBusStage` の 2 つの参照が同一定義に解決するため 1 本へ統合
+- `sites/dev/rust-engine/capture-verification.md` — `CAPTURE_RING_SECONDS` / `OutputStream` と
+  `render_block_with_sources` が別ファイルへ分かれたため 2 本へ分割
+- `sites/dev/signal-chain/mixer-audio-line.md` — post-loop が `output/render_full.rs` へ移った
+- `sites/dev/plugin-hosting/plugin-ui.md` — `ClosePluginUI` が `session/dispatch.rs` へ移った
+- 上記 5 章の `verified-against` / `verified-at` を `9c29e45` / `2026-09-12` へ更新
+
+`/docs` 側も 2 件:
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — `validate_line_program` の `Pan` 受理と
+  バス上 pan 則（`line_pan_coefficients`）を `output/line_program.rs` / `output/dsp.rs` へ
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — 最後の session 切断の判定を
+  `session/params_plugin.rs` の `SessionRegistration::disconnect` へ
+
+🔴 **発見: これらの参照は #896 より前から既に壊れていた。** 旧 `path:line` を `9d39d2e`
+（#896 の base）で引き直したところ、**確認した 34 箇所のほぼ全部が無関係な行を指していた**
+（例: `output.rs:823-846` は「active flag snapshot」と書かれていたが実際は `MasterLine::new`、
+`session.rs:1271-1284` は「session 切断 trigger」と書かれていたが実際は outproc frames-clamped の
+ticker）。**引用ブロックだけがラチェットで守られ、その隣の散文参照は誰にも検査されずに漂流していた。**
+CLAUDE.md「規律を足す時は、同時にそれを守らせる仕組みを足すこと」の未適用箇所である。
+
+**実装・テストは 1 行も変更していない。**
+
+---
+
 ### docs: re-anchor the dev-site prose citations that PR #895 moved out of engine_wrap.rs (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr895`
@@ -1894,77 +1936,6 @@ git のブロック照合が空行を片方だけ移動と認めたための **f
 
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
-
-
-### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
-
-#888 子 1 の**第 2 束**。🔴 **純粋な移動**。
-
-`device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` / `set_bus_line` /
-`set_bus_routing` / `set_source_routing`（元 6956-7451・496 行）を
-`src/engine_wrap/bus_lines.rs` へ。**ヘルパー 3 本を一緒に動かした**のは、置いていくと
-モジュールを跨いで `pub(crate)` 化が要り、それは「移動」ではなく「変更」だから。
-
-| | before | after |
-|---|---|---|
-| `engine_wrap.rs` | 6,014 コード行 | **5,585** |
-| `engine_wrap/bus_lines.rs` | — | 433 |
-| `excluded` | 7,730 | **7,730** |
-
-**residual**: 素の変更行 1,013 → moved+ 496 == moved− 496 → **residual 21**
-（うち 15 行は新設 doc コメント = **実質 6 行**）。ゲート (i) 通過。
-
-🔴 **引用が 14 件落ちた**（7 箇所 ×2 言語）。第 1 束と違い、**移動したコード自体が引用されていた**ので
-4 箇所は**ファイルパスごと** `bus_lines.rs` へ向け直した。残り 3 箇所は行番号のずれ。
-`docs:check` は**先頭行しか照合しない**ので、末尾が関数シグネチャの途中で終わっていた 1 件を
-引用元の文脈まで読んで確認した（「関数コメントが機構を一文で言い切っている」を見せる意図なので
-doc コメント + シグネチャで正しい）。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
-**担当**: 設計 = Fable / 実装・検証 = main
-
-#888 子 1 の**第 1 束**。設計は `docs/design/888-child1-first-extraction.md`。
-🔴 **純粋な移動**（本文は 1 行も書き換えていない）。
-
-- `impl EngineWrap` の 40 メソッド（`clap_post_peak` 〜 `output_channels`・元 8972-9550）を
-  **子モジュール** `src/engine_wrap/stats.rs` へ。`use super::*;` + `impl EngineWrap { … }` で包む
-- 🔴 **可視性の変更 0 件**。子モジュールは親の private フィールド・private `use` に到達できる
-  （兄弟モジュールにすると `pub(crate)` 化が多数必要で、それは「移動」ではなく「変更」）
-- **インラインテスト mod は動かさない**（コード行に数えられず目標に寄与しない）。`excluded` は 7,730 で不変
-- `mod stats;` は**先頭ではなく impl の閉じ括弧の直後**に置いた。先頭だと行番号が +2 ずれて
-  dev サイトの引用が約 20 箇所動く
-
-**結果**: `engine_wrap.rs` **6,418 → 6,014** コード行 / `stats.rs` 408（500 以下なので baseline 無し）。
-
-**residual**（§5.1a の新ルールで初の実測）:
-
-```
-素の変更行 1,176  →  moved+ 579 == moved− 579  →  residual 18
-```
-
-うち 11 行は新設モジュールの doc コメントなので**実質 7 行**。移動した 579 行は 1 行も residual に出ていない。
-ゲート (i) `moved+ == moved−` 通過。
-
-**検証**（main が sandbox 外で実行）: `cargo fmt --check` / `clippy --all-targets -D warnings` /
-**`scripts/check-cfg-matrix.sh` 4 象限緑** + `clap-host` 単独 / `cargo test -p orbit-audio-daemon` /
-`npm test` **2,445 passed**（前と同数 = 期待値不変）/ lint / `docs:check` 948 引用 0 failed。
-
-🔴 **`docs:check` は一度落ちた**（4 件 = 引用 2 箇所 ×2 言語）。ソースを動かすと引用が必ず動く。
-`--fix` は行番号を合わせるだけなので、**新しい行を grep で探し、着地先の中身を目視で照合してから**
-書き換えた（構造体が `}` で閉じ、メソッドが `}` で閉じることを確認）。
-ずれ幅が −578 と −580 の 2 種類あるのは、`mod stats;` の挿入位置の前後で変わるため。
-
-🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
-しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
-CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
 
 
 ## Archived sections

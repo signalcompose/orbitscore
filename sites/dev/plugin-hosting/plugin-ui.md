@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # PH-2. プラグイン UI ホスティング — seq.ui() からウィンドウまで
 
@@ -1210,9 +1210,9 @@ CLAP を使う必要があります。
 - `rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45` — `UiPumpNotification`
 - `rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82` — per-window の `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame 名
-- `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` はフェーズ A 受理のみ
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/plugin_ui.rs:36-127` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/wire_types.rs:58-69` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:296-323` — `ClosePluginUI` はフェーズ A 受理のみ
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1（close をオラクルにする）
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0〜UIH.8 — 仕様正本
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — #474 の P0〜P6 実装設計と owner 裁定 Q1〜Q8

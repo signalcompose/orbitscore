@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # PH-2. Plugin UI Hosting — from seq.ui() to a Window
 
@@ -1230,9 +1230,9 @@ must be CLAP.
 - `rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45` — `UiPumpNotification`
 - `rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82` — the per-window `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame names
-- `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` is Phase A acceptance only
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/plugin_ui.rs:36-127` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap/wire_types.rs:58-69` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:296-323` — `ClosePluginUI` is Phase A acceptance only
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1 (using close as the oracle)
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0–UIH.8 — the normative spec
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — the #474 P0–P6 implementation design and owner decisions Q1–Q8
