@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: f2245bb
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで、2026-09-10 に #502 の SC 削除（[#833](https://github.com/signalcompose/orbitscore/pull/833)）で確定した「LinkAudio egress は出荷ビルドに入っていない」まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）の `pan` op・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで、2026-09-10 に #502 の SC 削除（[#833](https://github.com/signalcompose/orbitscore/pull/833)）で確定した「LinkAudio egress は出荷ビルドに入っていない」まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）の `pan` op・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -791,8 +791,11 @@ wire（`SetGlobalGain`）の `ramp_sec` は互換のため受け取り続けま�
 `validate_line_program` が「RT 未配線」を理由に拒否していました。#611 PR-O4 の前半
 （[#834](https://github.com/signalcompose/orbitscore/pull/834)）でその両方が外れ、`-1..=1` の
 `pan` op が wire に足されて RT でも実行されます。バス上の pan 則は素の等パワーではなく
-`√2 · equal_power_pan(p)` で、理由（発音側が center で既に `1/√2` を掛けている）は
-[SC-2](/signal-chain/mixer-audio-line) の「`Pan` — バス上の等パワー・パンニング」節にあります。
+**減衰のみのバランス**（`balance_pan`）で、中央は `(1, 1)` の素通り・端は `(1, 0)` です。
+#834 の時点では `√2 · equal_power_pan(p)` でしたが、
+[#922](https://github.com/signalcompose/orbitscore/pull/922)（#921 / `#851` B-3 の裁定 D′・
+2026-09-13）で発音側と揃えて減衰のみになりました。経緯は
+[SC-2](/signal-chain/mixer-audio-line) の「`Pan` — バス上のバランス」節にあります。
 
 検証は 2 段に分かれていて、ここが読むときの勘所です。**JSON の形**（`op` の綴り・`rack` の重複・
 `gain` の範囲・`dest` の形）は session 層の `parse_set_bus_line_params` が見て、
@@ -1097,12 +1100,23 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 ```
 
 **期待値（実機検証済み・2026-07-17）**: `test-assets/audio/sine_880.wav`（振幅 1.0 の sine）を
-1 発再生した capture WAV の実測 peak は **0.70711**（= 1.0 × equal-power pan center の
-√0.5。engine は center pan に equal-power gain を掛けるため、モノラル素材の capture peak は
-素材振幅 × √0.5 になります）。plugin oracle 系では clap-test-synth の既知振幅 0.25 が capture でも
-**0.25000** ちょうどで観測されます（WORK_LOG 6.258 / 6.262・gated テストの stats
+1 発再生した capture WAV の実測 peak は **0.70711** でした（= 1.0 × 当時の center pan ゲイン
+√0.5。engine は center pan にも equal-power gain を掛けていたため、モノラル素材の capture peak は
+素材振幅 × √0.5 になっていました）。plugin oracle 系では clap-test-synth の既知振幅 0.25 が
+capture でも **0.25000** ちょうどで観測されます（WORK_LOG 6.258 / 6.262・gated テストの stats
 `post_mix_peak` とも一致 = 同一 tap 点の相互検証）。この数値は 2026-07-17 の実測で、
 2026-09-01 の再読では再実行していません。
+
+🔴 **0.70711 は #921 より前の値です。**
+[#922](https://github.com/signalcompose/orbitscore/pull/922)（裁定 D′・2026-09-13）で発音側が
+`balance_pan` へ変わり、**center pan の `1/√2` は掛からなくなりました**
+（`rust/crates/orbit-audio-core/src/scheduler.rs:302-306`。ユニットテストの名前も
+`pan_center_applies_equal_power_minus_3db` から `pan_center_passes_through_unattenuated` へ
+変わっています）。したがって上の手順は**実機で測り直す必要があります** — 本ページの追従では
+測っていないので、新しい期待値はまだ書けません。この PR が測り直したのは E2E の RMS golden
+`tests/e2e/output-line-expectations.ts:134` の方で、`0.0846173` → `0.1230601`（= ×√2）です。
+clap-test-synth の **0.25000 は instrument（feed 経路）なので動きません** — 裁定 D′ が変えたのは
+発音側とライン側の 2 段で、feed は素のまま加算されるためです。
 
 ## 次の深掘り候補
 

@@ -1,12 +1,12 @@
 ---
 title: "RE-3. per-sequence insert bus（seq.effect()）"
 chapter-id: "RE-3"
-verified-against: f23eb5d
-verified-at: "2026-09-11"
+verified-against: f2245bb
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）で `LineOp::Pan` が RT へ配線されたところまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）で `LineOp::Pan` が RT へ配線されたところまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。
 
 # RE-3. per-sequence insert bus（seq.effect()）
 
@@ -119,8 +119,10 @@ pub enum LineOp {
 `LineOp::Pan` は PR-O3a の時点では型としてのみ存在し、`validate_line_program` が RT 未配線を
 理由に install を拒否していました。続く #611 PR-O4（本束）でその拒否が外れ、post-loop と
 master line の両方で実行されるようになっています（バス上の Pan は素の等パワーではなく
-`√2 · equal_power_pan(p)` — 詳しくは [SC-2](/signal-chain/mixer-audio-line) の「line program」
-節）。この bus の出力がどこへ行くかという話そのものは SC-2 章の主題です。
+**減衰のみのバランス** `balance_pan(p)`。#834 の時点の `√2 · equal_power_pan(p)` は
+[#922](https://github.com/signalcompose/orbitscore/pull/922)（#921 / `#851` B-3 の裁定 D′・
+2026-09-13）で置き換わりました — 詳しくは [SC-2](/signal-chain/mixer-audio-line) の
+「line program」節）。この bus の出力がどこへ行くかという話そのものは SC-2 章の主題です。
 
 ## bus 0 個ならビット同一の従来経路
 
