@@ -6,7 +6,7 @@ verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化と PR-O3b（[#823](https://github.com/signalcompose/orbitscore/pull/823)）の `SetBusLine` wire まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）のバス上 `Pan`・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化と PR-O3b（[#823](https://github.com/signalcompose/orbitscore/pull/823)）の `SetBusLine` wire まで、2026-09-11 に #611 PR-O4 の前半（[#834](https://github.com/signalcompose/orbitscore/pull/834)）のバス上 `Pan`・mono デバイス宛先・再 publish の seed まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しました（引用の行番号は `f575f27` 基準。**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）はまだ本ページに反映していません**）。 さらに 2026-09-13 に #921 / `#851` B-3 の裁定 D′（PR [#922](https://github.com/signalcompose/orbitscore/pull/922)）— 発音側とライン側の両方を減衰のみの `balance_pan` へ揃える — まで追従しました（本追従で読み直したのは pan 則に関わる箇所とその引用だけで、他の節は前回の `verified-against` 時点の読みのままです）。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -158,7 +158,7 @@ export const AUX_BUS_PREFIX = 'aux-bus-'
 export const MIXER_BUS_POOL_SIZE = 4
 ```
 
-対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
+対応する Rust 側の定数は daemon の `engine_wrap/effect_slot_types.rs` にあります。
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap/effect_slot_types.rs:436-449
@@ -185,7 +185,7 @@ TS が `"drum" → "sum-bus-0"` と束縛し、daemon へは常に `sum-bus-0` �
 `ORBIT_EFFECT_BUS_POOL` と同じ機構・[RE-3](/rust-engine/insert-bus) 参照）。
 
 面白いのは、daemon が bus の「種類」を prefix 文字列からではなく構築時の enum
-`BusKind { Insert, Sum, Aux }`（`engine_wrap.rs:1950-1961`）で持っている点です。doc コメントは
+`BusKind { Insert, Sum, Aux }`（`engine_wrap/effect_slot_types.rs:311-322`）で持っている点です。doc コメントは
 「`SetBusRouting` の検証を prefix 文字列比較に依存させないため、構築時に確定した値として明示的に
 持つ」と説明しています。この `BusKind` が、後で見る `SetBusRouting` の検証（output 先は sum のみ・send 先は aux のみ）の
 根拠になります。名前の規則と種類の検証を分離しておくことで、prefix を変えても検証ロジックが
@@ -546,7 +546,7 @@ send だけを反映する」という部分更新の意味論を、毎回まる
 ### render 側: post-loop がトポロジカル順に合流させる
 
 daemon が atomic に書いた routing を、native の render callback はどう消費するのでしょうか。
-`output.rs` の `render_engine_with_insert_buses_and_source_outputs` の後半、いわゆる
+`output/render_full.rs` の `render_engine_with_insert_buses_and_source_outputs` の後半、いわゆる
 **post-loop** がその場所です。
 
 ```rust
@@ -591,7 +591,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
    各 stage で何をするかは `effective_targets[i]` の分岐ではなく、その stage に **publish されて
    いる line program**（`LineOp` の列）が決めます。`LineOp::Rack` が insert の
    `processor.process`、`LineOp::Output` が `hw`（Master）か後ろの bus（`Bus(j)`）への加算です
-3. 引用の続き（`output.rs:2160-2184`）が `LineOp::Output` の本体で、`gain` を掛けた copy 加算に
+3. 引用の続き（`output/render_full.rs:193-257`）が `LineOp::Output` の本体で、`gain` を掛けた copy 加算に
    なっています（fan-out は event の複製ではなく「bus 処理段の copy 加算」という MX.4 の規範どおり）
 
 `split_at_mut(i + 1)` で左右に分けられるのは、構築時に `validate_bus_topology` が
@@ -1061,20 +1061,20 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 verb 宛ての `Output` が 1.0 から目標（例えば 0.25）まで数 ms かけて ramp し直され、その間だけ
 本来より大きな信号がリバーブへ流れます。
 
-対策が `engine_wrap.rs` の `line_republish_seeds` です。旧 program の `Vec<LineOp>`
+対策が `engine_wrap/effect_slot_types.rs` の `line_republish_seeds` です。旧 program の `Vec<LineOp>`
 と、`LineProgramInstaller::current_gains()`（次節）で読み取った旧 program の実効値を、**op の
 種類ごとの出現序数**で対応付けます —— `Gain` は Gain 同士の何番目か、`Pan` は Pan 同士、
 `Output` は宛先（`OutputDest`）が一致する何番目かです。対応する旧 op が見つかった新 op は
 その実効値を seed にし、`LineProgram::with_seeds(ops, seeds)` へ渡します。対応する旧 op が
 無い（新規に増えた）op は `Gain → 1.0` / `Pan → 目標値そのもの` / `Output → 0.0`（無音からの
 フェードイン）で埋めます。同じ処理は `master` 行き（`bus == "master"` の分岐、
-`engine_wrap.rs:7044-7061`）でも `self.master_line.current_gains()` を読んで行われています。
+`engine_wrap/bus_lines.rs:131-141`）でも `self.master_line.current_gains()` を読んで行われています。
 
 #### `master` も同じ publish に乗った
 
 `SetBusLine` の `bus` は `"master"` を受け付けます。受け皿として PR-O3b は `MasterLine` にも
 `line: LineSlot` を足し、publish 済みかどうかを `explicit_line` で見て render を分岐させました
-（分岐は `rust/crates/orbit-audio-native/src/output.rs:1719-1721`、汎用側の実行は同 `:1765-1821`）。
+（分岐は `rust/crates/orbit-audio-native/src/output/render.rs:140-142`、汎用側の実行は同 `:183-240`）。
 
 その install ハンドルがこれです。
 
@@ -1110,7 +1110,7 @@ PR #823 の時点ではそのとおりでしたが、O-wire-b のレビュー修
 **`set_global_gain` は atomic を書くだけに戻り**、裁定 F2（設計 611-o-surface §0・「写さない」）で
 今後もこの形が続くと確定しています。
 
-現在の `set_global_gain`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）は
+現在の `set_global_gain`（`rust/crates/orbit-audio-daemon/src/engine_wrap/playback.rs`）は
 `master_gain.store(...)` の 1 行だけで、line-program installer を**呼びません**。
 ユニットテスト `set_global_gain_only_updates_the_compatibility_atomic` が
 「SetGlobalGain must not republish a fresh master LineProgram」「must leave the SetBusLine
@@ -1158,7 +1158,7 @@ pub enum SourceDest {
 無音宛先で、未設定・範囲外・失われた routing を master へ倒しません。TS は現在も `unit` を
 0 固定で発行しています（後述）。
 
-feed の収集は `collect_source_feeds`（`output.rs:2141-2173`）が行い、unit ごとの `SourceDest` を
+feed の収集は `collect_source_feeds`（`output/render.rs:378-410`）が行い、unit ごとの `SourceDest` を
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
@@ -1208,7 +1208,7 @@ feed 加算（`422-441`・`FeedDest::Hardware` なら `hardware_out`、`Channel(
 設計文書 §5.1 はこの位置を「★ feed 加算ループ（新規 ~10行）」と書き、
 「**これで `global.gain` が instrument に効かない現行欠陥が消える**（位置の修正のみ・別途の
 手当て不要）」と結論していました。native の unit test
-`global_gain_scales_instrument_contribution`（`output.rs:2017`）は、`set_global_gain(0.5, 0.0)` を
+`global_gain_scales_instrument_contribution`（`output/startup.rs:1008`）は、`set_global_gain(0.5, 0.0)` を
 設定した状態で `SourceDest::Master` の feed を流し、出力が 0.5 倍になることを固定しています
 （WORK_LOG 6.405 に red → green の実出力が残っています）。
 
@@ -1410,7 +1410,7 @@ Fable 監査が spec の既知制約を指して誤りだと指摘しました�
 > — `docs/archive/WORK_LOG_2026-08.md` 6.420
 
 実際、E2E-1 の DSL は sum も aux も宣言しないので、instrument の feed は
-`render_engine_with_source_outputs`（`output.rs:1078`）から `render_multi_feeds` に渡り、
+`render_engine_with_source_outputs`（`output.rs:389`）から `render_multi_feeds` に渡り、
 gain ループの**前**に `hw` へ加算されます。先ほど引用した core のコードを見るかぎり、
 `hw` と全 `channels` buffer に同じ `g` が掛かるので、静的な読解だけでは「素通り」は
 説明できません。#649 設計文書 §13 はこれを「**静的配線は完全**。したがって欠陥は静的欠線では
@@ -1704,7 +1704,7 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - **`SetBusRouting` の `routing_override` エンコード（0 / 1 / index+2）と `SourceDestCell` の
   帯域分割** — 2 種類の atomic routing が native 側でどう decode されるか（`output.rs:286-330`）
 - **`validate_bus_topology` と bus 配列の構築順** — insert → sum → aux の順が
-  `build_effect_bus_stages` でどう固定されるか（`engine_wrap.rs:2050-2130` 付近）
+  `build_effect_bus_stages` でどう固定されるか（`engine_wrap/bus_stages.rs:19-95` 付近）
 - **respawn 後の再適用 3 兄弟**（`reapplyBusRoutingAfterRespawn` / `reapplySourceRoutingAfterRespawn`
   / `reapplyGlobalGainAfterRespawn`）の呼び出し順と失敗時の独立性
 - **ミキサーの出口（#611）** — #643 設計 §1.5 が「未設計」と認めた「どの bus がデバイスの
@@ -1722,8 +1722,8 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing（MX.1〜MX.5）規範
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1313-1325` — PH.2b 既知の v1 制約と、master gain の順序が入れ替わった注記（#649 PR-O2）
-- `rust/crates/orbit-audio-native/src/output.rs:700-754,1253-1277` — `MasterLine`（ラック → gain）/ `place_master_into_device`
-- `rust/crates/orbit-audio-native/src/output.rs:3290-3322` — unit test `master_gain_applies_after_the_master_rack_generates_sound`（順序を守る唯一のテスト）
+- `rust/crates/orbit-audio-native/src/output/lines.rs:9-50` / `rust/crates/orbit-audio-native/src/output/render.rs:250-279` — `MasterLine`（ラック → gain）/ `place_master_into_device`
+- `rust/crates/orbit-audio-native/src/output/startup.rs:2465-2497` — unit test `master_gain_applies_after_the_master_rack_generates_sound`（順序を守る唯一のテスト）
 - `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — master ライン・乗算経路を 1 本にする設計正本
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
@@ -1744,28 +1744,28 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259` — `setGlobalGain`（intent 記録）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum・aux pool prefix と既定サイズ
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing`（検証 → line program の 1 回 publish → 旧 atomic へのミラー・#611 PR-O3a）
-- `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` ハンドラ
-- `rust/crates/orbit-audio-native/src/output.rs:900-915` — `BlockSource` / `SourceDest`
-- `rust/crates/orbit-audio-native/src/output.rs:2141-2173` — `collect_source_feeds`
-- `rust/crates/orbit-audio-native/src/output.rs:2119-2235` — `render_multi_feeds` 呼び出しと post-loop（line program 実行・#611 PR-O3a）
-- `rust/crates/orbit-audio-native/src/output.rs:914-939` — `OutputDest` / `LineOutput` / `LineOp`
-- `rust/crates/orbit-audio-native/src/output.rs:1043-1100` — `LineExchange`（AtomicPtr publish + 世代カウンタによる回収）
-- `rust/crates/orbit-audio-native/src/output.rs:1249-1297` — `validate_line_program`（`Pan` / `Render` / `Link` の install 拒否）
+- `rust/crates/orbit-audio-daemon/src/session/dispatch_transport.rs:168-190` — `SetGlobalGain` ハンドラ
+- `rust/crates/orbit-audio-native/src/output/lines.rs:140-154` — `BlockSource` / `SourceDest`
+- `rust/crates/orbit-audio-native/src/output/render.rs:378-410` — `collect_source_feeds`
+- `rust/crates/orbit-audio-native/src/output/render_full.rs:11-283` — `render_multi_feeds` 呼び出しと post-loop（line program 実行・#611 PR-O3a）
+- `rust/crates/orbit-audio-native/src/output/lines.rs:320-342` — `OutputDest` / `LineOutput` / `LineOp`
+- `rust/crates/orbit-audio-native/src/output/line_program.rs:91-154` — `LineExchange`（AtomicPtr publish + 世代カウンタによる回収）
+- `rust/crates/orbit-audio-native/src/output/line_program.rs:329-374` — `validate_line_program`（`Pan` / `Render` / `Link` の install 拒否）
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) / PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — 束 O-wire・PR-O3a（line program 化・互換維持）
 - PR [#823](https://github.com/signalcompose/orbitscore/pull/823) — 束 O-wire-b・PR-O3b（`SetBusLine` wire と TS client・`MasterLine.line`）
-- `rust/crates/orbit-audio-daemon/src/session.rs:299-361` — `set_bus_line_malformed` / `parse_set_bus_line_params`（wire 形式の検証・`MALFORMED_REQUEST`）
-- `rust/crates/orbit-audio-daemon/src/session.rs:435-464` — `validate_set_bus_line_device_channels`（`PARAM_OUT_OF_RANGE`）
-- `rust/crates/orbit-audio-daemon/src/session.rs:2633-2656` — `SetBusLine` の dispatch と feature 無効時の `UNSUPPORTED`
+- `rust/crates/orbit-audio-daemon/src/session/params.rs:103-169` — `set_bus_line_malformed` / `parse_set_bus_line_params`（wire 形式の検証・`MALFORMED_REQUEST`）
+- `rust/crates/orbit-audio-daemon/src/session/params.rs:268-295` — `validate_set_bus_line_device_channels`（`PARAM_OUT_OF_RANGE`）
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:407-429` — `SetBusLine` の dispatch と feature 無効時の `UNSUPPORTED`
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6499-6687` — `EngineWrap::set_bus_line`（forward-only・master 分岐・全検証後の 1 回 publish）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9266-9294` — `EngineWrap::set_global_gain`（master line への再 publish が 1 段増えた）
-- `rust/crates/orbit-audio-native/src/output.rs:739-742` — `MasterLine.line` / `explicit_line`
-- `rust/crates/orbit-audio-native/src/output.rs:1765-1821` — `execute_master_line`（publish 後の master 実行）
+- `rust/crates/orbit-audio-native/src/output/lines.rs:38-49` — `MasterLine.line` / `explicit_line`
+- `rust/crates/orbit-audio-native/src/output/render.rs:183-240` — `execute_master_line`（publish 後の master 実行）
 - `packages/engine/src/audio/rust-engine/protocol-types.ts:33-34` — `CommandMethod` への `'SetBusLine'` 追加
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97` — `WireDest` / `WireLineOp`
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:715-718` — `DaemonClient.setBusLine()`
 - `tests/audio/rust-engine/daemon-client-line-wire.spec.ts:8-36` — TS 側の唯一の `SetBusLine` テスト（`request` を mock）
-- `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — bus 無し経路 `render_engine_with_source_outputs`
-- `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
+- `rust/crates/orbit-audio-native/src/output.rs:389-445` — bus 無し経路 `render_engine_with_source_outputs`
+- `rust/crates/orbit-audio-native/src/output/startup.rs:1008-1060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds`（feed 加算と gain ramp）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:500-600` — `captureInstrumentScenario` / `rms()`
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463` — E2E-1（`global.gain(-6)`）

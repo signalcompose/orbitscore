@@ -302,7 +302,8 @@ panic した場合に台帳が丸ごと消えて復元されず、**最後の砦
 この結果、`failed` に数えられた note は**台帳に残り、次回の呼び出しで再試行される**。
 
 session 切断 trigger が発火するのは、daemon が受理している**最後の確立済み session が切れたとき
-だけ**である（`session.rs:1271-1284`）。daemon は複数 session を受理し台帳はそれらで共有されるため、
+だけ**である（`rust/crates/orbit-audio-daemon/src/session/params_plugin.rs:473-477` の
+`SessionRegistration::disconnect` が `session_disconnected_is_last()` を返す）。daemon は複数 session を受理し台帳はそれらで共有されるため、
 途中の 1 接続が切れただけで解放すると、生きている他の session の音まで止めてしまう。
 
 ```json

@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # PH-2. Plugin UI Hosting — from seq.ui() to a Window
 
@@ -336,7 +336,7 @@ being pointed at right now" (destination); the latter is "which window this is a
 
 ### The daemon layer: `open_outproc_plugin_ui`
 
-When the daemon's `engine_wrap.rs` receives `OpenPluginUI`, it (1) checks that the child is READY,
+When the daemon's `engine_wrap/plugin_ui.rs` receives `OpenPluginUI`, it (1) checks that the child is READY,
 (2) for a rack child, checks `index_binding` (current index → token) for an existing binding,
 (3) reserves the lifecycle as `Opening` via `UiEventPump::begin_open(window)`, (4) registers
 `window → PluginUiTarget` in the route registry, and then (5) posts `CMD_OPEN_UI` (single-plugin
@@ -1223,14 +1223,14 @@ must be CLAP.
 - `rust/crates/orbit-child-ui/src/lib.rs:203-225` — `open_command` (drain gate; separated details)
 - `rust/crates/orbit-child-ui/src/lib.rs:268-319` — `tick` (the Phase B trigger and release order)
 - `rust/crates/orbit-child-ui/src/lib.rs:321-342` — `begin_close` (the reentry guard where three paths converge)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:79-87` — `EVT_SLOTS = 2` and the const assert
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:265-277` — the evt ring and `dirty_epoch` fields of `SharedRegion`
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:359-378` — `ReleaseAcquireSeq` (ordering fixed by the type)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:512-538` — `EventRingChild::service` (slot-reuse invariant; retain and retry)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:1213-1225` — `UiPumpNotification`
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374` — the per-window `UiPumpState`
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:33-41` — `EVT_SLOTS = 2` and the const assert
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:222-234` — the evt ring and `dirty_epoch` fields of `SharedRegion`
+- `rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:37-56` — `ReleaseAcquireSeq` (ordering fixed by the type)
+- `rust/crates/orbit-audio-sandbox/src/transport/event_ring.rs:192-218` — `EventRingChild::service` (slot-reuse invariant; retain and retry)
+- `rust/crates/orbit-audio-sandbox/src/transport/ui_codec.rs:33-45` — `UiPumpNotification`
+- `rust/crates/orbit-audio-sandbox/src/transport/ui_pump.rs:63-82` — the per-window `UiPumpState`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:79-81` — UI event frame names
-- `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` is Phase A acceptance only
+- `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:296-323` — `ClosePluginUI` is Phase A acceptance only
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1 (using close as the oracle)

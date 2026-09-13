@@ -1330,15 +1330,15 @@ LOOP(drums)
 ## Sources
 
 - `rust/crates/orbit-plugin-scan/Cargo.toml:1-7` — スキャナを独立バイナリにする理由（crash isolation）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:29-50` — `CatalogEntry` / `Catalog`（PC.1 JSON スキーマ）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:52-61` — `SCANNER_SCHEMA_VERSION` とキャッシュ無効化の条件
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1028-1035` — `dedup_key`（format, path, pluginId）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:187-198` — 標準スキャンディレクトリ
-- `rust/crates/orbit-plugin-scan/src/lib.rs:228-253` — 非再帰のバンドル列挙
-- `rust/crates/orbit-plugin-scan/src/lib.rs:571-584` — CLAP feature → roles（不明なら両方）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:922-940` — VST3 Sub Categories → roles
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1037-1055` — `dedup_entries`（後勝ち）
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1854-1866` — atomic write
+- `rust/crates/orbit-plugin-scan/src/types.rs:21-42` — `CatalogEntry` / `Catalog`（PC.1 JSON スキーマ）
+- `rust/crates/orbit-plugin-scan/src/types.rs:44-53` — `SCANNER_SCHEMA_VERSION` とキャッシュ無効化の条件
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:206-213` — `dedup_key`（format, path, pluginId）
+- `rust/crates/orbit-plugin-scan/src/dirs.rs:9-20` — 標準スキャンディレクトリ
+- `rust/crates/orbit-plugin-scan/src/dirs.rs:50-75` — 非再帰のバンドル列挙
+- `rust/crates/orbit-plugin-scan/src/clap_scan.rs:43-56` — CLAP feature → roles（不明なら両方）
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:100-118` — VST3 Sub Categories → roles
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:215-233` — `dedup_entries`（後勝ち）
+- `rust/crates/orbit-plugin-scan/src/catalog_io.rs:29-41` — atomic write
 - `rust/crates/orbit-plugin-scan/src/main.rs:25-29` / `:64-69` — `--probe-artifacts` opt-in と catalog version 2
 - `packages/engine/src/core/global/plugin-catalog.ts:18-73` — engine 側 reader（型・パス解決・mtime キャッシュ）
 - `packages/engine/src/core/global/plugin-resolver.ts:68-80` — PC.2 判別規則 `isPluginPathSpec`
@@ -1355,9 +1355,9 @@ LOOP(drums)
 - `packages/engine/src/core/global.ts:1337-1378` — `prepareInstrumentReplacement`（UI close → state 保存）
 - `packages/engine/src/core/global.ts:1380-1402` — `prepareEffectReplacement`（UI close のみ）
 - `packages/engine/src/core/global/effect-replace-notice.ts:1-24` — 「続行する通知」の唯一の出口
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088` — `apply_outproc_effect_chain`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522` — `replace_outproc_effect_plugin`（#625 in-place）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022` — `replace_outproc_instrument_plugin`（#618 prepare-commit）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:144-152` — `apply_outproc_effect_chain`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_replace.rs:21-29` — `replace_outproc_effect_plugin`（#625 in-place）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_instrument_slots.rs:68-80` — `replace_outproc_instrument_plugin`（#618 prepare-commit）
 - `packages/vscode-extension/src/plugin-catalog-reader.ts:1-15` / `:174-202` / `:259-266` — 拡張側 reader・バイナリ探索・`--probe-artifacts` spawn
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — ラック文脈スキャナ・候補フィルタ・Quick Pick 行
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — 解決規則のミラーと合意テスト

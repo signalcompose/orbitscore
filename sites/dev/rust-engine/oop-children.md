@@ -239,7 +239,7 @@ pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 3 つ目の `CHILD_STATUS_LOAD_FAILED` は、名前のとおり child が load に失敗して終了する直前に立てる
 status です。rack child の `RackController::load_initial` が plugin のロードに失敗すると、まず
 失敗の詳細を `cmd_result_detail` へ publish し、**その後で**この status を store してから終了します。
-daemon 側（`engine_wrap.rs` の Root 3-3 分岐）は、child の早期終了を拾う watchdog signal
+daemon 側（`engine_wrap/outproc_effect_chain.rs:170` の Root 3-3 分岐）は、child の早期終了を拾う watchdog signal
 **より先に**この status を見ます。ですから host に上がるのは「child が死んだ」という汎用の文言では
 なく、「index n の load がこう失敗した」という具体的な理由になります。PR-1c（#441）の watchdog は
 役目を失ったわけではなく、この status を立てないまま死ぬ child（ロード以外の理由による早期終了）を
@@ -654,7 +654,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 ## Sources
 
 - `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`（spawn し得る child の正本）
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:67-97,127-239` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost`（pipelined submit/read 状態機械、RT-safe `process_block`）
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard`（child teardown の RAII ガード：QUIT → reap → kill フォールバック → shm 削除）
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124`（全文） — `ParentWatch`（`getppid()` ベースの親死活監視、rate-limit 済み、`orphaned_for_tests`）

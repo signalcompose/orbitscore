@@ -252,7 +252,7 @@ The third value, `CHILD_STATUS_LOAD_FAILED`, is exactly what its name says: the 
 raises right before it exits because loading failed. When the rack child's
 `RackController::load_initial` fails to load a plugin, it first publishes the details of that
 failure to `cmd_result_detail` and only **afterwards** stores this status and exits. On the daemon
-side (the Root 3-3 branch in `engine_wrap.rs`), this status is read **before** the watchdog signal
+side (the Root 3-3 branch in `engine_wrap/outproc_effect_chain.rs:170`), this status is read **before** the watchdog signal
 that catches an early child exit. So what reaches the host is not the generic "the child died" but
 the specific reason: "the load at index n failed like this". The PR-1c (#441) watchdog has not lost
 its job — it remains the path that catches, without waiting for a timeout, a child that dies
@@ -681,7 +681,7 @@ but on "one generation's worth". Adding a SIGTERM handler remains #448.
 ## Sources
 
 - `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
+- `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:67-97,127-239` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost` (pipelined submit/read state machine, RT-safe `process_block`)
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard` (child-teardown RAII guard: QUIT → reap → kill fallback → shm removal)
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124` (full file) — `ParentWatch` (`getppid()`-based parent-liveness monitoring, rate-limited, `orphaned_for_tests`)

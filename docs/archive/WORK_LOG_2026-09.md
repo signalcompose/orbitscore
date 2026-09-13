@@ -14,6 +14,8 @@
 
 ### 09-12 分の移設（docs-sync 4 本の取り込みで超過・2026-09-13）
 
+### 09-12 分の移設（docs-sync 残り 7 本の取り込みで超過・2026-09-13）
+
 ### 09-12 分の追加移設（routine docs-sync PR #909 の追記で 2,000 行超過・2026-09-13）
 
 ### feat(dsl)!: drop the implicit master terminal — the score text is the whole truth (#883 bundle S) (Sep 12, 2026)
@@ -11864,3 +11866,157 @@ sandbox 外で `set -o pipefail` 付きで回し直した。**終了コードと
 fail-before / pass-after を main が再現: 入れ子テンプレート **4 → 5**・throw メッセージの行番号・
 **オラクルが状態機械の破壊 2 種を検出**・honesty の `(f)` 分岐の変異が **red**（修正前は緑）・
 baseline 変異 5 件がリファクタ後も全件 red。**baseline 25 件の値は 1 つも変わっていない。**
+
+---
+
+### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 2 束**。🔴 **純粋な移動**。
+
+`device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` / `set_bus_line` /
+`set_bus_routing` / `set_source_routing`（元 6956-7451・496 行）を
+`src/engine_wrap/bus_lines.rs` へ。**ヘルパー 3 本を一緒に動かした**のは、置いていくと
+モジュールを跨いで `pub(crate)` 化が要り、それは「移動」ではなく「変更」だから。
+
+| | before | after |
+|---|---|---|
+| `engine_wrap.rs` | 6,014 コード行 | **5,585** |
+| `engine_wrap/bus_lines.rs` | — | 433 |
+| `excluded` | 7,730 | **7,730** |
+
+**residual**: 素の変更行 1,013 → moved+ 496 == moved− 496 → **residual 21**
+（うち 15 行は新設 doc コメント = **実質 6 行**）。ゲート (i) 通過。
+
+🔴 **引用が 14 件落ちた**（7 箇所 ×2 言語）。第 1 束と違い、**移動したコード自体が引用されていた**ので
+4 箇所は**ファイルパスごと** `bus_lines.rs` へ向け直した。残り 3 箇所は行番号のずれ。
+`docs:check` は**先頭行しか照合しない**ので、末尾が関数シグネチャの途中で終わっていた 1 件を
+引用元の文脈まで読んで確認した（「関数コメントが機構を一文で言い切っている」を見せる意図なので
+doc コメント + シグネチャで正しい）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
+**担当**: 設計 = Fable / 実装・検証 = main
+
+#888 子 1 の**第 1 束**。設計は `docs/design/888-child1-first-extraction.md`。
+🔴 **純粋な移動**（本文は 1 行も書き換えていない）。
+
+- `impl EngineWrap` の 40 メソッド（`clap_post_peak` 〜 `output_channels`・元 8972-9550）を
+  **子モジュール** `src/engine_wrap/stats.rs` へ。`use super::*;` + `impl EngineWrap { … }` で包む
+- 🔴 **可視性の変更 0 件**。子モジュールは親の private フィールド・private `use` に到達できる
+  （兄弟モジュールにすると `pub(crate)` 化が多数必要で、それは「移動」ではなく「変更」）
+- **インラインテスト mod は動かさない**（コード行に数えられず目標に寄与しない）。`excluded` は 7,730 で不変
+- `mod stats;` は**先頭ではなく impl の閉じ括弧の直後**に置いた。先頭だと行番号が +2 ずれて
+  dev サイトの引用が約 20 箇所動く
+
+**結果**: `engine_wrap.rs` **6,418 → 6,014** コード行 / `stats.rs` 408（500 以下なので baseline 無し）。
+
+**residual**（§5.1a の新ルールで初の実測）:
+
+```
+素の変更行 1,176  →  moved+ 579 == moved− 579  →  residual 18
+```
+
+うち 11 行は新設モジュールの doc コメントなので**実質 7 行**。移動した 579 行は 1 行も residual に出ていない。
+ゲート (i) `moved+ == moved−` 通過。
+
+**検証**（main が sandbox 外で実行）: `cargo fmt --check` / `clippy --all-targets -D warnings` /
+**`scripts/check-cfg-matrix.sh` 4 象限緑** + `clap-host` 単独 / `cargo test -p orbit-audio-daemon` /
+`npm test` **2,445 passed**（前と同数 = 期待値不変）/ lint / `docs:check` 948 引用 0 failed。
+
+🔴 **`docs:check` は一度落ちた**（4 件 = 引用 2 箇所 ×2 言語）。ソースを動かすと引用が必ず動く。
+`--fix` は行番号を合わせるだけなので、**新しい行を grep で探し、着地先の中身を目視で照合してから**
+書き換えた（構造体が `}` で閉じ、メソッドが `}` で閉じることを確認）。
+ずれ幅が −578 と −580 の 2 種類あるのは、`mod stats;` の挿入位置の前後で変わるため。
+
+🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
+しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
+CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
+
+---
+
+### refactor(daemon): move note dispatch and sample playback into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-notes-samples`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 3 束**。🔴 **純粋な移動**。2 グループを 2 ファイルへ:
+
+- プラグインへのノート送出（CLAP / out-of-process instrument）→ `engine_wrap/notes.rs`（286 コード行）
+- サンプル再生・トランスポート・オフライン render → `engine_wrap/playback.rs`（180 コード行）
+
+`engine_wrap.rs` は **5,585 → 5,127** コード行。`excluded` は 7,730 で不変。
+
+### 🔴 設計 E3「可視性の変更 0 件」には条件がある（第 3 束で実測）
+
+「**子モジュールは親の private に到達できる**」は正しいが、**逆は成り立たない**。
+親は子の private メソッドを呼べない。
+
+`lock_active_notes`（`#[cfg(feature = "outproc-instrument")]` の private ヘルパー）を
+`notes.rs` へ動かしたところ、`engine_wrap.rs` に残った 2 箇所とインラインテスト 2 箇所から
+呼べなくなり **`outproc-instrument` の 2 象限が E0624 で落ちた**。
+
+**残る側が使うヘルパーは移さない**（親へ戻す）のが正しい。`pub(super)` にするのは
+「移動」ではなく「変更」なので residual に出る。設計文書に **E3′** として記録した。
+
+### 🔴 ゲート (i) が発火した（`moved+ 602 ≠ moved− 603`）— 調査手順が定まった
+
+1 行差だったので、**削除行と追加行を多重集合で照合**したところ
+「**削除されたが追加されていない行 = 0 件**」で、コードは 1 行も失われていなかった。
+新規追加 24 行はすべて新設モジュールのヘッダと `mod` 宣言。
+git のブロック照合が空行を片方だけ移動と認めたための **false positive** である。
+
+**正しい向きの false positive**（「怪しいから見ろ」と言われて見たら確定的に否定できた）。
+この多重集合判定を**子 0b の `move-residual.sh` に組み込む**価値がある。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
+
+---
+
+### refactor(daemon): move the out-of-process effect slot lifecycle into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-effect`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 4 束**。out-of-process エフェクトの load / chain / replace / unload（799 行）を
+3 ファイルへ:
+
+| ファイル | コード行 |
+|---|---|
+| `engine_wrap/outproc_effect_slots.rs` | 297 |
+| `engine_wrap/outproc_effect_chain.rs` | 216 |
+| `engine_wrap/outproc_effect_replace.rs` | 217 |
+
+`engine_wrap.rs` は **5,127 → 4,409** コード行。`excluded` 7,730 で不変。
+
+### 🔴 3 ファイルに割った理由（設計 §13.9 の制約 1）
+
+1 ファイルにまとめると **724 コード行**で閾値 500 を超える。§13.9 は「**分割で生まれる新ファイルも
+同じ PR 内で 500 以下**」と定めている（「粗く割ってから細かく」の 2 段階は取れない）。
+2 ファイルでも `slots` が **510 行**で 10 行超えたので、`load_outproc_effect_chain_impl` を
+3 つ目へ分けた。
+
+### 🔴 可視性の変更 3 行（E3′ の適用）
+
+このグループは相互依存していて、**純粋な移動だけでは成立しなかった**。`pub(super)` を 3 つ:
+
+| メソッド | 呼び出し元 | 理由 |
+|---|---|---|
+| `apply_outproc_effect_chain_with_timeout` | 親のインラインテスト `effect_rack_tests` | **親は子の private を呼べない** |
+| `teardown_outproc_effect_slot` | 兄弟 `outproc_effect_slots.rs` | **兄弟同士も private は見えない** |
+| `load_outproc_effect_chain_impl` | 兄弟 `outproc_effect_slots.rs` | 同上 |
+
+**変更を必要最小の 3 行に留めた**ことが residual にそのまま出ている（`fn` → `pub(super) fn`）。
+これは隠すべきものではなく、**レビュアーが読むべき行**である。
+
+**residual**: moved+ 794 / moved− 795 / residual 60（doc コメント 40 行を除くと**約 20 行**）。
+ゲート (i) は 1 行差で NG になったが、多重集合の照合で「**削除されたが追加されていない行は
+上記 3 メソッドのシグネチャのみ**」= `pub(super)` を付けた行であり、**コードの欠損は 0** と確定した。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（**5 箇所を再アンカー**）。

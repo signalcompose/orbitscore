@@ -169,7 +169,7 @@ npm run test:e2e:cold-install
 
 #### VS Code Extension Installation
 ```bash
-code --install-extension packages/vscode-extension/orbitscore-0.0.1.vsix
+code --install-extension packages/vscode-extension/orbitscore-darwin-arm64-*.vsix
 ```
 
 #### Cursor / Claude Code

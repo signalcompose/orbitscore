@@ -1362,15 +1362,15 @@ LOOP(drums)
 ## Sources
 
 - `rust/crates/orbit-plugin-scan/Cargo.toml:1-7` — why the scanner is a standalone binary (crash isolation)
-- `rust/crates/orbit-plugin-scan/src/lib.rs:29-50` — `CatalogEntry` / `Catalog` (PC.1 JSON schema)
-- `rust/crates/orbit-plugin-scan/src/lib.rs:52-61` — `SCANNER_SCHEMA_VERSION` and cache-invalidation conditions
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1028-1035` — `dedup_key` (format, path, pluginId)
-- `rust/crates/orbit-plugin-scan/src/lib.rs:187-198` — standard scan directories
-- `rust/crates/orbit-plugin-scan/src/lib.rs:228-253` — non-recursive bundle enumeration
-- `rust/crates/orbit-plugin-scan/src/lib.rs:571-584` — CLAP features → roles (both when unsure)
-- `rust/crates/orbit-plugin-scan/src/lib.rs:922-940` — VST3 Sub Categories → roles
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1037-1055` — `dedup_entries` (last wins)
-- `rust/crates/orbit-plugin-scan/src/lib.rs:1854-1866` — atomic write
+- `rust/crates/orbit-plugin-scan/src/types.rs:21-42` — `CatalogEntry` / `Catalog` (PC.1 JSON schema)
+- `rust/crates/orbit-plugin-scan/src/types.rs:44-53` — `SCANNER_SCHEMA_VERSION` and cache-invalidation conditions
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:206-213` — `dedup_key` (format, path, pluginId)
+- `rust/crates/orbit-plugin-scan/src/dirs.rs:9-20` — standard scan directories
+- `rust/crates/orbit-plugin-scan/src/dirs.rs:50-75` — non-recursive bundle enumeration
+- `rust/crates/orbit-plugin-scan/src/clap_scan.rs:43-56` — CLAP features → roles (both when unsure)
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:100-118` — VST3 Sub Categories → roles
+- `rust/crates/orbit-plugin-scan/src/vst3_scan.rs:215-233` — `dedup_entries` (last wins)
+- `rust/crates/orbit-plugin-scan/src/catalog_io.rs:29-41` — atomic write
 - `rust/crates/orbit-plugin-scan/src/main.rs:25-29` / `:64-69` — `--probe-artifacts` opt-in and catalog version 2
 - `packages/engine/src/core/global/plugin-catalog.ts:18-73` — engine-side reader (types, path resolution, mtime cache)
 - `packages/engine/src/core/global/plugin-resolver.ts:68-80` — PC.2 discriminator `isPluginPathSpec`
@@ -1387,9 +1387,9 @@ LOOP(drums)
 - `packages/engine/src/core/global.ts:1337-1378` — `prepareInstrumentReplacement` (UI close → state save)
 - `packages/engine/src/core/global.ts:1380-1402` — `prepareEffectReplacement` (UI close only)
 - `packages/engine/src/core/global/effect-replace-notice.ts:1-24` — the single exit for "continuing" notices
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088` — `apply_outproc_effect_chain`
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522` — `replace_outproc_effect_plugin` (#625 in-place)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022` — `replace_outproc_instrument_plugin` (#618 prepare-commit)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_slots.rs:144-152` — `apply_outproc_effect_chain`
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_effect_replace.rs:21-29` — `replace_outproc_effect_plugin` (#625 in-place)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap/outproc_instrument_slots.rs:68-80` — `replace_outproc_instrument_plugin` (#618 prepare-commit)
 - `packages/vscode-extension/src/plugin-catalog-reader.ts:1-15` / `:174-202` / `:259-266` — extension-side reader, binary lookup, `--probe-artifacts` spawn
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — rack-context scanner, candidate filter, Quick Pick rows
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — mirrored resolution rules and the agreement test

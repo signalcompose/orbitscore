@@ -17,6 +17,243 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: fold the remaining docs-sync PRs and fix the version claims they found (Sep 13, 2026)
+
+**Issue**: #933。#930 / #907 / #902 / #901 / #900 を取り込み、**#904 と #929 は close**した。
+
+#### 🔴 #904 はマージしてはいけなかった — が、発見は正しかった
+
+#904 は「4.0.1 の bump が漏らしたページ」を直す PR で、**main は既に 4.1.0** なので
+マージすると**版が巻き戻る**（`+` 側に `4.0.1` が 16 箇所）。
+**しかし指摘は当たっていた** — 4.1.0 の bump が届いていない箇所が残っていた:
+
+| 箇所 | 直前の値 | 直した値 |
+|---|---|---|
+| `docs/core/INDEX.md:5` | 拡張 **3.0.0** / `DSL_VERSION 1.2` | 4.1.0 / `DSL_VERSION 2.0` |
+| `sites/dev/{,en/}editor/vscode-architecture.md:15` | package version **3.0.0** | 4.1.0 |
+| `sites/dev/{,en/}editor/vscode-architecture.md:1154/1155` | version **3.0.0** | 4.1.0 |
+
+**2 版分（3.0.0 → 4.0.1 → 4.1.0）取り残されていた。** #904 の中身だけ採って 4.1.0 で書いた。
+
+#### 🔴 版の列挙はこれで 3 回連続で漏れている
+
+| 版 | 漏れ | 後始末 |
+|---|---|---|
+| 4.0.1 | 複数ページ | `10d3c7eb`「follow the bump into the pages it missed」を後出し |
+| 4.1.0 | `README.md:55` | PR #928 の中で修正 |
+| **今回** | 上の 5 スポット | 本 PR |
+
+原因は毎回同じで、**grep のパターンが「現在の版の数字」や特定の強調記法に依存していた**こと。
+`**4.0.1**` と `"version"` を狙ったパターンは、`VS Code 拡張 **3.0.0**` や
+`package version 3.0.0` を**構造的に拾えない**（探しているのが「古い版」ではなく
+「**版を名乗っている場所**」だから）。
+
+**今後は数字に依存しないパターンで数える**:
+
+```
+(拡張|extension)[^0-9]{0,40}[0-9]+\.[0-9]+\.[0-9]+|package version [0-9]+\.[0-9]+\.[0-9]+|Current release
+```
+
+24 箇所が挙がり、1 つずつ「現在の版を名乗るのか／履歴記述か」を判定した。
+履歴（`DEVELOPMENT_MAP:240` の #883、各 provenance Note、`architecture-overview:620`）は触っていない。
+
+#### ついでに直した 2 件
+
+- `sites/dev/en/editor/vscode-architecture.md` の `contributes.commands` が **(17)** だったが、
+  `package.json` の実体は **15**。ja 側は 15 で正しく、**en だけがずれていた**
+- `docs/testing/{TESTING_GUIDE,PERFORMANCE_TEST}.md` のインストール例が
+  `orbitscore-0.0.1.vsix` のままで、**コピペすると失敗する**。
+  `orbitscore-darwin-arm64-*.vsix`（`release.yml:129` の命名と一致）へ直した。
+  `docs/user/{ja,en}/GETTING_STARTED.md` にも同じ例があるが、**両方 DEPRECATED 宣言付き**なので触っていない
+
+#### #902 の衝突は「分割前 vs 分割後」だった
+
+HEAD 側が `output.rs:254-260` / `session.rs:691-718` という**分割前のパス**を指したままで、
+#902 が `output/lines.rs` / `output/render.rs` / `session/dispatch.rs` へ貼り直していた。
+**参照リストは #902 側を採り**、frontmatter は HEAD（`verified-against: f2245bb` が新しい）を採って、
+Note は**両側の固有文を文単位で統合**した。
+
+#### #929 は差分 0 だが中身が重要（→ issue へ）
+
+🔴 **E2E-P が裁定 D′ と旧 `√2 · equal_power_pan` 則を区別できない**ことを指摘している。
+`hardLeftCh1 / hardLeftCh0 ≤ 0.05` も `centerRms / noPanRms ≈ 1` も**旧則で通る** —
+発音側の差は 3 本すべてに等しく掛かるので比を取ると消えるため。
+その他の指摘とあわせて issue 化した。
+
+`docs:check` exit 0 / lint exit 0 / `npm test` 全件 pass。
+
+Closes #933
+
+---
+
+### docs: re-anchor the dev-site code pointers onto the #896 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr896`
+
+PR [#896](https://github.com/signalcompose/orbitscore/pull/896)（#888 子 2・`session.rs` 2,605 → 439 /
+`output.rs` 2,587 → 322 コード行）へのドキュメント追従。
+
+#896 は `// FILE:START-END` 引用ブロックを分割後のモジュールへ張り直しており、`npm run docs:check`
+は 948 件すべて緑である。**しかし `check-citations.mjs` が見ているのは引用ブロックだけ**で、
+本文中のインライン参照と各章末「参考にしたコード」の `path:line` は検査対象外だった。
+その結果、**dev サイトに 44 箇所の宙に浮いた参照が残っていた**（`output.rs:3290-3322` など、
+445 行しかないファイルへの参照）。
+
+本コミットはそれらを**シンボルから引き直して**再アンカーした（ja / en 両方）:
+
+- `sites/dev/rust-engine/index.md` — コマンド表の出典が単一 `match` ではなくなった旨を追記し、
+  `session/run_loop.rs` / `session/dispatch.rs` / `dispatch_plugin.rs` / `dispatch_transport.rs` へ分解
+- `sites/dev/rust-engine/insert-bus.md` — `InsertBusStage` の 2 つの参照が同一定義に解決するため 1 本へ統合
+- `sites/dev/rust-engine/capture-verification.md` — `CAPTURE_RING_SECONDS` / `OutputStream` と
+  `render_block_with_sources` が別ファイルへ分かれたため 2 本へ分割
+- `sites/dev/signal-chain/mixer-audio-line.md` — post-loop が `output/render_full.rs` へ移った
+- `sites/dev/plugin-hosting/plugin-ui.md` — `ClosePluginUI` が `session/dispatch.rs` へ移った
+- 上記 5 章の `verified-against` / `verified-at` を `9c29e45` / `2026-09-12` へ更新
+
+`/docs` 側も 2 件:
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — `validate_line_program` の `Pan` 受理と
+  バス上 pan 則（`line_pan_coefficients`）を `output/line_program.rs` / `output/dsp.rs` へ
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — 最後の session 切断の判定を
+  `session/params_plugin.rs` の `SessionRegistration::disconnect` へ
+
+🔴 **発見: これらの参照は #896 より前から既に壊れていた。** 旧 `path:line` を `9d39d2e`
+（#896 の base）で引き直したところ、**確認した 34 箇所のほぼ全部が無関係な行を指していた**
+（例: `output.rs:823-846` は「active flag snapshot」と書かれていたが実際は `MasterLine::new`、
+`session.rs:1271-1284` は「session 切断 trigger」と書かれていたが実際は outproc frames-clamped の
+ticker）。**引用ブロックだけがラチェットで守られ、その隣の散文参照は誰にも検査されずに漂流していた。**
+CLAUDE.md「規律を足す時は、同時にそれを守らせる仕組みを足すこと」の未適用箇所である。
+
+**実装・テストは 1 行も変更していない。**
+
+---
+
+### docs: re-anchor the dev-site prose citations that PR #895 moved out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr895`
+
+PR [#895](https://github.com/signalcompose/orbitscore/pull/895)（merge commit `9d39d2e`）の
+ドキュメント追従。`engine_wrap.rs` は 6,418 → 424 コード行になり、21 の子モジュールへ実体が移った。
+
+### 🔴 `docs:check` が見ていない引用が 40 件残っていた
+
+PR #895 は `// FILE:START-END` の**コードブロック引用**（`docs:check` が文字単位で突合する層）を
+すべて直していた。直っていなかったのは、**本文と「参考」節の散文引用**である。
+
+| 層 | #895 で直ったか | 機械検査 |
+|---|---|---|
+| ` ```rust // path:start-end ` のコードブロック | ✅ | `sites/dev/scripts/check-citations.mjs`（948 件） |
+| 本文の `` `engine_wrap.rs:6470-6560` `` 等 | ❌ **40 件が残存** | **無い** |
+
+`check-citations.mjs` はフェンス直後のヘッダ行しか見ないので、散文に書かれた path:line は
+**ラチェットの外側**にいる。今回はそこを実ファイルへ手で突き合わせて貼り直した。
+
+🔴 **この 40 件は #895 より前から line がずれていた**（base `0819a88` で実測。例:
+`engine_wrap.rs:4455` が指していたのは `path: &std::path::Path,` の行だった）。
+ただし #895 で**ファイルそのものが変わった**ので、行ずれではなく到達不能になった。
+
+### 直した範囲
+
+`sites/dev/`（ja）と `sites/dev/en/`（en）の 6 章 × 2 言語:
+`rust-engine/index.md` / `rust-engine/insert-bus.md` / `signal-chain/index.md` /
+`signal-chain/mixer-audio-line.md` / `plugin-hosting/catalog.md` / `plugin-hosting/plugin-ui.md` /
+`glossary.md` / `rust-engine/oop-children.md`。
+
+置換は 40 件の行番号付き引用と 18 件の散文言及で、**ja / en の件数一致を assert して**適用した
+（片方だけ直る事故を機械で防いだ）。
+
+### DSL 正本（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）も 5 箇所直した
+
+MX.4 の「今日の現在地」表が `SetBusRouting` の kind 拒否と forward-only 拒否を
+`engine_wrap.rs:7212-7216` / `:7237-7241` / `:5802-5806` / `:7207-7211` で引いていた。
+実体は `engine_wrap/bus_lines.rs` の `set_bus_routing` にある:
+
+| 規則 | 現在地 |
+|---|---|
+| `output '<name>' must be a sum bus` | `engine_wrap/bus_lines.rs:299-303` |
+| `send '<name>' must be an aux bus` | `engine_wrap/bus_lines.rs:325-329` |
+| forward-only（output） | `engine_wrap/bus_lines.rs:292-296` |
+| forward-only（send） | `engine_wrap/bus_lines.rs:318-322` |
+
+### frontmatter は触っていない（意図的）
+
+`verified-against` を新しい SHA へ上げると「章全体を再検証した」と主張することになる。
+本 PR が突き合わせたのは `engine_wrap/` 配下の引用だけで、同じ章が引いている
+`session.rs` / `output.rs` は **PR [#896](https://github.com/signalcompose/orbitscore/pull/896)
+（`9d39d2e` の直後にマージ）で分割済み**であり未検証である。`f23eb5d` のまま残すのが正しい。
+
+### docs(dev-site): re-anchor the source pointers left behind by the #888 child-3 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr897` / **追従元**: PR [#897](https://github.com/signalcompose/orbitscore/pull/897)（merge `6dcd80bb2086fd6ced22e0c9711a7063e45ee535`）
+
+PR #897 は `orbit-vst3-host/src/lib.rs` / `orbit-plugin-scan/src/lib.rs` /
+`orbit-audio-sandbox/src/transport.rs` を分割し、dev サイトの **`// FILE:START-END`
+引用ヘッダ 32 件**を移動先へ追随させた。しかし各章末の **`## Sources` / 「Further reading」の
+散文ポインタは旧パスのまま**残っていた。
+
+🔴 **`docs:check` はこの取りこぼしを構造的に検出できない。**
+`sites/dev/scripts/check-citations.mjs` が突合するのは ```` ```rust ```` ブロック先頭の
+`// FILE:START-END` ヘッダだけで、**散文の中のバッククォート付きパスは走査対象外**である。
+そのため #897 は `948 citations / 0 failed` で緑のまま、**17 種 34 箇所**（ja / en 対）の
+死んだポインタを残せた。
+
+本コミットはその 17 種すべてを移動先へ張り直した（ja / en 対で 8 ファイル・計 34 箇所）:
+
+| 旧 | 新 |
+|---|---|
+| `transport.rs:79-87`（`EVT_SLOTS`） | `transport/layout.rs:33-41` |
+| `transport.rs:265-277`（evt ring / `dirty_epoch`） | `transport/layout.rs:222-234` |
+| `transport.rs:359-378`（`ReleaseAcquireSeq`） | `transport/event_ring.rs:37-56` |
+| `transport.rs:512-538`（`EventRingChild::service`） | `transport/event_ring.rs:192-218` |
+| `transport.rs:1213-1225`（`UiPumpNotification`） | `transport/ui_codec.rs:33-45` |
+| `transport.rs:1355-1374`（`UiPumpState`） | `transport/ui_pump.rs:63-82` |
+| `transport.rs:113-143,173-288`（`CONTROL_*` / `SharedRegion`） | `transport/layout.rs:67-97,127-239` |
+| `transport.rs:2031-2041`（`create_shared`） | `transport/shm.rs:171-186` |
+| `plugin-scan/src/lib.rs` 9 件（カタログ型・role 判定・scan dir・dedup・atomic write） | `types.rs` / `dirs.rs` / `clap_scan.rs` / `vst3_scan.rs` / `catalog_io.rs` |
+
+`docs/planning/DEVELOPMENT_MAP.md` の 2 件（`extra_scan_dirs_from_env` の実装位置、
+`reset_child_starting` の在処）も同様に張り直した。前者は「`CLAP_PATH` 対応は同じ関数に
+1 行並べるだけ」という**着手手順そのもの**を指すポインタで、死んだままだと実装者が迷う。
+
+`verified-against` / `verified-at` は**更新していない**。STYLE_GUIDE §4 の
+「小規模 cross-link / 体裁修正のみ: 更新しない（本文内容と code の対応関係に変更がないため）」に
+該当する — 純粋な移動なので本文の主張は 1 つも変わっていない。
+
+検証: `npm run docs:build`（user / dev）両方緑 / `npm run docs:check` **948 citations / 0 failed**。
+張り直した 17 種は docs:check の対象外なので、`sed -n '<start>p;<end>p'` で各範囲の先頭行・
+末尾行を**実ファイルから目視照合**した。
+
+### docs: follow the install-route change into the user site (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr906`
+
+PR [#906](https://github.com/signalcompose/orbitscore/pull/906)（マージコミット `85f29aa`）の追従。
+同 PR で**リリースページが持つ内容が変わった**ため、user site の記述を合わせた。
+
+### 何が食い違ったか
+
+`release.yml` の `--notes-file` が先頭に置くのは、**Assets からの入れ方の 1 行と、正本
+（`sites/user/getting-started/installation.md`）へのリンクと、動作環境の注意**である
+（`.github/workflows/release.yml:244-264`）。**手順そのものはリリースページに載らない。**
+
+一方 user site の installation 章は、`::: tip` の中で「リリースページを開くと、そのページに
+インストール手順も載っています」と書いていた。#906 以前から v4.0.0 で外れていた約束であり、
+#906 の後も**手順ではなくリンクが載る**ので、どちらの意味でも成り立たない。
+
+### やったこと
+
+| ファイル | 変更 |
+|---|---|
+| `sites/user/getting-started/installation.md:33` | tip を「Assets に直接行ける / 先頭に動作環境とこのページへのリンクが置かれる / 手順の正本はこのページ」に書き換え |
+| `sites/user/en/getting-started/installation.md:33` | 同内容の英語版（バイリンガル必須） |
+
+### やらなかったこと
+
+- **`docs/user/ja/USER_MANUAL.md:65`** に同じ文が残っているが、この文書は **DEPRECATED で
+  「履歴として保持」（#237）**。#906 でも同じ理由で意図的に触れていないため、追従対象から外した
+- **`sites/dev/`** — 差分はリリースノートの生成（配布面）であり、dev site の章立て
+  （内部構造・評価経路）に該当する節が無い
+- **実装・テスト** — 変更なし（本追従はドキュメントのみ）
 ### docs: fold the four pending docs-sync PRs into one branch (Sep 13, 2026)
 
 **Issue**: #931。bot の docs 同期 PR **4 本**（#923 / #916 / #925 / #915）をまとめて取り込んだ。
@@ -94,6 +331,37 @@ Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して 
   （`grep -rl "pre-edit" sites/` が 0 件）。バイリンガル追従の対象も発生しない
 - `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
   退避した既存エントリ。過去ログなので触らない
+
+### docs: record the 4.1.0 follow in the dev-site provenance Notes (Sep 13, 2026)
+
+PR [#928](https://github.com/signalcompose/orbitscore/pull/928)（#926・4.1.0 バンプ）への
+docs 追従（実装・テストは変更なし）。
+
+#928 は dev サイト 4 ページ（`orientation/architecture-overview.md` と
+`decisions/adr-002-dsl-v3-pivot.md` の ja + en）の**本文の版表記だけ**を 4.1.0 に上げ、
+同じページの冒頭 Note は「2026-09-12 に #883（拡張 **4.0.0**）まで追従しました」のままだった。
+**本文と来歴注記が同一ファイル内で食い違う**ので、Note に 2026-09-13 の 4.1.0 追従を追記した。
+
+`verified-against` / `verified-at` は**据え置き**。STYLE_GUIDE §4「`verified-against` の更新
+ポリシー」では「小規模 cross-link / 体裁修正のみ」は更新しない、であり、版表記の差し替えは
+本文と code の対応関係を変えない。2026-09-12 の #883 追従も同じ 4 ページで `56c34c3` /
+`2026-09-11` を据え置いており、その前例に合わせた。
+
+🔴 直さず報告（PR 本文へ）:
+
+- **版表記の同期を守らせる仕組みが無い。** #928 の記述（本ログ上方）自身が「4.0.1 でも
+  取りこぼして `10d3c7eb` を後から出した」「**2 回連続で同じ形**」と書いているのに、
+  `packages/vscode-extension/package.json` の版と doc の版を突合するテストは存在しない
+  （`tests/docs/` は `planning-issue-state` と `worklog-size` のみ）。CLAUDE.md の
+  「規律を足す時は、同時にそれを守らせる仕組みを足すこと」に対して、仕組みだけが欠けている
+- **`CHANGELOG.md` が 1.1.0（2026-05-06）で止まっている。** 2.0.0 / 3.0.0 / 4.0.0 / 4.0.1 /
+  4.1.0 のどれも項が無く、`[Unreleased]` は #212 の内容のまま。どの版を遡って書き起こすかは
+  リリース判断なので追従作業では決めない
+
+Part of #926
+
+---
+
 ### chore(release): bump the extension to 4.1.0 (Sep 13, 2026)
 
 **Issue**: #926。出すのは **#922（振る舞いの修正）** + #918 / #920（テストのみ）。
@@ -1688,157 +1956,6 @@ cfg 4 象限も `cargo test` も通ってしまった。
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
 🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
-
-
-### refactor(daemon): move the out-of-process effect slot lifecycle into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-effect`（base = `888-split-engine-wrap`）
-
-#888 子 1 の**第 4 束**。out-of-process エフェクトの load / chain / replace / unload（799 行）を
-3 ファイルへ:
-
-| ファイル | コード行 |
-|---|---|
-| `engine_wrap/outproc_effect_slots.rs` | 297 |
-| `engine_wrap/outproc_effect_chain.rs` | 216 |
-| `engine_wrap/outproc_effect_replace.rs` | 217 |
-
-`engine_wrap.rs` は **5,127 → 4,409** コード行。`excluded` 7,730 で不変。
-
-### 🔴 3 ファイルに割った理由（設計 §13.9 の制約 1）
-
-1 ファイルにまとめると **724 コード行**で閾値 500 を超える。§13.9 は「**分割で生まれる新ファイルも
-同じ PR 内で 500 以下**」と定めている（「粗く割ってから細かく」の 2 段階は取れない）。
-2 ファイルでも `slots` が **510 行**で 10 行超えたので、`load_outproc_effect_chain_impl` を
-3 つ目へ分けた。
-
-### 🔴 可視性の変更 3 行（E3′ の適用）
-
-このグループは相互依存していて、**純粋な移動だけでは成立しなかった**。`pub(super)` を 3 つ:
-
-| メソッド | 呼び出し元 | 理由 |
-|---|---|---|
-| `apply_outproc_effect_chain_with_timeout` | 親のインラインテスト `effect_rack_tests` | **親は子の private を呼べない** |
-| `teardown_outproc_effect_slot` | 兄弟 `outproc_effect_slots.rs` | **兄弟同士も private は見えない** |
-| `load_outproc_effect_chain_impl` | 兄弟 `outproc_effect_slots.rs` | 同上 |
-
-**変更を必要最小の 3 行に留めた**ことが residual にそのまま出ている（`fn` → `pub(super) fn`）。
-これは隠すべきものではなく、**レビュアーが読むべき行**である。
-
-**residual**: moved+ 794 / moved− 795 / residual 60（doc コメント 40 行を除くと**約 20 行**）。
-ゲート (i) は 1 行差で NG になったが、多重集合の照合で「**削除されたが追加されていない行は
-上記 3 メソッドのシグネチャのみ**」= `pub(super)` を付けた行であり、**コードの欠損は 0** と確定した。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（**5 箇所を再アンカー**）。
-
-
-### refactor(daemon): move note dispatch and sample playback into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-notes-samples`（base = `888-split-engine-wrap`）
-
-#888 子 1 の**第 3 束**。🔴 **純粋な移動**。2 グループを 2 ファイルへ:
-
-- プラグインへのノート送出（CLAP / out-of-process instrument）→ `engine_wrap/notes.rs`（286 コード行）
-- サンプル再生・トランスポート・オフライン render → `engine_wrap/playback.rs`（180 コード行）
-
-`engine_wrap.rs` は **5,585 → 5,127** コード行。`excluded` は 7,730 で不変。
-
-### 🔴 設計 E3「可視性の変更 0 件」には条件がある（第 3 束で実測）
-
-「**子モジュールは親の private に到達できる**」は正しいが、**逆は成り立たない**。
-親は子の private メソッドを呼べない。
-
-`lock_active_notes`（`#[cfg(feature = "outproc-instrument")]` の private ヘルパー）を
-`notes.rs` へ動かしたところ、`engine_wrap.rs` に残った 2 箇所とインラインテスト 2 箇所から
-呼べなくなり **`outproc-instrument` の 2 象限が E0624 で落ちた**。
-
-**残る側が使うヘルパーは移さない**（親へ戻す）のが正しい。`pub(super)` にするのは
-「移動」ではなく「変更」なので residual に出る。設計文書に **E3′** として記録した。
-
-### 🔴 ゲート (i) が発火した（`moved+ 602 ≠ moved− 603`）— 調査手順が定まった
-
-1 行差だったので、**削除行と追加行を多重集合で照合**したところ
-「**削除されたが追加されていない行 = 0 件**」で、コードは 1 行も失われていなかった。
-新規追加 24 行はすべて新設モジュールのヘッダと `mod` 宣言。
-git のブロック照合が空行を片方だけ移動と認めたための **false positive** である。
-
-**正しい向きの false positive**（「怪しいから見ろ」と言われて見たら確定的に否定できた）。
-この多重集合判定を**子 0b の `move-residual.sh` に組み込む**価値がある。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
-
-
-### refactor(daemon): move the bus-routing methods into a child module (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-bus-lines`（base = `888-split-engine-wrap`）
-
-#888 子 1 の**第 2 束**。🔴 **純粋な移動**。
-
-`device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` / `set_bus_line` /
-`set_bus_routing` / `set_source_routing`（元 6956-7451・496 行）を
-`src/engine_wrap/bus_lines.rs` へ。**ヘルパー 3 本を一緒に動かした**のは、置いていくと
-モジュールを跨いで `pub(crate)` 化が要り、それは「移動」ではなく「変更」だから。
-
-| | before | after |
-|---|---|---|
-| `engine_wrap.rs` | 6,014 コード行 | **5,585** |
-| `engine_wrap/bus_lines.rs` | — | 433 |
-| `excluded` | 7,730 | **7,730** |
-
-**residual**: 素の変更行 1,013 → moved+ 496 == moved− 496 → **residual 21**
-（うち 15 行は新設 doc コメント = **実質 6 行**）。ゲート (i) 通過。
-
-🔴 **引用が 14 件落ちた**（7 箇所 ×2 言語）。第 1 束と違い、**移動したコード自体が引用されていた**ので
-4 箇所は**ファイルパスごと** `bus_lines.rs` へ向け直した。残り 3 箇所は行番号のずれ。
-`docs:check` は**先頭行しか照合しない**ので、末尾が関数シグネチャの途中で終わっていた 1 件を
-引用元の文脈まで読んで確認した（「関数コメントが機構を一文で言い切っている」を見せる意図なので
-doc コメント + シグネチャで正しい）。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move the stats/health accessors out of engine_wrap.rs (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-stats`（base = `888-split-engine-wrap`）
-**担当**: 設計 = Fable / 実装・検証 = main
-
-#888 子 1 の**第 1 束**。設計は `docs/design/888-child1-first-extraction.md`。
-🔴 **純粋な移動**（本文は 1 行も書き換えていない）。
-
-- `impl EngineWrap` の 40 メソッド（`clap_post_peak` 〜 `output_channels`・元 8972-9550）を
-  **子モジュール** `src/engine_wrap/stats.rs` へ。`use super::*;` + `impl EngineWrap { … }` で包む
-- 🔴 **可視性の変更 0 件**。子モジュールは親の private フィールド・private `use` に到達できる
-  （兄弟モジュールにすると `pub(crate)` 化が多数必要で、それは「移動」ではなく「変更」）
-- **インラインテスト mod は動かさない**（コード行に数えられず目標に寄与しない）。`excluded` は 7,730 で不変
-- `mod stats;` は**先頭ではなく impl の閉じ括弧の直後**に置いた。先頭だと行番号が +2 ずれて
-  dev サイトの引用が約 20 箇所動く
-
-**結果**: `engine_wrap.rs` **6,418 → 6,014** コード行 / `stats.rs` 408（500 以下なので baseline 無し）。
-
-**residual**（§5.1a の新ルールで初の実測）:
-
-```
-素の変更行 1,176  →  moved+ 579 == moved− 579  →  residual 18
-```
-
-うち 11 行は新設モジュールの doc コメントなので**実質 7 行**。移動した 579 行は 1 行も residual に出ていない。
-ゲート (i) `moved+ == moved−` 通過。
-
-**検証**（main が sandbox 外で実行）: `cargo fmt --check` / `clippy --all-targets -D warnings` /
-**`scripts/check-cfg-matrix.sh` 4 象限緑** + `clap-host` 単独 / `cargo test -p orbit-audio-daemon` /
-`npm test` **2,445 passed**（前と同数 = 期待値不変）/ lint / `docs:check` 948 引用 0 failed。
-
-🔴 **`docs:check` は一度落ちた**（4 件 = 引用 2 箇所 ×2 言語）。ソースを動かすと引用が必ず動く。
-`--fix` は行番号を合わせるだけなので、**新しい行を grep で探し、着地先の中身を目視で照合してから**
-書き換えた（構造体が `}` で閉じ、メソッドが `}` で閉じることを確認）。
-ずれ幅が −578 と −580 の 2 種類あるのは、`mod stats;` の挿入位置の前後で変わるため。
-
-🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
-しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
-CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
 
 
 ## Archived sections

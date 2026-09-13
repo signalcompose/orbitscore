@@ -109,11 +109,11 @@ The shared-memory transport between the daemon and a child. Audio blocks travel 
 
 ### insert bus (`seq-bus-<n>`)
 
-The per-sequence insert bus used by `seq.effect()`. The daemon pre-allocates 8 inactive buses by default (`ORBIT_EFFECT_BUS_POOL`) and a declaration is the activation. The `seq-bus-` prefix is a contract shared by TS (`sequence-effect-manager.ts`) and Rust (`engine_wrap.rs`). See [RE-3](/en/rust-engine/insert-bus).
+The per-sequence insert bus used by `seq.effect()`. The daemon pre-allocates 8 inactive buses by default (`ORBIT_EFFECT_BUS_POOL`) and a declaration is the activation. The `seq-bus-` prefix is a contract shared by TS (`sequence-effect-manager.ts`) and Rust (`engine_wrap/effect_slot_types.rs`). See [RE-3](/en/rust-engine/insert-bus).
 
 ### sum bus / aux bus (`sum-bus-<n>` / `aux-bus-<n>`)
 
-The mixer buses used by `global.sum()` / `global.aux()`. `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` in TS `mixer-manager.ts` must match the default pool prefixes in Rust `engine_wrap.rs`; v1 allows 4 of each at a time (`MIXER_BUS_POOL_SIZE`). See [SC-2](/en/signal-chain/mixer-audio-line).
+The mixer buses used by `global.sum()` / `global.aux()`. `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` in TS `mixer-manager.ts` must match the default pool prefixes in Rust `engine_wrap/effect_slot_types.rs`; v1 allows 4 of each at a time (`MIXER_BUS_POOL_SIZE`). See [SC-2](/en/signal-chain/mixer-audio-line).
 
 ### receiver id (`sum:<name>` / `aux:<name>`)
 

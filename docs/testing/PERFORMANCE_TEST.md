@@ -27,7 +27,7 @@ npm run build
 
 2. **Install VS Code extension**:
 ```bash
-code --install-extension packages/vscode-extension/orbitscore-0.0.1.vsix
+code --install-extension packages/vscode-extension/orbitscore-darwin-arm64-*.vsix
 ```
 
 3. **Verify audio files**:
