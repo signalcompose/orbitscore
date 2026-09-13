@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 4.1.0 (Sep 13, 2026)
+
+**Issue**: #926。出すのは **#922（振る舞いの修正）** + #918 / #920（テストのみ）。
+
+#### 🔴 なぜ patch ではなく minor か
+
+**patch は「振る舞いが変わらない」の意味**で、それは嘘になる（audio が +3 dB）。
+**major でもない** — semver が問うのは**利用者の入力との契約**で、v3.0.0（設定とコマンドが消えた）
+v4.0.0（暗黙 master が消えた）と違い、**4.1.0 では譜面を 1 文字も変えなくていい**。
+加えて #922 は実質バグ修正（誤って 3 dB 減衰されていた audio を戻した）。
+**minor が「聞いて分かる変化はあるが書いたものは壊れない」の信号。**
+
+#### 🔴 版を名乗る箇所は 11 あった
+
+前回（4.0.1）は取りこぼして `10d3c7eb`「follow the bump into the pages it missed」を
+後から出している。**今回は grep で列挙し、期待件数を `assert` で固定してから置換した**
+（`package.json` 正本 / `CLAUDE.md` / `README.md` / core spec ×2 / dev サイト ja+en ×6）。
+設計文書の「4.0.1」は当時の記録なので触っていない。
+`ENGINE_VERSION` / `DSL_VERSION` は別軸（設計 656 §4.4）。
+
+#### マージ前ゲート（main `77a17905` で実測）
+
+実機 gated **46 passed / 46（skip 0）** / cold install exit 0 / build / std-gain 実機 3 行 /
+CI 4 チェック全 pass。
+
+🔴 **E2E-5 の比率は `× √2` が消えても不動** — `9.999999829984711`（期待 10・誤差 1.7e-8）。
+絶対レベルは √2 倍（`0.0867` → `0.1226`）でも比率は動かないことを実測で確認。
+
+#### リリースノートに書くこと
+
+audio が +3 dB / 🔴 **ヘッドルームが 3 dB 減る**（リミッタが無い系なので重ねたミックスは
+0 dBFS に近づく）/ pan がフルスケールを超えなくなった / gated が skip 0 の 46 件に。
+
+---
+
 ### test(e2e): implement E2E-4/E2E-5 against a real >=4ch device (Sep 13, 2026)
 
 owner が Loopback で **`OrbitScore E2E`（8ch）** を作成したので、`#611` O-surface で
