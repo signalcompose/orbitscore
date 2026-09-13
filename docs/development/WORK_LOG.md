@@ -17,6 +17,46 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #918 — the self-launching test placement rule, and two WORK_LOG separators (Sep 13, 2026)
+
+PR [#918](https://github.com/signalcompose/orbitscore/pull/918)（マージ `77a1790`）の追従。
+実装は触らない（差分は `tests/` と `CLAUDE.md` と WORK_LOG のみ）。
+
+#### 1. 自前アプリのテストの配置規則が CLAUDE.md にしか無かった
+
+元 PR は `launchIsolatedOrbitStudio()` が冒頭で `killHarnessInstances()` を呼ぶため、
+自己完結のテストを共有セッションの途中に置くと後続が `ECONNREFUSED` で落ちることを
+実測し、spec の境界にコメントを残した（`tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553`）。
+これはハーネスの不変条件なので、以下へ展開した:
+
+- `docs/testing/E2E_HARNESS_SPEC.md` §3.1（新設）— 共有セッション / 自己完結の 2 種別と順序規則
+- `sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/editor/mcp-and-gated-e2e.md`
+  — `killHarnessInstances()` の節の直後に節を 1 つ追加（引用は 6550-6553）。
+  `verified-against` を `77a1790` へ、Note の追従先に #917 / #918 を追記
+
+#### 2. WORK_LOG の区切りが 2 箇所崩れていた
+
+| ファイル | 症状 |
+|---|---|
+| `docs/development/WORK_LOG.md` | #918 のエントリと次のエントリの間に `---` が無く、本文の次の行が `###` 見出しになっていた |
+| `docs/archive/WORK_LOG_2026-09.md` | アーカイブへの追記で `---` が 2 連続になっていた |
+
+どちらも他のエントリの形（空行 + `---` + 空行）に揃えた。
+
+#### 検証
+
+`npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` / `npm run docs:check`。
+
+#### 追従しなかったもの（PR 本文に出す）
+
+- `sites/user/getting-started/engine-settings.md:29,33` の「チャンネル = ステレオ（2ch）」/
+  「マルチチャンネル出力は未実装」が、同じサイトの `sites/user/mixing/routing.md:115` と
+  食い違う。元 PR は 8ch デバイスで ch3/4 に音が出ることを実測しているが、
+  この警告文の「マルチチャンネル出力」が DSL の宛先を指すのか設定 UI を指すのかは
+  差分から確定できないので、書き換えずに報告に回した
+
+---
+
 ### test(e2e): implement E2E-4/E2E-5 against a real >=4ch device (Sep 13, 2026)
 
 owner が Loopback で **`OrbitScore E2E`（8ch）** を作成したので、`#611` O-surface で
@@ -74,6 +114,9 @@ free 0.2GB → **8.5GB**。その後 1 周で全件緑。
 `-t 'E2E-4/E2E-5'` は 2 分で回る（自己完結テストなので）。**だが `-t` は
 「そのテストが後続を壊すこと」を原理的に検出できない** — 上の誤り 1 は単独実行では
 **自分だけ緑**になる。**開発は `-t`、影響の確認とマージ前ゲートは全件**。
+
+---
+
 ### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
 
 `#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの

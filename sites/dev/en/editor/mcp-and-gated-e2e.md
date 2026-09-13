@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: f575f27
-verified-at: "2026-09-12"
+verified-against: 77a1790
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) and #855 (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), the temp-sweep race that was inflating the ERROR count) on 2026-09-11, and to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889), the addition of the cold install gate) on 2026-09-12. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) and #855 (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), the temp-sweep race that was inflating the ERROR count) on 2026-09-11, and to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889), the addition of the cold install gate) on 2026-09-12, and to #917 (PR [#918](https://github.com/signalcompose/orbitscore/pull/918), **the E2E-4 / E2E-5 implementation and the placement rule for self-launching tests**) on 2026-09-13. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -634,6 +634,20 @@ async function killHarnessInstances(): Promise<void> {
 `selectRootPids()` (`tests/e2e/helpers/harness-processes.ts`, new) takes the set of harness-owned pids and drops any whose parent is also in that set, leaving only the roots. A row whose parent could not be determined (the process vanished between the scan and the lookup, `ps` itself failed, etc.) is **treated as unknown and never counted as a root** — unknown defaults to safe. Roots get a `SIGTERM` so each main process can take its own helpers down through the normal shutdown path; if any are still alive after 5 seconds (or root detection found nothing to begin with), an unconditional `SIGKILL` sweep cleans up the rest. This classification logic can't be driven from the DSL and never shows up directly in whether the gated run succeeds, so it's pinned as a unit test in `tests/e2e/harness-processes.spec.ts` (new) — main + several helpers, two mains launched at once, an unknown parent, and a `NaN` parent.
 
 The pattern must never be widened to an app or process name, it says in more than one place. The reason is a past incident in which the user's actual VS Code was killed.
+
+### Self-launching tests belong after the shared-session ones
+
+`killHarnessInstances()` is not only a teardown helper. `launchIsolatedOrbitStudio()` calls it **as its first step**, so any test that launches its own app carries a side effect: the moment it starts running, every harness-owned VS Code instance alive at that point is taken down. Most of the gated spec rides on the **shared session** that the `describe` setup launched once, so putting a self-launching test in the middle of that run leaves the shared-session tests behind it with nothing to connect to.
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553
+  // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
+  // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
+  // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
+  // `#606 E2E-K3` が `ECONNREFUSED` で落ちた（2026-09-13 実測・#917）。
+```
+
+What makes this awkward is that the breakage is **invisible when the test runs alone**. Narrow the run with vitest's `-t` and the self-launching test passes, because it is self-contained. The ones that fail are the tests that would have come after it in the same run, so `-t` cannot detect this class of failure at all. Iterating with `-t` is still the right way to develop, but there is an asymmetry here: **seeing the effect on other tests requires running the whole suite** (measured 2026-09-13, #917).
 
 ### `capture_wav` is a spawn-only option
 
@@ -1440,6 +1454,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — the first test (launch, catalogue, capture, run_selection, onset verification)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — the #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553` — the boundary between the shared-session tests and the self-launching ones (#917)
 - `tests/e2e/vsix-cold-install-gated.spec.ts:1-51` — the cold install gate's env contract (`ORBIT_GATED_COLD_INSTALL`) and the strict / finder configurations (#878 / #873)
 - `tests/e2e/vsix-cold-install-gated.spec.ts:160-223` — from evaluating DSL through to the RMS and `get_log` assertions
 - `tests/e2e/helpers/harness-processes.ts:1-49` — the teardown containment policy, `selectRootPids()` and `userDataDirExceedsSocketLimit()` (#830)

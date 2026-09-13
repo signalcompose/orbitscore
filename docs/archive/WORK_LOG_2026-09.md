@@ -11249,8 +11249,6 @@ Tests  45 passed | 1 skipped (46) | 0 failed
 
 ---
 
----
-
 ### fix(dsl): make the missing-output diagnostic read the whole chain (#883 束 S・レビュー round 1) (Sep 12, 2026)
 
 **Date**: 2026-09-12
