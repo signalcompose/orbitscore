@@ -1,0 +1,43 @@
+// #611 E2E-4 / E2E-5: デバイスのチャンネル対（`mix.output(3, 4)` / `"3,4"`）宛ての 2 つの規則を
+// 1 つの譜面で固定する（設計 `611-o-surface-bundle-design.md` §8.3）。
+//
+// 🔴 **出力 4ch 以上のデバイスが要る。** 2ch デバイスでは ch3/4 が存在しないので、この譜面は
+// 「鳴らない」のではなく「測れない」。テスト側が `maxOutputChannels >= 4` で skip する。
+//
+// 2 つの sequence を**順に**鳴らす（同時に鳴らすと両方が master = ch1/2 へ加算されて
+// 比率が測れない）。テストが `split.stop()` → `LOOP(cut)` の順に駆動する。
+//
+// - `split`（E2E-5）: `output(master, thru: true).output("3,4", db: -20)`
+//   → ch1/2 は素のレベル、ch3/4 は -20 dB。比は `10^(20/20)` = 10
+// - `cut`（E2E-4）: `output(master, thru: false).output(cue)`
+//   → `thru: false` が終端なので、その後ろの `output(cue)` には**到達しない**
+//     （設計 `611-output-line-design.md` :310 / :589「`Output` 後の `break`」）。
+//     ch1/2 は鳴り、ch3/4 は無音
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+
+// デバイスのチャンネル対をノード変数で受ける（設計 :107 の `cue` 形・1 始まり）。
+var cue = mix.output(3, 4)
+
+// E2E-5: master へ素通しし、同じ信号を ch3/4 へ -20 dB で分岐する。
+var split = init global.seq
+split.beat(4 by 4).length(1)
+split.audio("kick.wav").chop(1)
+split.output(master, thru: true).output("3,4", db: -20)
+split.play(1, 1, 1, 1)
+
+// E2E-4: `thru: false` で終端し、その後ろに `output(cue)` を置く。
+// 🔴 後ろの要素は wire に載るが daemon は break で到達しない = ch3/4 は無音。
+var cut = init global.seq
+cut.beat(4 by 4).length(1)
+cut.audio("kick.wav").chop(1)
+cut.output(master, thru: false).output(cue)
+cut.play(1, 1, 1, 1)
+
+LOOP(split)

@@ -17,6 +17,63 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): implement E2E-4/E2E-5 against a real >=4ch device (Sep 13, 2026)
+
+owner が Loopback で **`OrbitScore E2E`（8ch）** を作成したので、`#611` O-surface で
+唯一 skip されていた `E2E-4 / E2E-5` の本体を書いた。**実機 gated が初めて skip 0 の
+46 passed になった**（#917 / #851 B-2）。
+
+#### 固定したもの
+
+| | 期待値 | 実測（4 周） |
+|---|---|---|
+| **E2E-5** `output(master, thru: true).output("3,4", db: -20)` | ch1/2 : ch3/4 = `10^(20/20)` | **9.999999818**（8 桁一致） |
+| **E2E-4** `output(master, thru: false).output(cue)` | 終端の後ろには到達しない | `cutCue` = **厳密に 0** |
+
+8ch あるので **ch5/6 を「誰も宛先にしていない対照」**として使い、E2E-4 の無音を
+「小さい」ではなく「**未使用チャンネルと同じ床**」で判定している（4ch デバイスでは飛ばす）。
+
+#### 🔴 Monitors を繋がなくてよいことを実測で確かめた
+
+capture は **cpal へ渡す最終 `hw` を読み取り専用で tap** している
+（`orbit-audio-native/src/output/render.rs:56-59`「tap であって mutation ではない」）ので、
+デバイスがその先へ流すかに依存しない。クロックも刻む（**first callback 12 ms**）。
+→ **BlackHole は不要**（設計 §8.3 の元案）。
+
+#### red-first ではない。変異で代替した
+
+O-surface の実装は v4.0.0 で出荷済みなので「実装前に書いて赤」は成立しない。
+代わりに**期待値を壊す変異 2 種**で、この判定が区別できることを確かめた:
+
+| 変異 | 結果 |
+|---|---|
+| E2E-5 の期待比 `10 → 3` | red（`expected 2.33 to be <= 0.12`） |
+| E2E-4 が ch3/4 ではなく **ch1/2 を見る**（off-by-one） | red（`cutCue` が `cutMaster` と同値・`cutLeak = 1`） |
+
+後者が重要で、**DSL は 1 始まり・`channelRms` は 0 始まり**なので取り違えが最も起きやすい。
+
+#### 🔴 自分の誤り 3 つ
+
+1. **配置**: 共有セッションのブロックの真ん中に置いたので、`launchIsolatedOrbitStudio` の
+   `killHarnessInstances()` が共有アプリを殺し、後続の `#606 T1` / `E2E-K3` が
+   `ECONNREFUSED` で落ちた。自前アプリ群の側へ移し、**境界にコメントを残した**
+2. **後始末**: `fs.rmSync` を裸で呼んでいて `ENOTEMPTY` で 2 周続けて赤くなった
+   （アサーションは全部通っていた）。**既に `removeHarnessTree` が
+   kill → 終了待ち → best-effort 削除を持っていた**ので、手書きをやめてそれを使った
+3. **Spotlight を索引中だと誤断**した。CPU は 0.0〜0.1% で、12 日間常駐していただけ。
+   **メモリ使用量だけを見て動いていると推測した**のが誤り
+
+#### 実機ゲートが 2 回メモリ不足で kill された
+
+`claude` プロセスが **89 個 / 5.28GB**（11 日 23 時間動く `--resume` が 17 個）積み上がり、
+free が 0.1GB まで落ちていた（swap は 0）。owner の許可を得て自分以外の **47 セッション**を停止し、
+free 0.2GB → **8.5GB**。その後 1 周で全件緑。
+
+#### 🔴 `-t` の限界を CLAUDE.md に足した
+
+`-t 'E2E-4/E2E-5'` は 2 分で回る（自己完結テストなので）。**だが `-t` は
+「そのテストが後続を壊すこと」を原理的に検出できない** — 上の誤り 1 は単独実行では
+**自分だけ緑**になる。**開発は `-t`、影響の確認とマージ前ゲートは全件**。
 ### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
 
 `#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの
@@ -1875,100 +1932,6 @@ dev サイトの 6 箇所は `--fix` では直らなかった（行番号では�
 引用ブロックと本文・mermaid ラベルを手で追従させた。
 
 Closes #878
-### fix(dsl): make the missing-output diagnostic read the whole chain (#883 束 S・レビュー round 1) (Sep 12, 2026)
-
-**Date**: 2026-09-12
-**ブランチ**: `883-explicit-output-semantics`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）
-**担当**: レビュー = pr-review-team 4 体 + Fable 監査（並行）/ 裁定と fix = main
-
-束 S のレビュー round 1。**5 体の指摘を 4 つの機構に畳んで一度に当てた**（指摘単位のローカル
-パッチはしない）。
-
-#### 1. 診断がチェーンの途中の出口を読めていなかった（Important・**3 体が独立に到達**）
-
-`analyzeMissingOutput()` のレシーバ判定は、**「行がこのシーケンスのものか」と「どのメソッドか」を
-1 本の正規表現で兼ねていた**。名前の直後しか見ないので、チェーンの途中に置いた出口が消える。
-`.output(` だけが `chainReceiver` でチェーン対応しており、**非対称がそのまま残っていた**のが証拠。
-
-実測（fix 前・5 件とも red）:
-
-| 譜面 | 出ていた診断 | 正しい診断 |
-|---|---|---|
-| `kick.audio("k.wav").send("verb", -12)` | `output-missing`（"it will be silent"） | `dry-not-routed` |
-| `kick.gain(-3).master` | `output-missing` | なし（裸形 master は正当な出口） |
-| `kick.gain(-3).drums` | `output-missing` | なし |
-| `kick.send("verb",-12).send("drums",-6)` | `dry-not-routed` | なし（2 本目が sum） |
-| `kick.audio("k.wav").play(1)`（出口なし） | **なし** | `output-missing` |
-
-最後の 1 行は逆方向の取りこぼしで、**発火点の `play(` 自体がチェーン途中だと 1 件も警告されない**。
-レビュアー 2 体はここに触れていない — main が probe で列挙して見つけた。
-
-**直し方**: レシーバの 2 つの仕事を分けた。行の帰属は `\b<name>\b`、メソッドは
-レシーバを含まないモジュール定数（`OUTPUT_CALL` / `MASTER_ACCESS` / `SEND_CALL` / `PLAY_CALL` /
-`MIDI_CALL`）。**バス名のパターンも文書ごとに 1 度だけ**組み立てる（打鍵ごとに走る診断なので、
-シーケンス数 × 行数 × バス数 の再コンパイルを避ける）。1 行に 2 つ置いた `send` を両方読めるように
-なったのは副次効果。
-
-#### 2. 「無音へ倒す」時に痕跡を残す（Important 1 + Minor 1）
-
-§2.6 は「表現できない routing は無音」だが、**仕様上の無音と不変条件違反は区別が付かなければ
-ならない**。ライブ中に「書き忘れ」と「バグ」を切り分ける手段が要る。
-
-| 箇所 | 直す前 | 直した後 |
-|---|---|---|
-| `output.rs` `SourceDestCell::encode` の範囲外 fallback | `debug_assert!` のみ。`[profile.release]` は `debug-assertions` を上書きしていない（既定 false）ので**出荷ビルドでは何も残らない** | `eprintln!` を併記（`encode` の呼び手は制御プレーンのみ・実測） |
-| `output.rs` `decode` | — | **据え置き**。RT コールバック（`collect_source_feeds`）から呼ばれる。唯一の書き手が `encode` なので追える旨をコメントに |
-| `sequence.ts` `instrumentSourceRoutingTarget()` の inconsistent route | 無言で `{kind:'none'}` | 既存の `logSkipOnce()` を再利用（per-reason dedup 付き） |
-
-#### 3. wire の版を上げた（Fable 監査・②-4）
-
-本 PR で `SetSourceRouting.target` が非互換になった（`null` / 生文字列を受け付けない）のに
-`PROTOCOL_VERSION` は scaffold 以来 `'0.2'` のままだった。**版を上げないとずれは handshake ではなく
-最初の `SetSourceRouting` まで露見せず、その間 instrument は旧既定の master で鳴り続ける**
-（孤児 daemon を掴んだ時に実際に起きうる）。`'0.3'` へ。不一致は `daemon-client.ts` の
-両経路で loud に落ちる（実装済みの機構・新設ではない）。
-
-#### 4. 記録と前提条件
-
-- `tests/vscode-extension/output-code-action.spec.ts` が**ディスクにあるのに一度もコミットされて
-  いなかった**（pr-test-analyzer）。D8 の quick fix 配線が無防備だった。コミットに含めた
-- `InsertBusStage::with_output_target` / `with_sends` に前提条件を明記（`[Rack]` 既定の stage に
-  対しては前者が黙って捨て、後者が panic する）
-- `resolveDispatchChannel()` の skip を **LinkAudio 抜き**で押さえる unit を 1 本追加（既存の
-  1 本は `global.linkAudio()` を先に呼んでおり、LinkAudio ゲートと区別が付かなかった）
-
-#### D15 の変異表（Fable 監査が実走・各 1 行変異 → 対象 test → `git checkout --` で復元）
-
-設計 §2.6 の 6 箇所（+ `#[default]`）を Master に戻すと red になることの記録。**テストは効いており、
-欠けていたのは記録だけ**だった。
-
-| 変異 | red になった test |
-|---|---|
-| `encode` の範囲外 fallback `NONE` → `MASTER`（`output.rs`） | `source_dest_cell_roundtrips_every_destination_and_defaults_invalid_values` |
-| `decode` の `_ => None` → `Master` | 同上 |
-| `SourceDest` の `#[default]` を `None` → `Master` | 同上 |
-| `default_bus_line_ops` → `legacy(Master, &[])` | `tagged_event_with_unattached_bus_is_consumed_without_reaching_hardware` |
-| Bus 位置なしの `map_or(Discard, …)` → `Hardware` | `unregistered_source_bus_is_silent_…` |
-| `Link(_) => Discard` → `Hardware` | `unwired_link_source_is_silent_…` |
-| slot 解放時の `store(None)` → `store(Master)` ×2（`engine_wrap.rs`） | `r1_replace_migrates_all_unit_destinations_then_resets_every_freed_unit` |
-
-#### 採らなかった指摘と理由
-
-| 指摘 | 裁定 |
-|---|---|
-| 変数参照の `send(v, -6)` で `dry-not-routed` が沈黙する（silent-failure-hunter Important） | **誤検知**。`extractDeclaredBusNames()` は `scanVarDeclarations` で `var v = mix.aux(...)` も拾う。実測で `dry-not-routed` が出る |
-| `_insertBus` が一度確保すると解放されない（Minor） | 本 PR 以前からの性質。プール上限そのものは #663（撤廃）の土俵なので別 |
-| LinkAudio で `output-missing` が Error → Warning（Minor） | **仕様どおり**。owner の収束条件 3 が「Warning + quick fix」と明示している |
-| legacy `SetBusRouting` に暗黙 master が 1 箇所残る（Fable ③-2） | **本 PR では触らない**。#852 以降 DSL からは到達不能な legacy wire コマンドで、正しい翻訳は「拒否」か「出口なしの line」かの判断が要る。別 issue（下記）に切り出し、コマンドの撤去と一緒に閉じる |
-| `kick.output(1)`（render のみ）でエディタと実行時が逆を向く | #598 周辺。別 |
-
-`npm test` **2,383 passed / 74 skipped / 0 failed**・lint 緑・`cargo test --workspace`
-**627 passed / 0 failed**・引用 948 / 0 failed。
-
-Part of #883
-
----
-
 ## Archived sections
 
 Older entries have been archived by month for readability:
