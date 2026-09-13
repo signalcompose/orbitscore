@@ -62,6 +62,45 @@ CI 4 チェック全 pass。
 audio が +3 dB / 🔴 **ヘッドルームが 3 dB 減る**（リミッタが無い系なので重ねたミックスは
 0 dBFS に近づく）/ pan がフルスケールを超えなくなった / gated が skip 0 の 46 件に。
 
+### docs: follow PR #918 — the self-launching test placement rule, and two WORK_LOG separators (Sep 13, 2026)
+
+PR [#918](https://github.com/signalcompose/orbitscore/pull/918)（マージ `77a1790`）の追従。
+実装は触らない（差分は `tests/` と `CLAUDE.md` と WORK_LOG のみ）。
+
+#### 1. 自前アプリのテストの配置規則が CLAUDE.md にしか無かった
+
+元 PR は `launchIsolatedOrbitStudio()` が冒頭で `killHarnessInstances()` を呼ぶため、
+自己完結のテストを共有セッションの途中に置くと後続が `ECONNREFUSED` で落ちることを
+実測し、spec の境界にコメントを残した（`tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553`）。
+これはハーネスの不変条件なので、以下へ展開した:
+
+- `docs/testing/E2E_HARNESS_SPEC.md` §3.1（新設）— 共有セッション / 自己完結の 2 種別と順序規則
+- `sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/editor/mcp-and-gated-e2e.md`
+  — `killHarnessInstances()` の節の直後に節を 1 つ追加（引用は 6550-6553）。
+  `verified-against` を `77a1790` へ、Note の追従先に #917 / #918 を追記
+
+#### 2. WORK_LOG の区切りが 2 箇所崩れていた
+
+| ファイル | 症状 |
+|---|---|
+| `docs/development/WORK_LOG.md` | #918 のエントリと次のエントリの間に `---` が無く、本文の次の行が `###` 見出しになっていた |
+| `docs/archive/WORK_LOG_2026-09.md` | アーカイブへの追記で `---` が 2 連続になっていた |
+
+どちらも他のエントリの形（空行 + `---` + 空行）に揃えた。
+
+#### 検証
+
+`npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` / `npm run docs:check`。
+
+#### 追従しなかったもの（PR 本文に出す）
+
+- `sites/user/getting-started/engine-settings.md:29,33` の「チャンネル = ステレオ（2ch）」/
+  「マルチチャンネル出力は未実装」が、同じサイトの `sites/user/mixing/routing.md:115` と
+  食い違う。元 PR は 8ch デバイスで ch3/4 に音が出ることを実測しているが、
+  この警告文の「マルチチャンネル出力」が DSL の宛先を指すのか設定 UI を指すのかは
+  差分から確定できないので、書き換えずに報告に回した
+
+
 ---
 
 ### test(e2e): implement E2E-4/E2E-5 against a real >=4ch device (Sep 13, 2026)
@@ -150,6 +189,8 @@ docs を追従（実装・テストは変更なし）。`docs/core/INSTRUCTION_O
 
 追従できなかった点（E2E の穴・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1992` の旧法則残存・
 E2E-P の比のみアサーション）は **PR 本文に path:line 付きで列挙した**。E2E と baseline は触っていない。
+
+
 
 ---
 

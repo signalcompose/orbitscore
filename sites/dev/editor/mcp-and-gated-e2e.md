@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: f575f27
-verified-at: "2026-09-12"
+verified-against: 77a1790
+verified-at: "2026-09-13"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）、2026-09-11 に #860（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)・正常系で鳴っていた `warn!` を `debug!` へ）、2026-09-11 に #855（PR [#857](https://github.com/signalcompose/orbitscore/pull/857)・temp 掃除のレースが ERROR 件数を押し上げていた件）、2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・cold install ゲートの追加）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）、2026-09-11 に #860（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)・正常系で鳴っていた `warn!` を `debug!` へ）、2026-09-11 に #855（PR [#857](https://github.com/signalcompose/orbitscore/pull/857)・temp 掃除のレースが ERROR 件数を押し上げていた件）、2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・cold install ゲートの追加）、2026-09-13 に #917（PR [#918](https://github.com/signalcompose/orbitscore/pull/918)・**E2E-4 / E2E-5 の実装と、自前アプリを立てるテストの配置規則**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -634,6 +634,20 @@ async function killHarnessInstances(): Promise<void> {
 `selectRootPids()`（`tests/e2e/helpers/harness-processes.ts`、新設）は「ハーネス管理下の pid の集合」から「親も同じ集合に属する pid」を除いて根だけを返します。親が取得できない行（走査と取得の間にプロセスが消えた・`ps` 自体が失敗した、等）は**不明として扱い、根とはみなしません**——不明は安全側に倒す設計です。根に SIGTERM を送って通常の終了パスへヘルパーの後始末を任せ、5 秒待って生きていれば（あるいは根の検出そのものが失敗していれば）無条件の SIGKILL sweep で回収します。この分類ロジックは DSL からは駆動できず実機の成否にも直接は現れないため、`tests/e2e/harness-processes.spec.ts`（新設）でユニットテストとして固定しています（本体1+ヘルパー複数／本体を複数起動／親が不明／親が NaN、の4パターン）。
 
 パターンをアプリ名やプロセス名に広げてはいけない、と複数箇所で書かれています。ユーザーの VS Code を殺した過去の事故がその理由です。
+
+### 自前でアプリを立てるテストは、共有セッションのテストより後ろへ
+
+`killHarnessInstances()` は teardown 専用の関数ではありません。`launchIsolatedOrbitStudio()` が **冒頭で** これを呼ぶので、自前のアプリを立てるテストは「走り出した瞬間に、そのとき生きているハーネス由来の VS Code をすべて落とす」という副作用を持ちます。gated spec の大半は `describe` のセットアップが 1 回だけ起動した**共有セッション**に相乗りしているので、自前アプリのテストをその並びの途中に置くと、後ろに残った共有セッションのテストは接続先を失います。
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553
+  // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
+  // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
+  // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
+  // `#606 E2E-K3` が `ECONNREFUSED` で落ちた（2026-09-13 実測・#917）。
+```
+
+厥介なのは、この壊れ方が **単独実行では見えない**という点です。vitest の `-t` で名前を絞ると、自前アプリのテストは自己完結しているので緑になります。落ちるのは「同じ実行の中で後ろに並んでいたテスト」の側なので、`-t` は原理的にこの故障を検出できません。反復を速く回すために `-t` を使うのは正しいのですが、**他のテストへの影響を見るには全件を回すしかない**、という非対称がここにあります（#917・2026-09-13 実測）。
 
 ### `capture_wav` は spawn 専用オプション
 
@@ -1430,6 +1444,7 @@ npm run test:e2e:cold-install
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — `launchIsolatedOrbitStudio()`・describe のセットアップ・teardown
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553` — 自前アプリのテストと共有セッションのテストの境界（#917）
 - `tests/e2e/vsix-cold-install-gated.spec.ts:1-51` — cold install ゲートの env contract（`ORBIT_GATED_COLD_INSTALL`）と strict / finder の 2 構成（#878 / #873）
 - `tests/e2e/vsix-cold-install-gated.spec.ts:160-223` — DSL 評価から RMS と `get_log` のアサーションまで
 - `tests/e2e/helpers/harness-processes.ts:1-49` — teardown の封じ込めポリシー・`selectRootPids()`・`userDataDirExceedsSocketLimit()`（#830）
