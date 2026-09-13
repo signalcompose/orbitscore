@@ -17,6 +17,75 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: fold the remaining docs-sync PRs and fix the version claims they found (Sep 13, 2026)
+
+**Issue**: #933。#930 / #907 / #902 / #901 / #900 を取り込み、**#904 と #929 は close**した。
+
+#### 🔴 #904 はマージしてはいけなかった — が、発見は正しかった
+
+#904 は「4.0.1 の bump が漏らしたページ」を直す PR で、**main は既に 4.1.0** なので
+マージすると**版が巻き戻る**（`+` 側に `4.0.1` が 16 箇所）。
+**しかし指摘は当たっていた** — 4.1.0 の bump が届いていない箇所が残っていた:
+
+| 箇所 | 直前の値 | 直した値 |
+|---|---|---|
+| `docs/core/INDEX.md:5` | 拡張 **3.0.0** / `DSL_VERSION 1.2` | 4.1.0 / `DSL_VERSION 2.0` |
+| `sites/dev/{,en/}editor/vscode-architecture.md:15` | package version **3.0.0** | 4.1.0 |
+| `sites/dev/{,en/}editor/vscode-architecture.md:1154/1155` | version **3.0.0** | 4.1.0 |
+
+**2 版分（3.0.0 → 4.0.1 → 4.1.0）取り残されていた。** #904 の中身だけ採って 4.1.0 で書いた。
+
+#### 🔴 版の列挙はこれで 3 回連続で漏れている
+
+| 版 | 漏れ | 後始末 |
+|---|---|---|
+| 4.0.1 | 複数ページ | `10d3c7eb`「follow the bump into the pages it missed」を後出し |
+| 4.1.0 | `README.md:55` | PR #928 の中で修正 |
+| **今回** | 上の 5 スポット | 本 PR |
+
+原因は毎回同じで、**grep のパターンが「現在の版の数字」や特定の強調記法に依存していた**こと。
+`**4.0.1**` と `"version"` を狙ったパターンは、`VS Code 拡張 **3.0.0**` や
+`package version 3.0.0` を**構造的に拾えない**（探しているのが「古い版」ではなく
+「**版を名乗っている場所**」だから）。
+
+**今後は数字に依存しないパターンで数える**:
+
+```
+(拡張|extension)[^0-9]{0,40}[0-9]+\.[0-9]+\.[0-9]+|package version [0-9]+\.[0-9]+\.[0-9]+|Current release
+```
+
+24 箇所が挙がり、1 つずつ「現在の版を名乗るのか／履歴記述か」を判定した。
+履歴（`DEVELOPMENT_MAP:240` の #883、各 provenance Note、`architecture-overview:620`）は触っていない。
+
+#### ついでに直した 2 件
+
+- `sites/dev/en/editor/vscode-architecture.md` の `contributes.commands` が **(17)** だったが、
+  `package.json` の実体は **15**。ja 側は 15 で正しく、**en だけがずれていた**
+- `docs/testing/{TESTING_GUIDE,PERFORMANCE_TEST}.md` のインストール例が
+  `orbitscore-0.0.1.vsix` のままで、**コピペすると失敗する**。
+  `orbitscore-darwin-arm64-*.vsix`（`release.yml:129` の命名と一致）へ直した。
+  `docs/user/{ja,en}/GETTING_STARTED.md` にも同じ例があるが、**両方 DEPRECATED 宣言付き**なので触っていない
+
+#### #902 の衝突は「分割前 vs 分割後」だった
+
+HEAD 側が `output.rs:254-260` / `session.rs:691-718` という**分割前のパス**を指したままで、
+#902 が `output/lines.rs` / `output/render.rs` / `session/dispatch.rs` へ貼り直していた。
+**参照リストは #902 側を採り**、frontmatter は HEAD（`verified-against: f2245bb` が新しい）を採って、
+Note は**両側の固有文を文単位で統合**した。
+
+#### #929 は差分 0 だが中身が重要（→ issue へ）
+
+🔴 **E2E-P が裁定 D′ と旧 `√2 · equal_power_pan` 則を区別できない**ことを指摘している。
+`hardLeftCh1 / hardLeftCh0 ≤ 0.05` も `centerRms / noPanRms ≈ 1` も**旧則で通る** —
+発音側の差は 3 本すべてに等しく掛かるので比を取ると消えるため。
+その他の指摘とあわせて issue 化した。
+
+`docs:check` exit 0 / lint exit 0 / `npm test` 全件 pass。
+
+Closes #933
+
+---
+
 ### docs: re-anchor the dev-site code pointers onto the #896 split (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr896`
@@ -1887,86 +1956,6 @@ cfg 4 象限も `cargo test` も通ってしまった。
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
 🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
-
-
-### refactor(daemon): move the out-of-process effect slot lifecycle into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-effect`（base = `888-split-engine-wrap`）
-
-#888 子 1 の**第 4 束**。out-of-process エフェクトの load / chain / replace / unload（799 行）を
-3 ファイルへ:
-
-| ファイル | コード行 |
-|---|---|
-| `engine_wrap/outproc_effect_slots.rs` | 297 |
-| `engine_wrap/outproc_effect_chain.rs` | 216 |
-| `engine_wrap/outproc_effect_replace.rs` | 217 |
-
-`engine_wrap.rs` は **5,127 → 4,409** コード行。`excluded` 7,730 で不変。
-
-### 🔴 3 ファイルに割った理由（設計 §13.9 の制約 1）
-
-1 ファイルにまとめると **724 コード行**で閾値 500 を超える。§13.9 は「**分割で生まれる新ファイルも
-同じ PR 内で 500 以下**」と定めている（「粗く割ってから細かく」の 2 段階は取れない）。
-2 ファイルでも `slots` が **510 行**で 10 行超えたので、`load_outproc_effect_chain_impl` を
-3 つ目へ分けた。
-
-### 🔴 可視性の変更 3 行（E3′ の適用）
-
-このグループは相互依存していて、**純粋な移動だけでは成立しなかった**。`pub(super)` を 3 つ:
-
-| メソッド | 呼び出し元 | 理由 |
-|---|---|---|
-| `apply_outproc_effect_chain_with_timeout` | 親のインラインテスト `effect_rack_tests` | **親は子の private を呼べない** |
-| `teardown_outproc_effect_slot` | 兄弟 `outproc_effect_slots.rs` | **兄弟同士も private は見えない** |
-| `load_outproc_effect_chain_impl` | 兄弟 `outproc_effect_slots.rs` | 同上 |
-
-**変更を必要最小の 3 行に留めた**ことが residual にそのまま出ている（`fn` → `pub(super) fn`）。
-これは隠すべきものではなく、**レビュアーが読むべき行**である。
-
-**residual**: moved+ 794 / moved− 795 / residual 60（doc コメント 40 行を除くと**約 20 行**）。
-ゲート (i) は 1 行差で NG になったが、多重集合の照合で「**削除されたが追加されていない行は
-上記 3 メソッドのシグネチャのみ**」= `pub(super)` を付けた行であり、**コードの欠損は 0** と確定した。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（**5 箇所を再アンカー**）。
-
-
-### refactor(daemon): move note dispatch and sample playback into child modules (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-notes-samples`（base = `888-split-engine-wrap`）
-
-#888 子 1 の**第 3 束**。🔴 **純粋な移動**。2 グループを 2 ファイルへ:
-
-- プラグインへのノート送出（CLAP / out-of-process instrument）→ `engine_wrap/notes.rs`（286 コード行）
-- サンプル再生・トランスポート・オフライン render → `engine_wrap/playback.rs`（180 コード行）
-
-`engine_wrap.rs` は **5,585 → 5,127** コード行。`excluded` は 7,730 で不変。
-
-### 🔴 設計 E3「可視性の変更 0 件」には条件がある（第 3 束で実測）
-
-「**子モジュールは親の private に到達できる**」は正しいが、**逆は成り立たない**。
-親は子の private メソッドを呼べない。
-
-`lock_active_notes`（`#[cfg(feature = "outproc-instrument")]` の private ヘルパー）を
-`notes.rs` へ動かしたところ、`engine_wrap.rs` に残った 2 箇所とインラインテスト 2 箇所から
-呼べなくなり **`outproc-instrument` の 2 象限が E0624 で落ちた**。
-
-**残る側が使うヘルパーは移さない**（親へ戻す）のが正しい。`pub(super)` にするのは
-「移動」ではなく「変更」なので residual に出る。設計文書に **E3′** として記録した。
-
-### 🔴 ゲート (i) が発火した（`moved+ 602 ≠ moved− 603`）— 調査手順が定まった
-
-1 行差だったので、**削除行と追加行を多重集合で照合**したところ
-「**削除されたが追加されていない行 = 0 件**」で、コードは 1 行も失われていなかった。
-新規追加 24 行はすべて新設モジュールのヘッダと `mod` 宣言。
-git のブロック照合が空行を片方だけ移動と認めたための **false positive** である。
-
-**正しい向きの false positive**（「怪しいから見ろ」と言われて見たら確定的に否定できた）。
-この多重集合判定を**子 0b の `move-residual.sh` に組み込む**価値がある。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
 
 
 ## Archived sections

@@ -11938,3 +11938,85 @@ doc コメント + シグネチャで正しい）。
 🔴 **cfg 4 象限を手書きループで確かめようとして壊した**（zsh は未クォートのパラメータを単語分割
 しないので `--features clap-host` が 1 引数として渡り、全象限が偽の FAIL になった）。
 CLAUDE.md が「ループを手書きしない」と記録しているとおりで、`scripts/check-cfg-matrix.sh` を使った。
+
+---
+
+### refactor(daemon): move note dispatch and sample playback into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-notes-samples`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 3 束**。🔴 **純粋な移動**。2 グループを 2 ファイルへ:
+
+- プラグインへのノート送出（CLAP / out-of-process instrument）→ `engine_wrap/notes.rs`（286 コード行）
+- サンプル再生・トランスポート・オフライン render → `engine_wrap/playback.rs`（180 コード行）
+
+`engine_wrap.rs` は **5,585 → 5,127** コード行。`excluded` は 7,730 で不変。
+
+### 🔴 設計 E3「可視性の変更 0 件」には条件がある（第 3 束で実測）
+
+「**子モジュールは親の private に到達できる**」は正しいが、**逆は成り立たない**。
+親は子の private メソッドを呼べない。
+
+`lock_active_notes`（`#[cfg(feature = "outproc-instrument")]` の private ヘルパー）を
+`notes.rs` へ動かしたところ、`engine_wrap.rs` に残った 2 箇所とインラインテスト 2 箇所から
+呼べなくなり **`outproc-instrument` の 2 象限が E0624 で落ちた**。
+
+**残る側が使うヘルパーは移さない**（親へ戻す）のが正しい。`pub(super)` にするのは
+「移動」ではなく「変更」なので residual に出る。設計文書に **E3′** として記録した。
+
+### 🔴 ゲート (i) が発火した（`moved+ 602 ≠ moved− 603`）— 調査手順が定まった
+
+1 行差だったので、**削除行と追加行を多重集合で照合**したところ
+「**削除されたが追加されていない行 = 0 件**」で、コードは 1 行も失われていなかった。
+新規追加 24 行はすべて新設モジュールのヘッダと `mod` 宣言。
+git のブロック照合が空行を片方だけ移動と認めたための **false positive** である。
+
+**正しい向きの false positive**（「怪しいから見ろ」と言われて見たら確定的に否定できた）。
+この多重集合判定を**子 0b の `move-residual.sh` に組み込む**価値がある。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（4 件を再アンカー）。
+
+---
+
+### refactor(daemon): move the out-of-process effect slot lifecycle into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-outproc-effect`（base = `888-split-engine-wrap`）
+
+#888 子 1 の**第 4 束**。out-of-process エフェクトの load / chain / replace / unload（799 行）を
+3 ファイルへ:
+
+| ファイル | コード行 |
+|---|---|
+| `engine_wrap/outproc_effect_slots.rs` | 297 |
+| `engine_wrap/outproc_effect_chain.rs` | 216 |
+| `engine_wrap/outproc_effect_replace.rs` | 217 |
+
+`engine_wrap.rs` は **5,127 → 4,409** コード行。`excluded` 7,730 で不変。
+
+### 🔴 3 ファイルに割った理由（設計 §13.9 の制約 1）
+
+1 ファイルにまとめると **724 コード行**で閾値 500 を超える。§13.9 は「**分割で生まれる新ファイルも
+同じ PR 内で 500 以下**」と定めている（「粗く割ってから細かく」の 2 段階は取れない）。
+2 ファイルでも `slots` が **510 行**で 10 行超えたので、`load_outproc_effect_chain_impl` を
+3 つ目へ分けた。
+
+### 🔴 可視性の変更 3 行（E3′ の適用）
+
+このグループは相互依存していて、**純粋な移動だけでは成立しなかった**。`pub(super)` を 3 つ:
+
+| メソッド | 呼び出し元 | 理由 |
+|---|---|---|
+| `apply_outproc_effect_chain_with_timeout` | 親のインラインテスト `effect_rack_tests` | **親は子の private を呼べない** |
+| `teardown_outproc_effect_slot` | 兄弟 `outproc_effect_slots.rs` | **兄弟同士も private は見えない** |
+| `load_outproc_effect_chain_impl` | 兄弟 `outproc_effect_slots.rs` | 同上 |
+
+**変更を必要最小の 3 行に留めた**ことが residual にそのまま出ている（`fn` → `pub(super) fn`）。
+これは隠すべきものではなく、**レビュアーが読むべき行**である。
+
+**residual**: moved+ 794 / moved− 795 / residual 60（doc コメント 40 行を除くと**約 20 行**）。
+ゲート (i) は 1 行差で NG になったが、多重集合の照合で「**削除されたが追加されていない行は
+上記 3 メソッドのシグネチャのみ**」= `pub(super)` を付けた行であり、**コードの欠損は 0** と確定した。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（**5 箇所を再アンカー**）。
