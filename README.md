@@ -40,12 +40,16 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 
 - **Native audio engine**: Rust `orbit-audio-daemon` (cpal, WebSocket IPC), bundled in the `.vsix`
 - **Realtime WAV capture** (`ORBIT_CAPTURE_WAV`) for objective verification
+- **Session log** (`.orbslog`): an execution record of what was evaluated — implemented but
+  **dormant by default** (opt-in with `ORBITSCORE_SESSION_LOG=1`). It records execution, not
+  results: randomness is re-rolled on playback
 - **VS Code Extension**: Syntax highlighting, live execution, engine view, live playhead, and an embedded MCP server for agent-driven E2E
 - **macOS Optimized**: CoreAudio integration (Apple Silicon only)
 
 ## Current Implementation Status
 
-**2.0.0 is released.** OrbitScore 2.0.0 is a dual-output live-coding DSL:
+**4.1.0 is released.** OrbitScore is a dual-output live-coding DSL — the 2.0.0 line below is
+the feature baseline; everything after it shipped on top:
 
 - **MIDI output** — degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
 - **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 2.0)
@@ -114,7 +118,7 @@ See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 | #137 | ✅ Merged ([PR #157](https://github.com/signalcompose/orbitscore/pull/157)) | GitHub Actions release workflow (Marketplace + Open VSX + GitHub Release) |
 | #139 | ✅ Closed (吸収 in #155) | LICENSE.GPL-3.0 verbatim + NOTICE aggregation clause |
 | #146 | ✅ Closed (吸収 in #155) | First-run check / status bar / settings override |
-| #138 | ⏳ Pending | Cold-install acceptance test on SC-less macOS (manual verification) |
+| #138 | ⏳ Open — but **automated since** [#873](https://github.com/signalcompose/orbitscore/issues/873) / [#878](https://github.com/signalcompose/orbitscore/issues/878) | Cold-install acceptance test (was: manual verification on SC-less macOS). Now `npm run test:e2e:cold-install` installs the packaged `.vsix` into an empty extensions dir and asserts on captured audio |
 
 ### Legacy pre-2.0 MIDI phases (historical)
 
@@ -188,7 +192,13 @@ See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_
 - ✅ **Phase 4** - VS Code Extension (Syntax, Commands, IntelliSense)
 - ✅ **Phase 5** - Audio Playback Verification
 - ✅ **Phase 6** - Live Coding Workflow
-- ✅ **Phase 7** - SuperCollider Integration (0-2ms Latency)
+- ✅ **Phase 7** - Low-latency audio engine
+
+> 🔴 Phase 7 originally read "SuperCollider Integration". SuperCollider was the engine of that
+> era and was **removed in [#502](https://github.com/signalcompose/orbitscore/issues/502)**
+> (PR [#840](https://github.com/signalcompose/orbitscore/pull/840), 2026-09-10). The only audio
+> backend today is the Rust `orbit-audio-daemon`, and no `scsynth` ships in the `.vsix`.
+> The phase table is kept as a record of what was completed, not of what runs now.
 
 <details>
 <summary>Pre-2.0 phases (historical)</summary>
@@ -269,7 +279,7 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 
 ### VS Code Extension
 
-- ✅ Syntax highlighting (2.0.0)
+- ✅ Syntax highlighting
 - ✅ Cmd+Enter execution
 - ✅ Engine control commands, engine view, audio device selection
 - ✅ Real-time feedback, live playhead on `play()` arguments
@@ -309,13 +319,17 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 npm test
 ```
 
-**2271 passed, 58 skipped (2329 total) — 2026-09-10, macOS, on `b9f6ded1`** (#502 removed seven SuperCollider-only spec files)
+**2497 passed, 76 skipped (2573 total) — 2026-09-13, macOS, on `c3e1e3fe`**
 
 Run `npm test` to see the current breakdown. Skipped tests are real-daemon / macOS integration tests that require a local environment. Real-device verification runs through the gated E2E harness:
 
 ```bash
-npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives stock VS Code via MCP, asserts on captured WAV
+npm run test:e2e:gated          # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives stock VS Code via MCP, asserts on captured WAV
+npm run test:e2e:cold-install   # packages the .vsix, installs it into an empty extensions dir, and asserts it makes sound
 ```
+
+Both need macOS with a real audio device, so **they only run locally** — GitHub's macOS runners
+have no VS Code and no audio device.
 
 ## Getting Started
 
@@ -383,12 +397,14 @@ global.start()
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav")
-kick.play(1, 0, 1, 0)
+kick.output()                 // 🔴 required since DSL 2.0 (#883): a sequence with no
+kick.play(1, 0, 1, 0)         //    output() is silent — there is no implicit master
 
 // Snare sequence
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 1, 0, 1)
 
 // Transport control
@@ -427,17 +443,32 @@ sequence piano {
 
 ### VS Code Extension
 
-1. Build the extension:
+1. Build from the repo root — **not from `packages/vscode-extension`**. The root build is what
+   copies the engine `dist` and the daemon / plugin-child binaries into the extension:
 
 ```bash
-cd packages/vscode-extension
 npm install
 npm run build
 ```
 
-2. Install in VS Code:
-   - `Cmd+Shift+P` → "Developer: Install Extension from Location..."
-   - Select `packages/vscode-extension` folder
+2. Package it and install the `.vsix`:
+
+```bash
+cd packages/vscode-extension
+npx vsce package --target darwin-arm64 --no-yarn --no-dependencies
+code --install-extension orbitscore-darwin-arm64-*.vsix
+```
+
+   (This is exactly what `pretest:e2e:cold-install` runs before the cold-install test.)
+
+> 🔴 **Install the packaged `.vsix`, not the source folder.** Loading
+> `packages/vscode-extension` directly (via `Developer: Install Extension from Location...` or
+> `--extensionDevelopmentPath`) skips the packaging layer entirely — the daemon's
+> `extension-bundle` resolution, the extension's own bundled runtime dependencies, and the Node
+> runtime the engine is spawned on. A `.vsix` whose `activate()` never ran survived every other
+> gate that way ([#873](https://github.com/signalcompose/orbitscore/issues/873) /
+> [#878](https://github.com/signalcompose/orbitscore/issues/878)). `npm run test:e2e:cold-install`
+> is what covers that layer now.
 
 3. Usage:
    - Open a `.orbs` file
