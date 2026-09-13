@@ -139,6 +139,20 @@ docs を追従（実装・テストは変更なし）。`docs/core/INSTRUCTION_O
 
 🔴 直さず報告: `INSTRUCTION_ORBITSCORE_DSL.md:1771`「`pan(random)` は発音側のまま」と #922 の前提「`event.pan` は本番コードで一度も設定されない」が食い違う（`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:125`）。仕様判断なので追従作業では決めない。
 
+### docs: record the #920 doc-sync audit (no spec follow-up needed) (Sep 13, 2026)
+
+[#920](https://github.com/signalcompose/orbitscore/pull/920)（merge `59511c9`）の追従監査。
+差分は `scheduler.rs` の `mod tests` 内テスト 1 本と #920 自身の WORK_LOG entry だけで、
+**振る舞いを 1 行も変えていない**ため spec / site の追従は不要。`docs:check` 982 引用 0 失敗。
+
+🔴 #920 が固定した「端で +3 dB」は **20 分後の #922（裁定 D′）が置き換えた**ので、
+仕様文書へ書き写していない。書けば main と食い違う記述を新規に作ることになる。
+
+追従できなかった点（E2E の穴・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1992` の旧法則残存・
+E2E-P の比のみアサーション）は **PR 本文に path:line 付きで列挙した**。E2E と baseline は触っていない。
+
+---
+
 ### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
 
 `#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの
