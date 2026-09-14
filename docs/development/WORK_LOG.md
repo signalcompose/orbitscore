@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 4.2.0 (Sep 14, 2026)
+
+**Date**: 2026-09-14 / **ブランチ**: `942-release-4.2.0` / **Issue**: #942
+
+#939 / #940（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)）をマージしたので
+拡張を **4.2.0** とする。
+
+#### なぜ minor か
+
+**新機能の追加で破壊的変更は無い**（semver の minor）。
+
+- **#939**: 譜面上のプラグイン名を右クリック → **その 1 つだけ**の UI を開く経路。
+  DSL の `ui("name")` は同名の挿入を全部開く（SC.10.10.1 規範 3）ため、人間には個別経路が無かった
+- **#940**: VS Code が前面の時だけプラグイン窓を floating に（DAW と同じ振る舞い・
+  child 自己完結で wire 変更なし）
+
+DSL の表面・wire・出力の意味論はいずれも変えていない。
+`ENGINE_VERSION 2.0.0` と `DSL_VERSION 2.0` は**別軸なので据え置き**
+（`docs/design/656-release-design.md` §4.4）。
+
+#### 🔴 版の列挙 — 番号非依存のパターンで洗った
+
+**過去 3 回連続で 1 件落としている**（4.0.1 の post-fix commit / `README.md:55` /
+`docs/core/INDEX.md:5` + `vscode-architecture.md` が ja/en とも **2 版分**取り残し）。
+いずれも「現在の版番号」や特定の強調記法を狙ったパターンが原因だったので、
+今回は **`(拡張|extension)` + 任意の版番号**という番号非依存の形で探した。
+
+🔴 **それでも 4 回目の取りこぼしをした。** 番号を変数にしたが**形を固定した**パターン
+（`(拡張|extension)` + 版番号）で探したため、次の **7 箇所**を最初の掃除で落とした:
+
+| 落とした場所 | なぜ形が合わなかったか |
+|---|---|
+| `sites/dev/orientation/architecture-overview.md:617`（ja/en）— **正本を示す行** | 太字でなくバッククォート `` `4.1.0` `` |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md:17`（ja/en） | 「拡張」と版番号の間に括弧注記が入る |
+| `sites/dev/editor/vscode-architecture.md:1159`（ja/en） | 「拡張 / extension」の語が無い（`— version 4.1.0、`） |
+| `README.md:59` | `**` が版番号ではなく行全体を囲む |
+
+**軸が逆だった。** 正しくは**番号（`4.1.0`）を固定して形を一切仮定しない**素の grep で探し、
+ノイズ（vendored / lock / 履歴記述）は**後から**除く。検算も同じ方法で行い、
+「更新した箇所の数」ではなく**古い番号が 0 件になったこと**を見る。
+
+更新 **23 箇所 / 12 ファイル**:
+
+| 種別 | ファイル |
+|---|---|
+| 正本 | `packages/vscode-extension/package.json` |
+| 目次・仕様 | `CLAUDE.md` / `README.md`（2 箇所）/ `docs/core/INDEX.md` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2 箇所） |
+| dev サイト（ja/en） | `orientation/architecture-overview.md`（各 2 箇所）/ `editor/vscode-architecture.md`（各 2 箇所）/ `decisions/adr-002-dsl-v3-pivot.md`（各 1 箇所） |
+
+冒頭 Note（追従履歴）は**過去の記述を書き換えず、追記する**形にした。
+`docs/archive/` と WORK_LOG の過去エントリは時点の記録なので触っていない。
+
+#### ついでに直したもの — lockfile が 4 版分取り残されていた
+
+`package-lock.json` の `packages/vscode-extension` が **`2.1.0`** のままだった
+（3.0.0 / 4.0.0 / 4.0.1 / 4.1.0 の**どのバンプでも更新されていない**）。
+`npm install --package-lock-only` の差分は **1 行だけ**で副作用が無かったので取り込んだ。
+
+⚠️ 実害は確認できていない（`npm ci` は CI で通り続けていた）。
+出荷 `.vsix` の版は `packages/vscode-extension/package.json` が担うため、そちらは正しかった。
+
+#### 検証
+
+`npm test` **2577 passed / 79 skipped**・lint 0・`docs:check` 986 引用 0 failed・
+ratchet 68 passed。
+
+---
+
 ### fix: make the #940 wiring tests platform-independent, and pin the keyword mirror (Sep 14, 2026)
 
 レビューラウンド 3。**すべて fix 起因**の指摘で、元差分（`main..113ec39e`）起因の

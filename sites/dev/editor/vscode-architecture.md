@@ -6,13 +6,13 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しましたと束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・`registerOutputCodeActionProvider()` の登録）まで、さらに #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動）まで**engine spawn 節だけ**追従しました。 さらに 2026-09-13 に v4.1.0 のリリース（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）まで **package version の表記だけ**追従しました（本ページは 3.0.0 のまま 2 版分取り残されていました・#933）。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-12 に #883 束 C（PR [#884](https://github.com/signalcompose/orbitscore/pull/884)・`output()` の宛先省略・実現の省略・`.output(` の宛先補完）まで追従しましたと束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・`registerOutputCodeActionProvider()` の登録）まで、さらに #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動）まで**engine spawn 節だけ**追従しました。 さらに 2026-09-13 に v4.1.0 のリリース（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）まで **package version の表記だけ**追従しました（本ページは 3.0.0 のまま 2 版分取り残されていました・#933）。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。
 >
 > 🔴 2026-09-12: #887（PR [#909](https://github.com/signalcompose/orbitscore/pull/909)）で `extension.ts` / `mcp-server.ts` が 19 モジュールへ分割されました。**振る舞いは変わっていません**（既存テストの期待値は 1 つも変わっていない）。本ページのファイル参照は分割後の位置へ付け替えてあります。対応表は [IV-1 の drift 節](/editor/vscode-architecture#_887-extension-ts-mcp-server-ts-の分割-pr-909)にあります。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
-OrbitScore の VS Code 拡張 (`packages/vscode-extension`、package version 4.1.0) は、どのようにして起動し、エンジンとどのようにつながっているのでしょうか。本章ではその内部構造を extension の activation から engine プロセスとの通信まで順を追って読み解きます。2026-05 の初稿から最も変わったのは「engine kind の分岐」「engine ライフサイクルの vscode 非依存モジュールへの抽出」「MCP サーバ・playhead・Engine ビューといった周辺機能の増加」で、末尾に drift の一覧をまとめました。
+OrbitScore の VS Code 拡張 (`packages/vscode-extension`、package version 4.2.0) は、どのようにして起動し、エンジンとどのようにつながっているのでしょうか。本章ではその内部構造を extension の activation から engine プロセスとの通信まで順を追って読み解きます。2026-05 の初稿から最も変わったのは「engine kind の分岐」「engine ライフサイクルの vscode 非依存モジュールへの抽出」「MCP サーバ・playhead・Engine ビューといった周辺機能の増加」で、末尾に drift の一覧をまとめました。
 
 ---
 
@@ -1156,7 +1156,7 @@ flowchart TD
 
 ## Sources
 
-- `packages/vscode-extension/package.json` — version 4.1.0、`activationEvents`、`contributes.commands` (15)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`mcpServer.port` / `playheadPalette` 等。`orbitscore.engine` / `orbitscore.scsynthPath` は #502 で削除)
+- `packages/vscode-extension/package.json` — version 4.2.0、`activationEvents`、`contributes.commands` (15)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`mcpServer.port` / `playheadPalette` 等。`orbitscore.engine` / `orbitscore.scsynthPath` は #502 で削除)
 - `packages/vscode-extension/package.json:34-43` — `capabilities.untrustedWorkspaces` の宣言 (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — 宣言を検査する 6 本 (`restrictedConfigurations` を `?? []` に落とさない理由もここ)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — マニフェスト読み取りの共有ヘルパー (`readExtensionManifest()` / `declaredConfigurationKeys()`)

@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。
 
 # 0-2. アーキテクチャ全景
 
@@ -614,10 +614,10 @@ export const DSL_VERSION = '2.0'
 
 - **`ENGINE_VERSION`**: `2.0.0` — `.orbslog` の meta ヘッダが名乗る版。MIDI 出力 + Pitch DSL + session log を含む WCTM milestone
 - **DSL spec バージョン**: `2.0` — DSL spec の軸 (`ENGINE_VERSION` とも拡張の版とも別)
-- **VS Code 拡張の package version**: `4.1.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
+- **VS Code 拡張の package version**: `4.2.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.1.0` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
+上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.2.0` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
 
 なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '2.0'` (DSL spec 版) とは軸が違います。
 

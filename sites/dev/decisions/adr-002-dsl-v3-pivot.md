@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョンに触れた箇所だけ**追従しました。v0.1 → v3.0 の pivot 本論は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョンに触れた箇所だけ**追従しました。v0.1 → v3.0 の pivot 本論は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
@@ -14,7 +14,7 @@ OrbitScore DSL は 3 回のメジャーバージョンを経て v3.0 に至り�
 
 **重要**: ADR のタイトルが "v1 → v3 pivot" と書かれていますが、実際には 3 段階の変化です。**v1 → v2 が最大の pivot (MIDI → Audio)** であり、v2 → v3 は DSL 構文の洗練です。この章では 3 つすべての変化を扱います。
 
-ちなみに現在も、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL (MIDI 出力) が **別軸** で積まれています。`DSL_VERSION` は audio line の v3.0 ではなく DSL spec の版を指し、#883 の暗黙終端廃止で **2.0** になりました。拡張 (`.vsix` と git タグが名乗る版) は **4.1.0**、`ENGINE_VERSION` は **2.0.0** のままです — 3 つは同期しない別軸です (`docs/design/656-release-design.md` §4.4)。本 ADR は audio line の話です。
+ちなみに現在も、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL (MIDI 出力) が **別軸** で積まれています。`DSL_VERSION` は audio line の v3.0 ではなく DSL spec の版を指し、#883 の暗黙終端廃止で **2.0** になりました。拡張 (`.vsix` と git タグが名乗る版) は **4.2.0**、`ENGINE_VERSION` は **2.0.0** のままです — 3 つは同期しない別軸です (`docs/design/656-release-design.md` §4.4)。本 ADR は audio line の話です。
 
 ```typescript
 // packages/engine/src/version.ts:15-18

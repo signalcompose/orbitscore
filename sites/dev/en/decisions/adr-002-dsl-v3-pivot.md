@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version-bearing passages** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. The main argument about the v0.1 → v3.0 pivot is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version-bearing passages** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. The main argument about the v0.1 → v3.0 pivot is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**. It was further brought up to the v4.2.0 release (PR [#941](https://github.com/signalcompose/orbitscore/pull/941) — #939 cursor-addressed plugin UI / #940 host-frontmost floating windows) on 2026-09-14 — **the extension version string only**.
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
@@ -14,7 +14,7 @@ The OrbitScore DSL went through three major versions to reach v3.0. These versio
 
 **Important**: Although the ADR title says "v1 → v3 pivot," there are actually three stages of change. **v1 → v2 is the largest pivot (MIDI → Audio)**, and v2 → v3 is a refinement of DSL syntax. This chapter covers all three changes.
 
-Incidentally, this v3.0 is still maintained as the "audio engine line," with the Pitch DSL (MIDI output) stacked on top of it as a **separate axis**. `DSL_VERSION` refers to the DSL specification rather than the audio line's v3.0, and #883's removal of implicit terminals takes it to **2.0**. The extension — the version the `.vsix` and the git tag carry — is **4.1.0**, while `ENGINE_VERSION` stays at **2.0.0**: the three are separate axes and are not synced (`docs/design/656-release-design.md` §4.4). This ADR is about the audio line.
+Incidentally, this v3.0 is still maintained as the "audio engine line," with the Pitch DSL (MIDI output) stacked on top of it as a **separate axis**. `DSL_VERSION` refers to the DSL specification rather than the audio line's v3.0, and #883's removal of implicit terminals takes it to **2.0**. The extension — the version the `.vsix` and the git tag carry — is **4.2.0**, while `ENGINE_VERSION` stays at **2.0.0**: the three are separate axes and are not synced (`docs/design/656-release-design.md` §4.4). This ADR is about the audio line.
 
 ```typescript
 // packages/engine/src/version.ts:15-18
