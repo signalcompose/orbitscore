@@ -21,12 +21,30 @@
 
 import * as path from 'path'
 
-import type { DiagnosticIssue } from './diagnostics-analysis'
+import { collectDerivedMixerBuses, type DiagnosticIssue } from './diagnostics-analysis'
 import { normalizeCatalogKey } from './plugin-catalog-completion'
 import type { PluginCatalogEntry } from './plugin-catalog-reader'
 
 /** Structural words that carry the enclosing verb's role into a nested region. */
 const STRUCTURAL_WORDS = new Set(['layer', 'chain'])
+
+// 🔴 語彙の集合はここに並べて置く。#940 のレビューまで、同じ語（`effect` / `instrument` /
+// `layer` / `chain` / `plugin`）に対する判定が 4 箇所に**それぞれ違う集合**でインライン展開
+// されていた。5 つ目の構造語が増えた時、どれか 1 箇所を直し忘れる形だった。
+// 集合が並んでいれば、意図的な差（`layer` だけ透過にしない等）も見比べられる。
+
+/** カタログ名の解決文脈を**開く**呼び出し語。ここが receiver とチェーンの起点になる。 */
+const CATALOG_ROOT_WORDS = new Set(['effect', 'instrument'])
+
+/**
+ * 直下の最初の `[` が**チェーンの階層を増やさない**呼び出し語。
+ * `effect([...])` の外側の配列はチェーンそのものなので、パス成分にしない。
+ * 🔴 `layer` は入らない — `layer([[...], [...]])` の各枝は**別の階層**である。
+ */
+const TRANSPARENT_ROOT_ARRAY_WORDS = new Set(['effect', 'instrument', 'chain'])
+
+/** 直下の `,` が**要素の区切り**になる呼び出し語（`plugin(...)` や `Gain(...)` の中は数えない）。 */
+const ELEMENT_SEPARATOR_WORDS = new Set(['effect', 'instrument', 'layer', 'chain'])
 
 /** Mirrors `plugin-resolver.ts` `PATH_DIRECT_PREFIXES`. */
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
@@ -255,7 +273,7 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
       const call = callWordBefore(text, i)
       const parent = currentFrame()
       const role = roleForCallWord(call.word, parent?.role)
-      const isCatalogRoot = call.word === 'effect' || call.word === 'instrument'
+      const isCatalogRoot = CATALOG_ROOT_WORDS.has(call.word)
       stack.push({
         role,
         word: call.word,
@@ -286,8 +304,7 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
       let pushedCounter = false
       if (frame?.elementCounters) {
         const transparentRootArray =
-          (frame.word === 'effect' || frame.word === 'instrument' || frame.word === 'chain') &&
-          !frame.directArraySeen
+          TRANSPARENT_ROOT_ARRAY_WORDS.has(frame.word) && !frame.directArraySeen
         frame.directArraySeen = true
         if (!transparentRootArray && frame.word !== 'plugin') {
           frame.elementCounters.push(0)
@@ -308,13 +325,7 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
 
     if (ch === ',') {
       const frame = currentFrame()
-      if (
-        frame?.elementCounters &&
-        (frame.word === 'effect' ||
-          frame.word === 'instrument' ||
-          frame.word === 'layer' ||
-          frame.word === 'chain')
-      ) {
+      if (frame?.elementCounters && ELEMENT_SEPARATOR_WORDS.has(frame.word)) {
         const last = frame.elementCounters.length - 1
         frame.elementCounters[last] = (frame.elementCounters[last] ?? 0) + 1
       }
@@ -337,15 +348,17 @@ function callWordBefore(text: string, parenIndex: number): { word: string; start
   return { word: text.slice(start, end), start }
 }
 
-/** Collect `var d = mix.sum` / `.aux` before resolving any call site. */
+/**
+ * `var d = mix.sum` / `.aux` の派生宣言を receiver 表記へ写す。
+ *
+ * 🔴 検出そのものは `diagnostics-analysis` の [`collectDerivedMixerBuses`] に委譲する。
+ * #940 のレビューまでここに 3 本目の独自正規表現を持っており、既存 2 本と文字集合も
+ * アンカリングも違っていた（同じ楽譜が 3 通りに読まれうる状態だった）。
+ */
 function collectDerivedReceivers(text: string): ReadonlyMap<string, string> {
   const receivers = new Map<string, string>()
-  for (const line of text.split('\n')) {
-    const code = line.split('//', 1)[0] ?? ''
-    const match = code.match(
-      /^\s*var\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*[A-Za-z_$][A-Za-z0-9_$]*\.(sum|aux)\s*$/,
-    )
-    if (match?.[1] && match[2]) receivers.set(match[1], `${match[2]}:${match[1]}`)
+  for (const [name, kind] of collectDerivedMixerBuses(text)) {
+    receivers.set(name, `${kind}:${name}`)
   }
   return receivers
 }

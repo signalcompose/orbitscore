@@ -496,7 +496,7 @@ spin loop から呼びます。どちらの理由で抜けたかを stderr に 1
 両者を区別できないためです（#474 P3b のレビューで落ちていたのを戻した経緯がコメントにあります）。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:133-144
+// rust/crates/orbit-child-runtime/src/lib.rs:161-172
 pub unsafe fn child_should_quit(
     region: *const orbit_audio_sandbox::SharedRegion,
     parent_watch: &orbit_audio_sandbox::ParentWatch,

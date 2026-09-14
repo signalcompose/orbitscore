@@ -526,7 +526,7 @@ export type DispatchTarget =
 `analyzeMissingOutput()` は診断ごとに `code` を付けて返します。この `code` が severity・quick fix・MCP の `get_diagnostics` すべての分岐点になります。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:322-325
+// packages/vscode-extension/src/diagnostics-analysis.ts:348-351
 export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
   code: 'output-missing' | 'dry-not-routed'
   sequenceName: string
@@ -536,7 +536,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 判定そのものは 3 分岐です。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:423-428
+// packages/vscode-extension/src/diagnostics-analysis.ts:449-454
     const code = !hasDestination
       ? 'output-missing'
       : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
@@ -602,7 +602,7 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 診断 6 は「`.output()` が書いてあるのに `linkAudio()` が無い」で警告しますが、#611 で `output()` の宛先集合が広がったため、**LinkAudio に届く前に解決される名前**まで巻き込むようになりました。`output("master")` や `output("drums")` (宣言済み sum/aux) は `linkAudio()` が無くても正しく動くので、そこに警告を出すと**動いているコードを「効果がない」と言う**ことになります。
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:259-264
+// packages/vscode-extension/src/diagnostics-analysis.ts:285-290
     for (const m of line.matchAll(outputCallPattern)) {
       const target = m[1]
       // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.

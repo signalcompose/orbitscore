@@ -222,8 +222,34 @@ export function analyzeAudioPathOrdering(text: string): DiagnosticIssue[] {
 const PHYSICAL_PAIR_PATTERN = /^\d+\s*,\s*\d+$/
 /** `global.sum("drums")` / `global.aux("verb")` — the string form. */
 const MIXER_BUS_STRING_DECL = /\bglobal\.(?:sum|aux)\s*\(\s*["']([^"']+)["']/g
-/** `var verb = mix.aux` — the variable NAME is the bus name (#459). */
-const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*mix\.(?:sum|aux)\b/g
+/**
+ * `var verb = mix.aux` — the variable NAME is the bus name (#459).
+ *
+ * 🔴 The receiver is **any identifier**, not the literal `mix`. `mix` is itself a variable
+ * (`var mix = init global.mixer`, SC.2.1), so a score is free to call it something else and
+ * the declaration still means the same thing. Pinning it to `mix.` rejected those scores.
+ * (#940 review: a third copy of this pattern was about to be added with the general form.)
+ */
+const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(sum|aux)\b/g
+
+/**
+ * Every `var <name> = <mixer>.sum|aux` declaration in the document, with its kind.
+ *
+ * 🔴 One reader for this shape. Before #940 there were three regexes for it
+ * (`diagnostics-analysis`, `dsl-completion-context`, and a new one in `plugin-name-diagnostics`),
+ * each with slightly different character classes and anchoring — so the same score could be
+ * read three ways. Callers that only need the names use `declaredMixerBusNames`.
+ */
+export function collectDerivedMixerBuses(text: string): ReadonlyMap<string, 'sum' | 'aux'> {
+  const buses = new Map<string, 'sum' | 'aux'>()
+  for (const raw of text.split('\n')) {
+    if (!raw || raw.trim().startsWith('//')) continue
+    for (const match of stripLineComment(raw).matchAll(MIXER_BUS_VAR_DECL)) {
+      if (match[1] && match[2]) buses.set(match[1], match[2] as 'sum' | 'aux')
+    }
+  }
+  return buses
+}
 
 /** Every mixer-bus name declared anywhere in the document, in either declaration form. */
 function declaredMixerBusNames(lines: readonly string[]): ReadonlySet<string> {

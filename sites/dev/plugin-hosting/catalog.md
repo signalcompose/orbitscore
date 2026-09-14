@@ -827,7 +827,7 @@ export function buildPluginPickItems(
 の引数を誤って照合しません。
 
 ```typescript
-// packages/vscode-extension/src/plugin-name-diagnostics.ts:389-402
+// packages/vscode-extension/src/plugin-name-diagnostics.ts:402-415
 export function analyzeUnknownPluginNames(
   text: string,
   entries: readonly PluginCatalogEntry[] | undefined,

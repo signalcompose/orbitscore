@@ -13,7 +13,7 @@
     "rust/crates/orbit-audio-sandbox/src/events.rs": 520,
     "rust/crates/orbit-child-runtime/src/ui_service.rs": 571,
     "rust/crates/orbit-effect-rack-child/src/lib.rs": 714,
-    "rust/crates/orbit-effect-rack-child/src/macos.rs": 531,
+    "rust/crates/orbit-effect-rack-child/src/macos.rs": 529,
     "rust/crates/orbit-sandbox-spike/src/bin/sandbox-host.rs": 629,
     "rust/crates/orbit-vst3-gain-oracle/src/lib.rs": 685,
     "rust/crates/orbit-vst3-synth-oracle/src/lib.rs": 693

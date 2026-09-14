@@ -87,6 +87,34 @@ where
     Ok(host_bundle_id)
 }
 
+/// `--host-bundle-id <value>` を argv から**取り除いて**残りを返す。
+///
+/// 🔴 **各 child の `parse_args()` にこのフラグを教え込まない**ため（#940 レビュー）。
+/// child 固有のパーサは「未知の引数はエラー」で、自分のドメイン（`--shm` / `--plugin` /
+/// `--chain`）だけを知っていればよい。そこへ**関心の外にあるフラグを無視する分岐**を
+/// 足すと、3 つの binary に同じ知識が複製される（実際そうなっていた。エラー文言まで
+/// 日英でばらついていた）。値を実際に読むのは [`parse_host_bundle_id_argument`] 1 箇所。
+///
+/// フラグが無ければ入力をそのまま返す。値が欠けている場合も**ここでは判定しない** —
+/// 判定は [`parse_host_bundle_id_argument`] が持ち、二重に持たせない。
+pub fn strip_host_bundle_id_argument<I>(arguments: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut remaining = Vec::new();
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        if argument == HOST_BUNDLE_ID_ARG {
+            // 値も一緒に落とす。欠けていれば次の `next()` が None を返して終わるだけで、
+            // その診断は `parse_host_bundle_id_argument` の仕事。
+            let _ = arguments.next();
+            continue;
+        }
+        remaining.push(argument);
+    }
+    remaining
+}
+
 /// child / host が出す **正常系の通知**の level トークン規約（#618 / #625）。
 pub mod notice;
 
@@ -451,6 +479,43 @@ mod tests {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
+
+    #[test]
+    fn strips_the_host_bundle_id_flag_and_its_value_but_keeps_the_rest() {
+        // 🔴 child 固有パーサが `--host-bundle-id` を**知らなくて済む**ことの担保。
+        let stripped = strip_host_bundle_id_argument(
+            [
+                "--shm",
+                "/tmp/a.shm",
+                HOST_BUNDLE_ID_ARG,
+                "com.example.Host",
+                "--sample-rate",
+                "48000",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+        assert_eq!(
+            stripped,
+            vec!["--shm", "/tmp/a.shm", "--sample-rate", "48000"]
+        );
+    }
+
+    #[test]
+    fn strip_leaves_argv_untouched_when_the_flag_is_absent() {
+        let stripped =
+            strip_host_bundle_id_argument(["--shm", "/tmp/a.shm"].into_iter().map(str::to_owned));
+        assert_eq!(stripped, vec!["--shm", "/tmp/a.shm"]);
+    }
+
+    #[test]
+    fn strip_drops_a_trailing_flag_without_erroring() {
+        // 値の欠落を診断するのは `parse_host_bundle_id_argument` の仕事。
+        // ここで二重に判定すると、規則が 2 箇所に散る。
+        let stripped =
+            strip_host_bundle_id_argument([HOST_BUNDLE_ID_ARG].into_iter().map(str::to_owned));
+        assert!(stripped.is_empty());
+    }
 
     #[test]
     fn parses_optional_host_bundle_id_argument() {

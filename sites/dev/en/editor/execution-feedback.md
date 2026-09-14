@@ -526,7 +526,7 @@ Diagnostic 8 stays at **Error** severity, not because the runtime throws, but be
 `analyzeMissingOutput()` tags every issue it returns with a `code`. That `code` is the branch point for severity, for the quick fix, and for MCP's `get_diagnostics` alike.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:322-325
+// packages/vscode-extension/src/diagnostics-analysis.ts:348-351
 export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
   code: 'output-missing' | 'dry-not-routed'
   sequenceName: string
@@ -536,7 +536,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 The decision itself is a three-way branch.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:423-428
+// packages/vscode-extension/src/diagnostics-analysis.ts:449-454
     const code = !hasDestination
       ? 'output-missing'
       : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
@@ -602,7 +602,7 @@ The point is that `isPreferred` is true only for `output-missing`. `dry-not-rout
 Diagnostic 6 warns when `.output()` appears without a `linkAudio()` declaration. #611 widened the set of destinations `output()` accepts, so the check started catching **names that resolve long before LinkAudio is ever consulted**. `output("master")` and `output("drums")` (a declared sum/aux bus) work fine without `linkAudio()`, so warning there tells the user that **working code has no effect**.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:259-264
+// packages/vscode-extension/src/diagnostics-analysis.ts:285-290
     for (const m of line.matchAll(outputCallPattern)) {
       const target = m[1]
       // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.

@@ -32,7 +32,9 @@ fn parse_args() -> Result<Args> {
     let mut shm = None;
     let mut chain = None;
     let mut sample_rate = 48_000;
-    let mut args = std::env::args().skip(1);
+    // `--host-bundle-id` は orbit-child-runtime が読む。ここでは知らなくてよい（#940）。
+    let mut args =
+        orbit_child_runtime::strip_host_bundle_id_argument(std::env::args().skip(1)).into_iter();
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--shm" => {
@@ -51,9 +53,6 @@ fn parse_args() -> Result<Args> {
                     .context("--sample-rate requires a value")?
                     .parse()
                     .context("parse --sample-rate")?;
-            }
-            orbit_child_runtime::HOST_BUNDLE_ID_ARG => {
-                args.next().context("--host-bundle-id requires a value")?;
             }
             other => bail!("unknown argument: {other}"),
         }

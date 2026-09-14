@@ -11,7 +11,7 @@
  * believes, not what the compositor applied.
  */
 
-import { execFileSync } from 'child_process'
+import { spawnSync } from 'child_process'
 import * as path from 'path'
 
 /** `kCGWindowLayer` values we care about. AppKit's NSFloatingWindowLevel is 3. */
@@ -36,7 +36,13 @@ const MODULE_CACHE = '/private/tmp/orbit-swift-module-cache'
  * ("nothing is open"), not an error, and the caller decides whether it is a failure.
  */
 export function observeWindows(pid: number): ObservedWindow[] {
-  const stdout = execFileSync('swift', [READER, String(pid)], {
+  // 🔴 `execFileSync` ではなく `spawnSync`（`run-cli.ts` と同じ規約・silent-failure レビュー
+  // 2026-09-04）。`execFileSync` は**成功時に stdout の文字列しか返さない**ので、swift が
+  // stderr へ書いても呼び出し元からは**原理的に見えない**。`CGWindowListCopyWindowInfo` は
+  // 画面録画権限が落ちていると**警告を stderr に出したまま空配列を返す**ことがあり、
+  // それを「窓が無い」と読み違える。signal も見る（タイムアウトで殺されたのと
+  // swift が非ゼロで終わったのは別の失敗）。
+  const result = spawnSync('swift', [READER, String(pid)], {
     encoding: 'utf8',
     // The module cache defaults under $HOME; pinning it keeps repeated calls at
     // ~0.2s instead of recompiling the AppKit interface each run.
@@ -49,7 +55,22 @@ export function observeWindows(pid: number): ObservedWindow[] {
     env: { ...process.env, CLANG_MODULE_CACHE_PATH: MODULE_CACHE },
     timeout: 30_000,
   })
-  return stdout
+  if (result.error) throw result.error
+  if (result.signal) {
+    throw new Error(`window-layer.swift was killed by ${result.signal} (pid ${pid})`)
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `window-layer.swift exited ${result.status} for pid ${pid}: ${result.stderr.trim()}`,
+    )
+  }
+  if (result.stderr.trim().length > 0) {
+    throw new Error(
+      `window-layer.swift wrote to stderr for pid ${pid} — the window list may be ` +
+        `incomplete (screen-recording permission?): ${result.stderr.trim()}`,
+    )
+  }
+  return result.stdout
     .split('\n')
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as ObservedWindow)

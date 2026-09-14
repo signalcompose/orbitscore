@@ -517,7 +517,7 @@ reason ended the loop, because the two are indistinguishable from the logs other
 comment records that this line had been dropped and was restored in the review of #474 P3b).
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:133-144
+// rust/crates/orbit-child-runtime/src/lib.rs:161-172
 pub unsafe fn child_should_quit(
     region: *const orbit_audio_sandbox::SharedRegion,
     parent_watch: &orbit_audio_sandbox::ParentWatch,

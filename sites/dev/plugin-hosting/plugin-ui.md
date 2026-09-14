@@ -172,7 +172,7 @@ main thread 側は `NSApplication` を **Accessory** ポリシー（Dock アイ�
 ```
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:182-185
+// rust/crates/orbit-child-runtime/src/lib.rs:210-213
 /// Main-runloop service interval. Mailbox commands and liveness changes are
 /// control-plane work, so 20 ms avoids a busy main thread while remaining
 /// responsive enough for UI commands.
@@ -185,7 +185,7 @@ state 保存へ、`CMD_OPEN_UI` / `CMD_CLOSE_UI` は UI サービスへ振り分
 1 tick 進めています。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:162-180
+// rust/crates/orbit-child-runtime/src/lib.rs:190-208
 pub unsafe fn service_child_main<E: std::fmt::Display>(
     region: *mut orbit_audio_sandbox::SharedRegion,
     ui: &UiService,

@@ -1251,7 +1251,7 @@ pub fn resolve_standard_plugin_path(
 ```
 
 ```rust
-// rust/crates/orbit-effect-rack-child/src/macos.rs:361-368
+// rust/crates/orbit-effect-rack-child/src/macos.rs:360-367
             StageSpec::Standard { name, params, .. } => {
                 let path = resolve_standard_plugin_path(
                     &self.executable,
