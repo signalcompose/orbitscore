@@ -6,6 +6,9 @@ const pluginUiForAgent = vi.hoisted(() => vi.fn())
 vi.mock('../../packages/vscode-extension/src/agent-handlers', () => ({ pluginUiForAgent }))
 
 import { normalizePluginInstanceName } from '../../packages/engine/src/core/global/effect-slot'
+import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
+import type { ChordBinding } from '../../packages/engine/src/parser/types'
+import { resolveRackValue } from '../../packages/engine/src/signal-chain/rack'
 import {
   OPEN_PLUGIN_UI_AT_CURSOR_COMMAND,
   openPluginUiAtCursor,
@@ -37,6 +40,18 @@ function targetAt(text: string, needle: string, occurrence = 1) {
   return result.target
 }
 
+function engineCatalogOrder(expression: string): string[] {
+  const statement = parseAudioDSL(`var rack = ${expression}`).statements[0] as ChordBinding
+  return resolveRackValue(statement.value, {
+    getBinding: () => undefined,
+    getRack: () => undefined,
+  }).map((entry) => {
+    expect(entry.kind).toBe('catalog')
+    if (entry.kind !== 'catalog') throw new Error(`expected catalog entry, got ${entry.kind}`)
+    return entry.spec
+  })
+}
+
 function fakeEditor(text: string, selection = cursor(text, 'ValhallaRoom')): TextEditor {
   return {
     document: { languageId: 'orbitscore', getText: () => text },
@@ -45,6 +60,58 @@ function fakeEditor(text: string, selection = cursor(text, 'ValhallaRoom')): Tex
 }
 
 describe('resolvePluginUiTargetAtCursor', () => {
+  it.each([
+    {
+      label: 'a nested plain array',
+      expression: '["Z", ["A", "B"], "C"]',
+      names: ['Z', 'A', 'B', 'C'],
+    },
+    {
+      label: 'identically named plugins in a nested plain array',
+      expression: '["Echo", ["Echo", "Echo"], "Echo"]',
+      names: ['Echo', 'Echo', 'Echo', 'Echo'],
+    },
+    {
+      label: 'deeply nested plain arrays',
+      expression: '[["A", ["B"]], "C"]',
+      names: ['A', 'B', 'C'],
+    },
+    {
+      label: 'a chain() inside a plain array',
+      expression: '["Z", chain(["A", "B"]), "C"]',
+      names: ['Z', 'A', 'B', 'C'],
+    },
+  ])('matches the engine flat index for $label', ({ expression, names }) => {
+    expect(engineCatalogOrder(expression)).toEqual(names)
+
+    const text = `drums.effect(${expression})`
+    const occurrences = new Map<string, number>()
+    const extensionIndexes = names.map((name) => {
+      const occurrence = (occurrences.get(name) ?? 0) + 1
+      occurrences.set(name, occurrence)
+      const address = pluginUiAddressFor(targetAt(text, name, occurrence))
+      expect(address.ok, address.ok ? undefined : address.message).toBe(true)
+      if (!address.ok) throw new Error(address.message)
+      return address.index
+    })
+
+    expect(extensionIndexes).toEqual(names.map((_name, index) => index + 1))
+  })
+
+  it('addresses the fourth identical plugin after a nested plain array', () => {
+    const expression = '["Echo", ["Echo", "Echo"], "Echo"]'
+    const engineOrder = engineCatalogOrder(expression)
+    const address = pluginUiAddressFor(
+      targetAt(`drums.effect(${expression})`, 'Echo', engineOrder.length),
+    )
+
+    expect(address).toMatchObject({
+      ok: true,
+      index: engineOrder.length,
+      expectedName: engineOrder.at(-1),
+    })
+  })
+
   it('distinguishes three identical names by syntax path', () => {
     const text = 'drums.effect(["Echo", "Echo", "Echo"])'
     expect(targetAt(text, 'Echo', 1)).toMatchObject({ kind: 'effect', chainPath: [0] })
@@ -71,6 +138,17 @@ describe('resolvePluginUiTargetAtCursor', () => {
     })
   })
 
+  it('keeps layer() non-serial when its branch contains chain()', () => {
+    const text = 'drums.effect([layer([chain(["A", "B"])])])'
+    const target = targetAt(text, 'B')
+    expect(target).toMatchObject({ kind: 'effect', chainPath: [0, 1] })
+    expect(pluginUiAddressFor(target)).toEqual({
+      ok: false,
+      message:
+        'layer() (parallel racks) is staged behind PDC (SC.10.11); v1 supports serial chains only',
+    })
+  })
+
   it.each([
     ['plain sequence', 'drums.effect("Echo")', 'drums'],
     ['global master', 'global.effect("Echo")', 'master'],
@@ -78,8 +156,43 @@ describe('resolvePluginUiTargetAtCursor', () => {
     ['global aux', 'global.aux("verb").effect("Echo")', 'aux:verb'],
     ['derived sum', ['var d = mix.sum', 'd.effect("Echo")'].join('\n'), 'sum:d'],
     ['derived aux declared later', ['d.effect("Echo")', 'var d = mix.aux'].join('\n'), 'aux:d'],
+    [
+      'core-spec chained output',
+      'snare.output(verb, thru: true, db: -6).effect(["Comp"]).output(drums)',
+      'snare',
+    ],
+    ['chained audio', 'kick.audio("k.wav").effect(["Comp"]).output()', 'kick'],
+    ['chained gain', 'kick.gain(-6).effect(["Comp"])', 'kick'],
+    ['chained global sum', 'global.sum("drum").gain(-3).effect(["Comp"])', 'sum:drum'],
+    ['effect followed by output', 'kick.effect(["Comp"]).output(verb)', 'kick'],
   ])('resolves the %s receiver', (_label, text, receiver) => {
-    expect(targetAt(text, 'Echo')).toMatchObject({ receiver })
+    expect(targetAt(text, text.includes('Echo') ? 'Echo' : 'Comp')).toMatchObject({ receiver })
+  })
+
+  it('uses the statement origin for every effect() in one method chain', () => {
+    const text = 'drums.effect(["A", "B"]).effect(["C"])'
+    expect(targetAt(text, 'A')).toMatchObject({ receiver: 'drums' })
+    expect(targetAt(text, 'B')).toMatchObject({ receiver: 'drums' })
+    expect(targetAt(text, 'C')).toMatchObject({ receiver: 'drums' })
+  })
+
+  it('uses the expression after var assignment as the statement origin', () => {
+    expect(targetAt('var processed = kick.gain(-6).effect(["Comp"])', 'Comp')).toMatchObject({
+      receiver: 'kick',
+    })
+  })
+
+  it('describes a genuinely unresolved statement origin without one-line advice', () => {
+    const text = ['drums.', 'effect("Echo")'].join('\n')
+    const result = resolvePluginUiTargetAtCursor(text, cursor(text, 'Echo'))
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unresolved-receiver',
+      message:
+        'Could not identify the sequence or bus at the start of this line for the selected plugin chain.',
+    })
+    if (!result.ok) expect(result.message).not.toContain('one line')
   })
 
   it('maps an instrument to index zero', () => {

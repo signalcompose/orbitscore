@@ -179,6 +179,40 @@ export function pluginUiAddressFor(target: PluginUiCursorTarget):
 | `sum("x").` / `global.sum("x").` | `sum:x`（`aux` も同様） |
 | 上のどれでもない（複数行に割れたチェーン等） | `undefined` → 解決器が `unresolved-receiver` |
 
+> ### 🔴 訂正 3（レビューラウンド 1・2026-09-14）— **receiver は「直左」ではなく「文の起点」で決まる**
+>
+> 上の表は「`effect(` の**直左**のテキスト」で receiver を決めると書いており、実装もそう書かれた。
+> **これでは、DSL の正規の書き方である同一行メソッドチェーンが解決できない。**
+>
+> **main が dist で取った実測**:
+>
+> | 入力（すべて 1 行） | 訂正前の receiver |
+> |---|---|
+> | `snare.output(verb, thru: true, db: -6).effect(["Comp"]).output(drums)` ← **core spec `:1796` の例そのもの** | **undefined** |
+> | `kick.audio("k.wav").effect(["Comp"]).output()` | **undefined** |
+> | `kick.gain(-6).effect(["Comp"])` | **undefined** |
+> | `global.sum("drum").gain(-3).effect(["Comp"])` | **undefined** |
+> | `drums.effect(["A","B"]).effect(["C"])` | A/B は `drums`・**C は undefined** |
+> | `kick.effect(["Comp"]).output(verb)` | `kick` ✅ |
+>
+> しかも失敗文言が **「keep receiver.effect([...]) on one line」** — **1 行に書いてあるのに**こう言われる。
+> 利用者には直しようがない。
+>
+> 表の最終行「複数行に割れたチェーン等」という理解が誤りだった。**割れていなくても落ちる。**
+>
+> 🔴 **仮定の話ではない。** この形は**リポジトリ自身の実機 E2E フィクスチャ**が使っている
+> （`tests/fixtures/mcp-e2e/output_line_position_matters.orbs:38`）:
+>
+> ```js
+> kickA.output(verb611e6, thru: true).effect([Gain(db: -12)]).output()
+> ```
+>
+> つまり **gated E2E が毎回評価している譜面**の上で、右クリック経路だけが receiver を見失う。
+>
+> **正しい規則**: receiver は**その文がどこから始まったか**（行頭の識別子 / `global.` /
+> `sum("x")` / `aux("x")`、`var <name> = ` があればその後ろ）で決まる。
+> `.effect(` の直左が何であるかは関係しない。
+
 **import 越しの宣言は追わない**（v1）。`import { drums } from "./mixer.orbs"` の `drums` は sequence として送られ、engine が `Unknown sequence 'drums'; a same-named mixer bus exists. Use 'sum:drums' ...`（`global.ts:929-936`）を返す。これは**黙らない**ので受け入れる（§2.3）。
 
 **`expectedName` の作り方**: F4 を拡張側でミラーする `normalizePluginInstanceNameForGuard(spec)`（trim → NFC → `\`→`/` → basename → `.clap/.vst3/.component` を落とす）。`plugin-name-diagnostics.ts` は既に engine の `plugin-resolver.ts` をミラーしている module なので、そこに置く（合意テストの同じ考え方: **engine の `normalizePluginInstanceName` と同一コーパスで一致を固定する**ユニットを 1 本足す。T1 に含める）。
@@ -365,6 +399,42 @@ MCP open_plugin_ui_at_cursor ──▶ executeCommand('orbitscore.openPluginUiAt
 文字列を site として push する時: `receiver = frame.receiver`、`chainPath = [...frame.elementCounters]`。
 
 `analyzeUnknownPluginNames` は新フィールドを読まない（診断は無変更）。
+
+> ### 🔴 訂正 2（レビューラウンド 1・2026-09-14）— **透過の基準を間違えていた**
+>
+> 上の記述（と、それに従った実装）は配列の透過を
+> **「その呼び出し語の直後の最初の `[` か」**（`directArraySeen`）で決めていた。**これは誤り。**
+>
+> engine の正本は `packages/engine/src/signal-chain/rack.ts:193-197`:
+>
+> ```ts
+> if (isValueArray(value)) {
+>   return value.elements.flatMap((element) => resolveRackValue(element, env))
+> }
+> ```
+>
+> **素の配列は深さに関係なく親へ平坦化される。階層を作るのは `layer(...)` だけ**である
+> （既存テスト `tests/interpreter/rack-value-resolution.spec.ts:188`
+> `'flattens nested serial arrays…'` がこれを固定していた）。
+>
+> **main が dist で取った再現**（`drums.effect(["Echo", ["Echo", "Echo"], "Echo"])`）:
+>
+> | 名前 | engine の真の index | 訂正前の resolver |
+> |---|---|---|
+> | 1 つ目 | 1 | `index: 1` ✅ |
+> | 2 つ目 | 2 | FAIL `layer() … serial chains only`（`layer` は書かれていない） |
+> | 3 つ目 | 3 | FAIL 同上 |
+> | 4 つ目 | **4** | 🔴 **`index: 3`** = 3 つ目のアドレス |
+>
+> 🔴 **`expectedName` は名前が同じだと止められない**（`global.ts:1242` は名前しか比べない）。
+> つまり**黙って別のインスタンスが開く** — **#939 が防ぐために作られた失敗そのもの**を、
+> #939 自身が再導入していた。
+>
+> **正しい規則**: 配列が階層を増やすのは **直近の囲い呼び出しが `layer` の時だけ**。
+>
+> **なぜレビューまで残ったか**: フィクスチャが `layer([...])` 経由の入れ子しか持たず、
+> **`layer` を経由しない素の入れ子配列が 1 つも無かった**。
+> ユニット 2,542 件・実機 gated 48 件を素通りしている。
 
 ---
 
@@ -556,8 +626,11 @@ VS Code が非フォーカスになり floating が外れる**。child なら「
 | 前面判定の論理が逆 / 自分自身を数えない | **ユニット**（前面 bundle id → 期待レベルの純関数に切り出す） |
 | 🔴 **窓の重なり順が実際に変わるか** | ~~手動ゲートのみ~~ → **gated E2E**（`kCGWindowLayer` で読める・下記の訂正） |
 
-🔴 **自動テストで窓の重なり順は観測できない。** 純関数に切り出せる部分（前面 bundle id → 期待レベル）
-だけをユニットで固定し、**実際の重なりは手動ゲート**で見る。ここを E2E で見たことにしない。
+> ⚠️ **以下の段落は当初の（誤った）前提である。直後の訂正ブロックが正。**
+> 取り消し線ではなく引用で残しているのは、**何をどう間違えたか**が後から読めるようにするため。
+>
+> ~~🔴 **自動テストで窓の重なり順は観測できない。** 純関数に切り出せる部分（前面 bundle id → 期待レベル）
+> だけをユニットで固定し、**実際の重なりは手動ゲート**で見る。ここを E2E で見たことにしない。~~
 
 > ### 🔴 訂正（main の実測・2026-09-14）— **窓の重なり順は自動で観測できる**
 >
@@ -582,10 +655,16 @@ VS Code が非フォーカスになり floating が外れる**。child なら「
 
 ### 手動ゲート（§5.5 に追加する項目）
 
-1. VS Code を前面 → **プラグイン窓が上に出る**
-2. 他アプリ（ブラウザ等）を前面 → **被さらない**
-3. 🔴 **プラグイン窓自体をクリック → floating が外れない**（上記の罠の確認）
-4. ホスト bundle id を渡さないビルド → **従来どおり normal**（後方互換）
+🔴 **真偽の判定は gated E2E `#940` が持つ。** 下の 1・2・4 は E2E が
+「ホスト前面 → floating → 別アプリ前面 → normal → 戻すと floating」で既に固定しているので、
+**人が見るのは「見た目が自然か」だけ**である。自動化されていないのは **3 だけ**。
+
+1. VS Code を前面 → **プラグイン窓が上に出る**（真偽は E2E 済み・見た目の確認）
+2. 他アプリ（ブラウザ等）を前面 → **被さらない**（真偽は E2E 済み・見た目の確認）
+3. 🔴 **プラグイン窓自体をクリック → floating が外れない**（上記の罠の確認）。
+   **ここだけが手動でしか見られない** — computer use は IDE を click tier に固定するため、
+   窓の重なりを人が見る以外の経路が拡張版には無い
+4. ホスト bundle id を渡さないビルド → **従来どおり normal**（後方互換・真偽は E2E 済み）
 
 ---
 

@@ -188,7 +188,7 @@ When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP
 The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:623-629
+// packages/vscode-extension/src/engine-process.ts:641-647
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -526,7 +526,7 @@ Diagnostic 8 stays at **Error** severity, not because the runtime throws, but be
 `analyzeMissingOutput()` tags every issue it returns with a `code`. That `code` is the branch point for severity, for the quick fix, and for MCP's `get_diagnostics` alike.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:348-351
+// packages/vscode-extension/src/diagnostics-analysis.ts:349-352
 export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
   code: 'output-missing' | 'dry-not-routed'
   sequenceName: string
@@ -536,7 +536,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 The decision itself is a three-way branch.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:449-454
+// packages/vscode-extension/src/diagnostics-analysis.ts:450-455
     const code = !hasDestination
       ? 'output-missing'
       : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
@@ -602,7 +602,7 @@ The point is that `isPreferred` is true only for `output-missing`. `dry-not-rout
 Diagnostic 6 warns when `.output()` appears without a `linkAudio()` declaration. #611 widened the set of destinations `output()` accepts, so the check started catching **names that resolve long before LinkAudio is ever consulted**. `output("master")` and `output("drums")` (a declared sum/aux bus) work fine without `linkAudio()`, so warning there tells the user that **working code has no effect**.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:285-290
+// packages/vscode-extension/src/diagnostics-analysis.ts:286-291
     for (const m of line.matchAll(outputCallPattern)) {
       const target = m[1]
       // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.

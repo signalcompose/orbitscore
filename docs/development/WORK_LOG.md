@@ -17,6 +17,112 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix: address the review round-1 findings for #939 / #940 (Sep 14, 2026)
+
+レビュー 5 体（`/code:pr-review-team` フル編成 + Fable 監査を**並行**）の指摘を集約し、
+main が実機コードで再現を取った 8 件を直した。
+
+🔴 **本体は Critical 1 件 — #939 が防ぐために作られた失敗を、#939 自身が再導入していた。**
+
+#### 何が起きていたか
+
+```
+drums.effect(["Echo", ["Echo", "Echo"], "Echo"])
+engine の真の並び: [Echo#1, Echo#2, Echo#3, Echo#4] → UIH.5 index 1,2,3,4
+
+  Echo#1 → index 1          ✅
+  Echo#2 → FAIL "layer() … serial chains only"   ← layer は書かれていない
+  Echo#3 → FAIL 同上
+  Echo#4 → index 3, expectedName "Echo"          🔴 3 番目が開く
+```
+
+**`expectedName` ガードは名前が同じだと止められない**（`global.ts:1242` は名前しか比べない）。
+つまり**エラーも警告も無しに別のインスタンスが開く**。
+
+原因は engine との規則の食い違い。`packages/engine/src/signal-chain/rack.ts:196`:
+
+```ts
+return value.elements.flatMap((element) => resolveRackValue(element, env))
+```
+
+**素の配列は深さに関係なく親へ平坦化される。階層を作るのは `layer(...)` だけ**
+（既存テスト `rack-value-resolution.spec.ts:188` が固定済み）。
+スキャナは透過を **「その呼び出し語の最初の `[` か」**（`directArraySeen`）で決めており、
+2 つ目以降の素の配列を layer の枝と誤認していた。
+
+**なぜレビューまで残ったか**: フィクスチャが `layer([...])` 経由の入れ子しか持たず、
+**`layer` を経由しない素の入れ子配列が 1 つも無かった**。
+ユニット 2,542 件・実機 gated 48 件・`/simplify` 4 体を素通りしている。
+
+#### 修正の規則（指摘単位のローカルパッチを避けるため、先に 5 本書いた）
+
+| 規則 | 内容 |
+|---|---|
+| **P1** | チェーンのアドレスは engine の平坦化規則を 1 つだけ写す。階層を作るのは `layer` だけ |
+| **P2** | receiver は **文の起点**で決まる（`.effect(` の直左ではない） |
+| **P3** | 機能を黙って無効化しうる解決は、**両方の分岐で**ログを出す |
+| **P4** | 登録の述語は、そのツールが**実際に使う**ハンドラだけを名指す |
+| **P5** | 観測ヘルパは、絞り込みで空になったら**絞る前**を見せる |
+
+#### 直したもの
+
+| id | 何を |
+|---|---|
+| **F1** (P1) | `directArraySeen` と `TRANSPARENT_ROOT_ARRAY_WORDS` を**削除**し、`[` の直近 CallFrame が `layer` の時だけ階層を積む |
+| **F2** (P2) | receiver を行の文頭から解決。`var <name> =` があれば右辺を起点に。失敗文言から誤った「1 行に書け」案内を削除 |
+| **F3** (P3) | `resolvePluginWindowHostBundleId` の 4 分岐（成功 / `.app` 不在 / plist 読めない / キー不在）を `outputChannel` へ。`platform !== 'darwin'` は正常系なので黙る |
+| **F4** (P4) | UI 3 ツールをそれぞれ自身のハンドラだけの述語へ分離。**登録順序は維持** |
+| **F5** (P5) | `soloWindowLayer` のエラーにフィルタ前の一覧を含め、全 name が空なら画面録画権限を名指す |
+| **F6** | `collectDerivedMixerBuses` の「読み手は 1 つ」コメントが**嘘だった**（`dsl-completion-context.ts:195-198` に残っている）。委譲は循環依存（`diagnostics-analysis.ts:8` が逆向きに import）なので**コメントを実態へ訂正** |
+| **F7** | gated E2E が `.app/Contents/Info.plist` を `plutil` で読むようにし、bundle id の決め打ちを廃止 |
+| **F8** | `.optionAll` は off-screen も含む（`CGWindow.h:137-145`）— コメント訂正 |
+
+#### F2 の実測（訂正前 → 訂正後）
+
+| 入力（すべて 1 行） | 前 | 後 |
+|---|---|---|
+| `snare.output(verb, thru: true, db: -6).effect(["Comp"])` — **core spec `:1796` の例** | undefined | `snare` |
+| `kick.audio("k.wav").effect(["Comp"]).output()` | undefined | `kick` |
+| `global.sum("drum").gain(-3).effect(["Comp"])` | undefined | `sum:drum` |
+| `drums.effect(["A","B"]).effect(["C"])` の `C` | undefined | `drums` |
+
+🔴 **仮定の話ではなかった。** この形は**リポジトリ自身の実機 E2E フィクスチャ**が使っている
+（`tests/fixtures/mcp-e2e/output_line_position_matters.orbs:38`）。
+しかも失敗文言が「keep receiver.effect([...]) on one line」— **1 行に書いてあるのに**。
+
+#### テスト
+
+**期待値を手書きしない形にした。** `engineCatalogOrder()` が同じ式を engine の
+`parseAudioDSL` → `resolveRackValue` に実際に通し、その平坦順と拡張の index を突き合わせる。
+
+- 素の入れ子 / **同名 4 つ** / 深い入れ子 / `chain()` を含む形（🔴 同名版が**区別するテスト** —
+  名前が違う版だけでは `expectedName` が偶然守ってしまう）
+- `layer` が引き続き拒否されること
+- F2 の表の全行（core spec の行を含む）
+- `startEngine` が `ORBIT_HOST_BUNDLE_ID` を env に載せる / 取れない時は**キーが消える**配線
+- カーソルツールだけ欠けても既存 2 本が登録されること
+- `window-layer` の権限診断（新規 `tests/e2e/window-layer-helper.spec.ts`）
+- gated E2E に素の入れ子・同名 4 インスタンス版を 1 本追加（`index: 4` を要求し、
+  **index 3 への close が失敗する**ことを確認）
+
+#### 見送り・別 issue
+
+| 指摘 | 判断 |
+|---|---|
+| `HOST_BUNDLE_ID_ARG` が 2 クレートに重複 | **見送り**。daemon は `orbit-child-runtime` に依存しておらず、共有には依存追加が要る。`--shm` も raw literal で 28 箇所に散っており慣習が無い。値がずれれば child が未知引数で落ちて loud |
+| `set_plugin_window_level` が `NSApplication.windows()` **全部**にレベルを掛ける | **別 issue**。JUCE のポップアップ（独自レベル）が巻き込まれうるが、実プラグインでの確認が要る |
+
+#### 🔴 レビュー運用で分かったこと
+
+- **Fable を並行投入した意味があった**: Fable の I-1（receiver）と pr-test-analyzer の C1（入れ子）は
+  **どちらも「差分に在るコードの誤り」ではなく「フィクスチャに無かったもの」**だった。
+  code-reviewer（Critical 0 / Important 0）は差分を丁寧に追ったが、**無いものは見えない**
+- **Codex が read-only sandbox で起動され、何もせず exit 0 で終わった**。`task` に **`--write`** が要る。
+  `git status` にコード差分が無いことで気づいた。**「完了」を成果物で検算する**
+- **dist が古いまま**で「修正が効いていない」と誤判定しかけた（[[ts-mutations-need-a-rebuild-before-real-machine]] と同型）
+
+---
+
 ### refactor: apply the /simplify findings for #939 / #940 (Sep 14, 2026)
 
 `/simplify`（reuse / simplification / efficiency / altitude の 4 体）が出した指摘のうち

@@ -65,13 +65,31 @@ describe('registerPluginTools cursor UI registration', () => {
     expect(openPluginUiAtCursor).toHaveBeenCalledOnce()
   })
 
-  it('registers none of the UI trio when the cursor handler is missing', () => {
+  it('keeps the existing UI pair when only the cursor handler is missing', () => {
     const { server, tools } = fakeServer()
     registerPluginTools(server, pluginHandlers({ openPluginUi: vi.fn(), closePluginUi: vi.fn() }))
 
-    expect(tools.map((tool) => tool.name)).not.toEqual(
-      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui', 'open_plugin_ui_at_cursor']),
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui']),
     )
+    expect(tools.map((tool) => tool.name)).not.toContain('open_plugin_ui_at_cursor')
+  })
+
+  it.each([
+    ['open_plugin_ui', { openPluginUi: vi.fn() }],
+    ['close_plugin_ui', { closePluginUi: vi.fn() }],
+    ['open_plugin_ui_at_cursor', { openPluginUiAtCursor: vi.fn() }],
+  ] as const)('registers %s from only its own handler', (expectedName, handlers) => {
+    const { server, tools } = fakeServer()
+    registerPluginTools(server, pluginHandlers(handlers))
+
+    const registeredUiTools = tools
+      .map((tool) => tool.name)
+      .filter(
+        (name) =>
+          name === 'open_plugin_ui' || name === 'close_plugin_ui' || name.endsWith('at_cursor'),
+      )
+    expect(registeredUiTools).toEqual([expectedName])
   })
 
   it('uses the shared loud MCP error envelope', async () => {

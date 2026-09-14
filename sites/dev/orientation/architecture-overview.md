@@ -99,7 +99,7 @@ graph TD
 engine の起動は `startEngine()` が担います。**2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**され、唯一のバックエンドである Rust daemon 向けの起動だけが残りました。最初にやるのは **engine を spawn する前にバックエンドのバイナリ解決を先行させる** ことです。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:101-109
+// packages/vscode-extension/src/engine-process.ts:119-127
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     bundleStatusItem.show()
@@ -131,7 +131,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 この `env` 変数へ積むのは debug フラグと capture seam（#307）だけです（spawn の直前にもう 2 つ足されます。すぐあとで出てきます）。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:338-352
+// packages/vscode-extension/src/engine-process.ts:356-370
   // Set environment
   const env = { ...process.env }
   const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
@@ -152,7 +152,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。ここで問題になるのが「**どの** Node.js か」です。**2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、PATH から `node` を引くのをやめて VS Code 自身が同梱している Node を借りる**ようになりました。Finder や launchd から起動された VS Code の PATH は `/etc/paths` の最小構成で、nodenv や Homebrew で node を入れている環境ではそこに `node` がありません。engine は `spawn node ENOENT` で起動せず、しかも利用者から見える症状は「エンジンが起動しない」だけなので、原因が PATH だとは分かりません。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` を渡して初めて Node になります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:360-393
+// packages/vscode-extension/src/engine-process.ts:378-411
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -194,7 +194,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:659-660
+// packages/vscode-extension/src/engine-process.ts:677-678
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```

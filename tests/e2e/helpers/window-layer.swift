@@ -1,4 +1,4 @@
-// Print the window-server view of every on-screen window owned by a given pid.
+// Print the window-server view of every on-screen or off-screen window owned by a given pid.
 //
 // 🔴 Why an external reader instead of asking the child process itself (#940):
 // the child could report `window.level()` from its own AppKit state, but that is

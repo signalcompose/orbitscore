@@ -1,5 +1,5 @@
 /**
- * Read the window server's record of a process's on-screen windows (#940).
+ * Read the window server's record of a process's windows (#940).
  *
  * 🔴 The design for #940 claimed window stacking "cannot be observed automatically"
  * and put the whole check in a manual gate. **That was wrong** — `kCGWindowLayer`
@@ -30,7 +30,7 @@ const READER = path.join(__dirname, 'window-layer.swift')
 const MODULE_CACHE = '/private/tmp/orbit-swift-module-cache'
 
 /**
- * Every on-screen window owned by `pid`, as the window server sees it.
+ * Every on-screen or off-screen window owned by `pid`, as the window server sees it.
  *
  * Returns an empty array when the process owns no window — that is a real answer
  * ("nothing is open"), not an error, and the caller decides whether it is a failure.
@@ -38,10 +38,11 @@ const MODULE_CACHE = '/private/tmp/orbit-swift-module-cache'
 export function observeWindows(pid: number): ObservedWindow[] {
   // 🔴 `execFileSync` ではなく `spawnSync`（`run-cli.ts` と同じ規約・silent-failure レビュー
   // 2026-09-04）。`execFileSync` は**成功時に stdout の文字列しか返さない**ので、swift が
-  // stderr へ書いても呼び出し元からは**原理的に見えない**。`CGWindowListCopyWindowInfo` は
-  // 画面録画権限が落ちていると**警告を stderr に出したまま空配列を返す**ことがあり、
-  // それを「窓が無い」と読み違える。signal も見る（タイムアウトで殺されたのと
-  // swift が非ゼロで終わったのは別の失敗）。
+  // stderr へ書いても呼び出し元からは**原理的に見えない**ため、別種の helper 失敗を
+  // 見逃さないよう stderr も検査する。画面録画権限が無い実測ケースでは stderr/exit は
+  // 正常のまま、対象 pid の窓が `name: ""` として返るため、そちらは soloWindowLayer が
+  // フィルタ前の一覧から診断する。signal も見る（タイムアウトで殺されたのと swift が
+  // 非ゼロで終わったのは別の失敗）。
   const result = spawnSync('swift', [READER, String(pid)], {
     encoding: 'utf8',
     // The module cache defaults under $HOME; pinning it keeps repeated calls at
@@ -84,12 +85,21 @@ export function observeWindows(pid: number): ObservedWindow[] {
  * a broken state pass as a number.
  */
 export function soloWindowLayer(pid: number): number {
-  const windows = observeWindows(pid).filter((window) => window.name.length > 0)
-  if (windows.length !== 1) {
+  const observed = observeWindows(pid)
+  const named = observed.filter((window) => window.name.length > 0)
+  if (observed.length > 0 && named.length === 0) {
     throw new Error(
-      `expected exactly 1 named window for pid ${pid}, got ${windows.length}: ` +
-        JSON.stringify(windows),
+      `all ${observed.length} windows for pid ${pid} have empty names; ` +
+        'grant Screen Recording permission to the process running this test. ' +
+        `Unfiltered windows: ${JSON.stringify(observed)}`,
     )
   }
-  return windows[0]!.layer
+  if (named.length !== 1) {
+    throw new Error(
+      `expected exactly 1 named window for pid ${pid}, got ${named.length}. ` +
+        `Named windows: ${JSON.stringify(named)}. ` +
+        `Unfiltered windows: ${JSON.stringify(observed)}`,
+    )
+  }
+  return named[0]!.layer
 }

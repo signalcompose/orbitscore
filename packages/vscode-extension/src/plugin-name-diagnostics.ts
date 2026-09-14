@@ -36,15 +36,16 @@ const STRUCTURAL_WORDS = new Set(['layer', 'chain'])
 /** カタログ名の解決文脈を**開く**呼び出し語。ここが receiver とチェーンの起点になる。 */
 const CATALOG_ROOT_WORDS = new Set(['effect', 'instrument'])
 
-/**
- * 直下の最初の `[` が**チェーンの階層を増やさない**呼び出し語。
- * `effect([...])` の外側の配列はチェーンそのものなので、パス成分にしない。
- * 🔴 `layer` は入らない — `layer([[...], [...]])` の各枝は**別の階層**である。
- */
-const TRANSPARENT_ROOT_ARRAY_WORDS = new Set(['effect', 'instrument', 'chain'])
-
 /** 直下の `,` が**要素の区切り**になる呼び出し語（`plugin(...)` や `Gain(...)` の中は数えない）。 */
 const ELEMENT_SEPARATOR_WORDS = new Set(['effect', 'instrument', 'layer', 'chain'])
+
+const STATEMENT_DECLARATION_PREFIX = String.raw`(?:var\s+[A-Za-z_$][\w$]*\s*=\s*)?`
+const STATEMENT_BUS_RECEIVER = new RegExp(
+  String.raw`^\s*${STATEMENT_DECLARATION_PREFIX}(?:global\.)?(sum|aux)\(\s*(["'])(.*?)\2\s*\)`,
+)
+const STATEMENT_IDENTIFIER_RECEIVER = new RegExp(
+  String.raw`^\s*${STATEMENT_DECLARATION_PREFIX}([A-Za-z_$][A-Za-z0-9_$]*)\b`,
+)
 
 /** Mirrors `plugin-resolver.ts` `PATH_DIRECT_PREFIXES`. */
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
@@ -182,8 +183,6 @@ interface CallFrame {
   readonly word: string
   readonly receiver: string | undefined
   readonly elementCounters: number[] | undefined
-  /** The outer array of effect()/instrument() is the root chain and adds no path component. */
-  directArraySeen: boolean
 }
 
 interface BracketFrame {
@@ -287,7 +286,6 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
           : role === undefined
             ? undefined
             : parent?.elementCounters,
-        directArraySeen: false,
       })
       i += 1
       continue
@@ -303,10 +301,10 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
       const frame = currentFrame()
       let pushedCounter = false
       if (frame?.elementCounters) {
-        const transparentRootArray =
-          TRANSPARENT_ROOT_ARRAY_WORDS.has(frame.word) && !frame.directArraySeen
-        frame.directArraySeen = true
-        if (!transparentRootArray && frame.word !== 'plugin') {
+        // Mirrors engine `resolveRackValue`: every plain array and chain() is
+        // flattened into its parent, regardless of nesting depth. Only an
+        // array whose nearest enclosing call is layer() creates a path level.
+        if (frame.word === 'layer') {
           frame.elementCounters.push(0)
           pushedCounter = true
         }
@@ -363,7 +361,7 @@ function collectDerivedReceivers(text: string): ReadonlyMap<string, string> {
   return receivers
 }
 
-/** Resolve the receiver expression immediately to the left of effect/instrument on this line. */
+/** Resolve the receiver from the start of the statement containing effect/instrument. */
 function receiverBefore(
   text: string,
   wordStart: number,
@@ -371,10 +369,10 @@ function receiverBefore(
 ): string | undefined {
   const lineStart = text.lastIndexOf('\n', wordStart - 1) + 1
   const prefix = text.slice(lineStart, wordStart)
-  const busCall = prefix.match(/(?:global\.)?(sum|aux)\(\s*(["'])(.*?)\2\s*\)\.\s*$/)
+  const busCall = prefix.match(STATEMENT_BUS_RECEIVER)
   if (busCall?.[1] && busCall[3] !== undefined) return `${busCall[1]}:${busCall[3]}`
 
-  const ident = prefix.match(/([A-Za-z_$][A-Za-z0-9_$]*)\.\s*$/)?.[1]
+  const ident = prefix.match(STATEMENT_IDENTIFIER_RECEIVER)?.[1]
   if (!ident) return undefined
   if (ident === 'global') return 'master'
   return derivedReceivers.get(ident) ?? ident

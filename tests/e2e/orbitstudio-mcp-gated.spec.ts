@@ -448,8 +448,17 @@ async function effectChildPids(client: McpClient): Promise<number[]> {
   return rackChildPidsFromLog(log)
 }
 
-/** The host OrbitStudio/VS Code bundle id the daemon passes to every child (#940). */
-const HOST_BUNDLE_ID = 'com.microsoft.VSCode'
+/** The host bundle id from the same app bundle the harness launches (#940). */
+function hostBundleIdForApp(appBundlePath: string): string {
+  const plistPath = path.join(appBundlePath, 'Contents', 'Info.plist')
+  const bundleId = execFileSync(
+    '/usr/bin/plutil',
+    ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', plistPath],
+    { encoding: 'utf8', timeout: 15_000 },
+  ).trim()
+  if (!bundleId) throw new Error(`CFBundleIdentifier is empty in ${plistPath}`)
+  return bundleId
+}
 
 /**
  * A bundle id that is certainly **not** the host, used to prove the level drops (#940).
@@ -2664,6 +2673,68 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
+    '#941 E2E opens the fourth identical plugin after a nested plain array',
+    async () => {
+      expect(client, '#941 E2E must initialize the MCP client').toBeDefined()
+      expect(tmpRoot, '#941 E2E must initialize the scratch root').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const name = requireCatalogFixtures().clapEffectName
+      const quotedName = JSON.stringify(name)
+      const dslText = [
+        'var global = init GLOBAL',
+        'var cursorNestedSeq = init global.seq',
+        `cursorNestedSeq.effect([${quotedName}, [${quotedName}, ${quotedName}], ${quotedName}])`,
+      ].join('\n')
+      const dslPath = path.join(tmpRoot, '941-nested-cursor.orbs')
+      fs.writeFileSync(dslPath, `${dslText}\n`)
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split('ERROR:').length - 1
+
+      const openedFile = await activeClient.call('open_file', { path: dslPath })
+      expect(openedFile.isError, openedFile.text).toBe(false)
+      const evaluated = await activeClient.call('evaluate_orbitscore', { code: dslText })
+      expect(evaluated.isError, evaluated.text).toBe(false)
+      await sleep(8000)
+
+      const fourthLiteralOffset = dslText.lastIndexOf(quotedName)
+      const fourthLiteralLineStart = dslText.lastIndexOf('\n', fourthLiteralOffset) + 1
+      const fourthLiteralStartChar = fourthLiteralOffset - fourthLiteralLineStart + 2
+      const selected = await activeClient.call('set_selection', {
+        start_line: 3,
+        start_char: fourthLiteralStartChar,
+      })
+      expect(selected.isError, selected.text).toBe(false)
+
+      const opened = await activeClient.call('open_plugin_ui_at_cursor')
+      expect(opened.isError, opened.text).toBe(false)
+      expect(JSON.parse(opened.text)).toMatchObject({ receiver: 'cursorNestedSeq', index: 4 })
+      await sleep(2000)
+
+      const closeThird = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorNestedSeq',
+        index: 3,
+      })
+      expect(closeThird.isError, closeThird.text).toBe(true)
+      expect(closeThird.text).toContain('no plugin UI opened')
+
+      const closeFourth = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorNestedSeq',
+        index: 4,
+      })
+      expect(closeFourth.isError, closeFourth.text).toBe(false)
+      expect(JSON.parse(closeFourth.text)).toMatchObject({ completion: 'safepoint-completed' })
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split('ERROR:').length - 1,
+        `#941 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
     '#940 E2E floats the plugin window only while the host is frontmost',
     async () => {
       expect(client, '#940 E2E must initialize the MCP client').toBeDefined()
@@ -2696,9 +2767,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const childPids = await effectChildPids(activeClient)
       const childPid = childPids[childPids.length - 1]
       expect(childPid, '#940 needs the effect child that owns the plugin window').toBeDefined()
+      const hostBundleId = hostBundleIdForApp(appPath)
 
       // ホストを前面へ → floating。
-      activateBundle(HOST_BUNDLE_ID)
+      activateBundle(hostBundleId)
       await sleep(1500)
       expect(
         soloWindowLayer(childPid!),
@@ -2715,7 +2787,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       ).toBe(WINDOW_LAYER_NORMAL)
 
       // 戻せば floating に復帰する（一方通行ではない）。
-      activateBundle(HOST_BUNDLE_ID)
+      activateBundle(hostBundleId)
       await sleep(1500)
       expect(
         soloWindowLayer(childPid!),

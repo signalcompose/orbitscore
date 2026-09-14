@@ -2,9 +2,8 @@
  * plugin 系の MCP ツール（#887 束 F・`mcp-server.ts` の `buildServer` から移した）。
  *
  * 既存ツールの `registerTool` 本文は維持する。`save_plugin_state` は
- * `handlers.savePluginState` の有無で、
- * `open_plugin_ui` / `close_plugin_ui` / `open_plugin_ui_at_cursor` は 3 ハンドラが
- * 揃っている時だけ登録される（#939）。
+ * `handlers.savePluginState` の有無で登録される。UI ツールもそれぞれ、自身が実際に使う
+ * ハンドラの有無だけで登録を決める。
  *
  * 🔴 **editor 系より後・docs 系より前**に登録されること。
  * 順序は `tools/list` に出るので変えられない（`mcp-tools-editor.ts` の `registerDocsTools` の doc）。
@@ -64,27 +63,28 @@ export function registerPluginTools(server: McpServerLike, handlers: OrbitScoreT
   const openPluginUi = handlers.openPluginUi?.bind(handlers)
   const closePluginUi = handlers.closePluginUi?.bind(handlers)
   const openPluginUiAtCursor = handlers.openPluginUiAtCursor?.bind(handlers)
-  if (openPluginUi && closePluginUi && openPluginUiAtCursor) {
-    const pluginUiError = (result: Extract<PluginUiResult, { ok: false }>): ToolResult =>
-      errorResult(
-        JSON.stringify({
-          error: result.error,
-          ...(result.code ? { code: result.code } : {}),
-          ...(result.details === undefined ? {} : { details: result.details }),
-        }),
-      )
-    const receiverSchema = z
-      .string()
-      .describe('Receiver: sequence name, "master", "sum:<bus-name>", or "aux:<bus-name>"')
-    const chainPathSchema = z
-      .array(z.number().int().nonnegative())
-      .length(1)
-      .describe('Zero-based effect chain path; v1 requires exactly one non-negative integer')
-      .optional()
-    const indexSchema = z
-      .number()
-      .describe('Compatibility-only UIH.5 chain index (instrument 0, effects 1-based)')
-      .optional()
+  const pluginUiError = (result: Extract<PluginUiResult, { ok: false }>): ToolResult =>
+    errorResult(
+      JSON.stringify({
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.details === undefined ? {} : { details: result.details }),
+      }),
+    )
+  const receiverSchema = z
+    .string()
+    .describe('Receiver: sequence name, "master", "sum:<bus-name>", or "aux:<bus-name>"')
+  const chainPathSchema = z
+    .array(z.number().int().nonnegative())
+    .length(1)
+    .describe('Zero-based effect chain path; v1 requires exactly one non-negative integer')
+    .optional()
+  const indexSchema = z
+    .number()
+    .describe('Compatibility-only UIH.5 chain index (instrument 0, effects 1-based)')
+    .optional()
+
+  if (openPluginUi) {
     server.registerTool(
       'open_plugin_ui',
       {
@@ -117,7 +117,9 @@ export function registerPluginTools(server: McpServerLike, handlers: OrbitScoreT
           : pluginUiError(result)
       },
     )
+  }
 
+  if (closePluginUi) {
     server.registerTool(
       'close_plugin_ui',
       {
@@ -141,7 +143,9 @@ export function registerPluginTools(server: McpServerLike, handlers: OrbitScoreT
           : pluginUiError(result)
       },
     )
+  }
 
+  if (openPluginUiAtCursor) {
     server.registerTool(
       'open_plugin_ui_at_cursor',
       {

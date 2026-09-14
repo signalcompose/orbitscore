@@ -669,7 +669,7 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(openPluginUiAtCursor).toHaveBeenCalledTimes(1)
   })
 
-  it('registers none of the three plugin UI tools unless all cursor/open/close handlers exist', async () => {
+  it('keeps open/close registered when only the cursor handler is missing', async () => {
     const { handlers } = createStubHandlers({
       openPluginUi: vi.fn(),
       closePluginUi: vi.fn(),
@@ -680,9 +680,10 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
 
     const listed = await client.toolsList()
     const body = listed.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
-    expect(body.result.tools.map((tool) => tool.name)).not.toEqual(
-      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui', 'open_plugin_ui_at_cursor']),
+    expect(body.result.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui']),
     )
+    expect(body.result.tools.map((tool) => tool.name)).not.toContain('open_plugin_ui_at_cursor')
   })
 
   it('returns the cursor command failure through the standard MCP error envelope', async () => {

@@ -92,7 +92,7 @@ export function resolvePluginUiTargetAtCursor(
       ok: false,
       reason: 'unresolved-receiver',
       message:
-        'Could not tell which sequence or bus this chain belongs to; keep receiver.effect([...]) on one line.',
+        'Could not identify the sequence or bus at the start of this line for the selected plugin chain.',
     }
   }
 

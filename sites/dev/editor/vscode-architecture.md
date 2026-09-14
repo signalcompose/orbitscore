@@ -316,7 +316,7 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 **2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**されました。`bundleStatusItem` の表示を決める `updateBundleStatus()` はもう engine kind を見ず、daemon の解決結果だけを見ます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:99-109
+// packages/vscode-extension/src/engine-process.ts:117-127
 export function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   const daemonResolution = resolveDaemonForUI()
@@ -590,7 +590,7 @@ provider 本体は `dsl-providers.ts:176-213` にあり、`vscode.languages.regi
 engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造です。**2026-09-10 の裁定（#827 / #502）で削除される前**は、この wrapper が scsynth (`resolveScsynthForUI()`) と daemon (`resolveDaemonForUI()`) の 2 つ symmetric な形で存在していましたが、SC 経路の削除により **`resolveDaemonForUI()` だけが残ります**。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:82-89
+// packages/vscode-extension/src/engine-process.ts:100-107
 export function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
     return resolveDaemonBinaryForExtension()
@@ -640,7 +640,7 @@ daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > ex
 事前チェックは削除済みの旧 III-3 章（[ADR-003](/decisions/adr-003-scsynth-bundle) に記録）に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:329-333
+// packages/vscode-extension/src/engine-process.ts:347-351
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -651,7 +651,7 @@ daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > ex
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:338-387
+// packages/vscode-extension/src/engine-process.ts:356-405
   // Set environment
   const env = { ...process.env }
   const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
@@ -713,7 +713,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:413-423
+// packages/vscode-extension/src/engine-process.ts:431-441
   // Setup handlers
   setupStdoutHandler(spawnedProcess, effectiveDebugMode)
   setupStderrHandler(spawnedProcess)
@@ -842,7 +842,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:623-629
+// packages/vscode-extension/src/engine-process.ts:641-647
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -952,7 +952,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:437-485
+// packages/vscode-extension/src/engine-process.ts:455-503
 export function stopEngine(): boolean {
   bumpEngineGeneration()
   if (engineProcess && !engineProcess.killed) {

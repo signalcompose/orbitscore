@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:329-393 (env の組み立てを省略)
+// packages/vscode-extension/src/engine-process.ts:347-411 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -206,7 +206,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:623-629
+// packages/vscode-extension/src/engine-process.ts:641-647
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると

@@ -235,10 +235,11 @@ const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(
 /**
  * Every `var <name> = <mixer>.sum|aux` declaration in the document, with its kind.
  *
- * 🔴 One reader for this shape. Before #940 there were three regexes for it
- * (`diagnostics-analysis`, `dsl-completion-context`, and a new one in `plugin-name-diagnostics`),
- * each with slightly different character classes and anchoring — so the same score could be
- * read three ways. Callers that only need the names use `declaredMixerBusNames`.
+ * Shared by diagnostics and the cursor receiver resolver. Completion context retains its own
+ * anchored sum/aux patterns alongside its distinct `mixerNode` (`output(...)` included) reader,
+ * so there are two readers for this declaration shape; this function prevents a third one in
+ * `plugin-name-diagnostics`. Callers that only need diagnostic names use
+ * `declaredMixerBusNames`.
  */
 export function collectDerivedMixerBuses(text: string): ReadonlyMap<string, 'sum' | 'aux'> {
   const buses = new Map<string, 'sum' | 'aux'>()

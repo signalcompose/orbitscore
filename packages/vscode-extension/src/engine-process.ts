@@ -49,26 +49,44 @@ import type { PluginUiAction } from './plugin-ui-bridge'
 import { clearAllPlayheadDecorations } from './playhead-decorations'
 
 type ReadTextFile = (filePath: string) => string
+type LogLine = (message: string) => void
 
 /** Resolve the outer host `.app`, not a nested Electron helper app. */
 export function resolvePluginWindowHostBundleId(
   executablePath: string,
   platform: NodeJS.Platform,
   readTextFile: ReadTextFile = (filePath) => fs.readFileSync(filePath, 'utf8'),
+  log: LogLine = (message) => {
+    outputChannel?.appendLine(message)
+  },
 ): string | undefined {
   if (platform !== 'darwin') return undefined
   const appContentsMarker = '.app/'
   const appEnd = executablePath.indexOf(appContentsMarker)
-  if (appEnd < 0) return undefined
+  if (appEnd < 0) {
+    log(
+      `⚠️ Plugin window host bundle ID unavailable: executable is not inside a macOS .app (${executablePath})`,
+    )
+    return undefined
+  }
 
   const appPath = executablePath.slice(0, appEnd + '.app'.length)
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
   try {
-    const plist = readTextFile(path.join(appPath, 'Contents', 'Info.plist'))
+    const plist = readTextFile(plistPath)
     const match = plist.match(
       /<key>\s*CFBundleIdentifier\s*<\/key>\s*<string>\s*([A-Za-z0-9.-]+)\s*<\/string>/,
     )
-    return match?.[1]
-  } catch {
+    const bundleId = match?.[1]
+    if (!bundleId) {
+      log(`⚠️ Plugin window host bundle ID unavailable: CFBundleIdentifier missing in ${plistPath}`)
+      return undefined
+    }
+    log(`🪟 Plugin window host bundle ID: ${bundleId} (${plistPath})`)
+    return bundleId
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    log(`⚠️ Plugin window host bundle ID unavailable: could not read ${plistPath}: ${reason}`)
     return undefined
   }
 }
