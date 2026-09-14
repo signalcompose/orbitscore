@@ -48,6 +48,53 @@ import {
 import type { PluginUiAction } from './plugin-ui-bridge'
 import { clearAllPlayheadDecorations } from './playhead-decorations'
 
+type ReadTextFile = (filePath: string) => string
+type LogLine = (message: string) => void
+
+/** Resolve the outer host `.app`, not a nested Electron helper app. */
+export function resolvePluginWindowHostBundleId(
+  executablePath: string,
+  platform: NodeJS.Platform,
+  readTextFile: ReadTextFile = (filePath) => fs.readFileSync(filePath, 'utf8'),
+  log: LogLine = (message) => {
+    try {
+      outputChannel?.appendLine(message)
+    } catch {
+      // Diagnostics are best-effort and must not prevent engine startup.
+    }
+  },
+): string | undefined {
+  if (platform !== 'darwin') return undefined
+  const appContentsMarker = '.app/'
+  const appEnd = executablePath.indexOf(appContentsMarker)
+  if (appEnd < 0) {
+    log(
+      `⚠️ Plugin window host bundle ID unavailable: executable is not inside a macOS .app (${executablePath})`,
+    )
+    return undefined
+  }
+
+  const appPath = executablePath.slice(0, appEnd + '.app'.length)
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  try {
+    const plist = readTextFile(plistPath)
+    const match = plist.match(
+      /<key>\s*CFBundleIdentifier\s*<\/key>\s*<string>\s*([A-Za-z0-9.-]+)\s*<\/string>/,
+    )
+    const bundleId = match?.[1]
+    if (!bundleId) {
+      log(`⚠️ Plugin window host bundle ID unavailable: CFBundleIdentifier missing in ${plistPath}`)
+      return undefined
+    }
+    log(`🪟 Plugin window host bundle ID: ${bundleId} (${plistPath})`)
+    return bundleId
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    log(`⚠️ Plugin window host bundle ID unavailable: could not read ${plistPath}: ${reason}`)
+    return undefined
+  }
+}
+
 /**
  * Resolve the native Rust daemon binary via shared resolver (engine の
  * compiled JS を runtime require). Returns null on failure — reason is logged
@@ -312,6 +359,12 @@ export async function startEngine(
 
   // Set environment
   const env = { ...process.env }
+  const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
+  if (hostBundleId) {
+    env.ORBIT_HOST_BUNDLE_ID = hostBundleId
+  } else {
+    delete env.ORBIT_HOST_BUNDLE_ID
+  }
   if (effectiveDebugMode) {
     env.ORBITSCORE_DEBUG = '1'
   }

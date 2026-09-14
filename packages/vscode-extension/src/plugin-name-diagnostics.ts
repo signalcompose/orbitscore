@@ -19,12 +19,49 @@
  * thing that goes away.
  */
 
-import type { DiagnosticIssue } from './diagnostics-analysis'
+import * as path from 'path'
+
+import { collectDerivedMixerBuses, type DiagnosticIssue } from './diagnostics-analysis'
 import { normalizeCatalogKey } from './plugin-catalog-completion'
 import type { PluginCatalogEntry } from './plugin-catalog-reader'
 
 /** Structural words that carry the enclosing verb's role into a nested region. */
 const STRUCTURAL_WORDS = new Set(['layer', 'chain'])
+
+// 🔴 語彙の集合はここに並べて置く。#940 のレビューまで、同じ語（`effect` / `instrument` /
+// `layer` / `chain` / `plugin`）に対する判定が 4 箇所に**それぞれ違う集合**でインライン展開
+// されていた。5 つ目の構造語が増えた時、どれか 1 箇所を直し忘れる形だった。
+// 集合が並んでいれば、意図的な差（`layer` だけ透過にしない等）も見比べられる。
+
+/** カタログ名の解決文脈を**開く**呼び出し語。ここが receiver とチェーンの起点になる。 */
+const CATALOG_ROOT_WORDS = new Set(['effect', 'instrument'])
+
+/** 直下の `,` が**要素の区切り**になる呼び出し語（`plugin(...)` や `Gain(...)` の中は数えない）。 */
+const ELEMENT_SEPARATOR_WORDS = new Set(['effect', 'instrument', 'layer', 'chain'])
+
+/**
+ * Mirrors `packages/engine/src/parser/tokenizer.ts` `AudioTokenizer.KEYWORDS`.
+ * None of these nine words can name a sequence/bus receiver. If the tokenizer
+ * gains a word and this mirror drifts, that word is treated as an ordinary
+ * identifier and bypasses the loud `unresolved-receiver` path.
+ */
+export const DSL_KEYWORDS = new Set([
+  'var',
+  'init',
+  'by',
+  'GLOBAL',
+  'force',
+  'RUN',
+  'LOOP',
+  'MUTE',
+  'import',
+])
+
+const STATEMENT_DECLARATION_PREFIX = new RegExp(String.raw`^\s*var\s+[A-Za-z_$][\w$]*\s*=\s*`)
+const STATEMENT_BUS_RECEIVER = new RegExp(
+  String.raw`^\s*(?:global\.)?(sum|aux)\(\s*(["'])(.*?)\2\s*\)`,
+)
+const STATEMENT_IDENTIFIER_RECEIVER = /^\s*([A-Za-z_$][A-Za-z0-9_$]*)\b/
 
 /** Mirrors `plugin-resolver.ts` `PATH_DIRECT_PREFIXES`. */
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
@@ -45,6 +82,16 @@ export function isPluginPathSpec(spec: string): boolean {
 /** Mirrors `plugin-resolver.ts` `isStateFileSpec` (#540 P2 — a saved tone, not a name). */
 export function isStateFileSpec(value: string): boolean {
   return /\.(vstpreset|state)$/i.test(value)
+}
+
+/** Mirrors engine `normalizePluginInstanceName` for the UI expected-name guard. */
+export function normalizePluginInstanceNameForGuard(spec: string): string {
+  const normalized = spec.trim().normalize('NFC').replace(/\\/g, '/')
+  const unqualified = path.basename(normalized)
+  const extension = path.extname(unqualified).toLowerCase()
+  return KNOWN_PLUGIN_EXTENSIONS.includes(extension)
+    ? unqualified.slice(0, -extension.length)
+    : unqualified
 }
 
 export type CatalogSpecRole = 'effect' | 'instrument'
@@ -140,11 +187,23 @@ export interface CatalogSpecSite {
   readonly startCol: number
   /** Column just past the closing quote (0-based). */
   readonly endCol: number
+  /** UIH.5 receiver notation; undefined when the owner cannot be resolved on this line. */
+  readonly receiver: string | undefined
+  /** Position within the enclosing effect/instrument chain, before conversion to an index. */
+  readonly chainPath: readonly number[]
 }
 
 interface CallFrame {
   /** The role catalog names in this frame resolve against; undefined = not a catalog context. */
   readonly role: CatalogSpecRole | undefined
+  readonly word: string
+  readonly receiver: string | undefined
+  readonly elementCounters: number[] | undefined
+}
+
+interface BracketFrame {
+  readonly owner: CallFrame | undefined
+  readonly pushedCounter: boolean
 }
 
 /**
@@ -163,12 +222,15 @@ interface CallFrame {
 export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
   const sites: CatalogSpecSite[] = []
   const stack: CallFrame[] = []
+  const brackets: BracketFrame[] = []
+  const derivedReceivers = collectDerivedReceivers(text)
   let line = 0
   let lineStart = 0
   let i = 0
 
   const currentRole = (): CatalogSpecRole | undefined =>
     stack.length === 0 ? undefined : stack[stack.length - 1]?.role
+  const currentFrame = (): CallFrame | undefined => stack[stack.length - 1]
 
   while (i < text.length) {
     const ch = text[i]
@@ -206,21 +268,81 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
       if (text[i] === quote) {
         i += 1
         const role = currentRole()
+        const frame = currentFrame()
         if (role !== undefined) {
-          sites.push({ spec: value, role, line: startLine, startCol, endCol: i - lineStart })
+          sites.push({
+            spec: value,
+            role,
+            line: startLine,
+            startCol,
+            endCol: i - lineStart,
+            receiver: frame?.receiver,
+            chainPath: [...(frame?.elementCounters ?? [0])],
+          })
         }
       }
       continue
     }
 
     if (ch === '(') {
-      stack.push({ role: roleForCallWord(wordBefore(text, i), currentRole()) })
+      const call = callWordBefore(text, i)
+      const parent = currentFrame()
+      const role = roleForCallWord(call.word, parent?.role)
+      const isCatalogRoot = CATALOG_ROOT_WORDS.has(call.word)
+      stack.push({
+        role,
+        word: call.word,
+        receiver: isCatalogRoot
+          ? receiverBefore(text, call.start, derivedReceivers)
+          : role === undefined
+            ? undefined
+            : parent?.receiver,
+        elementCounters: isCatalogRoot
+          ? [0]
+          : role === undefined
+            ? undefined
+            : parent?.elementCounters,
+      })
       i += 1
       continue
     }
 
     if (ch === ')') {
       stack.pop()
+      i += 1
+      continue
+    }
+
+    if (ch === '[') {
+      const frame = currentFrame()
+      let pushedCounter = false
+      if (frame?.elementCounters) {
+        // Mirrors engine `resolveRackValue`: every plain array and chain() is
+        // flattened into its parent, regardless of nesting depth. Only an
+        // array whose nearest enclosing call is layer() creates a path level.
+        if (frame.word === 'layer') {
+          frame.elementCounters.push(0)
+          pushedCounter = true
+        }
+      }
+      brackets.push({ owner: frame, pushedCounter })
+      i += 1
+      continue
+    }
+
+    if (ch === ']') {
+      const bracket = brackets.pop()
+      if (bracket?.pushedCounter) bracket.owner?.elementCounters?.pop()
+      i += 1
+      continue
+    }
+
+    if (ch === ',') {
+      const frame = currentFrame()
+      if (frame?.elementCounters && ELEMENT_SEPARATOR_WORDS.has(frame.word)) {
+        const last = frame.elementCounters.length - 1
+        frame.elementCounters[last] = (frame.elementCounters[last] ?? 0) + 1
+      }
       i += 1
       continue
     }
@@ -232,12 +354,50 @@ export function findCatalogSpecSites(text: string): CatalogSpecSite[] {
 }
 
 /** The identifier immediately preceding `parenIndex`, ignoring whitespace. */
-function wordBefore(text: string, parenIndex: number): string {
+function callWordBefore(text: string, parenIndex: number): { word: string; start: number } {
   let end = parenIndex
   while (end > 0 && /\s/.test(text[end - 1] ?? '')) end -= 1
   let start = end
   while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1] ?? '')) start -= 1
-  return text.slice(start, end)
+  return { word: text.slice(start, end), start }
+}
+
+/**
+ * `var d = mix.sum` / `.aux` の派生宣言を receiver 表記へ写す。
+ *
+ * 🔴 検出そのものは `diagnostics-analysis` の [`collectDerivedMixerBuses`] に委譲する。
+ * #940 のレビューまでここに 3 本目の独自正規表現を持っており、既存 2 本と文字集合も
+ * アンカリングも違っていた（同じ楽譜が 3 通りに読まれうる状態だった）。
+ */
+function collectDerivedReceivers(text: string): ReadonlyMap<string, string> {
+  const receivers = new Map<string, string>()
+  for (const [name, kind] of collectDerivedMixerBuses(text)) {
+    receivers.set(name, `${kind}:${name}`)
+  }
+  return receivers
+}
+
+/**
+ * Resolve the receiver from the start of the line containing effect/instrument.
+ * The DSL assumes one statement per line; this deliberately does not trace a
+ * statement origin across a newline.
+ */
+function receiverBefore(
+  text: string,
+  wordStart: number,
+  derivedReceivers: ReadonlyMap<string, string>,
+): string | undefined {
+  const lineStart = text.lastIndexOf('\n', wordStart - 1) + 1
+  const prefix = text.slice(lineStart, wordStart)
+  const declaration = prefix.match(STATEMENT_DECLARATION_PREFIX)
+  const expressionPrefix = declaration ? prefix.slice(declaration[0].length) : prefix
+  const busCall = expressionPrefix.match(STATEMENT_BUS_RECEIVER)
+  if (busCall?.[1] && busCall[3] !== undefined) return `${busCall[1]}:${busCall[3]}`
+
+  const ident = expressionPrefix.match(STATEMENT_IDENTIFIER_RECEIVER)?.[1]
+  if (!ident || DSL_KEYWORDS.has(ident)) return undefined
+  if (ident === 'global') return 'master'
+  return derivedReceivers.get(ident) ?? ident
 }
 
 function roleForCallWord(

@@ -7,11 +7,38 @@ use std::rc::Rc;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowDelegate, NSWindowStyleMask};
+use objc2_app_kit::{
+    NSApplication, NSBackingStoreType, NSFloatingWindowLevel, NSNormalWindowLevel, NSWindow,
+    NSWindowDelegate, NSWindowLevel, NSWindowStyleMask,
+};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 use orbit_child_ui::UiSize;
 
 use crate::ui_service::{WindowCloseCallback, WindowFactory, WindowHandle, WindowResizeCallback};
+use crate::PluginWindowLevel;
+
+thread_local! {
+    static CURRENT_PLUGIN_WINDOW_LEVEL: Cell<PluginWindowLevel> = const {
+        Cell::new(PluginWindowLevel::Normal)
+    };
+}
+
+fn appkit_window_level(level: PluginWindowLevel) -> NSWindowLevel {
+    match level {
+        PluginWindowLevel::Normal => NSNormalWindowLevel,
+        PluginWindowLevel::Floating => NSFloatingWindowLevel,
+    }
+}
+
+pub(crate) fn set_plugin_window_level(level: PluginWindowLevel) {
+    CURRENT_PLUGIN_WINDOW_LEVEL.set(level);
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    for window in NSApplication::sharedApplication(mtm).windows().iter() {
+        window.setLevel(appkit_window_level(level));
+    }
+}
 
 struct WindowDelegateIvars {
     close_callback: WindowCloseCallback,
@@ -134,6 +161,9 @@ impl WindowShell {
             programmatic_resize.clone(),
         );
         window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        CURRENT_PLUGIN_WINDOW_LEVEL.with(|level| {
+            window.setLevel(appkit_window_level(level.get()));
+        });
         window.center();
         window.makeKeyAndOrderFront(None);
         let window_number = u32::try_from(window.windowNumber())

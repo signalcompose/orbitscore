@@ -38,7 +38,9 @@ fn parse_args() -> Result<Args> {
     let mut plugin_id = None;
     let mut sample_rate = 48_000;
     let mut state = None;
-    let mut it = std::env::args().skip(1);
+    // `--host-bundle-id` は orbit-child-runtime が読む。ここでは知らなくてよい（#940）。
+    let mut it =
+        orbit_child_runtime::strip_host_bundle_id_argument(std::env::args().skip(1)).into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--shm" => shm = Some(PathBuf::from(it.next().context("--shm に値が必要")?)),

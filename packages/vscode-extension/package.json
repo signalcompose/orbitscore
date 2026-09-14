@@ -113,6 +113,12 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.openPluginUiAtCursor",
+        "title": "OrbitScore: Open Plugin UI",
+        "icon": "$(window)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.engineViewSelectDevice",
         "title": "OrbitScore: Select Audio Device (Engine View)",
         "category": "OrbitScore"
@@ -221,6 +227,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "orbitscore.openPluginUiAtCursor",
+          "when": "resourceExtname == .orbs",
+          "group": "orbitscore"
+        },
         {
           "command": "orbitscore.rescanPlugins",
           "when": "resourceExtname == .orbs",

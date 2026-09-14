@@ -99,7 +99,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch entirely**, leaving only the startup path for the sole remaining backend, the Rust daemon. The first thing it does is **have backend binary resolution precede spawning the engine**.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:76-84
+// packages/vscode-extension/src/engine-process.ts:123-131
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     bundleStatusItem.show()
@@ -131,9 +131,15 @@ What is interesting is that the resolved path is not handed to the engine via en
 Only the debug flag and the capture seam (#307) go into this `env` variable (two more are added right before the spawn; they show up in a moment). **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:313-327
+// packages/vscode-extension/src/engine-process.ts:360-374
   // Set environment
   const env = { ...process.env }
+  const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
+  if (hostBundleId) {
+    env.ORBIT_HOST_BUNDLE_ID = hostBundleId
+  } else {
+    delete env.ORBIT_HOST_BUNDLE_ID
+  }
   if (effectiveDebugMode) {
     env.ORBITSCORE_DEBUG = '1'
   }
@@ -141,18 +147,12 @@ Only the debug flag and the capture seam (#307) go into this `env` variable (two
   // Capture seam (#307): the daemon records the master output to this WAV while
   // the stream runs. Only set when explicitly requested (MCP start_engine tool)
   // — inherited env stays authoritative otherwise.
-  if (agentOpts?.captureWav) {
-    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
-    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
-  }
-
-  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 ```
 
 The engine process itself is then started with `child_process.spawn` running Node.js. The question that matters here is **which** Node.js. On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) the extension **stopped looking up `node` on PATH and started borrowing the Node that VS Code itself bundles**. A VS Code launched from Finder or launchd has the minimal PATH from `/etc/paths`, and on machines where node is installed through nodenv or Homebrew there is no `node` there. The engine then fails to start with `spawn node ENOENT`, and because the only visible symptom is "the engine does not start", the user has no way to tell that PATH is the cause. The extension host is Electron, so `process.execPath` does not run as Node on its own; it becomes Node only once `ELECTRON_RUN_AS_NODE=1` is passed.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:329-362
+// packages/vscode-extension/src/engine-process.ts:382-415
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -194,7 +194,7 @@ The two env vars added here enter the engine process. The process tree continues
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:628-629
+// packages/vscode-extension/src/engine-process.ts:681-682
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -222,7 +222,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:243-248
+// packages/vscode-extension/src/extension.ts:247-252
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -506,7 +506,7 @@ Not only the daemon itself but also the plugin children described below and the 
 The daemon does not load the actual plugins (CLAP / VST3) into its own process. Effects and instruments are each spawned as separate binaries in **out-of-process (OOP)** children, exchanging audio with the daemon over shared memory. The list of children that can be spawned is stated explicitly, in one place, as a constant in the daemon crate.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
+// rust/crates/orbit-audio-daemon/src/lib.rs:104-113
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -670,9 +670,9 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 
 - `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring, the two status bar items, command registration
 - `packages/vscode-extension/src/extension.ts:237-291` — MCP server start condition (`ORBITSCORE_MCP_PORT` over the setting) and the handler bundle
-- `packages/vscode-extension/src/engine-process.ts:57-65` — `resolveDaemonForUI()`: the boundary that runtime-requires the engine's compiled JS (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
-- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: kind decision → pre-check → env → spawn
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
+- `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()`: the boundary that runtime-requires the engine's compiled JS (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
+- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: kind decision → pre-check → env → spawn
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate shares `writeCodeToEngine`
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — design comment of the MCP server (Agent Bridge, 127.0.0.1 bind)

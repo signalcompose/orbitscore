@@ -130,7 +130,7 @@ introduced by #474). `PROTOCOL_VERSION` is `"0.3"`.
 // rust/crates/orbit-audio-daemon/src/protocol.rs:8-61
 pub const PROTOCOL_VERSION: &str = "0.3";
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-// ...
+
 /// Handshake フレーム（接続後に daemon が最初に送る）。
 #[derive(Debug, Serialize)]
 pub struct Handshake {
@@ -358,7 +358,7 @@ stay silent (the registration path is treated as the single authority). The spec
 The gated E2E suite records the opposite measurement.
 
 ```ts
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5419-5425
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5674-5680
   // **A comment is not evidence of implementation behavior** — main's real run found
   // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
   // get_log at all, meaning the assumed fallback does not actually happen (or does not

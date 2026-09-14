@@ -144,6 +144,19 @@ export type PluginUiResult =
   | { ok: true; result: unknown }
   | { ok: false; error: string; code?: string; details?: unknown }
 
+/** Result shared by the editor command and MCP's cursor-based plugin UI tool (#939). */
+export type PluginUiAtCursorResult =
+  | {
+      ok: true
+      receiver: string
+      index: number
+      chain_path: readonly number[]
+      normalizedName: string
+      site: { line: number; startCol: number; endCol: number }
+      [key: string]: unknown
+    }
+  | { ok: false; error: string; code?: string; details?: unknown }
+
 /**
  * Arguments for register_mcp_server. `scope` is a raw string here (rather than
  * the 'project' | 'user' union) so validation lives in one place — the
@@ -200,6 +213,7 @@ export interface OrbitScoreToolHandlers {
     expectedName?: string,
   ): Promise<PluginUiResult> | PluginUiResult
   closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
+  openPluginUiAtCursor?(): Promise<PluginUiAtCursorResult> | PluginUiAtCursorResult
   /**
    * Optional (unlike the members above): only hosts that can register
    * themselves into Claude Code expose the register_mcp_server tool — the

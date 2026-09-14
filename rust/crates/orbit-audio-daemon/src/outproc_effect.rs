@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -641,25 +641,20 @@ impl PostProcessor for OutProcEffectPostProcessor {
     }
 }
 
-/// `--shm`/`--chain`/`--sample-rate` を渡して rack effect child を 1 つ起動する。
-/// `start_outproc_effect` の初回 spawn と watchdog の respawn が共有する。
-///
-/// パスは `OsStr` のまま渡す（lossy 変換しない）。`stderr` は **継承**して child の eprintln（plugin
-/// process 失敗の集計報告等）を daemon stderr に出す（carry-forward ①③: child の可観測性）。
 pub fn spawn_effect_child(
     child_exe: &Path,
     shm_path: &Path,
     chain_manifest: &Path,
     sample_rate: u32,
 ) -> io::Result<Child> {
-    let mut cmd = Command::new(child_exe);
-    cmd.arg("--shm")
-        .arg(shm_path)
-        .arg("--chain")
-        .arg(chain_manifest)
-        .arg("--sample-rate")
-        .arg(sample_rate.to_string())
-        .stderr(Stdio::inherit());
+    let host_bundle_id = crate::host_bundle_id_from_env();
+    let mut cmd = crate::outproc_child_command::effect_child_command(
+        child_exe,
+        shm_path,
+        chain_manifest,
+        sample_rate,
+        host_bundle_id.as_deref(),
+    );
     let child = cmd.spawn()?;
     // 🔴 実機 E2E の PID オラクル（#628 §6）。rack child は `--chain <manifest>` で起動するため、
     // 既存ハーネスの `pgrep -f <pluginPath>` では**捕まらない**（旧 child は `--plugin <絶対パス>`
@@ -1248,6 +1243,7 @@ mod tests {
     }
 
     use super::*;
+
     use std::sync::Mutex;
 
     static EFFECT_PLUGIN_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -1602,7 +1598,7 @@ mod tests {
         let shm = make_shm();
         let stats = OutProcEffectStats::new();
         // すぐ exit する stub（watchdog が respawn を試みる契機）。
-        let first = Command::new("sleep")
+        let first = std::process::Command::new("sleep")
             .arg("0.2")
             .spawn()
             .expect("spawn stub child");
@@ -1645,7 +1641,7 @@ mod tests {
         let region = region_ptr(&mmap);
         // SAFETY: mmap はこのテストの生存する shared region を所有する。
         unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, true) };
-        let first = Command::new("sleep")
+        let first = std::process::Command::new("sleep")
             .arg("0.2")
             .spawn()
             .expect("spawn stub child");
@@ -1733,7 +1729,7 @@ mod tests {
         }
 
         assert!(
-            Command::new("kill")
+            std::process::Command::new("kill")
                 .args(["-9", &first_pid.to_string()])
                 .status()
                 .expect("kill initial child")
@@ -1781,7 +1777,7 @@ mod tests {
     fn supervisor_stops_respawning_after_consecutive_fast_failures() {
         let shm = make_shm();
         let stats = OutProcEffectStats::new();
-        let first = Command::new("true")
+        let first = std::process::Command::new("true")
             .spawn()
             .expect("spawn immediately-exiting stub");
         let sup = EffectChildSupervisor::spawn(
@@ -1899,7 +1895,7 @@ mod tests {
         assert!(r.is_err(), "open_shared 失敗で Err を返す");
         // first_child が reap された（orphan でない）= kill -0 が失敗（ESRCH）する。
         let reaped = poll_until(3, || {
-            !Command::new("kill")
+            !std::process::Command::new("kill")
                 .arg("-0")
                 .arg(pid.to_string())
                 .status()

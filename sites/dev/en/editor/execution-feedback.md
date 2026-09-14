@@ -188,7 +188,7 @@ When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP
 The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:592-598
+// packages/vscode-extension/src/engine-process.ts:645-651
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -526,7 +526,7 @@ Diagnostic 8 stays at **Error** severity, not because the runtime throws, but be
 `analyzeMissingOutput()` tags every issue it returns with a `code`. That `code` is the branch point for severity, for the quick fix, and for MCP's `get_diagnostics` alike.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:322-325
+// packages/vscode-extension/src/diagnostics-analysis.ts:349-352
 export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
   code: 'output-missing' | 'dry-not-routed'
   sequenceName: string
@@ -536,7 +536,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 The decision itself is a three-way branch.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:423-428
+// packages/vscode-extension/src/diagnostics-analysis.ts:450-455
     const code = !hasDestination
       ? 'output-missing'
       : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
@@ -602,7 +602,7 @@ The point is that `isPreferred` is true only for `output-missing`. `dry-not-rout
 Diagnostic 6 warns when `.output()` appears without a `linkAudio()` declaration. #611 widened the set of destinations `output()` accepts, so the check started catching **names that resolve long before LinkAudio is ever consulted**. `output("master")` and `output("drums")` (a declared sum/aux bus) work fine without `linkAudio()`, so warning there tells the user that **working code has no effect**.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:259-264
+// packages/vscode-extension/src/diagnostics-analysis.ts:286-291
     for (const m of line.matchAll(outputCallPattern)) {
       const target = m[1]
       // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.
@@ -690,17 +690,17 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 
 | Change | Issue | Source |
 |---|---|---|
-| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `engine-process.ts:592-630` |
+| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `engine-process.ts:645-683` |
 | Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `run-selection.ts:176-184` / `202-206` |
 | Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
 | Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:203-236` |
-| The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `engine-process.ts:600-605` |
+| The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `engine-process.ts:653-658` |
 | `linkAudio` added to `GLOBAL_ONCE_METHODS`, LinkAudio diagnostics 6-8 | (LinkAudio #209 family) | `diagnostics-analysis.ts:44-58` / `:194-391` |
 | No flash when sending fails | — | the comment at `run-selection.ts:199-201` |
 | Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `agent-handlers.ts:80-109` / `engine-handlers.ts:248-256` |
 | Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `diagnostics-provider.ts:160-168` |
 | The runtime counterpart of diagnostics 6-8 became a **silent skip plus a log line** instead of a throw (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587` (PR [#737](https://github.com/signalcompose/orbitscore/pull/737)) |
-| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`, `dsl-providers.ts:176-213` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
+| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:349-352` / `:346-452`, `dsl-providers.ts:176-213` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
 
 ---
 
@@ -738,7 +738,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/run-selection.ts:63-111` — Path 2: subject-based block evaluation
 - `packages/vscode-extension/src/run-selection.ts:112-135` — Path 3: standalone command
 - `packages/vscode-extension/src/run-selection.ts:141-197` — `flashLines()`: flash feedback implementation (whole-line)
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate and `//#evalMark`
 - `packages/vscode-extension/src/engine-handlers.ts:248-256` — the independent `{"evalMark"` branch on stdout
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead decoration management and `handleStepLine()`
@@ -748,7 +748,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:110-468` — the cross-line analysis functions
-- `packages/vscode-extension/src/diagnostics-analysis.ts:322-468` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics
+- `packages/vscode-extension/src/diagnostics-analysis.ts:349-495` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — background of the audioPath ordering diagnostic

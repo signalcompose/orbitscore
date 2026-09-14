@@ -41,7 +41,7 @@ daemon が spawn し得る child バイナリは `orbit-audio-daemon` の `SPAWN
 実装が食い違わないよう「真実を 1 箇所に置く」ために作られた定数です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
+// rust/crates/orbit-audio-daemon/src/lib.rs:104-113
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -280,7 +280,7 @@ respawn し続ける余地がありました。#573 で「`FAST_RESPAWN_THRESHOL
 `MAX_CONSECUTIVE_FAST_RESPAWNS`（5 回）続いたら諦める」というガードが入っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:34-39
 /// 「速い失敗」とみなす生存時間の閾値（#573）。`outproc_effect::FAST_RESPAWN_THRESHOLD` と同値・
 /// 同じ理由（`CHILD_READY_TIMEOUT` より十分短く `WATCHDOG_POLL` よりずっと長い）。effect 側の
 /// doc comment を参照。
@@ -290,7 +290,7 @@ const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:663-688
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:662-687
                             if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
                                 tracing::error!(
                                     plugin = ?plugin,
@@ -335,7 +335,7 @@ respawn とは別に、#618 の instrument 差し替え（`ReplacePlugin`）は 
 「event ring の全残渣を捨てて」と要求し、audio thread が空にしてから ack する構造です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:311-318
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:296-303
 pub struct SlotSignals {
     pub teardown_requested: Arc<AtomicBool>,
     pub teardown_done: Arc<AtomicBool>,
@@ -453,7 +453,24 @@ impl ParentWatch {
             check_interval,
             last_check: Cell::new(Instant::now()),
         }
-// ...
+    }
+
+    /// 常に「親は死んだ」と報告する watch を作る(**テスト支援専用**)。
+    ///
+    /// [`should_exit`](Self::should_exit) は起動時に記録した `getppid()` との差で判定するため、
+    /// **プロセス内では本物の孤児化を演出できない**。ありえない pid を記録することで
+    /// 「親が死んだ」分岐を到達可能にする。
+    ///
+    /// 🔴 用途は**配線の検証**である。`child_should_quit` が本物の [`ParentWatch`] を
+    /// 参照していることを縛るテストが、これを使って合成箇所を通る
+    /// (`orbit-child-runtime` の `child_should_quit_consults_the_injected_parent_watch`)。
+    /// 純関数にクロージャを注入するテストでは、その合成は検証できない。
+    pub fn orphaned_for_tests() -> Self {
+        Self {
+            // getppid(2) は POSIX 上ここには到達しない値を返さない。
+            original_ppid: -1,
+            check_interval: Duration::ZERO,
+            last_check: Cell::new(Instant::now()),
         }
     }
 
@@ -479,7 +496,7 @@ spin loop から呼びます。どちらの理由で抜けたかを stderr に 1
 両者を区別できないためです（#474 P3b のレビューで落ちていたのを戻した経緯がコメントにあります）。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:61-72
+// rust/crates/orbit-child-runtime/src/lib.rs:161-172
 pub unsafe fn child_should_quit(
     region: *const orbit_audio_sandbox::SharedRegion,
     parent_watch: &orbit_audio_sandbox::ParentWatch,

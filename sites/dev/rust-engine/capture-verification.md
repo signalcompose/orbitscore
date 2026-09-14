@@ -289,7 +289,20 @@ thread の外で完結します。drain ループの中に、上の `sync_header
                     thread::sleep(DRAIN_POLL_INTERVAL);
                     continue;
                 }
-// ...
+
+                // SPSC(consumer はここでしか読まない)なので、直前に読んだ `avail` を
+                // 超える読み取りを要求しない限り `read_chunk` は失敗しない(TooFewSlots は
+                // n > slots のときのみ)。invariant を expect で表明する(不可能分岐を握り潰さない)。
+                let chunk = consumer.read_chunk(avail).expect(
+                    "read_chunk(avail) with avail == slots() cannot fail (single consumer)",
+                );
+                let (a, b) = chunk.as_slices();
+                if let Err(e) = wav.write(a) {
+                    break Err(e);
+                }
+                if let Err(e) = wav.write(b) {
+                    break Err(e);
+                }
                 samples_written += (a.len() + b.len()) as u64;
                 chunk.commit_all();
                 // 異常終了に備えて header を追いつかせる。
@@ -430,7 +443,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:219-233
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:220-234
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -476,7 +489,7 @@ mtime 比較は「rebuild が no-op か」より弱い判定ですが、テス�
 そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:214-218
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:215-219
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {

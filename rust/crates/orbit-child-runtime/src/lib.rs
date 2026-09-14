@@ -15,6 +15,106 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+pub const HOST_BUNDLE_ID_ARG: &str = "--host-bundle-id";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginWindowLevel {
+    Normal,
+    Floating,
+}
+
+/// Decide the plugin-window level without depending on AppKit notification plumbing.
+///
+/// A missing host bundle ID is the legacy configuration and always stays normal,
+/// including when the child itself happens to be frontmost.
+/// `frontmost_is_child_process` covers standalone child executables, for which
+/// `NSRunningApplication::bundleIdentifier` is nil because there is no `Info.plist`.
+pub fn desired_plugin_window_level(
+    host_bundle_id: Option<&str>,
+    child_bundle_id: Option<&str>,
+    frontmost_bundle_id: Option<&str>,
+    frontmost_is_child_process: bool,
+) -> PluginWindowLevel {
+    let Some(host_bundle_id) = host_bundle_id else {
+        return PluginWindowLevel::Normal;
+    };
+    let host_is_frontmost = frontmost_bundle_id == Some(host_bundle_id);
+    let child_is_frontmost = frontmost_is_child_process
+        || child_bundle_id
+            .is_some_and(|child_bundle_id| frontmost_bundle_id == Some(child_bundle_id));
+    if host_is_frontmost || child_is_frontmost {
+        PluginWindowLevel::Floating
+    } else {
+        PluginWindowLevel::Normal
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum HostBundleIdArgumentError {
+    #[error("--host-bundle-id requires a value")]
+    MissingValue,
+    #[error("--host-bundle-id must not be empty")]
+    EmptyValue,
+    #[error("--host-bundle-id must be specified at most once")]
+    Duplicate,
+}
+
+/// Parse the one fixed host identifier supplied when this child was spawned.
+pub fn parse_host_bundle_id_argument<I, S>(
+    arguments: I,
+) -> Result<Option<String>, HostBundleIdArgumentError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut arguments = arguments.into_iter();
+    let mut host_bundle_id = None;
+    while let Some(argument) = arguments.next() {
+        if argument.as_ref() != HOST_BUNDLE_ID_ARG {
+            continue;
+        }
+        if host_bundle_id.is_some() {
+            return Err(HostBundleIdArgumentError::Duplicate);
+        }
+        let value = arguments
+            .next()
+            .ok_or(HostBundleIdArgumentError::MissingValue)?;
+        if value.as_ref().trim().is_empty() {
+            return Err(HostBundleIdArgumentError::EmptyValue);
+        }
+        host_bundle_id = Some(value.as_ref().to_owned());
+    }
+    Ok(host_bundle_id)
+}
+
+/// `--host-bundle-id <value>` を argv から**取り除いて**残りを返す。
+///
+/// 🔴 **各 child の `parse_args()` にこのフラグを教え込まない**ため（#940 レビュー）。
+/// child 固有のパーサは「未知の引数はエラー」で、自分のドメイン（`--shm` / `--plugin` /
+/// `--chain`）だけを知っていればよい。そこへ**関心の外にあるフラグを無視する分岐**を
+/// 足すと、3 つの binary に同じ知識が複製される（実際そうなっていた。エラー文言まで
+/// 日英でばらついていた）。値を実際に読むのは [`parse_host_bundle_id_argument`] 1 箇所。
+///
+/// フラグが無ければ入力をそのまま返す。値が欠けている場合も**ここでは判定しない** —
+/// 判定は [`parse_host_bundle_id_argument`] が持ち、二重に持たせない。
+pub fn strip_host_bundle_id_argument<I>(arguments: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut remaining = Vec::new();
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        if argument == HOST_BUNDLE_ID_ARG {
+            // 値も一緒に落とす。欠けていれば次の `next()` が None を返して終わるだけで、
+            // その診断は `parse_host_bundle_id_argument` の仕事。
+            let _ = arguments.next();
+            continue;
+        }
+        remaining.push(argument);
+    }
+    remaining
+}
+
 /// child / host が出す **正常系の通知**の level トークン規約（#618 / #625）。
 pub mod notice;
 
@@ -145,6 +245,8 @@ pub enum ChildRuntimeError {
     NotMainThread,
     #[error("NSApplication rejected Accessory activation policy")]
     AccessoryPolicyRejected,
+    #[error("invalid host bundle ID argument: {0}")]
+    InvalidHostBundleIdArgument(#[from] HostBundleIdArgumentError),
     #[error("failed to spawn dedicated audio thread: {0}")]
     SpawnAudio(#[source] std::io::Error),
     #[error("main-runloop service callback panicked")]
@@ -260,13 +362,26 @@ where
     Q: Fn() -> bool,
     S: FnMut() -> bool,
 {
+    #[cfg(target_os = "macos")]
+    let host_bundle_id = parse_host_bundle_id_argument(std::env::args().skip(1))?;
+    // 🔴 型注釈は load-bearing。macOS では `parse_host_bundle_id_argument` が
+    // `Option<String>` を与えるが、非 macOS ではその推論元ごと cfg で消えるため
+    // `Option<_>` のままになり **Linux CI だけが E0282 で落ちる**（実測 2026-09-14）。
+    #[cfg(not(target_os = "macos"))]
+    let host_bundle_id: Option<String> = None;
+
     run_child_with_main_loop(
         process_name,
         should_quit,
         service_main,
         audio,
         |coordinator, should_quit, service_main| {
-            run_main_loop(coordinator, should_quit, service_main)
+            run_main_loop(
+                coordinator,
+                should_quit,
+                service_main,
+                host_bundle_id.as_deref(),
+            )
         },
     )
 }
@@ -314,8 +429,9 @@ fn run_main_loop(
     coordinator: &StopCoordinator,
     should_quit: &dyn Fn() -> bool,
     service_main: &mut dyn FnMut() -> bool,
+    host_bundle_id: Option<&str>,
 ) -> Result<(), ChildRuntimeError> {
-    appkit::run_main_loop(coordinator, should_quit, service_main)
+    appkit::run_main_loop(coordinator, should_quit, service_main, host_bundle_id)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -323,6 +439,7 @@ fn run_main_loop(
     coordinator: &StopCoordinator,
     should_quit: &dyn Fn() -> bool,
     service_main: &mut dyn FnMut() -> bool,
+    _host_bundle_id: Option<&str>,
 ) -> Result<(), ChildRuntimeError> {
     loop {
         let quit_requested = should_quit();
@@ -336,186 +453,7 @@ fn run_main_loop(
 }
 
 #[cfg(target_os = "macos")]
-mod appkit {
-    use std::cell::{Cell, RefCell};
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-
-    use objc2::rc::Retained;
-    use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
-    use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType,
-    };
-    use objc2_foundation::{
-        NSObject, NSObjectProtocol, NSPoint, NSRunLoop, NSRunLoopCommonModes, NSTimer,
-    };
-
-    use super::{try_call_main_service, ChildRuntimeError, StopCoordinator, MAIN_TICK_INTERVAL};
-
-    type MainService<'a> = dyn FnMut() -> bool + 'a;
-    type QuitPredicate<'a> = dyn Fn() -> bool + 'a;
-
-    struct TimerTargetIvars {
-        service: RefCell<Box<MainService<'static>>>,
-        should_quit: Box<QuitPredicate<'static>>,
-        coordinator: StopCoordinator,
-        service_panicked: Cell<bool>,
-        reentrant_tick_skip_count: Cell<u64>,
-    }
-
-    define_class!(
-        // SAFETY: NSObject has no subclassing requirements. TimerTarget has
-        // no Drop implementation and is confined to the process main thread.
-        #[unsafe(super = NSObject)]
-        #[name = "OrbitChildRuntimeTimerTarget"]
-        #[thread_kind = MainThreadOnly]
-        #[ivars = TimerTargetIvars]
-        struct TimerTarget;
-
-        // SAFETY: NSObjectProtocol adds no extra invariants.
-        unsafe impl NSObjectProtocol for TimerTarget {}
-
-        impl TimerTarget {
-            // SAFETY: NSTimer invokes this selector with exactly one NSTimer argument.
-            #[unsafe(method(tick:))]
-            fn tick(&self, timer: &NSTimer) {
-                let requested_stop = match catch_unwind(AssertUnwindSafe(|| {
-                    try_call_main_service(
-                        &self.ivars().service,
-                        self.ivars().should_quit.as_ref(),
-                    )
-                })) {
-                    Ok(Ok(value)) => value,
-                    Ok(Err(_busy)) => {
-                        let skipped = self
-                            .ivars()
-                            .reentrant_tick_skip_count
-                            .get()
-                            .saturating_add(1);
-                        self.ivars().reentrant_tick_skip_count.set(skipped);
-                        // Child stderr is inherited by the daemon in both effect and
-                        // instrument supervisors, so the cumulative count is visible
-                        // to the host even though child tracing has no subscriber.
-                        //
-                        // 🔴 Rate-limited: a nested runloop (modal sheet, live resize,
-                        // drag tracking) can hold the borrow for seconds, and this tick
-                        // runs every 20ms. Logging unconditionally would emit ~50
-                        // unbuffered writes per second for the whole interaction. The
-                        // first skip announces the condition; every REENTRANT_TICK_LOG_EVERY
-                        // skips after that keeps the cumulative count fresh.
-                        if skipped == 1 || skipped.is_multiple_of(crate::REENTRANT_TICK_LOG_EVERY) {
-                            eprintln!(
-                                "[orbit-child-runtime] skipped reentrant main-runloop tick; \
-                                 skipped_ticks={skipped}"
-                            );
-                        }
-                        return;
-                    }
-                    Err(_) => {
-                        self.ivars().service_panicked.set(true);
-                        true
-                    }
-                };
-                if self.ivars().coordinator.should_stop(requested_stop) {
-                    timer.invalidate();
-                    let app = NSApplication::sharedApplication(self.mtm());
-                    app.stop(None);
-
-                    // `stop` is observed after AppKit finishes dispatching an
-                    // event. A timer callback is not an event, so wake the
-                    // headless runloop with a harmless application event.
-                    let wake_event = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-                        NSEventType::ApplicationDefined,
-                        NSPoint::ZERO,
-                        NSEventModifierFlags::empty(),
-                        0.0,
-                        0,
-                        None,
-                        0,
-                        0,
-                        0,
-                    );
-                    if let Some(wake_event) = wake_event {
-                        app.postEvent_atStart(&wake_event, true);
-                    }
-                }
-            }
-        }
-    );
-
-    impl TimerTarget {
-        fn new(
-            mtm: MainThreadMarker,
-            service: Box<MainService<'static>>,
-            should_quit: Box<QuitPredicate<'static>>,
-            coordinator: StopCoordinator,
-        ) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(TimerTargetIvars {
-                service: RefCell::new(service),
-                should_quit,
-                coordinator,
-                service_panicked: Cell::new(false),
-                reentrant_tick_skip_count: Cell::new(0),
-            });
-            // SAFETY: this is NSObject's designated initializer and the
-            // superclass does not impose extra initialization requirements.
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    pub(super) fn run_main_loop(
-        coordinator: &StopCoordinator,
-        should_quit: &dyn Fn() -> bool,
-        service_main: &mut dyn FnMut() -> bool,
-    ) -> Result<(), ChildRuntimeError> {
-        let mtm = MainThreadMarker::new().ok_or(ChildRuntimeError::NotMainThread)?;
-
-        // NSTimer retains its target until invalidation. The target never
-        // escapes this function/runloop, so extending the callback reference
-        // to that exact lifetime is sound. It is invalidated before return.
-        let service: Box<MainService<'_>> = Box::new(service_main);
-        let service: Box<MainService<'static>> = unsafe { std::mem::transmute(service) };
-        let should_quit: Box<QuitPredicate<'_>> = Box::new(should_quit);
-        let should_quit: Box<QuitPredicate<'static>> = unsafe { std::mem::transmute(should_quit) };
-        let target = TimerTarget::new(mtm, service, should_quit, coordinator.clone());
-
-        let app = NSApplication::sharedApplication(mtm);
-        if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
-            coordinator
-                .stop_audio
-                .store(true, std::sync::atomic::Ordering::Release);
-            return Err(ChildRuntimeError::AccessoryPolicyRejected);
-        }
-
-        let timer = unsafe {
-            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                MAIN_TICK_INTERVAL.as_secs_f64(),
-                &target,
-                sel!(tick:),
-                None,
-                true,
-            )
-        };
-        // Common modes keep mailbox/liveness servicing active while AppKit is
-        // tracking mouse/keyboard interaction in a hosted plugin editor.
-        unsafe {
-            NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
-        }
-        timer.fire();
-        if !coordinator
-            .stop_audio
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            app.run();
-        }
-        timer.invalidate();
-
-        if target.ivars().service_panicked.get() {
-            Err(ChildRuntimeError::ServicePanicked)
-        } else {
-            Ok(())
-        }
-    }
-}
+mod appkit;
 
 #[cfg(target_os = "macos")]
 fn set_audio_thread_qos() {
@@ -541,6 +479,88 @@ mod tests {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
+
+    #[test]
+    fn strips_the_host_bundle_id_flag_and_its_value_but_keeps_the_rest() {
+        // 🔴 child 固有パーサが `--host-bundle-id` を**知らなくて済む**ことの担保。
+        let stripped = strip_host_bundle_id_argument(
+            [
+                "--shm",
+                "/tmp/a.shm",
+                HOST_BUNDLE_ID_ARG,
+                "com.example.Host",
+                "--sample-rate",
+                "48000",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+        assert_eq!(
+            stripped,
+            vec!["--shm", "/tmp/a.shm", "--sample-rate", "48000"]
+        );
+    }
+
+    #[test]
+    fn strip_leaves_argv_untouched_when_the_flag_is_absent() {
+        let stripped =
+            strip_host_bundle_id_argument(["--shm", "/tmp/a.shm"].into_iter().map(str::to_owned));
+        assert_eq!(stripped, vec!["--shm", "/tmp/a.shm"]);
+    }
+
+    #[test]
+    fn strip_drops_a_trailing_flag_without_erroring() {
+        // 値の欠落を診断するのは `parse_host_bundle_id_argument` の仕事。
+        // ここで二重に判定すると、規則が 2 箇所に散る。
+        let stripped =
+            strip_host_bundle_id_argument([HOST_BUNDLE_ID_ARG].into_iter().map(str::to_owned));
+        assert!(stripped.is_empty());
+    }
+
+    #[test]
+    fn parses_optional_host_bundle_id_argument() {
+        assert_eq!(parse_host_bundle_id_argument(["--shm", "/tmp/x"]), Ok(None));
+        assert_eq!(
+            parse_host_bundle_id_argument([
+                "--shm",
+                "/tmp/x",
+                HOST_BUNDLE_ID_ARG,
+                "com.microsoft.VSCode",
+            ]),
+            Ok(Some("com.microsoft.VSCode".to_owned()))
+        );
+    }
+
+    #[test]
+    fn desired_window_level_tracks_host_child_other_and_legacy_cases() {
+        let host = Some("com.microsoft.VSCode");
+        let child = Some("dev.orbitscore.plugin-child");
+        assert_eq!(
+            desired_plugin_window_level(host, child, host, false),
+            PluginWindowLevel::Floating,
+            "host frontmost"
+        );
+        assert_eq!(
+            desired_plugin_window_level(host, child, child, false),
+            PluginWindowLevel::Floating,
+            "child frontmost"
+        );
+        assert_eq!(
+            desired_plugin_window_level(host, child, Some("com.apple.Safari"), false),
+            PluginWindowLevel::Normal,
+            "another application frontmost"
+        );
+        assert_eq!(
+            desired_plugin_window_level(None, child, child, true),
+            PluginWindowLevel::Normal,
+            "legacy launch without a host bundle ID"
+        );
+        assert_eq!(
+            desired_plugin_window_level(host, None, None, true),
+            PluginWindowLevel::Floating,
+            "standalone child process without a bundle ID frontmost"
+        );
+    }
 
     #[test]
     fn service_stop_sets_audio_stop_flag() {

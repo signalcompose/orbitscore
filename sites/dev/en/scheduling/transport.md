@@ -287,7 +287,7 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:628-628
+// packages/vscode-extension/src/engine-process.ts:681-681
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -642,7 +642,7 @@ OrbitScore's transport runs on the simple input model of "feed DSL text into std
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: creating a single `globalInterpreter` instance and handing it to the REPL
 - `packages/engine/src/cli/repl-mode.ts:370-378` — the REPL's `interpreter.execute()` call (the options it passes)
 - `packages/engine/src/core/sequence.ts:1774-1799` — `Sequence.stop()`: clearing events and cancelling the loop timer
-- `packages/vscode-extension/src/engine-process.ts:628-628` — the extension's stdin send
+- `packages/vscode-extension/src/engine-process.ts:681-681` — the extension's stdin send
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Transport Commands" — the launch-quantize specification and that `global.start()` does not wait
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize
 - Issue [#108](https://github.com/signalcompose/orbitscore/issues/108) — cutover (default backend to Rust)

@@ -450,6 +450,35 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     ])
   })
 
+  it('full handlers add one cursor UI tool after close without changing the unconditional order', async () => {
+    const { handlers } = createStubHandlers({
+      savePluginState: () => ({ ok: true, saved: {} }),
+      openPluginUi: () => ({ ok: true, result: {} }),
+      closePluginUi: () => ({ ok: true, result: {} }),
+      openPluginUiAtCursor: () => ({
+        ok: true,
+        receiver: 'lead',
+        index: 1,
+        chain_path: [0],
+        normalizedName: 'Echo',
+        site: { line: 1, startCol: 13, endCol: 19 },
+      }),
+      registerMcpServer: () => ({ ok: true }),
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const response = await client.toolsList()
+    const body = response.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
+    const names = body.result.tools.map((tool) => tool.name)
+
+    expect(names).toHaveLength(26)
+    expect(
+      names.slice(names.indexOf('open_plugin_ui'), names.indexOf('open_plugin_ui') + 3),
+    ).toEqual(['open_plugin_ui', 'close_plugin_ui', 'open_plugin_ui_at_cursor'])
+  })
+
   it('tools/list contains all 19 tools; evaluate_orbitscore requires code:string', async () => {
     const { handlers } = createStubHandlers()
     handle = await startTestServer(handlers)
@@ -583,21 +612,41 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       ok: true,
       result: { receiver: 'lead', index: 0, completion: 'safepoint-completed' },
     })
-    const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+    const openPluginUiAtCursor = vi.fn().mockResolvedValue({
+      ok: true,
+      receiver: 'lead',
+      index: 2,
+      chain_path: [1],
+      normalizedName: 'Echo',
+      site: { line: 3, startCol: 14, endCol: 20 },
+    })
+    const { handlers } = createStubHandlers({
+      openPluginUi,
+      closePluginUi,
+      openPluginUiAtCursor,
+    })
     handle = await startTestServer(handlers)
     const client = new McpTestClient(handle.port)
     await client.connect()
 
     const listed = await client.toolsList()
     const listBody = listed.json as JsonRpcOk<{
-      tools: Array<{ name: string; description?: string }>
+      tools: Array<{
+        name: string
+        description?: string
+        inputSchema?: { properties?: Record<string, unknown> }
+      }>
     }>
     expect(listBody.result.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui']),
+      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui', 'open_plugin_ui_at_cursor']),
     )
     expect(
       listBody.result.tools.find((tool) => tool.name === 'close_plugin_ui')?.description,
     ).toContain('UI_CLOSED_DONE')
+    expect(
+      listBody.result.tools.find((tool) => tool.name === 'open_plugin_ui_at_cursor')?.inputSchema
+        ?.properties,
+    ).toEqual({})
 
     const opened = await client.toolsCall('open_plugin_ui', {
       receiver: 'lead',
@@ -605,13 +654,52 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       expectedName: 'Massive-X',
     })
     const closed = await client.toolsCall('close_plugin_ui', { receiver: 'lead', index: 0 })
+    const openedAtCursor = await client.toolsCall('open_plugin_ui_at_cursor')
 
     expect((opened.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
     expect((closed.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
+    expect((openedAtCursor.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
+    expect(
+      JSON.parse((openedAtCursor.json as JsonRpcOk<ToolCallResult>).result.content[0]!.text),
+    ).toMatchObject({ receiver: 'lead', index: 2, chain_path: [1] })
     expect(openPluginUi).toHaveBeenCalledTimes(1)
     expect(openPluginUi).toHaveBeenCalledWith('lead', 0, 'Massive-X')
     expect(closePluginUi).toHaveBeenCalledTimes(1)
     expect(closePluginUi).toHaveBeenCalledWith('lead', 0)
+    expect(openPluginUiAtCursor).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps open/close registered when only the cursor handler is missing', async () => {
+    const { handlers } = createStubHandlers({
+      openPluginUi: vi.fn(),
+      closePluginUi: vi.fn(),
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const listed = await client.toolsList()
+    const body = listed.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
+    expect(body.result.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui']),
+    )
+    expect(body.result.tools.map((tool) => tool.name)).not.toContain('open_plugin_ui_at_cursor')
+  })
+
+  it('returns the cursor command failure through the standard MCP error envelope', async () => {
+    const { handlers } = createStubHandlers({
+      openPluginUi: vi.fn(),
+      closePluginUi: vi.fn(),
+      openPluginUiAtCursor: () => ({ ok: false, error: 'The cursor is not on a plugin name.' }),
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const response = await client.toolsCall('open_plugin_ui_at_cursor')
+    const body = response.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBe(true)
+    expect(body.result.content[0]?.text).toBe('error: The cursor is not on a plugin name.')
   })
 
   it('maps spec-shaped chain_path to the compatibility index for open and close', async () => {
@@ -623,7 +711,11 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       ok: true,
       result: { receiver: 'master', index: 2, completion: 'safepoint-completed' },
     })
-    const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+    const { handlers } = createStubHandlers({
+      openPluginUi,
+      closePluginUi,
+      openPluginUiAtCursor: vi.fn(),
+    })
     handle = await startTestServer(handlers)
     const client = new McpTestClient(handle.port)
     await client.connect()
@@ -652,7 +744,11 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     async (toolName) => {
       const openPluginUi = vi.fn()
       const closePluginUi = vi.fn()
-      const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+      const { handlers } = createStubHandlers({
+        openPluginUi,
+        closePluginUi,
+        openPluginUiAtCursor: vi.fn(),
+      })
       handle = await startTestServer(handlers)
       const client = new McpTestClient(handle.port)
       await client.connect()
@@ -681,7 +777,11 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
         'Valid indices: 0 (instrument, Massive-X), 1 (effect, Echo).',
     })
     const closePluginUi = vi.fn()
-    const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+    const { handlers } = createStubHandlers({
+      openPluginUi,
+      closePluginUi,
+      openPluginUiAtCursor: vi.fn(),
+    })
     handle = await startTestServer(handlers)
     const client = new McpTestClient(handle.port)
     await client.connect()
@@ -717,7 +817,11 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     async (_label, args) => {
       const openPluginUi = vi.fn()
       const closePluginUi = vi.fn()
-      const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+      const { handlers } = createStubHandlers({
+        openPluginUi,
+        closePluginUi,
+        openPluginUiAtCursor: vi.fn(),
+      })
       handle = await startTestServer(handlers)
       const client = new McpTestClient(handle.port)
       await client.connect()

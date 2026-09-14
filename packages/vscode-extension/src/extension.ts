@@ -56,6 +56,7 @@ import {
   rescanPlugins,
   rescanPluginsForAgent,
 } from './plugin-commands'
+import { openPluginUiAtCursor, openPluginUiAtCursorForAgent } from './plugin-ui-at-cursor'
 import { runSelection, runSelectionForAgent } from './run-selection'
 import {
   registerCompletionProviders,
@@ -169,6 +170,9 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
     vscode.commands.registerCommand('orbitscore.browsePlugins', browsePlugins),
+    vscode.commands.registerCommand('orbitscore.openPluginUiAtCursor', (arg) =>
+      openPluginUiAtCursor(vscode.window.activeTextEditor, arg),
+    ),
     // viewsWelcome コンテンツは view に provider が登録されて初めて描画される
     // （空 TreeView で十分 — 章ツリーの本実装は #451 確定後の follow-up）。
     vscode.window.registerTreeDataProvider('orbitscore.learningView', {
@@ -275,6 +279,7 @@ export async function activate(context: vscode.ExtensionContext) {
           openPluginUi: (receiver, index, expectedName) =>
             pluginUiForAgent('open', receiver, index, expectedName),
           closePluginUi: (receiver, index) => pluginUiForAgent('close', receiver, index),
+          openPluginUiAtCursor: () => openPluginUiAtCursorForAgent(),
           registerMcpServer: (args) => registerMcpServerForAgent(args),
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),

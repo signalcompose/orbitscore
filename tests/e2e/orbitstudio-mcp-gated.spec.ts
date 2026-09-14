@@ -98,6 +98,7 @@ import {
   UNIX_SOCKET_PATH_MAX,
   userDataDirExceedsSocketLimit,
 } from './helpers/harness-processes'
+import { soloWindowLayer, WINDOW_LAYER_FLOATING, WINDOW_LAYER_NORMAL } from './helpers/window-layer'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
@@ -445,6 +446,33 @@ function pluginChildPids(pluginPath: string): number[] {
 async function effectChildPids(client: McpClient): Promise<number[]> {
   const log = (await client.call('get_log', { lines: 800 })).text
   return rackChildPidsFromLog(log)
+}
+
+/** The host bundle id from the same app bundle the harness launches (#940). */
+function hostBundleIdForApp(appBundlePath: string): string {
+  const plistPath = path.join(appBundlePath, 'Contents', 'Info.plist')
+  const bundleId = execFileSync(
+    '/usr/bin/plutil',
+    ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', plistPath],
+    { encoding: 'utf8', timeout: 15_000 },
+  ).trim()
+  if (!bundleId) throw new Error(`CFBundleIdentifier is empty in ${plistPath}`)
+  return bundleId
+}
+
+/**
+ * A bundle id that is certainly **not** the host, used to prove the level drops (#940).
+ *
+ * Finder is the safe choice: it is always running on macOS, so activating it cannot
+ * fail or launch anything, and returning focus afterwards is a no-op for the user.
+ */
+const OTHER_APP_BUNDLE_ID = 'com.apple.finder'
+
+/** Bring one app to the front and wait for the switch to land before measuring. */
+function activateBundle(bundleId: string): void {
+  execFileSync('osascript', ['-e', `tell application id "${bundleId}" to activate`], {
+    timeout: 15_000,
+  })
 }
 
 function processExists(pid: number): boolean {
@@ -2549,6 +2577,233 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         afterLog.split(errorPrefix).length - 1,
         `E2E-2 must add no ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#939 E2E opens only the plugin under the cursor when the same plugin is inserted twice around a standard Gain',
+    async () => {
+      expect(client, '#939 E2E must initialize the MCP client').toBeDefined()
+      expect(tmpRoot, '#939 E2E must initialize the scratch root').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      // 🔴 `startR28Engine` を呼ばない。この helper は `🎵 Live coding mode` が **anchor より後に
+      // 新しく出る**のを待つが、engine が既に起動済みだと `start_engine` はそのマーカーを出さず
+      // 30 秒でタイムアウトする（main の実機 1 周目で実測・2026-09-14）。#633 E2E-1 が起動した
+      // engine を E2E-2 と同じ作法でそのまま使う（共有セッション群の並びに入っているため）。
+      const name = requireCatalogFixtures().clapEffectName
+      const dslLines = [
+        'var global = init GLOBAL',
+        'var cursorSeq = init global.seq',
+        `cursorSeq.effect([${JSON.stringify(name)}, Gain(db: -6), ${JSON.stringify(name)}])`,
+      ]
+      const dslText = dslLines.join('\n')
+      const dslPath = path.join(tmpRoot, '939-cursor.orbs')
+      fs.writeFileSync(dslPath, `${dslText}\n`)
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split('ERROR:').length - 1
+
+      const openedFile = await activeClient.call('open_file', { path: dslPath })
+      expect(openedFile.isError, openedFile.text).toBe(false)
+      const evaluated = await activeClient.call('evaluate_orbitscore', { code: dslText })
+      expect(evaluated.isError, evaluated.text).toBe(false)
+      await sleep(8000)
+
+      // 🔴 カーソルは **evaluate の後・使う直前**に置いて、その場で検算する。先に置くと、
+      // 評価がアクティブエディタを動かした場合に「解決器が間違えた」と見分けがつかない。
+      const thirdLiteralOffset = dslText.lastIndexOf(JSON.stringify(name))
+      const thirdLiteralLineStart = dslText.lastIndexOf('\n', thirdLiteralOffset) + 1
+      const thirdLiteralStartChar = thirdLiteralOffset - thirdLiteralLineStart + 2
+      const selected = await activeClient.call('set_selection', {
+        start_line: 3,
+        start_char: thirdLiteralStartChar,
+      })
+      expect(selected.isError, selected.text).toBe(false)
+      const editorState = await activeClient.call('get_editor_state')
+      expect(editorState.isError, editorState.text).toBe(false)
+      expect(JSON.parse(editorState.text), 'cursor must sit on the third literal').toMatchObject({
+        path: dslPath,
+        cursor: { line: 3 },
+      })
+
+      const opened = await activeClient.call('open_plugin_ui_at_cursor')
+      expect(opened.isError, opened.text).toBe(false)
+      expect(JSON.parse(opened.text)).toMatchObject({ receiver: 'cursorSeq', index: 3 })
+      await sleep(2000)
+
+      // This is the distinguishing assertion: ui("name")-style "open all" would make it fail.
+      const closeFirst = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorSeq',
+        index: 1,
+      })
+      expect(closeFirst.isError, closeFirst.text).toBe(true)
+      expect(closeFirst.text).toContain('no plugin UI opened')
+
+      const closeThird = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorSeq',
+        index: 3,
+      })
+      expect(closeThird.isError, closeThird.text).toBe(false)
+      expect(JSON.parse(closeThird.text)).toMatchObject({ completion: 'safepoint-completed' })
+
+      const closeThirdAgain = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorSeq',
+        index: 3,
+      })
+      expect(closeThirdAgain.isError, closeThirdAgain.text).toBe(true)
+
+      const movedOffPlugin = await activeClient.call('set_selection', {
+        start_line: 1,
+        start_char: 1,
+      })
+      expect(movedOffPlugin.isError, movedOffPlugin.text).toBe(false)
+      const failedOpen = await activeClient.call('open_plugin_ui_at_cursor')
+      expect(failedOpen.isError, failedOpen.text).toBe(true)
+      expect(failedOpen.text).toContain('not on a plugin name')
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split('ERROR:').length - 1,
+        `#939 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#941 E2E opens the fourth identical plugin after a nested plain array',
+    async () => {
+      expect(client, '#941 E2E must initialize the MCP client').toBeDefined()
+      expect(tmpRoot, '#941 E2E must initialize the scratch root').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const name = requireCatalogFixtures().clapEffectName
+      const quotedName = JSON.stringify(name)
+      const dslText = [
+        'var global = init GLOBAL',
+        'var cursorNestedSeq = init global.seq',
+        `cursorNestedSeq.effect([${quotedName}, [${quotedName}, ${quotedName}], ${quotedName}])`,
+      ].join('\n')
+      const dslPath = path.join(tmpRoot, '941-nested-cursor.orbs')
+      fs.writeFileSync(dslPath, `${dslText}\n`)
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split('ERROR:').length - 1
+
+      const openedFile = await activeClient.call('open_file', { path: dslPath })
+      expect(openedFile.isError, openedFile.text).toBe(false)
+      const evaluated = await activeClient.call('evaluate_orbitscore', { code: dslText })
+      expect(evaluated.isError, evaluated.text).toBe(false)
+      await sleep(8000)
+
+      const fourthLiteralOffset = dslText.lastIndexOf(quotedName)
+      const fourthLiteralLineStart = dslText.lastIndexOf('\n', fourthLiteralOffset) + 1
+      const fourthLiteralStartChar = fourthLiteralOffset - fourthLiteralLineStart + 2
+      const selected = await activeClient.call('set_selection', {
+        start_line: 3,
+        start_char: fourthLiteralStartChar,
+      })
+      expect(selected.isError, selected.text).toBe(false)
+
+      const opened = await activeClient.call('open_plugin_ui_at_cursor')
+      expect(opened.isError, opened.text).toBe(false)
+      expect(JSON.parse(opened.text)).toMatchObject({ receiver: 'cursorNestedSeq', index: 4 })
+      await sleep(2000)
+
+      const closeThird = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorNestedSeq',
+        index: 3,
+      })
+      expect(closeThird.isError, closeThird.text).toBe(true)
+      expect(closeThird.text).toContain('no plugin UI opened')
+
+      const closeFourth = await activeClient.call('close_plugin_ui', {
+        receiver: 'cursorNestedSeq',
+        index: 4,
+      })
+      expect(closeFourth.isError, closeFourth.text).toBe(false)
+      expect(JSON.parse(closeFourth.text)).toMatchObject({ completion: 'safepoint-completed' })
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split('ERROR:').length - 1,
+        `#941 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#940 E2E floats the plugin window only while the host is frontmost',
+    async () => {
+      expect(client, '#940 E2E must initialize the MCP client').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const name = requireCatalogFixtures().clapEffectName
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split('ERROR:').length - 1
+
+      // 🔴 この 1 本は設計 §5b の「窓の重なり順は自動で観測できない」という前提が
+      // **誤りだったため**に足したもの（main の実測・2026-09-14）。`kCGWindowLayer` は
+      // 窓サーバ側の記録なので、child の自己申告ではなく**実際に適用されたレベル**が読める。
+      const declared = await activeClient.call('evaluate_orbitscore', {
+        code: ['var global = init GLOBAL', 'var floatSeq = init global.seq'].join('\n'),
+      })
+      expect(declared.isError, declared.text).toBe(false)
+      const chained = await activeClient.call('evaluate_orbitscore', {
+        code: `floatSeq.effect([${JSON.stringify(name)}])`,
+      })
+      expect(chained.isError, chained.text).toBe(false)
+      await sleep(8000)
+
+      const opened = await activeClient.call('open_plugin_ui', {
+        receiver: 'floatSeq',
+        chain_path: [0],
+      })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(2000)
+
+      const childPids = await effectChildPids(activeClient)
+      const childPid = childPids[childPids.length - 1]
+      expect(childPid, '#940 needs the effect child that owns the plugin window').toBeDefined()
+      const hostBundleId = hostBundleIdForApp(appPath)
+
+      // ホストを前面へ → floating。
+      activateBundle(hostBundleId)
+      await sleep(1500)
+      expect(
+        soloWindowLayer(childPid!),
+        '#940 the plugin window must float while the host is frontmost',
+      ).toBe(WINDOW_LAYER_FLOATING)
+
+      // 🔴 区別するアサーション: 別アプリを前面にすると **normal に戻る**。
+      // floating を常時掛ける実装でもホスト前面のチェックは通るので、こちらが本体。
+      activateBundle(OTHER_APP_BUNDLE_ID)
+      await sleep(1500)
+      expect(
+        soloWindowLayer(childPid!),
+        '#940 the plugin window must drop to normal while another app is frontmost',
+      ).toBe(WINDOW_LAYER_NORMAL)
+
+      // 戻せば floating に復帰する（一方通行ではない）。
+      activateBundle(hostBundleId)
+      await sleep(1500)
+      expect(
+        soloWindowLayer(childPid!),
+        '#940 the plugin window must float again when the host returns to the front',
+      ).toBe(WINDOW_LAYER_FLOATING)
+
+      const closed = await activeClient.call('close_plugin_ui', {
+        receiver: 'floatSeq',
+        chain_path: [0],
+      })
+      expect(closed.isError, closed.text).toBe(false)
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split('ERROR:').length - 1,
+        `#940 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
       ).toBeLessThanOrEqual(errorsBefore)
     },
     TEST_TIMEOUT_MS,

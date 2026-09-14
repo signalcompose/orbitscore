@@ -99,7 +99,7 @@ graph TD
 engine の起動は `startEngine()` が担います。**2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**され、唯一のバックエンドである Rust daemon 向けの起動だけが残りました。最初にやるのは **engine を spawn する前にバックエンドのバイナリ解決を先行させる** ことです。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:76-84
+// packages/vscode-extension/src/engine-process.ts:123-131
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     bundleStatusItem.show()
@@ -131,9 +131,15 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 この `env` 変数へ積むのは debug フラグと capture seam（#307）だけです（spawn の直前にもう 2 つ足されます。すぐあとで出てきます）。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:313-327
+// packages/vscode-extension/src/engine-process.ts:360-374
   // Set environment
   const env = { ...process.env }
+  const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
+  if (hostBundleId) {
+    env.ORBIT_HOST_BUNDLE_ID = hostBundleId
+  } else {
+    delete env.ORBIT_HOST_BUNDLE_ID
+  }
   if (effectiveDebugMode) {
     env.ORBITSCORE_DEBUG = '1'
   }
@@ -141,18 +147,12 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
   // Capture seam (#307): the daemon records the master output to this WAV while
   // the stream runs. Only set when explicitly requested (MCP start_engine tool)
   // — inherited env stays authoritative otherwise.
-  if (agentOpts?.captureWav) {
-    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
-    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
-  }
-
-  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 ```
 
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。ここで問題になるのが「**どの** Node.js か」です。**2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、PATH から `node` を引くのをやめて VS Code 自身が同梱している Node を借りる**ようになりました。Finder や launchd から起動された VS Code の PATH は `/etc/paths` の最小構成で、nodenv や Homebrew で node を入れている環境ではそこに `node` がありません。engine は `spawn node ENOENT` で起動せず、しかも利用者から見える症状は「エンジンが起動しない」だけなので、原因が PATH だとは分かりません。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` を渡して初めて Node になります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:329-362
+// packages/vscode-extension/src/engine-process.ts:382-415
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -194,7 +194,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:628-629
+// packages/vscode-extension/src/engine-process.ts:681-682
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -222,7 +222,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:243-248
+// packages/vscode-extension/src/extension.ts:247-252
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -506,7 +506,7 @@ daemon 本体だけでなく、後述の plugin child と標準プラグイン `
 daemon はプラグイン (CLAP / VST3) の実体を自分のプロセスに載せません。effect と instrument はそれぞれ別のバイナリを **out-of-process (OOP)** の子プロセスとして spawn し、共有メモリで音声をやり取りします。spawn され得る child の一覧は daemon crate の定数として 1 箇所に明示されています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
+// rust/crates/orbit-audio-daemon/src/lib.rs:104-113
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -670,9 +670,9 @@ export const DSL_VERSION = '2.0'
 
 - `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring、ステータスバー 2 本、コマンド登録
 - `packages/vscode-extension/src/extension.ts:237-291` — MCP サーバーの起動条件 (`ORBITSCORE_MCP_PORT` > 設定) とハンドラ束
-- `packages/vscode-extension/src/engine-process.ts:57-65` — `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界 (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
-- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: kind 判定 → pre-check → env → spawn
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
+- `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界 (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
+- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: kind 判定 → pre-check → env → spawn
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)

@@ -6,6 +6,7 @@
 
 #![allow(unsafe_code)]
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -17,10 +18,11 @@ use std::time::{Duration, Instant};
 use orbit_audio_native::{BlockSource, BlockTransport};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, CommandMailboxHost, NeutralEvent, PipelinedInstrumentHost,
-    TransportContext, UiEventPump, VoiceKey, BUF_LEN, CHANNELS, CONTROL_QUIT,
+    UiEventPump, VoiceKey, BUF_LEN, CHANNELS, CONTROL_QUIT,
 };
 
 use crate::engine_wrap::PluginUiWiring;
+use crate::outproc_instrument_transport::transport_context;
 use crate::outproc_respawn_guard::{
     advance_fast_respawn_streak, drain_ui_pump, poll_ui_pump_once, service_ui_pump_on_respawn,
 };
@@ -43,23 +45,6 @@ pub const PROBE_KEY: VoiceKey = VoiceKey {
     channel: 0,
     key: 69,
 };
-fn transport_context(transport: &BlockTransport) -> TransportContext {
-    const TEMPO_BPM: f64 = 120.0;
-    let song_position_beats = if transport.sample_rate == 0 {
-        0.0
-    } else {
-        transport.cursor_frames as f64 / transport.sample_rate as f64 * (TEMPO_BPM / 60.0)
-    };
-    TransportContext {
-        tempo_bpm: TEMPO_BPM,
-        time_sig_numerator: 4,
-        time_sig_denominator: 4,
-        is_playing: 1,
-        is_looping: 0,
-        song_position_beats,
-    }
-}
-
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub fn unique_shm_path() -> PathBuf {
@@ -425,13 +410,14 @@ impl BlockSource for OutProcInstrumentBlockSource {
 
 /// child の起動コマンドを組み立てる純関数（unit テスト対象・#542 レビュー: `--state` の
 /// 有無を含む引数構築を spawn から分離してピン留めできるようにする）。
-fn instrument_child_command(
+pub(crate) fn instrument_child_command(
     child_exe: &Path,
     shm_path: &Path,
     plugin: &Path,
     plugin_id: Option<&str>,
     sample_rate: u32,
     state: Option<&Path>,
+    host_bundle_id: Option<&OsStr>,
 ) -> Command {
     let mut command = Command::new(child_exe);
     command
@@ -449,6 +435,9 @@ fn instrument_child_command(
     if let Some(state) = state {
         command.arg("--state").arg(state);
     }
+    if let Some(host_bundle_id) = host_bundle_id {
+        command.arg(crate::HOST_BUNDLE_ID_ARG).arg(host_bundle_id);
+    }
     command
 }
 
@@ -460,7 +449,17 @@ pub fn spawn_instrument_child(
     sample_rate: u32,
     state: Option<&Path>,
 ) -> io::Result<Child> {
-    instrument_child_command(child_exe, shm_path, plugin, plugin_id, sample_rate, state).spawn()
+    let host_bundle_id = crate::host_bundle_id_from_env();
+    instrument_child_command(
+        child_exe,
+        shm_path,
+        plugin,
+        plugin_id,
+        sample_rate,
+        state,
+        host_bundle_id.as_deref(),
+    )
+    .spawn()
 }
 
 fn reap(child: &mut Child, child_name: &str) {
@@ -1764,7 +1763,6 @@ mod tests {
     /// コマンド構築レベルの証明になる（実機レベルは gated テストが担う）。
     #[test]
     fn instrument_child_command_includes_state_only_when_given() {
-        use std::ffi::OsStr;
         let args_of = |state: Option<&Path>| -> Vec<String> {
             instrument_child_command(
                 Path::new("/bin/child"),
@@ -1773,6 +1771,7 @@ mod tests {
                 Some("plugin-id"),
                 48_000,
                 state,
+                None,
             )
             .get_args()
             .map(|arg: &OsStr| arg.to_string_lossy().into_owned())
@@ -1804,5 +1803,39 @@ mod tests {
             .map(|(_, arg)| arg.clone())
             .collect();
         assert_eq!(stripped, without_state);
+    }
+
+    #[test]
+    fn instrument_child_command_includes_host_bundle_id_only_when_configured() {
+        let args_of = |host_bundle_id: Option<&OsStr>| -> Vec<String> {
+            instrument_child_command(
+                Path::new("/bin/child"),
+                Path::new("/tmp/shm"),
+                Path::new("/plugins/synth.vst3"),
+                None,
+                48_000,
+                None,
+                host_bundle_id,
+            )
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+        };
+
+        let legacy = args_of(None);
+        assert!(!legacy.iter().any(|arg| arg == "--host-bundle-id"));
+
+        let configured = args_of(Some(OsStr::new("com.microsoft.VSCode")));
+        assert_eq!(
+            configured
+                .windows(2)
+                .find(|pair| pair[0] == "--host-bundle-id"),
+            Some(
+                &[
+                    "--host-bundle-id".to_owned(),
+                    "com.microsoft.VSCode".to_owned()
+                ][..]
+            )
+        );
     }
 }

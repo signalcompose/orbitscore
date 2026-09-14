@@ -889,21 +889,21 @@ rack child の spawn は `--shm` / `--chain` / `--sample-rate` の 3 引数で�
 分類されて E2E 自身を落とす、という罠がコメントに残っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:649-663
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:644-658
 pub fn spawn_effect_child(
     child_exe: &Path,
     shm_path: &Path,
     chain_manifest: &Path,
     sample_rate: u32,
 ) -> io::Result<Child> {
-    let mut cmd = Command::new(child_exe);
-    cmd.arg("--shm")
-        .arg(shm_path)
-        .arg("--chain")
-        .arg(chain_manifest)
-        .arg("--sample-rate")
-        .arg(sample_rate.to_string())
-        .stderr(Stdio::inherit());
+    let host_bundle_id = crate::host_bundle_id_from_env();
+    let mut cmd = crate::outproc_child_command::effect_child_command(
+        child_exe,
+        shm_path,
+        chain_manifest,
+        sample_rate,
+        host_bundle_id.as_deref(),
+    );
     let child = cmd.spawn()?;
 ```
 
@@ -1481,7 +1481,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4897-4904
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5152-5159
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

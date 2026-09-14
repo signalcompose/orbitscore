@@ -12053,3 +12053,663 @@ cfg 4 象限も `cargo test` も通ってしまった。
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
 🔴 引用は**2 段階**で直した — 移動による 2 件と、**doc コメントを繋ぎ直したことで生じた 7 行ずれ**の 3 件。
+
+---
+
+### refactor(daemon): move device switching and Link tempo into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-device-link`
+
+#888 子 1 の**第 6 束**。オーディオデバイス切替と Link テンポ（317 行）を
+`engine_wrap/device_link.rs`（242 コード行）へ。
+`engine_wrap.rs` は **3,655 → 3,417** コード行。
+
+**可視性の変更 2 行**（E3′）: `record_stream_config`（親の `finish_start` から）と
+`record_device_switch_result`（親のインラインテスト 3 箇所から）を `pub(super)` に。
+
+🔴 **第 5 束の教訓を仕組みにした**: 抽出範囲の開始を手で選ぶのをやめ、
+**doc コメントと属性を遡って item の真の開始行を求める関数**で決めた。
+第 4 束の doc コメント分断は、開始行を目で選んだために起きていた。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed（1 件を再アンカー）。
+
+---
+
+### refactor(daemon): move the startup variants into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-start-lifecycle`
+
+#888 子 1 の**第 7 束**。cfg feature ごとの `start*()` variant（645 行）を 2 ファイルへ
+（`startup.rs` 292 / `startup_instrument.rs` 276）。
+`engine_wrap.rs` は **3,417 → 2,857** コード行。
+
+**可視性の変更 2 行**（E3′）: `resolve_outproc_both_buffer_frames`（親のテスト 3 箇所）と
+`start_outproc_both_with_options`（親に残る `start_with_options`）。
+
+### 🔴 抽出範囲を 2 度取り違えた — 複数行属性の罠
+
+`#[cfg(all(\n  feature = …,\n  …\n))]` は**複数行に跨る 1 つの属性**である。
+`pub fn` の行から遡って「`#[` で始まる行」だけを見ると、**属性の途中で切ってしまう**。
+実際 2 度失敗した:
+
+1. 終端を 5657 に取り、`))]` だけを親に残した → **`expected item after attributes`**
+2. 開始を 5017（`pub fn` の行）に取り、`#[cfg(all(` 〜 `))]` を親に残した → 同じエラー
+
+**正しい境界**は「doc コメントの先頭」から「次の item の属性が始まる直前」。
+第 4 束の doc コメント分断（fmt でしか気づけなかった）と違い、**こちらはコンパイルエラーになる**
+ので気づける。属性の分断と**コメントの分断は検出可能性が違う**。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+---
+
+### refactor(daemon): move the out-of-process slot helpers into child modules (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-slot-helpers`
+
+#888 子 1 の**第 8 束**。`impl EngineWrap` の**外**にある自由関数・小さな型（598 行）を
+2 ファイルへ（`slot_helpers.rs` 397 / `slot_errors.rs` 122）。
+`engine_wrap.rs` は **2,857 → 2,362** コード行。
+
+### 🔴 これまでの束と性質が違う — モジュールレベルの item
+
+第 1〜7 束は `impl` の**メソッド**を動かしてきたが、本束は**モジュールレベルの item**
+（自由関数・`enum`・`struct`・`type`）が対象。2 つの新しい対処が要った:
+
+1. **`pub(super)` を 35 箇所**に付けた（モジュールレベル 22 + `impl` 内 13）。
+   メソッドと違い、自由関数は親と兄弟の両方から名前で呼ばれている
+2. 🔴 **`use slot_helpers::*;` を親に足す必要があった。** `pub(super)` は**可視性を上げるだけで、
+   名前をスコープへ持ち込まない**。これが無いと `cannot find function ... in this scope` になる
+
+### 🔴 `clap-host` 単独ビルドで import が未使用になった
+
+このモジュールの item は全部 `#[cfg(any(outproc-effect, outproc-instrument))]` なので、
+`clap-host` 単独だと**中身が空になり `use super::*;` が未使用**になる。CI は `-D warnings` なので
+落ちる。`#[allow(unused_imports)]` を付けた（中身が feature 次第で空になるモジュールの定型）。
+
+### rustfmt の折り返し
+
+`pub(super)` を足すと行が長くなり、rustfmt が引数の折り返しを要求する。
+該当パッケージにだけ `cargo fmt` をかけた（`git diff --stat` で**他のファイルが変わっていない**ことを確認済み）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+---
+
+### refactor(daemon): move the effect slot types and env parsing into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-effect-slot-types`
+
+#888 子 1 の**第 9 束**。`OutProcControl` / `EffectSlotEntry` / `BusKind` 系の型と
+`ORBIT_*` 環境変数の解析（512 行）を `engine_wrap/effect_slot_types.rs`（390 コード行）へ。
+🔴 **`engine_wrap.rs` が 2,000 行を切った**（2,362 → **1,989** コード行）。
+
+### 🔴 構造体フィールドの可視性 — 第 8 束より一段深い
+
+第 8 束は関数と型に `pub(super)` を付ければ済んだが、本束は **187 件が「フィールドが private」**
+のエラーだった。親が構造体のフィールドを**直接触っている**ため、**フィールド 44 個**にも
+`pub(super)` が要った（関数・型 30 個と合わせて 74 箇所）。
+
+### 🔴 `session.rs` からの外部参照 — 再エクスポートが要った
+
+`BusKind` / `BusLineDest` / `BusLineOp` / `SourceRoutingTarget` は **`session.rs` が
+`crate::engine_wrap::` から名前で import** していた。親から `pub(crate) use` で再エクスポートした。
+
+**cfg は定義側と一致させる必要があった**: `SourceRoutingTarget` だけ
+`any(test, all(outproc-effect, outproc-instrument))` で他の 3 つと条件が違い、
+まとめて 1 行にすると default ビルドで `unresolved import` になった。
+
+### 🔴 引用の追随に新しい型が出た — 行番号ではなく**本文**が変わる
+
+`pub(super)` を付けると**引用しているコード行そのものが変わる**。`--fix` は行番号しか直さないので
+効かない。1 行ずつ置換したが**収束しなかった**（8 ラウンド回して残った）ので、
+**引用ブロックの本文を実ファイルから再生成する**スクリプトを書いて解決した
+（scratchpad の `resync-citations.mjs`）。差分は追加 40 / 削除 40 で対応しており、
+**引用の追随以外の変更が無い**ことを確認済み。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+---
+
+### refactor(daemon): move the OOP role abstraction into a child module (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-role-traits`
+
+#888 子 1 の**第 11 束**。`OutProcRole` トレイトとその 2 実装、`StreamGuard`、
+リトライ付き push（696 行）を `engine_wrap/role.rs`（483 コード行）へ。
+🔴 **`engine_wrap.rs` が 1,000 行を切った**（1,468 → **995** コード行）。
+
+### 🔴 トレイトの中では `pub(super)` が使えない
+
+一括で `pub(super)` を付けたところ **E0449「visibility qualifiers are not permitted here」が 33 件**
+出た。トレイト定義の本体とトレイト実装ブロックのメソッドは、**可視性がトレイト側で決まる**ので
+修飾子を書けない。これまでの束は inherent impl（`impl EngineWrap`）だったので出なかった。
+
+**対処**: 正規表現で構文を判定するのをやめ、**コンパイラの指摘行をそのまま使って**外した。
+`cargo clippy` の出力から `role.rs:<行>` を抜き、その行の `pub(super) ` を削るループを回して収束させた。
+同じ手法を「フィールドが private」47 件にも使い、エラーメッセージから
+`struct 名 + フィールド名` を抜いて該当行だけに付けた。
+
+**再エクスポート 2 件**: `DeviceSwitchRequest`（`main.rs` から）と `ClapPluginRole`（`session.rs` から）。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+
+### refactor(daemon): move the instrument slot types and plugin UI wiring out (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-instrument-slot-types`
+
+#888 子 1 の**第 10 束**。instrument slot の型群とプラグイン UI の配線（606 行）を 2 ファイルへ
+（`instrument_slot_types.rs` 392 / `plugin_ui_wiring.rs` 144）。
+`engine_wrap.rs` は **1,989 → 1,468** コード行。
+
+**可視性**: `pub(super)` を 63 箇所（第 9 束の知見どおり**フィールドにも**）。
+`PluginUiWiring` 等 5 つは `outproc_effect.rs` / `outproc_respawn_guard.rs` からも使われるので
+`pub(crate)` のまま、親から再エクスポート。
+
+🔴 **再エクスポートの cfg を狭く書いて 1 象限落とした。** `outproc-instrument` と書いたが、
+定義側は `any(outproc-effect, outproc-instrument)` だった。**cfg は定義側と一致させる** —
+第 9 束と同じ誤りを繰り返した。
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+---
+
+### refactor(daemon): finish splitting engine_wrap.rs — 6,418 to 424 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c1-ui-types`
+
+🎯 **#888 子 1 完了。`engine_wrap.rs` が 6,418 → 424 コード行（閾値 500 以下）。**
+baseline から削除した。子モジュール **21 本**、いずれも 500 以下。
+
+第 12 束（最終）で移したもの: wire に載る公開型（`wire_types.rs` 130）/ `EngineWrap` の構築と
+OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクトバス stage の構築（`bus_stages.rs`）。
+
+### 子 1 の全経過
+
+```
+6,418 → 6,014 → 5,585 → 5,127 → 4,409 → 3,655
+      → 3,417 → 2,857 → 2,362 → 1,989 → 1,468 → 995 → 424
+```
+
+### 🔴 12 束を通して分かったこと
+
+1. **「純粋な移動」は目標ではなく性質。** 相互依存があれば可視性の変更は避けられない。
+   大事なのは**変更を最小に留め、それが residual に見えること**（第 4 束以降）
+2. **必要な作業は対象の種類で変わる。** メソッド（1〜7 束）→ 自由関数（8 束）→
+   構造体フィールド（9 束）→ トレイト（11 束）と、`pub(super)` を付ける対象が深くなった。
+   元が 1 つの巨大モジュールだったので、内部の結合が可視化されていなかっただけ
+3. 🔴 **境界の失敗には検出可能性の差がある。** 属性の分断は**コンパイルエラー**になるが、
+   doc コメントの分断は **`cargo fmt --check` しか捕まえない**（第 4 束で実際に残った）
+4. 🔴 **構文を正規表現で判定するのをやめ、コンパイラの指摘行を使う**方式に切り替えたら速くなった
+   （第 11 束）。子 0 の **D9**（heuristic を改良せず基準を言語の正規実装に置く）と同じ転換
+5. **cfg は定義側と一致させる** — 第 9・10 束で 2 度同じ誤りをした。
+   毎回 `check-cfg-matrix.sh` を回していたので 2 回とも即座に検出できた
+
+**検証**（全 12 束で毎回実施）: cfg 4 象限 + `clap-host` 単独 / `cargo fmt --check` /
+`cargo test` / `npm test` **2,445 passed**（**12 束を通して 1 件も変わっていない**）/ lint /
+`docs:check` 948 引用。
+
+---
+
+### refactor(daemon): split session.rs — 2,605 to 439 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c2-session`
+
+🎯 **#888 子 2 の前半完了。`session.rs` が 2,605 → 439 コード行。** 7 ファイルすべて 500 以下
+（`dispatch.rs` 411 / `dispatch_plugin.rs` 498 / `dispatch_transport.rs` 158 /
+`params.rs` 289 / `params_plugin.rs` 413 / `run_loop.rs` 476）。
+
+### 🔴 ここで初めて「純粋な移動」を超えた（owner 裁定 2026-09-12）
+
+`handle_command` は **1,028 コード行の単一 `match` 式**だった。ファイルを分けても 1 つの式なので、
+**行数だけでは閾値 500 を満たせない**。owner に諮り「**アームを関数へ切り出す**」を選んだ。
+
+切り出した形（`dispatch_plugin.rs` / `dispatch_transport.rs`）:
+
+```rust
+pub(super) async fn handle_plugin_command(...) -> Option<Value> {
+    Some(match method {
+        "LoadPlugin" => { ... }     // アーム本体は 1 行も書き換えていない
+        _ => return None,           // 該当しなければ親の match へ戻す
+    })
+}
+```
+
+🔴 **アーム本体は 1 行も書き換えていない。** 変わったのは (a) 関数シグネチャ (b) 呼び出し側の
+3 行 (c) 早期 `return err(...)` を `return Some(err(...))` に包んだこと（**21 + 12 箇所**）。
+**「既存テストの期待値を 1 つも変えていない」という検算は維持されている。**
+
+(c) の包み直しは、第 11 束で確立した**コンパイラの指摘行を使うループ**でやった。
+E0308 の行番号を抜いて該当行だけを包む処理を収束するまで回す。手で探すと必ず取りこぼす。
+
+### 引用の追随 6 件
+
+3 件は移動先が別ファイル、3 件は**範囲がファイル外**（`session.rs` が短くなったため
+`range 2412-2413 is outside the file (2120 lines)`）。引用ブロックの中身から移動先を検索して
+特定し、第 9 束で書いた再生成スクリプトで本文を同期した。**6 件とも着地先を目視で照合済み。**
+
+**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
+`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
+
+### 09-12 分の追加移設（本体の 2,000 行上限・2026-09-14・#939 / #940 の追記で超過）
+
+### docs: link the install guide from README and every release (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `905-install-route-links`
+
+owner の指摘から。「インストール手順は**リリースページに書く**のではなく、**マニュアルに載せて
+README やリリースからリンクする**」という裁定に従った（#905）。
+
+### 🔴 手書きの定型は次の版まで生き残らなかった
+
+v3.0.0 のリリースページには **45 行の丁寧な手順**が手書きされていたが、**v4.0.0 では丸ごと消えた**。
+`release.yml` は `gh release create --generate-notes` だけなので、**自動では何も付かない**。
+v3.0.0 のものは後から手で書き足したものだった。
+
+**これが「リリースページに書く」案を採らない実測の根拠**である。私は当初そちらを提案したが、
+owner の案（正本へリンク）の方が正しい。複製は必ず本体より遅れる。
+
+### やったこと
+
+| 対象 | 変更 |
+|---|---|
+| `release.yml` | `--notes-file` で短い定型（動作環境 + 正本へのリンク）を先頭に置き、`--generate-notes` の changelog をその後ろへ。**次の版から自動で付く** |
+| `README.md` | 既存の「Just want to use it?」節に正本へのリンクを足した |
+
+正本は `sites/user/getting-started/installation.md`（版に依存しない書き方・公開済み。
+https://signalcompose.github.io/orbitscore/getting-started/installation が 200 を返すことを確認）。
+
+🔴 **heredoc の字下げを検証した。** YAML の `run: |` ブロック内に heredoc を書くと、字下げ次第で
+markdown が丸ごとコードブロックになる。YAML を実際に展開して列 0 に揃うことを確認し、
+生成物も実行して目視した。
+
+### 🔴 やらなかったこと 2 件
+
+- **README に新しい `## Install` 節を作らない** — 一度作ったが、既存の「Just want to use it?」と
+  合わせて**三つ目の複製**になると気づいて取り消した
+- **`docs/user/ja/USER_MANUAL.md` を直さない** — scsynth の記述など明らかに腐っているが、
+  この文書は **DEPRECATED で「履歴として保持」（#237）** と明記されている。一度書き換えてから
+  気づいて戻した。腐りは冒頭の 2 つのバナーが既に無効宣言しており、さらに「リリースページに
+  手順が載っています」という 65 行目の約束は、上の `release.yml` の変更で**再び真になる**
+
+### chore(release): bump the extension to 4.0.1 — the Rust split ships (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-release-4.0.1`
+
+#888 の Rust 分割（子 0〜3）を 4.0.1 として出す。**patch である** — 振る舞いも DSL も
+変えていないため（`/goal` の確定事項「4.0.1 は Rust 分割のみ」）。
+
+| 軸 | 値 | 動いたか |
+|---|---|---|
+| 拡張（`.vsix` と git タグ・**正本**） | **4.0.0 → 4.0.1** | ✅ |
+| `ENGINE_VERSION`（セッションログの meta） | 2.0.0 | 別軸・同期しない |
+| `DSL_VERSION`（spec 版） | 2.0 | 別軸・同期しない |
+
+`docs/design/656-release-design.md` §4.4 のとおり 3 つは別軸。
+`node scripts/check-release-tag-version.mjs v4.0.1` が緑。
+
+🔴 **歴史的記述は変えていない。** 「#883 で拡張を 4.0.0 に上げた」という記述は事実なので
+そのまま残し、**「現在の版は〜」と現在形で述べている箇所だけ**を 4.0.1 にした
+（README / CLAUDE.md / core spec 2 箇所 / dev サイト 4 箇所）。
+
+### docs: land the four routine docs-sync PRs as one roundup (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `893-docs-sync-roundup`
+
+#882 / #891 / #892 / #893 を 1 本に畳んだ。**4 本とも CONFLICTING** で、#888 の分割が main に
+入った直後だったため放置すれば腐る一方だった（owner の指摘で着手）。前例は #867（9 本の roundup）。
+
+衝突は 2 種類:
+
+- **WORK_LOG**（4 本とも Recent Work へ追記）— 両方残す
+- **`vscode-architecture.md` の「どの PR まで追従したか」の Note 行** — #884 / #885 / #889 の
+  3 本すべてを反映した 1 文にまとめた。HEAD 側に残っていた「束 S（#885）はまだ反映していません」は
+  **#885 を取り込んだ時点で古くなっていた**（2 段目の取り込みで前段の宣言が嘘になる型）
+
+🔴 引用は 8 件壊れていたが、**すべて `extension.ts`** で #888 の Rust 分割とは無関係だった
+（PR の base が古かったための一様な **+27 行**シフト）。`--fix` の着地先 4 件は散文と突き合わせて
+確認済み — `updateDiagnostics` の `analyzeMissingOutput` ループ / `registerOutputCodeActionProvider`
+の `provideCodeActions` / 補完候補の組み立て / トリガ文字の登録。
+
+検証: `npm test` 2,450 passed / `npm run lint` / `npm run docs:check` **982 引用**（4 本が +34 件）。
+
+### docs: follow PR #889 into the chapters and guides that still said `spawn('node')` (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr889`
+**担当**: docs 追従ルーティン（マージ済み PR [#889](https://github.com/signalcompose/orbitscore/pull/889) を追う）
+
+PR #889（#878・engine を VS Code 同梱の Node で起動）は dev サイトの引用ブロックを追従させたが、
+**引用を囲む本文と図が古いまま**だった。`docs:check` は引用のアンカーしか見ないので red にならない
+（`docs/core/PROJECT_RULES.md` の「ルーティンは機械が見ていない層を見ている」）。
+
+#### 1. `spawn('node')` と言い続けていた本文・図
+
+| 場所 | 何が古かったか |
+|---|---|
+| `sites/dev/orientation/architecture-overview.md:60` | mermaid のラベルが `child_process.spawn('node', ...)` / `env は debug フラグと capture seam のみ` |
+| `sites/dev/editor/vscode-architecture.md:606` | 「debug フラグと capture seam（#307）だけを env へ積んで spawn します」 |
+
+どちらも spawn の第 1 引数が `process.execPath` になり、env に `ELECTRON_RUN_AS_NODE` /
+`ELECTRON_NO_ASAR` が加わった時点で事実でなくなっている。
+
+#### 2. `daemonEnv()` が説明なしで引用に現れていた
+
+`architecture-overview.md` の `spawnDaemon()` 引用には PR #889 で `env: daemonEnv(process.env)` が
+入ったが、**`daemonEnv()` が何かを述べる本文が 1 行も無かった**。関数本体の引用と、
+「自分が足したものを自分の出口で戻す」という根拠（および「ホスト由来の変数を第三者へ渡さない」を
+根拠にしていない理由）を書いた。
+
+#### 3. cold install ゲートがどの doc にも無かった
+
+`npm run test:e2e:cold-install`（`ORBIT_GATED_COLD_INSTALL=1`）は CLAUDE.md のマージ前ゲートには
+入ったが、**gated E2E を説明する章**（`sites/dev/editor/mcp-and-gated-e2e.md`）と
+**テスト手順の doc**（`docs/testing/TESTING_GUIDE.md`）には無かった。前者に 1 節
+（dev host が構造的に通らない 3 経路・strict / finder の差・オラクルが `ok` でなく RMS）を、
+後者に実行手順を足した。
+
+日英とも同一ターンで更新。`node sites/dev/scripts/check-citations.mjs` は 956 citations / 0 failed。
+
+---
+
+### docs: follow PR #885 in the user site, the manual and the editor chapters (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr885`
+**担当**: docs-sync ルーチン（追従元 = PR [#885](https://github.com/signalcompose/orbitscore/pull/885)・マージ commit `f575f27`）
+
+PR #885（暗黙 master 終端の廃止・#883 束 S）に、**ドキュメントだけ**を追従させた。実装・テストは
+一切触っていない。
+
+#### 1. ユーザー向けの記述が仕様と正反対のまま残っていた
+
+#885 は `AudioLine.program()` の暗黙 `output(master)` 合成を削除したが、**ユーザーサイトは
+「`output()` を 1 つも書かなかった場合は、線の最後に `output("master")` があるものとして
+扱われます」と書いたまま**だった。ja / en の 4 箇所:
+
+| ファイル | 旧記述 |
+|---|---|
+| `sites/user/mixing/routing.md:97` | 「これは今までどおりの動きです」 |
+| `sites/user/en/mixing/routing.md:97` | 同上（en） |
+| `sites/user/reference/methods.md:443` | 「線の最後に `output("master")` があるものとして扱われます」 |
+| `sites/user/en/reference/methods.md:399` | 同上（en） |
+
+いずれも「出口の無い線は無音」へ書き換え、`routing.md` には**出口を書き忘れたときの節**を新設した
+（`output-missing` / `dry-not-routed` の 2 診断と quick fix、sum / aux バス自身にも出口が要ること）。
+「音が鳴らない」は `troubleshooting.md` の先頭カテゴリなので、そこにも原因 1 件として足した。
+
+同じ章の**譜面例そのもの**も 2 件古かった。`routing.md` の `send()` 節は「元の音自体は消えず、
+そのまま master（または sum）へ流れ続けます」と書いており、これは #883 X3 が塞いだ挙動の説明に
+なっていた。`send()` は今も分岐（`thru: true`）だが、その先に出口が無ければ dry はどこにも
+届かない。`sum` の最初の例と `projects/import.md` の例も、バス自身の `output()` が無いため
+**そのまま写すと無音**になる状態だった。
+
+`docs/user/ja/USER_MANUAL.md` の instrument 節は「instrument の音は master へ直接ミックス
+されます」と**無条件に**書いていた。#885 以降は出口を書いたときだけなので条件付きに直し、
+「音が出ない」の原因リストにも出口の書き忘れを先頭で足した。
+
+#### 2. dev サイトの診断章が旧仕様（LinkAudio 限定の Error）のままだった
+
+#885 は `analyzeLinkAudioMissingOutput`（LinkAudio ファイル限定・Error・instrument 除外）を
+`analyzeMissingOutput`（全ファイル・Warning + Information・**instrument は対象**・quick fix 付き）へ
+置き換えたが、`sites/dev/editor/execution-feedback.md` の診断 6-8 節と 9 種の表は旧記述のまま
+だった。表の行・守備範囲・severity の理由を書き換え、`code` の 3 分岐・severity 写像・
+CodeActionProvider の節を足した（ja / en）。
+
+- `sites/dev/editor/vscode-architecture.md`: `activate()` に増えた
+  `registerOutputCodeActionProvider(context)` の 1 行を IntelliSense / 診断の登録節へ
+- `sites/dev/editor/mcp-and-gated-e2e.md`: `get_diagnostics` が返す `DiagnosticEntry` に
+  `code?` が増えたこと（エージェントが文言でなく識別子で分岐できる）
+
+3 章とも `verified-against` を `f575f27` へ、`verified-at` を 2026-09-12 へ更新した。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` / `DESIGN_DISCUSSION_RECORD.md`（決定 #78 / #79）は
+  **束 S より前に更新済み**で、#885 の振る舞いと一致している
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` は #885 自身が更新済み（診断の「⏳ 未実装」→「✅ 実装済み」）
+- `sites/dev/signal-chain/mixer-audio-line.md` ほか dev サイトの 20 章は #885 自身が更新済み
+  （`SourceDest::None` / `FeedDest::Discard` / `PROTOCOL_VERSION 0.3` まで反映されている）
+- `docs/design/883-explicit-output-routing-design.md` は起案時点のスナップショットなので触らない
+
+#### 検証
+
+`npm run docs:build`（user / dev）と `npm run docs:check` を通した。結果は PR 本文に貼ってある。
+
+---
+
+### docs(dev-site): follow PR #884 in the dev site and repair a mangled citation (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `claude/docs-sync-pr884`（docs 追従ルーチン・main 宛 draft）
+**対象**: PR [#884](https://github.com/signalcompose/orbitscore/pull/884)（#883 束 0+C・マージコミット `82acaa3`）
+
+マージ済み PR #884 に dev 学習サイトを追従させた。**実装とテストは一切変更していない。**
+
+#### 1. `sites/dev/pipeline/evaluation.md` の引用が壊れていた（🔴 docs:check は緑だった）
+
+PR #884 で `check-citations.mjs --fix` が `evaluate-method.ts:58-145` を再アンカーした際、
+**直前の別 docblock の末尾（` * ``` ` / ` */ `）を引用の先頭に取り込み、末尾は
+`if (sawNamedArg) {` で切れていた**。引用は実ファイルと**文字単位で一致していた**ので
+`docs:check` は 0 failed のまま通る — **この検査は「引用が意味のある単位か」を見ない。**
+
+実ファイルを読み直し、`60-159`（`NAMED_ARG_SCHEMA` の docblock から `processArguments()` の
+閉じ括弧まで）へ引用し直した。
+
+#### 2. 追従した内容
+
+| 章 | 足したもの |
+|---|---|
+| `pipeline/evaluation.md` | 名前付き引数だけの `output(db: -6)` で options 袋が**宛先の位置に座る**問題と、`output` / `send` に限って `undefined` を unshift して宛先位置を空ける処理（`evaluate-method.ts:145-158`）。判定に使う `isOutputDest()` が core 側と同一関数であること |
+| `signal-chain/mixer-audio-line.md` | 新節「宛先の省略と『実現の省略』」— `output()` の宛先省略（既定引数であって暗黙要素ではない）/ `isOutputDest()` の 1 点賭け / `assertSendDestination()` が両 `send()` の契約であること / `lineNeedsBus()` による実現の省略と `gain`・`pan` 引き継ぎへの副作用 |
+| `editor/vscode-architecture.md` | 補完を **3 系統 → 4 系統**に更新。`.output(` の宛先補完（`output-string` / `output-node` の 2 コンテキスト・`mixerNode` 除外の理由・トリガ文字 `(` の追加） |
+
+ja / en 両方（STYLE_GUIDE のバイリンガル要件）。3 章の frontmatter の
+`verified-against` / `verified-at` を `f575f27` / `2026-09-12` に更新した。
+
+#### 3. 🔴 引用は `f575f27`（#885 マージ後の main）基準である
+
+追従の起点は #884 だが、**束 S（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)）が
+既に main へ入っている**ため、branch を main から切った時点で `sequence.ts` /
+`audio-line.ts` / `extension.ts` の行番号が動いていた。行ずれだけのものは `--fix` で再アンカーし、
+**内容が変わっていた `lineNeedsBus()`（#885 が `isPlainMasterOutput()` を切り出した）は
+実ファイルを読み直して引用し直した**。束 S 自身の追従（`AudioLine.program()` からの
+暗黙 master 撤去・診断 2 種・版 4.0.0）は**このコミットには入っていない**。
+
+#### 4. 追従できていない点（PR 本文に書き出しただけ・直していない）
+
+- `.output()`（宛先省略）は E2E カバレッジのラチェットに**見えない** — 走査が
+  `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/` なので `.output()` と `.output("drum")` が同じ 1 語に潰れる
+- `output(db: -6)` / `send(db: -6)`（名前付き引数だけの形）は unit のみ。**実機 gated E2E に無い**
+- 実現の省略の目的（`.output()` 必須化で 8 本のプールを食い潰さない）を押さえる E2E が無い —
+  X2 は 1 シーケンスの等価性しか測っていない
+
+### docs: carry the install-route fix into the legacy ja manual (PR #880 追従) (Sep 11, 2026)
+
+ルーティン docs 追従。追従元は PR [#880](https://github.com/signalcompose/orbitscore/pull/880)
+（マージコミット `4e661467b0ff8997fc67b4b9bd6f31f1ef33e8d5`・docs のみ・CI 4/4 緑）。
+
+#### 追従した 1 点
+
+PR #880 は資産名の実物合わせ（`orbitscore-<version>.vsix` → `orbitscore-darwin-arm64-<version>.vsix`）を
+**4 箇所**に入れたが、**`docs/user/ja/USER_MANUAL.md` が漏れていた**。
+
+| 直した箇所 | 旧 | 新 |
+|---|---|---|
+| `docs/user/ja/USER_MANUAL.md:59` | `orbitscore-*.vsix` | `orbitscore-darwin-arm64-*.vsix` + Assets / releases/latest の導線 |
+| 同 `:63`（CLI） | `code --install-extension orbitscore-*.vsix` | 同上のファイル名 |
+| 同 `:65` | 「将来は VS Code Marketplace と Open VSX からも install 可能になる予定」 | **公開しない**（owner 2026-09-10・#880 の WORK_LOG に記録） |
+
+接尾辞 `darwin-arm64` は `release.yml:45` の `VSIX_TARGET` を `vsce package --target` へ渡した結果であり
+（`release.yml:118`）、**リリース資産にのみ付く**。版番号は #880 の方針どおり固定していない。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/user/{ja,en}/GETTING_STARTED.md:72` の `orbitscore-0.0.1.vsix` | **ローカルビルドの `.vsix`**（直前が `npm run build`）。`--target` を渡さない `vsce package` には接尾辞が付かないので #880 の資産名は当たらない。版が古いのは別件 |
+| `docs/user/en/USER_MANUAL.md` | `.vsix` のダウンロード導線を**そもそも持たない**（build-from-source のみ）。ja と対になる記述が無い |
+| `docs/user/ja/USER_MANUAL.md:55` の scsynth 同梱 | #502 の失効範囲。冒頭バナーが既にカバーしており、#880 の差分ではない |
+| `sites/user/**`・`README.md`・`packages/vscode-extension/README.md` | #880 が ja / en とも更新済み |
+| DSL / ランタイム / OrbitStudio の各層 | #880 は **docs のみ**（5 ファイル）。構文・意味論・MCP・評価経路のいずれも触っていない |
+
+検証: `docs:build`（user / dev）緑・`docs:check` 944 / 0 failed。
+### fix(plugin-scan): re-export vst3_scan publicly — my sed excluded digits (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`
+
+🔴 **Fable 監査の指摘を「既に直っている」と却下したが、誤りだった。** 私は**束 1 のブランチで**
+検査しており、そこでは `orbit-plugin-scan` がまだ分割されていなかった（分割は束 3）。
+stack 先端では `scan_vst3_bundle` / `dedup_entries` / `VstScanResult` が **E0603** で落ちる。
+
+原因は私の `sed` の文字クラス:
+
+```
+s/^pub(crate) use \([a-z_]*\)::\*;$/pub use \1::*;/
+```
+
+`[a-z_]*` に**数字が入っていない**ため、`vst3_scan` だけが一致していなかった。
+他 11 モジュールは直り、その 1 つだけが残った。
+
+**今日置いたばかりの `tests/public_surface.rs` が stack 先端でこれを捕まえた。**
+検算の道具を先に作ったことが効いている。
+
+🔴 **教訓は 2 つ**: (a) **stacked PR では、下流の変更を含む先端で検算する**。上流の枝で
+「無い」と言っても、下流で初めて現れる欠陥は見えない。(b) **機械的置換の網羅性は、置換対象の
+一覧と突き合わせて確かめる**（`grep -c 'pub(crate) use'` が 0 になったことだけを見ていた）。
+
+併せて `module-doc-purity.spec.ts` の「0 件なら必ず宣言せよ」という逆方向を外した。
+カウンタが測れるのは**修飾子の絶対数**であって「分割で変えたか」ではなく、`pub(crate)` は
+分割前から付いていることがある（`playback.rs` の `set_callback_alive`）。検証できる主張だけを残す。
+
+### refactor(rust): split the last three Rust files — #888 child 3 done (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`
+
+🎯 **#888 子 3 完了。目標 6 ファイルがすべて 500 コード行以下になった。**
+
+| ファイル | 前 | 後 | 新モジュール（コード行） |
+|---|---|---|---|
+| `orbit-vst3-host/src/lib.rs` | 2,388 | **455** | `setup` 466 / `effect` 406 / `instrument` 303 / `interfaces` 280 / `events` 276 / `probe` 232 |
+| `orbit-plugin-scan/src/lib.rs` | 1,652 | **44** | `scan_run` 271 / `artifact_probe` 237 / `child_probe` 193 / `vst3_scan` 186 / `process` 180 / `macho` 175 / `types` 135 ほか 5 |
+| `orbit-audio-sandbox/src/transport.rs` | 1,416 | **36** | `ui_pump` 478 / `mailbox` 374 / `event_ring` 218 / `shm` 160 / `layout` 93 / `ui_codec` 92 |
+
+`npm test` は **2,445 passed で不変**（既存テストの期待値を 1 つも変えていない）。
+cargo fmt / cfg 4 象限 / `clippy --workspace --all-targets -D warnings` / `cargo test --workspace`（93 スイート）/
+lint / docs:check（948 引用）すべて緑。dev サイトの引用 32 件は `relocate-citations.mjs` で追随。
+
+### 🔴 public API が黙って消える — `pub(crate) use` の罠
+
+`pub fn` を private な子モジュールへ移し `pub(crate) use child::*;` で再エクスポートすると、
+**crate 内はコンパイルが通るのに crate 外からは見えなくなる**。`cargo clippy -p <crate>` は
+下流を見ないので捕まらない。実際 `orbit-vst3-host` の `probe_factory_descriptors` は
+この形で public API から落ち、`orbit-plugin-scan` の 15 件は dead_code 警告で初めて露見した。
+
+対処は `pub use child::*;`（低い可視性の項目はそのまま低いまま再エクスポートされる）。
+検算として **分割前後で `^pub (fn|struct|enum|const|type|trait)` の集合を diff** し、
+3 crate とも同一であることを確認した。
+
+### 🔴 ラチェットが緑のまま閾値超過を見逃した — `git ls-files` は index を見る
+
+新設した `host/interfaces.rs` は **576 コード行**あったが、`git add` 前だったため
+`git ls-files` の列挙に現れず、**ラチェットは 11 テスト全緑**だった。設計 §13.10 が
+この帰結を予告していたのに、実作業で踏んだ。真空防止（`minFiles`）は塞げない —
+追跡済みファイルだけで件数のしきい値は満たされるからで、**L-1 / L-2 と同じ
+「分割が成功した瞬間に実害化する」構造**をしている。
+
+`listUntrackedMeasuredFiles` を足し、測定対象の未追跡ファイルが 1 つでもあれば赤にした
+（**L-3**）。未追跡の `.rs` を置いて red、消して green を実測。設計 §13.10 に追記済み。
+### fix(daemon): restore nine public items the split had hidden (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
+
+レビュー（`/code:pr-review-team` + Fable 監査）の指摘への対応。
+
+### 🔴 公開面が 9 件、黙って crate 外から見えなくなっていた（Fable 監査）
+
+`engine_wrap` は `lib.rs` で `pub mod` として公開されている。`BusKind` / `BusLineDest` /
+`BusLineOp` / `SourceRoutingTarget` / `StreamGuard` / `StreamConfigSnapshot` /
+`DEFAULT_{AUX,EFFECT,SUM}_BUS_POOL_PREFIX` は main では crate 外から見えていたが、
+private な子モジュールへ移して `pub(crate) use` で再エクスポートしたため **E0603** になる。
+**下流にまだ消費者が居ないので、全ゲートが緑のまま通過していた。**
+
+🔴 **「分割前後で `^pub (fn|struct|…)` の集合を diff して同一」という私の検算は無効だった。**
+宣言は `pub` のままで、**到達経路だけが失われる**からである。正しい検算は
+**crate の外側からコンパイルすること** — 統合テストは外部 crate なので、そこで `use` できる
+ことが到達可能性そのものの証明になる。
+
+`tests/public_surface.rs` を 4 crate（daemon / sandbox / plugin-scan / vst3-host・計 143 項目）に
+置いて main 時点の公開面を固定した。書く過程でもう 1 つ踏んだ: **統合テストでは `cfg(test)` が
+真だが、参照先の lib は `--test` 無しでコンパイルされるので偽**。定義側の `#[cfg(any(test, X))]`
+をそのまま写すと E0432 になる（`test` 項を落としてある）。
+
+### module doc の 7 件が実態とずれていた（comment-analyzer）
+
+最悪は `startup.rs` / `startup_instrument.rs` で、**可視性変更の説明がまるごと入れ替わって**いた
+（前者が名指しした 2 関数はどちらも後者にある）。個別パッチではなく設計 §14 に開示ポリシーを
+置き、21 モジュールへ一括適用した。**「N 行を除いて純粋な移動である」という件数の主張を禁じた** —
+件数は doc が追随せず必ずずれる（書いている最中に自分でも 1 件ずらした）。
+`tests/repo/module-doc-purity.spec.ts` で機械に突き合わせさせる。
+
+### refactor(daemon): re-cut role.rs after the simplify review (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-b1-engine-wrap`
+
+`/simplify` の altitude 指摘に対応。`role.rs` に同居していた**ストリーム/デバイスの
+ライフサイクル型**（`StreamGuard` / `StreamConfigSnapshot` / `DeviceSwitchRequest` /
+capture パス解決）166 行を、その主題そのものである `device_link.rs` へ移した。
+併せて `engine_wrap/outproc_instrument.rs` を `outproc_instrument_slots.rs` へ改名
+（crate 直下の同名 supervisor との衝突解消）、実態とずれた module doc 3 件を訂正、
+`LoadedSample` を生成元の `playback.rs` へ移した。
+
+🔴 **単一象限の unused 警告で import を消してはいけない。** デバイス群を移した後
+`use role::*;` が default 象限で unused になったので消したところ、`outproc-*` 両 feature
+象限が **E0432 で落ちた**（他象限のインラインテストが `super::ChildSlot` 等でこの glob 経由の
+名前に到達している）。`#[allow(unused_imports)]` で戻し、理由をコメントに残した。
+この赤は `check-cfg-matrix.sh ... | tail -2` で**終了コードが隠れて**おり、出力を読んで気づいた。
+
+🔴 レビュー指摘の前提が誤っていた例: 「`LoadedSample` の消費者は `playback.rs` だけ」は
+**`session.rs` が型名を書かずに（型推論で）使っている**ため誤り。名前の grep には掛からない。
+### refactor(native): split output.rs — 2,587 to 322 code lines (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `888-c2-output`
+
+🎯 **#888 子 2 完了。`output.rs` が 2,587 → 322 コード行。** 9 ファイルすべて 500 以下
+（`device.rs` 327 / `lines.rs` 258 / `line_program.rs` 293 / `render.rs` 406 /
+`render_full.rs` 237 / `dsp.rs` 173 / `bus_topology.rs` 156 / `startup.rs` 477）。
+
+**これで 6 ファイル中 3 つが目標達成**（`engine_wrap.rs` 424 / `session.rs` 439 / `output.rs` 322）。
+
+### 🔴 引用の追随が 68 件 — 自動化しないと回らない規模
+
+`output.rs` は dev サイトから **34 箇所 ×2 言語**引用されていた。手で直すのは非現実的なので、
+**引用ブロックの中身から移動先を特定して header を書き換える**スクリプトを書いた
+（scratchpad の `relocate-citations.mjs`）。段階的に強化した経過:
+
+| 版 | 方式 | 解決 | 残り |
+|---|---|---|---|
+| 1 | 先頭行が**一意に**一致する候補ファイルを探す | 50 | 18 |
+| 2 | 先頭 5 行の連続一致で照合 | +0 | 18 |
+| 3 | 🔴 **可視性修飾（`pub(super) ` 等）を剥がして照合** | +16 | 2 |
+| 手動 | シグネチャが複数行に折り返された 2 件 | +2 | 0 |
+
+版 2 が 1 件も増やさなかったのが示唆的で、**問題は「先頭行の曖昧さ」ではなく「行そのものが
+変わったこと」**だった。分割で `pub(super) ` が前置されるので、素の文字列比較では永久に一致しない。
+
+### 移動の内訳
+
+デバイス解決 / ライン機構 / ラインプログラム / render 経路 / 最大の render 1 関数 /
+DSP ヘルパー（ゲイン・パン・加算）/ bus topology 検証 / 起動系。
+可視性は第 9〜11 束で確立した手法（フィールドまで含めた一括付与 →
+**コンパイラの指摘行を使った収束ループ**）で処理した。
+
+**検証**: cfg 4 象限緑 / `cargo fmt --check` / **`cargo clippy --workspace -D warnings` 緑** /
+`cargo test --workspace --lib` **476 passed** / `npm test` **2,445 passed**（不変）/ lint /
+`docs:check` 948 引用 0 failed。

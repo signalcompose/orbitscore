@@ -19,7 +19,7 @@
 | 6 | instrument を裸の配列に複数並べるのは**明示エラー**。並列は `layer` のみ | SC.10.6 規範 1 |
 | 7 | instrument ブランチの無効化・削除は**強制 note-off の対象**。**#606 の機構を呼ぶ**（二重に作らない） | SC.10.6 規範 2 / core spec PH.4 |
 | 8 | 標準プラグインは**同梱 CLAP**・**UI 無し**・**state ファイル無し**・パラメータは DSL が正 | SC.10.8 |
-| 9 | 位置は 1 次元 index で指せない。UI は名前 + 「全部開く」/ Cmd+Click | SC.10.10 / SC.10.10.1 |
+| 9 | 位置は 1 次元 index で指せない。UI は名前 + 「全部開く」/ 右クリック | SC.10.10 / SC.10.10.1 / #939 |
 | 10 | #669 は **2 段階**: 段階 1 = DSL から 3 語を削除（先） / 段階 2 = 標準 CLAP として再構築 | #669 コメント 1（owner 2026-09-02） |
 | 11 | RT に**確保・ロック・syscall を持ち込まない**。`audio` スレッドからログを出さない | `rack-child lib.rs:395-412` の既存規律 |
 | 12 | `play()` の意味論は変えない | CLAUDE.md 運用規則 5 |
@@ -725,4 +725,4 @@ rust/crates/orbit-audio-daemon/src/session.rs:359     chain_path のネスト
 | フェーダー位置（`global.gain()` が instrument に効かない） | `docs/design/649-audio-line-design.md` / #649 |
 | daemon の graceful shutdown（SIGTERM ハンドラ） | `main.rs:21-29` の既知事項（#448）。**本書は防御の現状を明記するだけ** |
 | カタログのパラメータ設定・`preset:` | #522 |
-| プラグイン UI のエディタ面（Cmd+Click） | #474 残スコープ / #664 |
+| プラグイン UI のエディタ面（右クリック） | #939 / #664 |

@@ -155,28 +155,28 @@ windows and keyboard input are possible) and invokes a service callback periodic
 `NSTimer`.
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:481-497
-        let app = NSApplication::sharedApplication(mtm);
-        if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
-            coordinator
-                .stop_audio
-                .store(true, std::sync::atomic::Ordering::Release);
-            return Err(ChildRuntimeError::AccessoryPolicyRejected);
-        }
+// rust/crates/orbit-child-runtime/src/appkit.rs:205-221
+    let app = NSApplication::sharedApplication(mtm);
+    if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
+        coordinator
+            .stop_audio
+            .store(true, std::sync::atomic::Ordering::Release);
+        return Err(ChildRuntimeError::AccessoryPolicyRejected);
+    }
 
-        let timer = unsafe {
-            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                MAIN_TICK_INTERVAL.as_secs_f64(),
-                &target,
-                sel!(tick:),
-                None,
-                true,
-            )
-        };
+    let workspace = NSWorkspace::sharedWorkspace();
+    let activation_observer = host_bundle_id.map(|host_bundle_id| {
+        let observer = ActivationObserver::new(mtm, host_bundle_id.to_owned());
+        let notification_center = workspace.notificationCenter();
+        // SAFETY: the selector is implemented by ActivationObserver with the exact
+        // one-notification signature, and the observer is retained until removal below.
+        unsafe {
+            notification_center.addObserver_selector_name_object(
+                &observer,
 ```
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:110-113
+// rust/crates/orbit-child-runtime/src/lib.rs:210-213
 /// Main-runloop service interval. Mailbox commands and liveness changes are
 /// control-plane work, so 20 ms avoids a busy main thread while remaining
 /// responsive enough for UI commands.
@@ -189,7 +189,7 @@ saving and `CMD_OPEN_UI` / `CMD_CLOSE_UI` to the UI service, and finally advance
 machine by one tick.
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:90-108
+// rust/crates/orbit-child-runtime/src/lib.rs:190-208
 pub unsafe fn service_child_main<E: std::fmt::Display>(
     region: *mut orbit_audio_sandbox::SharedRegion,
     ui: &UiService,
@@ -361,7 +361,7 @@ The most important thing in the `WindowShell` delegate is that **`windowShouldCl
 returns `NO`**.
 
 ```rust
-// rust/crates/orbit-child-runtime/src/window.rs:36-42
+// rust/crates/orbit-child-runtime/src/window.rs:63-69
         #[unsafe(method(windowShouldClose:))]
         fn window_should_close(&self, _sender: &NSWindow) -> bool {
             // The callback enters (or defers entry into) the close state machine. AppKit
@@ -376,7 +376,7 @@ Even when the close button is pressed, AppKit is not allowed to destroy the wind
 does the child itself call `close()`.
 
 ```rust
-// rust/crates/orbit-child-runtime/src/window.rs:188-196
+// rust/crates/orbit-child-runtime/src/window.rs:218-226
     /// Close without consulting `windowShouldClose`; Phase B already authorized destruction.
     pub fn close(&mut self) {
         let Some(window) = self.window.take() else {
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2469
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2475-2497
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {
@@ -1210,11 +1210,11 @@ must be CLAP.
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — the DONE wait in `closePluginUi` (acceptance ≠ completion)
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — writing the `//#pluginUi` meta line
 - `packages/vscode-extension/src/engine-handlers.ts:243-247` — routing of `{"pluginUi"` result lines
-- `packages/vscode-extension/src/mcp-tools-plugins.ts:86-141` — the `open_plugin_ui` / `close_plugin_ui` tool definitions
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-145` — the `open_plugin_ui` / `close_plugin_ui` tool definitions
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — the execution model (main = NSApplication runloop / audio = dedicated thread)
 - `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main` (mailbox dispatch + `ui.tick`)
 - `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`
-- `rust/crates/orbit-child-runtime/src/lib.rs:481-497` — the Accessory policy and `NSTimer`
+- `rust/crates/orbit-child-runtime/src/appkit.rs:205-221` — the Accessory policy and `NSTimer`
 - `rust/crates/orbit-child-runtime/src/window.rs:36-42` — `windowShouldClose` always returns `NO`
 - `rust/crates/orbit-child-runtime/src/window.rs:188-196` — `WindowShell::close` (`performClose:` forbidden)
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:22-23` — `UI_CLOSE_TIMEOUT = 10 s`

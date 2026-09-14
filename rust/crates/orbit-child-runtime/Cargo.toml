@@ -30,10 +30,14 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSRunningApplication",
   "NSView",
   "NSWindow",
+  "NSWorkspace",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
   "std",
+  "NSArray",
   "NSDate",
+  "NSNotification",
+  "NSEnumerator",
   "NSObject",
   "NSRunLoop",
   "NSString",

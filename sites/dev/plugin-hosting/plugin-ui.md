@@ -151,28 +151,28 @@ main thread 側は `NSApplication` を **Accessory** ポリシー（Dock アイ�
 呼びます。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:481-497
-        let app = NSApplication::sharedApplication(mtm);
-        if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
-            coordinator
-                .stop_audio
-                .store(true, std::sync::atomic::Ordering::Release);
-            return Err(ChildRuntimeError::AccessoryPolicyRejected);
-        }
+// rust/crates/orbit-child-runtime/src/appkit.rs:205-221
+    let app = NSApplication::sharedApplication(mtm);
+    if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
+        coordinator
+            .stop_audio
+            .store(true, std::sync::atomic::Ordering::Release);
+        return Err(ChildRuntimeError::AccessoryPolicyRejected);
+    }
 
-        let timer = unsafe {
-            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                MAIN_TICK_INTERVAL.as_secs_f64(),
-                &target,
-                sel!(tick:),
-                None,
-                true,
-            )
-        };
+    let workspace = NSWorkspace::sharedWorkspace();
+    let activation_observer = host_bundle_id.map(|host_bundle_id| {
+        let observer = ActivationObserver::new(mtm, host_bundle_id.to_owned());
+        let notification_center = workspace.notificationCenter();
+        // SAFETY: the selector is implemented by ActivationObserver with the exact
+        // one-notification signature, and the observer is retained until removal below.
+        unsafe {
+            notification_center.addObserver_selector_name_object(
+                &observer,
 ```
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:110-113
+// rust/crates/orbit-child-runtime/src/lib.rs:210-213
 /// Main-runloop service interval. Mailbox commands and liveness changes are
 /// control-plane work, so 20 ms avoids a busy main thread while remaining
 /// responsive enough for UI commands.
@@ -185,7 +185,7 @@ state 保存へ、`CMD_OPEN_UI` / `CMD_CLOSE_UI` は UI サービスへ振り分
 1 tick 進めています。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/lib.rs:90-108
+// rust/crates/orbit-child-runtime/src/lib.rs:190-208
 pub unsafe fn service_child_main<E: std::fmt::Display>(
     region: *mut orbit_audio_sandbox::SharedRegion,
     ui: &UiService,
@@ -356,7 +356,7 @@ AppKit / VST3 / CLAP で実装した `UiActions` の組です。`open_ui` はプ
 ことです。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/window.rs:36-42
+// rust/crates/orbit-child-runtime/src/window.rs:63-69
         #[unsafe(method(windowShouldClose:))]
         fn window_should_close(&self, _sender: &NSWindow) -> bool {
             // The callback enters (or defers entry into) the close state machine. AppKit
@@ -370,7 +370,7 @@ AppKit / VST3 / CLAP で実装した `UiActions` の組です。`open_ui` はプ
 要求」を渡し、保存（セーフポイント）が済んでから child 自身が `close()` を呼びます。
 
 ```rust
-// rust/crates/orbit-child-runtime/src/window.rs:188-196
+// rust/crates/orbit-child-runtime/src/window.rs:218-226
     /// Close without consulting `windowShouldClose`; Phase B already authorized destruction.
     pub fn close(&mut self) {
         let Some(window) = self.window.take() else {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2469
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2475-2497
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {
@@ -1190,11 +1190,11 @@ CLAP を使う必要があります。
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — `closePluginUi` の DONE 待ち（受理 ≠ 完了）
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — `//#pluginUi` メタ行の書き出し
 - `packages/vscode-extension/src/engine-handlers.ts:243-247` — `{"pluginUi"` 結果行のルーティング
-- `packages/vscode-extension/src/mcp-tools-plugins.ts:86-141` — `open_plugin_ui` / `close_plugin_ui` tool 定義
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-145` — `open_plugin_ui` / `close_plugin_ui` tool 定義
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — 実行モデル（main = NSApplication runloop / audio = 専用スレッド）
 - `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main`（mailbox 振り分け + `ui.tick`）
 - `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`
-- `rust/crates/orbit-child-runtime/src/lib.rs:481-497` — Accessory ポリシーと `NSTimer`
+- `rust/crates/orbit-child-runtime/src/appkit.rs:205-221` — Accessory ポリシーと `NSTimer`
 - `rust/crates/orbit-child-runtime/src/window.rs:36-42` — `windowShouldClose` が常に `NO`
 - `rust/crates/orbit-child-runtime/src/window.rs:188-196` — `WindowShell::close`（`performClose:` 禁止）
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:22-23` — `UI_CLOSE_TIMEOUT = 10 s`

@@ -195,6 +195,12 @@ describe('registered command startEngine awaits', () => {
     await rejection
   })
 
+  it('registers the cursor-based plugin UI command', async () => {
+    await activateForCommands()
+
+    expect(vscodeMock.registeredCommandHandlers.has('orbitscore.openPluginUiAtCursor')).toBe(true)
+  })
+
   it('engineViewToggleEngine awaits startEngine before its registered handler settles', async () => {
     await activateForCommands()
     ext.__setStatusBarItemForTest(null)
