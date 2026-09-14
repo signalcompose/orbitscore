@@ -336,8 +336,11 @@ where
 {
     #[cfg(target_os = "macos")]
     let host_bundle_id = parse_host_bundle_id_argument(std::env::args().skip(1))?;
+    // 🔴 型注釈は load-bearing。macOS では `parse_host_bundle_id_argument` が
+    // `Option<String>` を与えるが、非 macOS ではその推論元ごと cfg で消えるため
+    // `Option<_>` のままになり **Linux CI だけが E0282 で落ちる**（実測 2026-09-14）。
     #[cfg(not(target_os = "macos"))]
-    let host_bundle_id = None;
+    let host_bundle_id: Option<String> = None;
 
     run_child_with_main_loop(
         process_name,
