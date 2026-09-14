@@ -842,7 +842,7 @@ inside a standard plugin like `Gain(...)` (resolved from the language's own voca
 from the catalog) and the argument of `seq.audio("path")` out of the check.
 
 ```typescript
-// packages/vscode-extension/src/plugin-name-diagnostics.ts:400-413
+// packages/vscode-extension/src/plugin-name-diagnostics.ts:413-426
 export function analyzeUnknownPluginNames(
   text: string,
   entries: readonly PluginCatalogEntry[] | undefined,

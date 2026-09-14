@@ -182,6 +182,15 @@ describe('resolvePluginUiTargetAtCursor', () => {
     })
   })
 
+  it('rejects a declaration whose expression starts with a bare rack word', () => {
+    const text = 'var myRack = effect(["Comp"])'
+
+    expect(resolvePluginUiTargetAtCursor(text, cursor(text, 'Comp'))).toMatchObject({
+      ok: false,
+      reason: 'unresolved-receiver',
+    })
+  })
+
   it('describes a genuinely unresolved statement origin without one-line advice', () => {
     const text = ['drums.', 'effect("Echo")'].join('\n')
     const result = resolvePluginUiTargetAtCursor(text, cursor(text, 'Echo'))

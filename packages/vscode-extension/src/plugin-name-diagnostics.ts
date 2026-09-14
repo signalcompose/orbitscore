@@ -39,13 +39,24 @@ const CATALOG_ROOT_WORDS = new Set(['effect', 'instrument'])
 /** 直下の `,` が**要素の区切り**になる呼び出し語（`plugin(...)` や `Gain(...)` の中は数えない）。 */
 const ELEMENT_SEPARATOR_WORDS = new Set(['effect', 'instrument', 'layer', 'chain'])
 
-const STATEMENT_DECLARATION_PREFIX = String.raw`(?:var\s+[A-Za-z_$][\w$]*\s*=\s*)?`
+/** Tokenizer keywords are syntax (`var`/`init`/`import`), modifiers, literals, or commands—not sequence/bus names. */
+const DSL_KEYWORDS = new Set([
+  'var',
+  'init',
+  'by',
+  'GLOBAL',
+  'force',
+  'RUN',
+  'LOOP',
+  'MUTE',
+  'import',
+])
+
+const STATEMENT_DECLARATION_PREFIX = new RegExp(String.raw`^\s*var\s+[A-Za-z_$][\w$]*\s*=\s*`)
 const STATEMENT_BUS_RECEIVER = new RegExp(
-  String.raw`^\s*${STATEMENT_DECLARATION_PREFIX}(?:global\.)?(sum|aux)\(\s*(["'])(.*?)\2\s*\)`,
+  String.raw`^\s*(?:global\.)?(sum|aux)\(\s*(["'])(.*?)\2\s*\)`,
 )
-const STATEMENT_IDENTIFIER_RECEIVER = new RegExp(
-  String.raw`^\s*${STATEMENT_DECLARATION_PREFIX}([A-Za-z_$][A-Za-z0-9_$]*)\b`,
-)
+const STATEMENT_IDENTIFIER_RECEIVER = /^\s*([A-Za-z_$][A-Za-z0-9_$]*)\b/
 
 /** Mirrors `plugin-resolver.ts` `PATH_DIRECT_PREFIXES`. */
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
@@ -369,11 +380,13 @@ function receiverBefore(
 ): string | undefined {
   const lineStart = text.lastIndexOf('\n', wordStart - 1) + 1
   const prefix = text.slice(lineStart, wordStart)
-  const busCall = prefix.match(STATEMENT_BUS_RECEIVER)
+  const declaration = prefix.match(STATEMENT_DECLARATION_PREFIX)
+  const expressionPrefix = declaration ? prefix.slice(declaration[0].length) : prefix
+  const busCall = expressionPrefix.match(STATEMENT_BUS_RECEIVER)
   if (busCall?.[1] && busCall[3] !== undefined) return `${busCall[1]}:${busCall[3]}`
 
-  const ident = prefix.match(STATEMENT_IDENTIFIER_RECEIVER)?.[1]
-  if (!ident) return undefined
+  const ident = expressionPrefix.match(STATEMENT_IDENTIFIER_RECEIVER)?.[1]
+  if (!ident || DSL_KEYWORDS.has(ident)) return undefined
   if (ident === 'global') return 'master'
   return derivedReceivers.get(ident) ?? ident
 }

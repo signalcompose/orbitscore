@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix: never resolve a DSL keyword as a plugin-UI receiver (Sep 14, 2026)
+
+レビューラウンド 2（1 件）。**ラウンド 1 の F2 修正が入れた新しい故障モード**を潰した。
+CLAUDE.md の「fixer の差分は、ラウンドを閉じる前に再点検する — この修正が導入する
+新しい故障モードは何か」に従い、main の受け入れ検証で見つけたもの。
+
+#### 何が起きていたか
+
+F2 で入れた正規表現は宣言部を**省略可能**にしていた:
+
+```
+^\s*(?:var\s+[A-Za-z_$][\w$]*\s*=\s*)?([A-Za-z_$][A-Za-z0-9_$]*)\b
+```
+
+その形に合わない入力では省略可能部分が**後戻り**し、キーワード `var` 自身を掴む:
+
+```
+var myRack = effect(["Comp"])   →   receiver = "var"
+```
+
+engine へ `"var"` が送られ `Unknown sequence 'var'` になる。黙りはしないが意味不明。
+なお `var x = effect([...])` は**そもそも不正な DSL**（`rack.ts` の `resolveCall` は
+`effect` を rack 語として受け付けない）なので、実害は文言の質だけ。
+
+#### 直し方 — 後戻りを**構造的に不可能**にした
+
+依頼はキーワード除外だけだったが、実装は 2 段にした:
+
+1. 宣言部 `var <name> = ` を**先に切り落とす**（省略可能な部分が無くなるので後戻りできない）
+2. その上で `DSL_KEYWORDS` のガード（防御の二段目）
+
+`DSL_KEYWORDS` は `packages/engine/src/parser/tokenizer.ts:18-28` の
+`AudioTokenizer.KEYWORDS` のミラー（9 語すべて一致を main が照合）。
+このファイルは `PATH_DIRECT_PREFIXES` など engine の定数をミラーする方針なので、慣習に沿う。
+⚠️ **ミラーなので、tokenizer に語が増えると古くなる**（失敗は loud・`Unknown sequence` になる）。
+
+#### 検証
+
+main が dist を**ビルドし直してから** receiver 10 ケースを実測し、退行 0 を確認:
+`snare` / `kick` / `sum:drum` / `master` / `kick`(var 経由) / `sum:drums` /
+**`null`(var myRack)** / `indented` / 3 連 `drums` / 派生 `sum:d`。
+
+`npm test` **2565 passed / 79 skipped**・lint 0・typecheck:e2e 0・ratchet 68・
+`docs:check` 986 引用 0 failed。
+
+実機 gated は再実行していない。変更がキーワード除外に閉じており、
+gated フィクスチャの receiver はすべて上のユニットで押さえられているため。
+
+---
+
 ### fix: address the review round-1 findings for #939 / #940 (Sep 14, 2026)
 
 レビュー 5 体（`/code:pr-review-team` フル編成 + Fable 監査を**並行**）の指摘を集約し、
