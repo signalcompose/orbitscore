@@ -18,7 +18,10 @@ pub mod engine_wrap;
 /// コンパイルされ、GPL crate `orbit-link-audio` を保持する consumer thread を起動する。
 #[cfg(feature = "link-audio")]
 pub mod link_audio;
-#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+// 🔴 `outproc-effect` だけ。中身の唯一の呼び手が `outproc_effect::spawn_effect_child` なので、
+// `any(effect, instrument)` にすると **instrument 単独の feature 構成で中身が丸ごと未使用**になり、
+// `-D warnings` の CI が `unused import` で落ちる（#940 の分割で実際に踏んだ・2026-09-14）。
+#[cfg(feature = "outproc-effect")]
 mod outproc_child_command;
 /// attach する plugin の拡張子から child binary を選ぶ規則。**effect と instrument で共有する**
 /// （規則を2箇所に持つと、片方だけ直し忘れる — #548 がまさにその形のバグだった）。
