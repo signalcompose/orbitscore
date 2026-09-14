@@ -50,7 +50,7 @@ The child binaries the daemon may spawn are spelled out in `orbit-audio-daemon`'
 truth is kept in one place.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:101-110
+// rust/crates/orbit-audio-daemon/src/lib.rs:104-113
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
