@@ -1210,7 +1210,7 @@ must be CLAP.
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — the DONE wait in `closePluginUi` (acceptance ≠ completion)
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — writing the `//#pluginUi` meta line
 - `packages/vscode-extension/src/engine-handlers.ts:243-247` — routing of `{"pluginUi"` result lines
-- `packages/vscode-extension/src/mcp-tools-plugins.ts:86-141` — the `open_plugin_ui` / `close_plugin_ui` tool definitions
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-145` — the `open_plugin_ui` / `close_plugin_ui` tool definitions
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — the execution model (main = NSApplication runloop / audio = dedicated thread)
 - `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main` (mailbox dispatch + `ui.tick`)
 - `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`

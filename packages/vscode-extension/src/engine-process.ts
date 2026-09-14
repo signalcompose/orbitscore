@@ -57,7 +57,11 @@ export function resolvePluginWindowHostBundleId(
   platform: NodeJS.Platform,
   readTextFile: ReadTextFile = (filePath) => fs.readFileSync(filePath, 'utf8'),
   log: LogLine = (message) => {
-    outputChannel?.appendLine(message)
+    try {
+      outputChannel?.appendLine(message)
+    } catch {
+      // Diagnostics are best-effort and must not prevent engine startup.
+    }
   },
 ): string | undefined {
   if (platform !== 'darwin') return undefined

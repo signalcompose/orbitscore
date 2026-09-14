@@ -7,6 +7,7 @@ vi.mock('../../packages/vscode-extension/src/agent-handlers', () => ({ pluginUiF
 
 import { normalizePluginInstanceName } from '../../packages/engine/src/core/global/effect-slot'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
+import { KEYWORDS } from '../../packages/engine/src/parser/tokenizer'
 import type { ChordBinding } from '../../packages/engine/src/parser/types'
 import { resolveRackValue } from '../../packages/engine/src/signal-chain/rack'
 import {
@@ -16,7 +17,10 @@ import {
   pluginUiAddressFor,
   resolvePluginUiTargetAtCursor,
 } from '../../packages/vscode-extension/src/plugin-ui-at-cursor'
-import { normalizePluginInstanceNameForGuard } from '../../packages/vscode-extension/src/plugin-name-diagnostics'
+import {
+  DSL_KEYWORDS,
+  normalizePluginInstanceNameForGuard,
+} from '../../packages/vscode-extension/src/plugin-name-diagnostics'
 import * as vscode from '../mocks/vscode'
 
 function positionAt(text: string, needle: string, occurrence = 1, offset = 1) {
@@ -191,6 +195,18 @@ describe('resolvePluginUiTargetAtCursor', () => {
     })
   })
 
+  it.each(['var', 'init', 'by', 'GLOBAL', 'force', 'RUN', 'LOOP', 'MUTE', 'import'])(
+    'rejects tokenizer keyword %s as a receiver',
+    (keyword) => {
+      const text = `${keyword}.effect(["Echo"])`
+
+      expect(resolvePluginUiTargetAtCursor(text, cursor(text, 'Echo'))).toMatchObject({
+        ok: false,
+        reason: 'unresolved-receiver',
+      })
+    },
+  )
+
   it('describes a genuinely unresolved statement origin without one-line advice', () => {
     const text = ['drums.', 'effect("Echo")'].join('\n')
     const result = resolvePluginUiTargetAtCursor(text, cursor(text, 'Echo'))
@@ -266,6 +282,12 @@ describe('normalization agreement with the engine expected-name guard', () => {
     String.raw`C:\\Plugins\\Synth.vst3`,
   ])('matches the engine for %j', (spec) => {
     expect(normalizePluginInstanceNameForGuard(spec)).toBe(normalizePluginInstanceName(spec))
+  })
+})
+
+describe('DSL keyword agreement with the engine tokenizer', () => {
+  it('mirrors the complete tokenizer keyword set', () => {
+    expect([...DSL_KEYWORDS].sort()).toEqual([...KEYWORDS].sort())
   })
 })
 

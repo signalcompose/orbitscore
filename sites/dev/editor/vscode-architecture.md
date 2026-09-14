@@ -255,7 +255,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 ```
 
-省略したブロックが `startOrbitScoreMcpServer()` に 25 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`engine-process.ts:187-210`)。
+省略したブロックが `startOrbitScoreMcpServer()` に 25 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`engine-process.ts:234-257`)。
 
 ### 出荷物では `activate()` の手前で落ちていた (#873)
 
@@ -316,7 +316,7 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 **2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**されました。`bundleStatusItem` の表示を決める `updateBundleStatus()` はもう engine kind を見ず、daemon の解決結果だけを見ます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:117-127
+// packages/vscode-extension/src/engine-process.ts:121-131
 export function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   const daemonResolution = resolveDaemonForUI()
@@ -590,7 +590,7 @@ provider 本体は `dsl-providers.ts:176-213` にあり、`vscode.languages.regi
 engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造です。**2026-09-10 の裁定（#827 / #502）で削除される前**は、この wrapper が scsynth (`resolveScsynthForUI()`) と daemon (`resolveDaemonForUI()`) の 2 つ symmetric な形で存在していましたが、SC 経路の削除により **`resolveDaemonForUI()` だけが残ります**。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:100-107
+// packages/vscode-extension/src/engine-process.ts:104-111
 export function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
     return resolveDaemonBinaryForExtension()
@@ -640,7 +640,7 @@ daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > ex
 事前チェックは削除済みの旧 III-3 章（[ADR-003](/decisions/adr-003-scsynth-bundle) に記録）に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:347-351
+// packages/vscode-extension/src/engine-process.ts:351-355
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -651,7 +651,7 @@ daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > ex
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:356-405
+// packages/vscode-extension/src/engine-process.ts:360-409
   // Set environment
   const env = { ...process.env }
   const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
@@ -713,7 +713,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:431-441
+// packages/vscode-extension/src/engine-process.ts:435-445
   // Setup handlers
   setupStdoutHandler(spawnedProcess, effectiveDebugMode)
   setupStderrHandler(spawnedProcess)
@@ -842,7 +842,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:641-647
+// packages/vscode-extension/src/engine-process.ts:645-651
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -952,7 +952,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:455-503
+// packages/vscode-extension/src/engine-process.ts:459-507
 export function stopEngine(): boolean {
   bumpEngineGeneration()
   if (engineProcess && !engineProcess.killed) {
@@ -1109,7 +1109,7 @@ flowchart TD
 | MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 25 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:237-291`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
 | `[STEP]` 行による live playhead highlight (per-seq 色・nested argPath・`orbitscore.playheadPalette`) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
 | dev 学習サイトのローカル配信と `openDevDocs` / Webview panel / Walkthrough / Activity Bar の Learning view | #450 / #457 | §6.260-6.261 (2026-07-17)、`docs-panels.ts:52-129` |
-| `//#documentDirectory` メタ行で基準ディレクトリを帯域外先渡し (import 対応) | #456 | §6.266 (2026-07-17)、`engine-process.ts:600-605` |
+| `//#documentDirectory` メタ行で基準ディレクトリを帯域外先渡し (import 対応) | #456 | §6.266 (2026-07-17)、`engine-process.ts:653-658` |
 | plugin catalog の名前補完 + `rescanPlugins` (3 面: コマンド / 右クリック / MCP) | #463 | §6.279 (2026-07-17)、`dsl-providers.ts:92-172` |
 | REPL 行処理の FIFO 直列化 (evalMark の前提) | #476 | §6.271 (2026-07-17) |
 | Engine ビュー (`orbitscore.engineView`)、デバイス表示/選択、走行中デバイス切替 (`DeviceSwitchBridge`)、選択=電源モデル、auto-start | #484 D2.5 / D3 / D3.5 | §6.280-6.283 (2026-07-17/18)、`engine-view.ts`、`device-switch-bridge.ts` |
@@ -1164,18 +1164,18 @@ flowchart TD
 - `packages/vscode-extension/src/extension.ts:150-284` — live playhead の decoration 管理 (#390)
 - `packages/vscode-extension/src/extension.ts:91-291` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
 - `packages/vscode-extension/src/extension.ts:293-314` — `deactivate()`
-- `packages/vscode-extension/src/engine-process.ts:57-65` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
-- `packages/vscode-extension/src/engine-process.ts:74-87` — `updateBundleStatus()` (`maybeShowBundleNotice()` は scsynth 専用だったため #502 で削除)
+- `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
+- `packages/vscode-extension/src/engine-process.ts:121-134` — `updateBundleStatus()` (`maybeShowBundleNotice()` は scsynth 専用だったため #502 で削除)
 - `packages/vscode-extension/src/extension.ts:316-333` — `showCommands()` (engine kind による分岐は #502 で削除・常に Engine ビューを focus) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`: `createLinePrefixer` + `StringDecoder` による bridge 振り分けと `applyEngineStdoutChunk` 呼び出し (#773)
 - `packages/vscode-extension/src/engine-handlers.ts:371-391` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756 / #773)
 - `packages/vscode-extension/src/engine-handlers.ts:407-429` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
 - Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) / PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — stdout の bridge 封筒が chunk 境界で割れて両断片とも失われる問題
 - `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
-- `packages/vscode-extension/src/engine-process.ts:187-210` — `autoStartConfiguredRustEngine()`
-- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
-- `packages/vscode-extension/src/engine-process.ts:406-455` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
+- `packages/vscode-extension/src/engine-process.ts:234-257` — `autoStartConfiguredRustEngine()`
+- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
+- `packages/vscode-extension/src/engine-process.ts:459-508` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
 - `packages/vscode-extension/src/dsl-providers.ts:41-173` — `registerCompletionProviders()`: chain / pitch scope / plugin catalog の 3 系統
 - `packages/vscode-extension/src/engine-lifecycle.ts:35-46` / `:76-85` / `:113-152` / `:177-192` — `transportStatusText` / `classifyEngineStdoutLine` / `applyEngineStdoutChunk` / `applyEngineExit`
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-24` — daemon resolver の runtime require 境界

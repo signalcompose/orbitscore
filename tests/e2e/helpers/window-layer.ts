@@ -90,7 +90,7 @@ export function soloWindowLayer(pid: number): number {
   if (observed.length > 0 && named.length === 0) {
     throw new Error(
       `all ${observed.length} windows for pid ${pid} have empty names; ` +
-        'grant Screen Recording permission to the process running this test. ' +
+        'Screen Recording permission for the process running this test is one known cause; ' +
         `Unfiltered windows: ${JSON.stringify(observed)}`,
     )
   }

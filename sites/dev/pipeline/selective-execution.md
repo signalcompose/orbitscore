@@ -16,7 +16,7 @@ Cmd+Enter でコードの一部だけを実行する — これが OrbitScore �
 
 本章の初版は 2026-05-05 の snapshot (0a4b598) に対して書かれました。2026-09-01 (69dc968) のコードでは「拡張が送るコードを決め、stdin に書き、エンジンの readline がバッファして parse → execute する」という骨格は同じですが、中身はかなり入れ替わっています。
 
-- **stdin への書き込みは `writeCodeToEngine()` に集約された**。エディタの `runSelection()` と MCP の `evaluate_orbitscore` が同じ関数を通ります (`packages/vscode-extension/src/engine-process.ts:592-630`)
+- **stdin への書き込みは `writeCodeToEngine()` に集約された**。エディタの `runSelection()` と MCP の `evaluate_orbitscore` が同じ関数を通ります (`packages/vscode-extension/src/engine-process.ts:645-683`)
 - **`//#documentDirectory <path>` メタ行を DSL の前に付ける** ようになった (2026-07-17 の #456)。`import` は statements より先に評価されるため、DSL として注入する `global.setDocumentDirectory(...)` では間に合わず、帯域外のメタ行で先渡しします
 - **REPL の行処理が `createReplSession()` に切り出され、FIFO の promise チェーンで直列化された** (2026-07-17 の #476)。readline は 1 チャンクの複数行を同 tick で連発するため、素朴な async ハンドラでは共有バッファが競合していました
 - **「未完の入力か」の判定は parse エラーの `\bEOF\b` だけ** になった (2026-08 の #607 / #612)。2026-05 版の `Expected RPAREN` 一致は「行の途中の本物の構文エラー」まで未完扱いにしてセッションを沈黙させていました
@@ -55,7 +55,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
 まず、エンジンがどう起動しているかを確認しておきましょう。`startEngine()` では引数に `'repl'` を指定して Node プロセスを spawn します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:347-411 (env の組み立てを省略)
+// packages/vscode-extension/src/engine-process.ts:351-415 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -206,7 +206,7 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 送るコードが確定したあと、`writeCodeToEngine()` がドキュメントのディレクトリパスを 2 通りの方法で engine に伝えます。`audioPath()` / `audio()` の相対パス解決、そして `import` の基準ディレクトリ (IM.6) に使われます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:641-647
+// packages/vscode-extension/src/engine-process.ts:645-651
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -552,12 +552,12 @@ sequenceDiagram
 ## Sources
 
 - `packages/vscode-extension/src/extension.ts:110-112` — `globalInitialized` フラグの宣言と用途
-- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: pre-check → env → `stdio: ['pipe','pipe','pipe']` のプロセス起動
+- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: pre-check → env → `stdio: ['pipe','pipe','pipe']` のプロセス起動
 - `packages/vscode-extension/src/run-selection.ts:27-40` — `getLineSubject()` の正規表現マッチ
 - `packages/vscode-extension/src/run-selection.ts:42-207` — `runSelection()` の全体フロー (選択 / subject ブロック / standalone / flash)
 - `packages/vscode-extension/src/run-selection.ts:60-62` — 選択テキストがある場合のパス
-- `packages/vscode-extension/src/engine-process.ts:594-604` — `writeCodeToEngine()` の設計コメント (注入条件と戻り値の意味)
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
+- `packages/vscode-extension/src/engine-process.ts:647-657` — `writeCodeToEngine()` の設計コメント (注入条件と戻り値の意味)
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate が `//#evalMark` で結果を待つ
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()` と `InterpreterV2` インスタンス生成
 - `packages/engine/src/cli/repl-mode.ts:64-93` — `extractDocumentDirectoryMeta()` / `extractSelectAudioDeviceMeta()`

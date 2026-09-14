@@ -17,6 +17,110 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix: make the #940 wiring tests platform-independent, and pin the keyword mirror (Sep 14, 2026)
+
+レビューラウンド 3。**すべて fix 起因**の指摘で、元差分（`main..113ec39e`）起因の
+新規指摘は 0 件だった（CLAUDE.md の provenance 規律により、元差分のレビューは収束とみなす）。
+
+#### 🔴 G1 — CI が red だった。手元（macOS）では緑
+
+ラウンド 1 の F3 で足したテスト 2 本が、**実行環境の本物の `process.platform` に依存**していた。
+
+```
+FAIL tests/vscode-extension/engine-spawn-runtime.spec.ts
+  AssertionError: expected undefined to be 'dev.orbitscore.OrbitStudio'
+  AssertionError: expected "spy" to be called with ... "not inside a macOS .app"
+Tests  2 failed | 2563 passed
+```
+
+`resolvePluginWindowHostBundleId` は `platform !== 'darwin'` で即 return するので、
+ubuntu の CI では env も付かずログも出ない。兄弟テストは `'darwin'` を明示的に渡しており踏んでいない。
+
+**直し方**: `process.platform` を `process.execPath` と**同じパターン**で固定する
+（`Object.defineProperty` → `afterEach` で復元）。🔴 配線（env に載る / 消える）を見る目的を
+失わないため、純関数直呼びには**しなかった** — このテストの存在理由は
+「純関数は正しいが**配線だけ**壊れている」を捕まえることである（`setDocumentDirectory` と同型）。
+
+**検証**: main が `process.platform = 'linux'` を setup で固定して再現 → **9 passed**。
+「前」の証拠は CI の赤そのもの。
+
+🔴 **これは [[local-gates-and-ci-see-different-layers]] の再発**である。main は実機ゲート 49 passed で
+「全ゲート緑」と報告したが、その時 CI は赤だった（pending の時点で見たきり追っていなかった）。
+
+#### G2 — `DSL_KEYWORDS` が engine の正本と何も結ばれていなかった
+
+レビュアー 2 体が独立に指摘。ラウンド 2 で足した `DSL_KEYWORDS` は
+`tokenizer.ts:18-27` の `AudioTokenizer.KEYWORDS` のハンドコピーだが、
+ポインタコメントも agreement test も無かった。
+
+🔴 **同じ fix 差分の中で F1 は正しいやり方を実践していた** — `engineCatalogOrder()` が
+engine の `parseAudioDSL` / `resolveRackValue` を実際に呼んで突き合わせている。
+
+しかも pr-test-analyzer が決定的な事実を出した: **この Set を空にしても 1 語消しても、
+当時のテストは 1 件も red にならなかった**（`DSL_KEYWORDS.has(ident)` が真になる経路を
+1 つも駆動していなかったため）。
+
+**足したもの（2 種類・別のことを見る）**:
+- **agreement test**: `tokenizer.ts:289` の `export const KEYWORDS` と集合が一致すること
+  → 「ミラーが古くなったこと」を見る。`import` を 1 語消す変異で red を確認済み
+- **振る舞いテスト**: 9 語それぞれ + `effect([...])` が `unresolved-receiver` になること
+  → 「ガードが効いていること」を見る
+
+🔴 **拡張のソースから engine を import はしない**（別プロセスなのでミラーは意図的）。
+テストからだけ両方を見る。
+
+#### G3〜G6
+
+| id | 何を |
+|---|---|
+| G3 | `soloWindowLayer` の権限診断が実測 1 ケースから**因果を断定**していた → 「既知の原因の一つ」へ |
+| G4 | 既定の `log` を best-effort に（catch 節から呼ばれるので、ログが投げると `startEngine` ごと落ちる）。🔴 **注入された logger は握り潰さない**ことをテストで固定 |
+| G5 | `receiverBefore` の docstring が「statement」と書いていたが実装は**行頭**を取るだけ → 一文一行の前提を明記 |
+| G6 | `DSL_KEYWORDS` の分類列挙が語と対応していなかった → 目的（全 9 語が receiver ではない）に絞った |
+
+#### 🔴 dev サイトの本文引用 42 件が壊れていた — `docs:check` では捕まらない層
+
+行番号の訂正（下記）を追う過程で発見。`main` では正確だった本文中の参照が、
+この PR で **47〜53 行**ずれていた:
+
+| シンボル | main | 現在 |
+|---|---|---|
+| `resolveDaemonForUI` | 57 | 104 |
+| `autoStartConfiguredRustEngine` | 187 | 234 |
+| `startEngine` | 255 | 302 |
+| `writeCodeToEngine` | 592 | 645 |
+
+🔴 **`docs:check` は構造的にこれを検査できない** — 対象はコードブロック内の
+`// file:start-end` だけで、本文中の参照は見ていない。
+
+**直し方**: 一括シフトは**しない**。`main` 時点の開始行の**内容**を取り、それが現在版に
+**一意に存在する時だけ**書き換えた（`main` で既に古かった参照は触らない）。
+一意に決まらなかった 2 種（`registerTool(` は 7 箇所ある）はシンボルを特定して手作業。
+
+⚠️ **この作業で 2 回壊して戻した**。3 回目に成功。踏んだ順:
+1. スクリプトが **fenced 引用まで**書き換えた（`--fix` が既に直した正しいものを壊す）
+2. fenced を除外したのに `str.replace` が**ファイル全体の同一文字列を置換**して巻き添えにした
+3. fenced 判定の正規表現に**行末アンカー**を付けたため、
+   `// ...:404-468 (env の組み立てを省略)` のような**意図的な省略注記つき引用**を
+   fenced と認識せず、また壊した ← **過去に同じ形で踏んでいる**
+
+#### 行番号の訂正（main の誤り）
+
+`tests/fixtures/mcp-e2e/output_line_position_matters.orbs` の当該行は **`:39`** であり、
+main が書いた `:38` は誤り。しかも main は Fable の引用を「1 行ずれている」と述べたが、
+**ずれていたのは main の数え方**だった。設計文書と WORK_LOG の 2 箇所を訂正。
+
+#### 検証
+
+`npm test` **2577 passed / 79 skipped**・lint 0・typecheck:e2e 0・ratchet 68 passed・
+`docs:check` 986 引用 0 failed・**Linux 条件の再現 9 passed**。
+
+実機 gated は再実行していない。ラウンド 3 は `process.platform` の固定とテスト追加・
+コメント訂正が中心で、**本番経路の振る舞いを変えていない**ため
+（直前の全件実行は 49 passed）。
+
+---
+
 ### fix: never resolve a DSL keyword as a plugin-UI receiver (Sep 14, 2026)
 
 レビューラウンド 2（1 件）。**ラウンド 1 の F2 修正が入れた新しい故障モード**を潰した。
@@ -137,7 +241,7 @@ return value.elements.flatMap((element) => resolveRackValue(element, env))
 | `drums.effect(["A","B"]).effect(["C"])` の `C` | undefined | `drums` |
 
 🔴 **仮定の話ではなかった。** この形は**リポジトリ自身の実機 E2E フィクスチャ**が使っている
-（`tests/fixtures/mcp-e2e/output_line_position_matters.orbs:38`）。
+（`tests/fixtures/mcp-e2e/output_line_position_matters.orbs:39`）。
 しかも失敗文言が「keep receiver.effect([...]) on one line」— **1 行に書いてあるのに**。
 
 #### テスト

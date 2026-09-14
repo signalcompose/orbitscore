@@ -201,7 +201,7 @@ export function pluginUiAddressFor(target: PluginUiCursorTarget):
 > 表の最終行「複数行に割れたチェーン等」という理解が誤りだった。**割れていなくても落ちる。**
 >
 > 🔴 **仮定の話ではない。** この形は**リポジトリ自身の実機 E2E フィクスチャ**が使っている
-> （`tests/fixtures/mcp-e2e/output_line_position_matters.orbs:38`）:
+> （`tests/fixtures/mcp-e2e/output_line_position_matters.orbs:39`）:
 >
 > ```js
 > kickA.output(verb611e6, thru: true).effect([Gain(db: -12)]).output()

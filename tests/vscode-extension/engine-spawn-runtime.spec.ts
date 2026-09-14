@@ -43,6 +43,7 @@ vi.mock('../../packages/vscode-extension/src/engine-startup-runtime', () => ({
 
 describe('engine spawn runtime (#878)', () => {
   const originalExecPath = process.execPath
+  const originalPlatform = process.platform
   let inheritedHostBundleId: string | undefined
 
   beforeEach(() => {
@@ -55,6 +56,7 @@ describe('engine spawn runtime (#878)', () => {
 
   afterEach(() => {
     Object.defineProperty(process, 'execPath', { value: originalExecPath, configurable: true })
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     if (inheritedHostBundleId === undefined) delete process.env.ORBIT_HOST_BUNDLE_ID
     else process.env.ORBIT_HOST_BUNDLE_ID = inheritedHostBundleId
     vi.mocked(child_process.spawn).mockReset()
@@ -178,6 +180,7 @@ describe('engine spawn runtime (#878)', () => {
       value: path.join(appPath, 'Contents', 'MacOS', 'OrbitStudio'),
       configurable: true,
     })
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     const appendLine = vi.fn()
     ext.__setOutputChannelForTest({ appendLine, append: () => {} })
     vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess().proc)
@@ -202,6 +205,7 @@ describe('engine spawn runtime (#878)', () => {
       value: '/usr/local/bin/node',
       configurable: true,
     })
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     const appendLine = vi.fn()
     ext.__setOutputChannelForTest({ appendLine, append: () => {} })
     vi.mocked(child_process.spawn).mockImplementation(() => fakeSpawnedProcess().proc)
@@ -211,5 +215,31 @@ describe('engine spawn runtime (#878)', () => {
     const [, , options] = vi.mocked(child_process.spawn).mock.calls[0]
     expect((options as { env?: NodeJS.ProcessEnv }).env).not.toHaveProperty('ORBIT_HOST_BUNDLE_ID')
     expect(appendLine).toHaveBeenCalledWith(expect.stringContaining('not inside a macOS .app'))
+  })
+
+  it('keeps default host bundle diagnostics best-effort', () => {
+    ext.__setOutputChannelForTest({
+      appendLine: () => {
+        throw new Error('output channel disposed')
+      },
+      append: () => {},
+    })
+
+    expect(() =>
+      resolvePluginWindowHostBundleId('/usr/local/bin/node', 'darwin', () => ''),
+    ).not.toThrow()
+  })
+
+  it('does not swallow failures from an injected logger', () => {
+    expect(() =>
+      resolvePluginWindowHostBundleId(
+        '/usr/local/bin/node',
+        'darwin',
+        () => '',
+        () => {
+          throw new Error('injected logger failed')
+        },
+      ),
+    ).toThrow('injected logger failed')
   })
 })

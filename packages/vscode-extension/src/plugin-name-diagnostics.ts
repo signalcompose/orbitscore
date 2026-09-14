@@ -39,8 +39,13 @@ const CATALOG_ROOT_WORDS = new Set(['effect', 'instrument'])
 /** 直下の `,` が**要素の区切り**になる呼び出し語（`plugin(...)` や `Gain(...)` の中は数えない）。 */
 const ELEMENT_SEPARATOR_WORDS = new Set(['effect', 'instrument', 'layer', 'chain'])
 
-/** Tokenizer keywords are syntax (`var`/`init`/`import`), modifiers, literals, or commands—not sequence/bus names. */
-const DSL_KEYWORDS = new Set([
+/**
+ * Mirrors `packages/engine/src/parser/tokenizer.ts` `AudioTokenizer.KEYWORDS`.
+ * None of these nine words can name a sequence/bus receiver. If the tokenizer
+ * gains a word and this mirror drifts, that word is treated as an ordinary
+ * identifier and bypasses the loud `unresolved-receiver` path.
+ */
+export const DSL_KEYWORDS = new Set([
   'var',
   'init',
   'by',
@@ -372,7 +377,11 @@ function collectDerivedReceivers(text: string): ReadonlyMap<string, string> {
   return receivers
 }
 
-/** Resolve the receiver from the start of the statement containing effect/instrument. */
+/**
+ * Resolve the receiver from the start of the line containing effect/instrument.
+ * The DSL assumes one statement per line; this deliberately does not trace a
+ * statement origin across a newline.
+ */
 function receiverBefore(
   text: string,
   wordStart: number,

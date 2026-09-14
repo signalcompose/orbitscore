@@ -287,7 +287,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 `Cmd+Enter` を押すと、VS Code extension はカーソル位置のブロック (または選択範囲) のテキストだけを stdin に書き込みます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:677-677
+// packages/vscode-extension/src/engine-process.ts:681-681
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -641,7 +641,7 @@ OrbitScore の transport は「DSL テキストを stdin に送り込む」と�
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: 単一 `globalInterpreter` インスタンスの生成と REPL への引き渡し
 - `packages/engine/src/cli/repl-mode.ts:370-378` — REPL の `interpreter.execute()` 呼び出し (渡しているオプション)
 - `packages/engine/src/core/sequence.ts:1774-1799` — `Sequence.stop()`: イベントクリアとループタイマーのキャンセル
-- `packages/vscode-extension/src/engine-process.ts:628-628` — extension の stdin 送信
+- `packages/vscode-extension/src/engine-process.ts:681-681` — extension の stdin 送信
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Transport Commands" — launch quantize の仕様と `global.start()` が待たないこと
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize
 - Issue [#108](https://github.com/signalcompose/orbitscore/issues/108) — cutover (既定バックエンドを Rust に)

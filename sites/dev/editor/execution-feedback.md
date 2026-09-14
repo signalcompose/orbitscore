@@ -188,7 +188,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:641-647
+// packages/vscode-extension/src/engine-process.ts:645-651
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -690,17 +690,17 @@ flowchart TD
 
 | 変更 | Issue | 出典 |
 |---|---|---|
-| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`engine-process.ts:592-630` |
+| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`engine-process.ts:645-683` |
 | フラッシュを常に whole-line に、送信前に `revealRange` | #388 | §6.193 (2026-07-07)、`run-selection.ts:176-184` / `202-206` |
 | `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
 | 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:203-236` |
-| `//#documentDirectory` メタ行 (import の基準ディレクトリ) | #456 | §6.266 (2026-07-17)、`engine-process.ts:600-605` |
+| `//#documentDirectory` メタ行 (import の基準ディレクトリ) | #456 | §6.266 (2026-07-17)、`engine-process.ts:653-658` |
 | `GLOBAL_ONCE_METHODS` に `linkAudio` を追加、LinkAudio 系の診断 6-8 | (LinkAudio #209 系) | `diagnostics-analysis.ts:44-58` / `:194-391` |
 | 送信失敗時はフラッシュしない | — | `run-selection.ts:199-201` のコメント |
 | `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`agent-handlers.ts:80-109` / `engine-handlers.ts:248-256` |
 | 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`diagnostics-provider.ts:160-168` |
 | 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
-| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:322-325` / `:346-452`、`dsl-providers.ts:176-213` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
+| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:349-352` / `:346-452`、`dsl-providers.ts:176-213` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
 
 ---
 
@@ -738,7 +738,7 @@ flowchart TD
 - `packages/vscode-extension/src/run-selection.ts:63-111` — パス 2: subject-based block evaluation
 - `packages/vscode-extension/src/run-selection.ts:112-135` — パス 3: standalone コマンド
 - `packages/vscode-extension/src/run-selection.ts:141-197` — `flashLines()`: 点滅フィードバック実装 (whole-line)
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate と `//#evalMark`
 - `packages/vscode-extension/src/engine-handlers.ts:248-256` — stdout の `{"evalMark"` 独立分岐
 - `packages/vscode-extension/src/extension.ts:150-284` — playhead の decoration 管理と `handleStepLine()`
@@ -748,7 +748,7 @@ flowchart TD
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:110-468` — 横断解析の関数群
-- `packages/vscode-extension/src/diagnostics-analysis.ts:322-468` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断
+- `packages/vscode-extension/src/diagnostics-analysis.ts:349-495` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — audioPath ordering 診断の背景

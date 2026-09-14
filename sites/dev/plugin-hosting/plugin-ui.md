@@ -1190,7 +1190,7 @@ CLAP を使う必要があります。
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — `closePluginUi` の DONE 待ち（受理 ≠ 完了）
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — `//#pluginUi` メタ行の書き出し
 - `packages/vscode-extension/src/engine-handlers.ts:243-247` — `{"pluginUi"` 結果行のルーティング
-- `packages/vscode-extension/src/mcp-tools-plugins.ts:86-141` — `open_plugin_ui` / `close_plugin_ui` tool 定義
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-145` — `open_plugin_ui` / `close_plugin_ui` tool 定義
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — 実行モデル（main = NSApplication runloop / audio = 専用スレッド）
 - `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main`（mailbox 振り分け + `ui.tick`）
 - `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`

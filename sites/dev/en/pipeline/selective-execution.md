@@ -16,7 +16,7 @@ Executing only part of the code with Cmd+Enter — this is the central operation
 
 The first edition of this chapter was written against the 2026-05-05 snapshot (0a4b598). In the code as of 2026-09-01 (69dc968), the skeleton — "the extension decides what code to send and writes it to stdin; the engine's readline buffers it and does parse → execute" — is the same, but much of the inside has been replaced.
 
-- **Writing to stdin was centralized in `writeCodeToEngine()`**. The editor's `runSelection()` and the MCP `evaluate_orbitscore` tool go through the same function (`packages/vscode-extension/src/engine-process.ts:592-630`)
+- **Writing to stdin was centralized in `writeCodeToEngine()`**. The editor's `runSelection()` and the MCP `evaluate_orbitscore` tool go through the same function (`packages/vscode-extension/src/engine-process.ts:645-683`)
 - **A `//#documentDirectory <path>` meta line is now prepended to the DSL** (#456 on 2026-07-17). Because `import` is evaluated before statements, the DSL-injected `global.setDocumentDirectory(...)` comes too late, so the directory is delivered ahead of time through an out-of-band meta line
 - **REPL line handling was extracted into `createReplSession()` and serialized through a FIFO promise chain** (#476 on 2026-07-17). readline fires multiple lines from one chunk in the same tick, so a naive async handler let the shared buffer race
 - **The "is the input incomplete" decision is now only `\bEOF\b` on parse errors** (#607 / #612 in 2026-08). The 2026-05 edition's `Expected RPAREN` match also treated "a genuine syntax error in the middle of a line" as incomplete and silenced the session
@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:347-411 (env の組み立てを省略)
+// packages/vscode-extension/src/engine-process.ts:351-415 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -206,7 +206,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:641-647
+// packages/vscode-extension/src/engine-process.ts:645-651
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -552,12 +552,12 @@ sequenceDiagram
 ## Sources
 
 - `packages/vscode-extension/src/extension.ts:110-112` — declaration and purpose of the `globalInitialized` flag
-- `packages/vscode-extension/src/engine-process.ts:255-400` — `startEngine()`: pre-check → env → process boot with `stdio: ['pipe','pipe','pipe']`
+- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: pre-check → env → process boot with `stdio: ['pipe','pipe','pipe']`
 - `packages/vscode-extension/src/run-selection.ts:27-40` — regex matches in `getLineSubject()`
 - `packages/vscode-extension/src/run-selection.ts:42-207` — overall flow of `runSelection()` (selection / subject block / standalone / flash)
 - `packages/vscode-extension/src/run-selection.ts:60-62` — the path used when there is selected text
-- `packages/vscode-extension/src/engine-process.ts:594-604` — design comment of `writeCodeToEngine()` (injection conditions and the meaning of the return value)
-- `packages/vscode-extension/src/engine-process.ts:592-630` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
+- `packages/vscode-extension/src/engine-process.ts:647-657` — design comment of `writeCodeToEngine()` (injection conditions and the meaning of the return value)
+- `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate waits for the result via `//#evalMark`
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()` and `InterpreterV2` instance creation
 - `packages/engine/src/cli/repl-mode.ts:64-93` — `extractDocumentDirectoryMeta()` / `extractSelectAudioDeviceMeta()`
