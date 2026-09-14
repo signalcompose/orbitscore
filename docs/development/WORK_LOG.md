@@ -17,6 +17,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: report-only follow-up for the 4.2.0 release bump (#943) (Sep 14, 2026)
+
+**ブランチ**: `claude/docs-sync-pr943` / **追従元**: PR [#943](https://github.com/signalcompose/orbitscore/pull/943)（merge `1276ab1f`）
+
+**doc の追従は不要だった。** #943 は版番号の文字列と本ログのエントリしか変えておらず、
+追従先（`CLAUDE.md` / `README.md` / `docs/core` / dev サイト ja+en 6 ページ）は PR 自身が更新済み。
+本ログ `:57` が言う「番号を固定して形を一切仮定しない」grep で検算し、
+現在の版を名乗る箇所に `4.1.0` の残りが **0 件**であることを確認した
+（`tests/vscode-extension/playhead.spec.ts:136` の `resolve('4.1.0')` は `play()` の引数パスで無関係）。
+
+🔴 直さず報告（PR 本文へ）:
+
+- **`CHANGELOG.md` が 4.2.0 で 6 版分の未記載**（`CHANGELOG.md:34` の `[1.1.0]` が最新）。
+  4.1.0 の時（本ログ `:1015`）と同じ理由で、遡って書き起こすかはリリース判断
+- **版表記の同期を守らせる仕組みが依然として無い**（#943 自身が `:47` で **4 回目**の取りこぼしを記録）。
+  `scripts/check-release-tag-version.mjs` はタグ ↔ `package.json` しか見ず、`tests/docs/` に版の spec は無い
+
+**検証**: `npm ci` / `docs:build`（user・dev）/ `docs:check` すべて exit 0・引用 986 件 0 failed。
+
+---
+
 ### chore(release): bump the extension to 4.2.0 (Sep 14, 2026)
 
 **Date**: 2026-09-14 / **ブランチ**: `942-release-4.2.0` / **Issue**: #942
