@@ -98,6 +98,7 @@ import {
   UNIX_SOCKET_PATH_MAX,
   userDataDirExceedsSocketLimit,
 } from './helpers/harness-processes'
+import { soloWindowLayer, WINDOW_LAYER_FLOATING, WINDOW_LAYER_NORMAL } from './helpers/window-layer'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
@@ -445,6 +446,24 @@ function pluginChildPids(pluginPath: string): number[] {
 async function effectChildPids(client: McpClient): Promise<number[]> {
   const log = (await client.call('get_log', { lines: 800 })).text
   return rackChildPidsFromLog(log)
+}
+
+/** The host OrbitStudio/VS Code bundle id the daemon passes to every child (#940). */
+const HOST_BUNDLE_ID = 'com.microsoft.VSCode'
+
+/**
+ * A bundle id that is certainly **not** the host, used to prove the level drops (#940).
+ *
+ * Finder is the safe choice: it is always running on macOS, so activating it cannot
+ * fail or launch anything, and returning focus afterwards is a no-op for the user.
+ */
+const OTHER_APP_BUNDLE_ID = 'com.apple.finder'
+
+/** Bring one app to the front and wait for the switch to land before measuring. */
+function activateBundle(bundleId: string): void {
+  execFileSync('osascript', ['-e', `tell application id "${bundleId}" to activate`], {
+    timeout: 15_000,
+  })
 }
 
 function processExists(pid: number): boolean {
@@ -2639,6 +2658,80 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         afterLog.split('ERROR:').length - 1,
         `#939 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#940 E2E floats the plugin window only while the host is frontmost',
+    async () => {
+      expect(client, '#940 E2E must initialize the MCP client').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const name = requireCatalogFixtures().clapEffectName
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split('ERROR:').length - 1
+
+      // 🔴 この 1 本は設計 §5b の「窓の重なり順は自動で観測できない」という前提が
+      // **誤りだったため**に足したもの（main の実測・2026-09-14）。`kCGWindowLayer` は
+      // 窓サーバ側の記録なので、child の自己申告ではなく**実際に適用されたレベル**が読める。
+      const declared = await activeClient.call('evaluate_orbitscore', {
+        code: ['var global = init GLOBAL', 'var floatSeq = init global.seq'].join('\n'),
+      })
+      expect(declared.isError, declared.text).toBe(false)
+      const chained = await activeClient.call('evaluate_orbitscore', {
+        code: `floatSeq.effect([${JSON.stringify(name)}])`,
+      })
+      expect(chained.isError, chained.text).toBe(false)
+      await sleep(8000)
+
+      const opened = await activeClient.call('open_plugin_ui', {
+        receiver: 'floatSeq',
+        chain_path: [0],
+      })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(2000)
+
+      const childPids = await effectChildPids(activeClient)
+      const childPid = childPids[childPids.length - 1]
+      expect(childPid, '#940 needs the effect child that owns the plugin window').toBeDefined()
+
+      // ホストを前面へ → floating。
+      activateBundle(HOST_BUNDLE_ID)
+      await sleep(1500)
+      expect(
+        soloWindowLayer(childPid!),
+        '#940 the plugin window must float while the host is frontmost',
+      ).toBe(WINDOW_LAYER_FLOATING)
+
+      // 🔴 区別するアサーション: 別アプリを前面にすると **normal に戻る**。
+      // floating を常時掛ける実装でもホスト前面のチェックは通るので、こちらが本体。
+      activateBundle(OTHER_APP_BUNDLE_ID)
+      await sleep(1500)
+      expect(
+        soloWindowLayer(childPid!),
+        '#940 the plugin window must drop to normal while another app is frontmost',
+      ).toBe(WINDOW_LAYER_NORMAL)
+
+      // 戻せば floating に復帰する（一方通行ではない）。
+      activateBundle(HOST_BUNDLE_ID)
+      await sleep(1500)
+      expect(
+        soloWindowLayer(childPid!),
+        '#940 the plugin window must float again when the host returns to the front',
+      ).toBe(WINDOW_LAYER_FLOATING)
+
+      const closed = await activeClient.call('close_plugin_ui', {
+        receiver: 'floatSeq',
+        chain_path: [0],
+      })
+      expect(closed.isError, closed.text).toBe(false)
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split('ERROR:').length - 1,
+        `#940 must add no engine ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
       ).toBeLessThanOrEqual(errorsBefore)
     },
     TEST_TIMEOUT_MS,

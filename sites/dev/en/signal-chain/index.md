@@ -1515,7 +1515,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4987-4994
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5080-5087
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): assert the plugin window level, and add a manual-gate score (#940) (Sep 14, 2026)
+
+🔴 **設計 §5b の前提「窓の重なり順は自動で観測できない」は誤りだった。** それを根拠に
+**全部を手動ゲートに置いていた**。owner の「テスト用のコードを書いて」で調べ直して分かった。
+
+#### 何が読めるのか
+
+`CGWindowListCopyWindowInfo` の **`kCGWindowLayer`**（0 = Normal / 3 = Floating）。
+🔴 **child に `window.level()` を聞くのとは違う** — あれは*process が信じている値*で、
+窓サーバが適用したかは分からない。`kCGWindowLayer` は**窓サーバ側の記録**なので、
+レベルが効かなかった場合はここで食い違いとして出る。
+
+実測（同じ child・同じビルド・**前面アプリだけ**を変えた）:
+
+| 前面のアプリ | layer |
+|---|---|
+| `com.mitchellh.ghostty` | **0 = Normal** |
+| `com.microsoft.VSCode` | **3 = Floating** |
+
+#### 足したもの
+
+- `tests/e2e/helpers/window-layer.swift` — 外部リーダ（**0.24 秒**）。1 行 1 JSON で依存を増やさない
+- `tests/e2e/helpers/window-layer.ts` — `observeWindows` / `soloWindowLayer`。
+  窓が 1 つでなければ **throw**（先頭を黙って選ぶと壊れた状態が数値として通る）
+- gated E2E `#940` — ホスト前面 → floating → **別アプリ前面 → normal** → 戻すと floating
+- `examples/manual-gates/939-940-plugin-ui.orbs` — 人が触る用（owner 依頼）。
+  ⑥ に `twin.ui("CLAP Test Effect")` をコメントで置き、**同名 2 つが両方開く**のと
+  右クリックで 1 つだけ開くのを**その場で見比べられる**ようにした
+
+🔴 **区別するアサーションは「別アプリ前面で normal に戻る」。** 常時 floating を掛ける実装でも
+「ホスト前面で floating」は通ってしまう。#935 と同型の失敗を避けるための本体。
+
+#### 🔴 owner の環境で「効かない」と見えた理由 — また計測側だった
+
+古いプロセスが残っていた: dev host **8 個** / daemon **2 個** / child 3 個。
+child はいずれも **`--host-bundle-id` 無し**（#940 より前に起動したもの）で、
+`desired_plugin_window_level` が `Normal` を返すのが**正しい動作**だった。
+しかも `start_engine` が **`engine already running`** を返し、新ビルドの daemon は起動していなかった。
+
+全部落として立て直すと、`Info.plist` → daemon の `ORBIT_HOST_BUNDLE_ID=com.microsoft.VSCode` →
+child の `--host-bundle-id` → **layer 3** まで通った。**実装は最初から正しかった。**
+
+昨日の「変異版 `dist` で dev host を起動」と**同じ形**。→ [[stale-processes-invalidate-real-machine-results]]
+
+#### 途中で踏んだもの
+
+`CLANG_MODULE_CACHE_PATH` に `/tmp` を使うと、swift が `/private/tmp` と**別物として扱い**
+2 回目以降が `module 'Darwin' is defined in both` で落ちる。実体パスに固定した。
+
+#### 検証
+
+実機 gated **48 passed / skip 0**（#940 を含む）/ lint / `typecheck:e2e` /
+`docs:check`（986 引用 0 失敗）/ `tests/repo` + `tests/docs` 86 passed。
+
+Part of #940
+
+---
+
 ### feat(plugin-ui): float plugin windows above the editor while OrbitStudio is frontmost (#940) (Sep 14, 2026)
 
 owner 裁定で **#939 の PR に畳んだ**（「振る舞いとしては同じ関心ですよね」）。
@@ -1908,47 +1966,6 @@ DSP ヘルパー（ゲイン・パン・加算）/ bus topology 検証 / 起動�
 **検証**: cfg 4 象限緑 / `cargo fmt --check` / **`cargo clippy --workspace -D warnings` 緑** /
 `cargo test --workspace --lib` **476 passed** / `npm test` **2,445 passed**（不変）/ lint /
 `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): split session.rs — 2,605 to 439 code lines (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c2-session`
-
-🎯 **#888 子 2 の前半完了。`session.rs` が 2,605 → 439 コード行。** 7 ファイルすべて 500 以下
-（`dispatch.rs` 411 / `dispatch_plugin.rs` 498 / `dispatch_transport.rs` 158 /
-`params.rs` 289 / `params_plugin.rs` 413 / `run_loop.rs` 476）。
-
-### 🔴 ここで初めて「純粋な移動」を超えた（owner 裁定 2026-09-12）
-
-`handle_command` は **1,028 コード行の単一 `match` 式**だった。ファイルを分けても 1 つの式なので、
-**行数だけでは閾値 500 を満たせない**。owner に諮り「**アームを関数へ切り出す**」を選んだ。
-
-切り出した形（`dispatch_plugin.rs` / `dispatch_transport.rs`）:
-
-```rust
-pub(super) async fn handle_plugin_command(...) -> Option<Value> {
-    Some(match method {
-        "LoadPlugin" => { ... }     // アーム本体は 1 行も書き換えていない
-        _ => return None,           // 該当しなければ親の match へ戻す
-    })
-}
-```
-
-🔴 **アーム本体は 1 行も書き換えていない。** 変わったのは (a) 関数シグネチャ (b) 呼び出し側の
-3 行 (c) 早期 `return err(...)` を `return Some(err(...))` に包んだこと（**21 + 12 箇所**）。
-**「既存テストの期待値を 1 つも変えていない」という検算は維持されている。**
-
-(c) の包み直しは、第 11 束で確立した**コンパイラの指摘行を使うループ**でやった。
-E0308 の行番号を抜いて該当行だけを包む処理を収束するまで回す。手で探すと必ず取りこぼす。
-
-### 引用の追随 6 件
-
-3 件は移動先が別ファイル、3 件は**範囲がファイル外**（`session.rs` が短くなったため
-`range 2412-2413 is outside the file (2120 lines)`）。引用ブロックの中身から移動先を検索して
-特定し、第 9 束で書いた再生成スクリプトで本文を同期した。**6 件とも着地先を目視で照合済み。**
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
 
 
 ## Archived sections
