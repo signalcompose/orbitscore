@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #941 (#939 / #940) in the dev and user sites (Sep 14, 2026)
+
+マージ済み PR [#941](https://github.com/signalcompose/orbitscore/pull/941)（`939-plugin-ui-by-cursor` →
+main・merge commit `c6b8f75`）への**ドキュメント追従のみ**。`packages/` / `rust/` / `tests/` は 1 行も
+触っていない。
+
+#### 🔴 散文の参照が、PR 自身のマージ時点で既に stale だった（4 回目）
+
+#941 は本文のコード引用（` // FILE:START-END ` 付き）を張り直したが、**引用ブロックの外にある
+`path:行` 参照**（各章末の「参考にしたコード」・表のセル・本文中の丸括弧）は
+`docs:check` の検査対象外なので取りこぼしが残った。しかも PR 内の後続コミットが
+`engine-process.ts` を +47 行動かしたため、**PR が自分で更新した参照まで**ずれていた。
+
+`147b742..abbc545` の差分から old→new の行マッピングを作り、**引用ブロック外の参照だけ**を
+機械的に張り直した（102 件 + basename 形 14 件 = 116 件・ja/en 対）。内容が動いていない参照は
+触っていない。
+
+**取りこぼしていた「内容の誤り」3 件**（行ずれではなく、記述が事実と食い違うもの）:
+
+| 章 | 旧記述 | 実際 |
+|---|---|---|
+| `editor/vscode-architecture.md:707` ほか計 6 箇所 | 「engine の spawn が env へ積むのは debug フラグと capture seam だけ」 | **`ORBIT_HOST_BUNDLE_ID` が 3 つ目**（#940）。解決できないときは `delete` する |
+| `signal-chain/index.md:885` | 「rack child の spawn は `--shm` / `--chain` / `--sample-rate` の 3 引数」 | env があるときだけ **`--host-bundle-id <値>` が付く** |
+| `plugin-hosting/plugin-ui.md:153` | 「Accessory ポリシーで立ち上げ、`NSTimer` で service を呼ぶ」＋ appkit.rs:205-221 の引用 | その行範囲は #940 で**前面アプリ observer に入れ替わっており**、`NSTimer` は 234-242 へ移っていた（引用は緑・散文だけが嘘） |
+
+3 件目は「引用が緑でも散文は検査されない」の再演である。**引用を張り直すときは、その引用が
+支えている散文を読み直すこと。**
+
+#### 追記した章
+
+- `plugin-hosting/plugin-ui.md`（ja/en）— 「エディタ面: カーソルが乗っている 1 つだけを開く（#939）」と
+  「窓を前面に浮かせる（#940）」の 2 節。`pluginUiAddressFor` / `desired_plugin_window_level` /
+  `set_plugin_window_level` / `NSTimer` の引用 4 本を追加。frontmatter を `c6b8f75` / 2026-09-14 へ
+- `editor/mcp-and-gated-e2e.md`（ja/en）— MCP ツール表に `open_plugin_ui_at_cursor` を追加。
+  **登録の述語が #939 で「組」から「1 本ずつ」に変わった**ことを明記（旧 `if (open && close)` は
+  片方だけ持つホストで両方消えた）
+- `editor/execution-feedback.md`（ja/en）— `var verb = mix.aux` の**レシーバが任意の識別子へ一般化**
+  された件（#940 レビュー）。`mix` はただの変数なので、別名の譜面ではバス宣言を取りこぼし、
+  「LinkAudio が要る」診断が誤爆していた
+- user サイト（ja/en）+ `docs/user/ja/USER_MANUAL.md` — **右クリック → `OrbitScore: Open Plugin UI`**。
+  `ui("名前")` が全部開くのに対しカーソルの 1 つだけを開くこと、5 種の loud な失敗、
+  macOS で窓がホスト前面時だけ浮くこと
+
+#### 直さず報告に回したもの
+
+- `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`（UIH の正本）に**ウィンドウレベルの規範が無い**。
+  仕様を決める作業なので追従では触らない（PR 本文で質問）
+- `sites/dev/decisions/adr-003-scsynth-bundle.md` の `extension.ts:2053-2088` 等 4 件は
+  **#887 の分割より前**を指しており、#941 とは無関係の既存 stale
+- MCP の `chain_path` / `site` が gated E2E で一度も検査されていない（ユニットのみ）
+
+#### 検証
+
+```
+npm ci                                     → exit 0
+npm run docs:build -w @orbitscore/user-site → exit 0（dead link 0）
+npm run docs:build -w @orbitscore/dev-site  → exit 0（dead link 0）
+npm run docs:check                          → 996 citations verified, 0 failed, 54 files
+```
+
+引用は 986 → **996**（新規 10 本 = ja 5 + en 5）。
+
+Follows #941 / #939 / #940
+
+---
+
 ### fix: make the #940 wiring tests platform-independent, and pin the keyword mirror (Sep 14, 2026)
 
 レビューラウンド 3。**すべて fix 起因**の指摘で、元差分（`main..113ec39e`）起因の

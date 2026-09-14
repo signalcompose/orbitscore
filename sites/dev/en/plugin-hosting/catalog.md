@@ -1394,11 +1394,11 @@ LOOP(drums)
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — rack-context scanner, candidate filter, Quick Pick rows
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — mirrored resolution rules and the agreement test
 - `packages/vscode-extension/src/plugin-commands.ts:42-48` / `diagnostics-provider.ts:160-168` — missing-catalog hint, Warning diagnostics
-- `packages/vscode-extension/package.json:120-131` — the `Rescan Plugin Catalog` / `Browse Plugins` commands
+- `packages/vscode-extension/package.json:126-137` — the `Rescan Plugin Catalog` / `Browse Plugins` commands
 - `packages/vscode-extension/src/mcp-tools-plugins.ts:206-223` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — agreement test with the engine resolver
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3406-3414` — #618 E1-E6 frequency oracle
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3557-3570` / `:3699-3705` / `:3917-3932` — #625 R-E2 / R-E6 / R-E3 (expectations flipped in #628)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3661-3669` — #618 E1-E6 frequency oracle
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3812-3825` / `:3699-3705` / `:3917-3932` — #625 R-E2 / R-E6 / R-E3 (expectations flipped in #628)
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — PH.2d / PH.3 / PH.4 / PC.1–PC.5
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` — SC.3.2 / SC.10.3 / SC.10.3b / SC.10.3c / SC.10.5 / SC.10.9
 - `docs/research/PLUGIN_CATALOG_SCANNING.md` — the 23.2% measurement and the basis of the three-state model

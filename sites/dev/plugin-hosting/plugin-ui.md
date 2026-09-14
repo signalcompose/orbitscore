@@ -1,12 +1,12 @@
 ---
 title: "PH-2. プラグイン UI ホスティング — seq.ui() からウィンドウまで"
 chapter-id: "PH-2"
-verified-against: ca745e8
-verified-at: "2026-09-12"
+verified-against: c6b8f75
+verified-at: "2026-09-14"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。2026-09-12 に #888 子 2（[#896](https://github.com/signalcompose/orbitscore/pull/896)）の `session.rs` / `output.rs` 分割に追従し、本文と「参考にしたコード」のコード参照を分割後のモジュールへ張り直しました。2026-09-14 に [#941](https://github.com/signalcompose/orbitscore/pull/941)（#939 / #940）へ追従し、カーソル経路とウィンドウレベルの節を足しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # PH-2. プラグイン UI ホスティング — seq.ui() からウィンドウまで
 
@@ -118,6 +118,79 @@ loud に落とします。close はどちらの面でも冪等化しません（
 （#628 設計書 R9 は「冪等 open を pump に実装する」案を、経路知識を持たない層に
 経路依存の意味論を置かないという理由で却下しています）。
 
+## エディタ面: カーソルが乗っている 1 つだけを開く（#939）
+
+`ui("名前")` は**一致する insert を全部開きます**（SC.10.10.1 規範 3・仕様どおり）。同名を
+2 つ挿していれば 2 つとも開く、ということです。
+
+```js
+drums.effect(["ValhallaRoom", "TAL Reverb 4", "ValhallaRoom"])
+drums.ui("ValhallaRoom")   // ← 1 つ目と 3 つ目が両方開く
+```
+
+index 形（`ui(2)`）は SC.10.10 規範 (2) で撤回済みです。ラックは入れ子になり得るので、
+位置は 1 次元の整数では指せません。一方 MCP の `open_plugin_ui` は `chain_path` で
+個別に指せるので、**LLM は 1 つだけ開けて、人間だけが開けない**状態が残っていました。
+
+#939 が埋めたのはそこです。楽譜上のプラグイン名を**右クリック**し、コンテキストメニューの
+`OrbitScore: Open Plugin UI` を選ぶと、**カーソルが乗っている 1 つだけ**が開きます。
+主経路の規範は SC.10.10 (2) が **Cmd+Click から右クリックへ改訂**されました
+（`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.10.10）。
+
+解決は 3 段です。
+
+1. `resolvePluginUiTargetAtCursor()` が**ドキュメントの文字列とカーソル位置だけ**から
+   receiver（sequence 名 / `master` / `sum:` / `aux:`）と**チェーン内のパス**（`chainPath`）を返す。
+   engine も VS Code の状態も読まない純関数です
+2. `pluginUiAddressFor()` が、そのパスを **UIH.5 の互換 index へ潰す唯一の場所**です
+3. `openPluginUiAtCursor()` が `pluginUiForAgent('open', ...)` を呼び、既存の
+   `open_plugin_ui` と**同じ engine 経路**へ合流します
+
+```typescript
+// packages/vscode-extension/src/plugin-ui-at-cursor.ts:114-136
+/** The sole cursor-route conversion from syntax paths to UIH.5 compatibility indexes. */
+export function pluginUiAddressFor(
+  target: PluginUiCursorTarget,
+):
+  | { ok: true; receiver: string; index: number; expectedName: string }
+  | { ok: false; message: string } {
+  if (target.kind === 'instrument') {
+    return { ok: true, receiver: target.receiver, index: 0, expectedName: target.expectedName }
+  }
+  if (target.chainPath.length !== 1) {
+    return {
+      ok: false,
+      message:
+        'layer() (parallel racks) is staged behind PDC (SC.10.11); v1 supports serial chains only',
+    }
+  }
+  return {
+    ok: true,
+    receiver: target.receiver,
+    index: (target.chainPath[0] ?? 0) + 1,
+    expectedName: target.expectedName,
+  }
+}
+```
+
+index への潰しを 1 箇所に閉じ込めたのは、`layer()`（並列ラック）が入ったときに
+**解決器・E2E・配線を無変更で残す**ためです。v1 は直列チェーンだけなので、
+`chainPath` の長さが 1 でなければここで loud に断ります。
+
+🔴 **`Gain(...)` のような標準プラグインも要素として数えます。** engine 側は標準プラグインも
+チェーンの offset を消費するので、数え落とすと index が 1 つずれます。同名が並んでいると
+`expectedName` のガードも止められません。
+
+解決できない位置は **5 種すべて loud** です（黙って no-op しない）。
+`not-on-plugin-name` / `standard-plugin`（`Gain` の上 — SC.10.8 で標準プラグインに UI は無い）/
+`state-file`（保存済み state ファイル名の上）/ `selection-spans-outside`（選択が 1 つの名前に
+収まっていない）/ `unresolved-receiver`（行頭の receiver を同定できない）。
+
+MCP の `open_plugin_ui_at_cursor`（引数なし）は、ハンドラを直接呼ばずに
+`vscode.commands.executeCommand(OPEN_PLUGIN_UI_AT_CURSOR_COMMAND)` を通します。
+**メニューとの差が「クリックするかどうか」だけ**になるので、コマンド登録の配線まで
+検査の視野に入ります。
+
 ## なぜ UI は child プロセスに住むのか
 
 DSL から下へ降りる前に、大前提を確認しておきましょう。**なぜプラグインの UI を daemon や
@@ -147,8 +220,10 @@ VS Code 拡張ではなく、child プロセスが開くのでしょうか。**
 ```
 
 main thread 側は `NSApplication` を **Accessory** ポリシー（Dock アイコンを出さない・
-ウィンドウ表示とキー入力は可能）で立ち上げ、`NSTimer` で定期的に service コールバックを
-呼びます。
+ウィンドウ表示とキー入力は可能）で立ち上げます。**#940 以降はその直後に、前面アプリの
+変更を購読する observer を登録します**（ホストの bundle id が spawn 時に渡されたときだけ。
+窓の重なり順の話なので、下の「[窓を前面に浮かせる（#940）](#窓を前面に浮かせる-940)」で
+まとめて読みます）。
 
 ```rust
 // rust/crates/orbit-child-runtime/src/appkit.rs:205-221
@@ -169,6 +244,21 @@ main thread 側は `NSApplication` を **Accessory** ポリシー（Dock アイ�
         unsafe {
             notification_center.addObserver_selector_name_object(
                 &observer,
+```
+
+定期的に service コールバックを呼ぶ `NSTimer` は、その observer より後ろで組み立てます。
+
+```rust
+// rust/crates/orbit-child-runtime/src/appkit.rs:234-242
+    let timer = unsafe {
+        NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+            MAIN_TICK_INTERVAL.as_secs_f64(),
+            &target,
+            sel!(tick:),
+            None,
+            true,
+        )
+    };
 ```
 
 ```rust
@@ -1113,6 +1203,90 @@ index で閉じられる**ことを確認します。owner 原則 C-A の生存�
 
 > NOTE: unverified — needs confirmation（CGWindowList 経路が gated E2E から外された経緯の直接の記録）
 
+## 窓を前面に浮かせる（#940）
+
+開いた UI が**エディタの裏に回ってしまう**、という問題が #939 の手動ゲート中に見つかりました。
+owner 裁定で同じ PR に畳まれています（「振る舞いとしては同じ関心ですよね」）。
+
+**wire は 1 バイトも変えていません。** 窓のレベルを決めるのは child 自身です。
+
+| 層 | 何を渡すか |
+|---|---|
+| 拡張 | `resolvePluginWindowHostBundleId()` が**外側の `.app`** の `Info.plist` から `CFBundleIdentifier` を読み、engine の env に `ORBIT_HOST_BUNDLE_ID` として積む（macOS 以外・`.app` の外なら `undefined`） |
+| daemon | `host_bundle_id_from_env()` が同 env を読み、child の spawn 引数に `--host-bundle-id <値>` を足す（未設定なら足さない） |
+| child | `parse_host_bundle_id_argument()` が値を取り出し、`strip_host_bundle_id_argument()` が**残りの argv から取り除く**（各 child の `parse_args()` に未知フラグを教え込まないため） |
+
+child は `NSWorkspaceDidActivateApplicationNotification` を購読し、前面アプリが変わるたびに
+レベルを計算し直します。判定そのものは AppKit に触らない純関数に切り出されています。
+
+```rust
+// rust/crates/orbit-child-runtime/src/lib.rs:26-50
+/// Decide the plugin-window level without depending on AppKit notification plumbing.
+///
+/// A missing host bundle ID is the legacy configuration and always stays normal,
+/// including when the child itself happens to be frontmost.
+/// `frontmost_is_child_process` covers standalone child executables, for which
+/// `NSRunningApplication::bundleIdentifier` is nil because there is no `Info.plist`.
+pub fn desired_plugin_window_level(
+    host_bundle_id: Option<&str>,
+    child_bundle_id: Option<&str>,
+    frontmost_bundle_id: Option<&str>,
+    frontmost_is_child_process: bool,
+) -> PluginWindowLevel {
+    let Some(host_bundle_id) = host_bundle_id else {
+        return PluginWindowLevel::Normal;
+    };
+    let host_is_frontmost = frontmost_bundle_id == Some(host_bundle_id);
+    let child_is_frontmost = frontmost_is_child_process
+        || child_bundle_id
+            .is_some_and(|child_bundle_id| frontmost_bundle_id == Some(child_bundle_id));
+    if host_is_frontmost || child_is_frontmost {
+        PluginWindowLevel::Floating
+    } else {
+        PluginWindowLevel::Normal
+    }
+}
+```
+
+🔴 **`frontmost_is_child_process` が塞いでいる穴**: standalone の child 実行ファイルには
+`Info.plist` が無いので、`NSRunningApplication::bundleIdentifier` が **`nil`** を返します。
+bundle id の比較だけだと「**プラグインの窓自体をクリックした**」場合に前面が誰か分からず、
+floating が外れてしまいます。同一 `NSRunningApplication` オブジェクトの比較で判定しています。
+
+🔴 **拡張側でフォーカスを検知する案は採っていません。** `onDidChangeWindowState` は VS Code の
+フォーカスしか見ないので、**プラグイン窓をクリックした瞬間に floating が外れます**。
+child なら「自分が前面」を直接見られるので、この罠が構造的に起きません。
+
+決まったレベルは、**現在開いている窓すべて**へ適用されます。
+
+```rust
+// rust/crates/orbit-child-runtime/src/window.rs:26-41
+fn appkit_window_level(level: PluginWindowLevel) -> NSWindowLevel {
+    match level {
+        PluginWindowLevel::Normal => NSNormalWindowLevel,
+        PluginWindowLevel::Floating => NSFloatingWindowLevel,
+    }
+}
+
+pub(crate) fn set_plugin_window_level(level: PluginWindowLevel) {
+    CURRENT_PLUGIN_WINDOW_LEVEL.set(level);
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    for window in NSApplication::sharedApplication(mtm).windows().iter() {
+        window.setLevel(appkit_window_level(level));
+    }
+}
+```
+
+`host_bundle_id` が渡されないビルド（#940 より前に spawn された child を含む）は
+**従来どおり `NSNormalWindowLevel`** です。`desired_plugin_window_level()` の最初の
+`let ... else` がそれを保証しています。
+
+> **未確認**: 窓の重なり順は自動では観測できないため、「ホストを前面にすると上に出る /
+> 他アプリを前面にすると被さらない / 窓自体をクリックしても floating が外れない」の
+> 3 点は PR #941 時点で**手動確認が未了**のままです（PR 本文のチェックリスト）。
+
 ## 故障モード
 
 UIH.7 と実装から読み取れる故障モードを、脱出経路とともに整理します。
@@ -1190,13 +1364,24 @@ CLAP を使う必要があります。
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — `closePluginUi` の DONE 待ち（受理 ≠ 完了）
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — `//#pluginUi` メタ行の書き出し
 - `packages/vscode-extension/src/engine-handlers.ts:243-247` — `{"pluginUi"` 結果行のルーティング
-- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-145` — `open_plugin_ui` / `close_plugin_ui` tool 定義
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-164` — `open_plugin_ui` / `close_plugin_ui` / `open_plugin_ui_at_cursor` tool 定義（登録の述語は #939 で 1 本ずつに分割）
+- `packages/vscode-extension/src/plugin-ui-at-cursor.ts:51-112` — `resolvePluginUiTargetAtCursor`（カーソル位置 → receiver + `chainPath`・失敗 5 種）
+- `packages/vscode-extension/src/plugin-ui-at-cursor.ts:114-136` — `pluginUiAddressFor`（UIH.5 index へ潰す唯一の場所）
+- `packages/vscode-extension/src/plugin-ui-at-cursor.ts:184-190` — `openPluginUiAtCursorForAgent`（MCP は `executeCommand` を通す）
+- `packages/vscode-extension/src/engine-process.ts:54-96` — `resolvePluginWindowHostBundleId`（外側の `.app` の `CFBundleIdentifier`）
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — 実行モデル（main = NSApplication runloop / audio = 専用スレッド）
-- `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main`（mailbox 振り分け + `ui.tick`）
-- `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`
-- `rust/crates/orbit-child-runtime/src/appkit.rs:205-221` — Accessory ポリシーと `NSTimer`
-- `rust/crates/orbit-child-runtime/src/window.rs:36-42` — `windowShouldClose` が常に `NO`
-- `rust/crates/orbit-child-runtime/src/window.rs:188-196` — `WindowShell::close`（`performClose:` 禁止）
+- `rust/crates/orbit-child-runtime/src/lib.rs:190-208` — `service_child_main`（mailbox 振り分け + `ui.tick`）
+- `rust/crates/orbit-child-runtime/src/lib.rs:210-213` — `MAIN_TICK_INTERVAL = 20 ms`
+- `rust/crates/orbit-child-runtime/src/appkit.rs:205-221` — Accessory ポリシーと前面アプリ observer の登録（#940）
+- `rust/crates/orbit-child-runtime/src/appkit.rs:234-242` — service コールバックの `NSTimer`
+- `rust/crates/orbit-child-runtime/src/appkit.rs:170-185` — `ActivationObserver::update_window_level`
+- `rust/crates/orbit-child-runtime/src/lib.rs:26-50` — `desired_plugin_window_level`（AppKit に触らない判定）
+- `rust/crates/orbit-child-runtime/src/lib.rs:63-88` — `parse_host_bundle_id_argument`
+- `rust/crates/orbit-child-runtime/src/window.rs:26-41` — `set_plugin_window_level`（開いている窓すべてへ適用）
+- `rust/crates/orbit-audio-daemon/src/lib.rs:38-40` — `host_bundle_id_from_env`（`ORBIT_HOST_BUNDLE_ID`）
+- `rust/crates/orbit-audio-daemon/src/outproc_child_command.rs:11-30` — `--host-bundle-id` を child の spawn 引数へ
+- `rust/crates/orbit-child-runtime/src/window.rs:63-69` — `windowShouldClose` が常に `NO`
+- `rust/crates/orbit-child-runtime/src/window.rs:218-226` — `WindowShell::close`（`performClose:` 禁止）
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:22-23` — `UI_CLOSE_TIMEOUT = 10 s`
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:95-105` — `UiEventHubCore.open_cycle`（close-cycle 順序ゲート）
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:197-203` — hub 全体のドレーン判定
@@ -1213,7 +1398,7 @@ CLAP を使う必要があります。
 - `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:296-323` — `ClosePluginUI` はフェーズ A 受理のみ
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1（close をオラクルにする）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1795-1817` — #633 E2E-1（close をオラクルにする）
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0〜UIH.8 — 仕様正本
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — #474 の P0〜P6 実装設計と owner 裁定 Q1〜Q8
 - [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — per-window pump の設計（C-A / C-B・2 レイヤ分離・却下案）
@@ -1224,3 +1409,6 @@ CLAP を使う必要があります。
 - Issue [#617](https://github.com/signalcompose/orbitscore/issues/617) — DSL 面 `seq.ui()`
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — ラック形エフェクトチェーン
 - Issue [#633](https://github.com/signalcompose/orbitscore/issues/633) — UI pump の per-window 化
+- Issue [#939](https://github.com/signalcompose/orbitscore/issues/939) / PR [#941](https://github.com/signalcompose/orbitscore/pull/941) — カーソル位置から 1 つだけ開く
+- Issue [#940](https://github.com/signalcompose/orbitscore/issues/940) — ホストが前面のときだけ窓を floating にする
+- [`docs/design/939-plugin-ui-by-cursor-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/939-plugin-ui-by-cursor-design.md) — #939 / #940 の設計（起案時点のスナップショット）

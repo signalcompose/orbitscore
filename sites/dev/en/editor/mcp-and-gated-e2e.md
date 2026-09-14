@@ -116,7 +116,7 @@ The server does not start by default. Near the end of `activate()`, the port is 
   if (mcpPort && mcpPort > 0) {
 ```
 
-The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode-extension/package.json:410-417`). The `ORBITSCORE_MCP_PORT` environment variable takes precedence so that the gated E2E, which launches the app **from the CLI**, does not have to touch settings files. The "pre-merge gate" section of CLAUDE.md, which says to launch with `ORBITSCORE_MCP_PORT=39123` ("without this environment variable the MCP server does not come up"), uses the same route.
+The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode-extension/package.json:421-428`). The `ORBITSCORE_MCP_PORT` environment variable takes precedence so that the gated E2E, which launches the app **from the CLI**, does not have to touch settings files. The "pre-merge gate" section of CLAUDE.md, which says to launch with `ORBITSCORE_MCP_PORT=39123` ("without this environment variable the MCP server does not come up"), uses the same route.
 
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
@@ -184,10 +184,13 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 | **Plugins** | `list_plugins` / `rescan_plugins` | Read / rescan the plugin catalogue (#463) |
 | | `save_plugin_state` | Save a running plugin's state (only while the transport is stopped) |
 | | `open_plugin_ui` / `close_plugin_ui` | Open / close a plugin UI; close waits for `UI_CLOSED_DONE` (#474 P4c) |
+| | `open_plugin_ui_at_cursor` | **No arguments.** Opens only the one plugin name the active editor's cursor sits on (#939) |
 | **Docs** | `get_dev_doc` / `search_dev_docs` | Read / search this site's Markdown |
 | **Registration** | `register_mcp_server` | Register this server into Claude Code (`.mcp.json` or `claude mcp add`) |
 
-`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` have optional handlers and are not registered on hosts that lack them. This keeps existing stub suites valid when a "different host" such as the WCTM pi harness reuses the seam.
+`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `open_plugin_ui_at_cursor` / `register_mcp_server` have optional handlers and are not registered on hosts that lack them. This keeps existing stub suites valid when a "different host" such as the WCTM pi harness reuses the seam.
+
+🔴 **#939 changed the predicate so that each tool looks only at the handler it actually calls.** Until then `open_plugin_ui` and `close_plugin_ui` were registered as a **pair** behind `if (openPluginUi && closePluginUi)`, so a host that supplied only one of them lost **both**. Adding a third tool (`open_plugin_ui_at_cursor`) to the same conjunction would have removed the existing two from every host without a cursor route, so the condition was split one tool at a time (`packages/vscode-extension/src/mcp-tools-plugins.ts:88-164`). The existing constraint that the **registration order** is visible in `tools/list`, and therefore cannot be changed, is unaffected.
 
 What is interesting is that most of this catalogue mirrors "operations a human can reach from the command palette or settings". `start_engine` is the "Start Engine" command, `configure_flash` is "Configure Flash", `rescan_plugins` is "Rescan Plugin Catalog" — each description names its counterpart command. The policy of **not widening the MCP tool surface even when a new observation is needed** is visible on the E2E helper side too (the comment on `rackChildPidsFromLog` in `tests/e2e/helpers/rack-child-pid.ts`: "**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある").
 
@@ -280,7 +283,7 @@ The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupS
 
 On 2026-09-08, [#811](https://github.com/signalcompose/orbitscore/pull/811) (#773) moved these four branches inside the callback of `createLinePrefixer`. The branches themselves and the order of the prefixes are unchanged, but **a line split at a chunk boundary no longer loses both fragments**, so one route by which an `evalMark` envelope could be dropped is gone. See [IV-1](/en/editor/vscode-architecture#the-stdout-bridge-envelopes-are-reassembled-into-lines-too-773) for the details.
 
-So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
+So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1045-1057`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
 
 The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is the **only channel** in which engine-side errors appear"); this PR rewords it to "the **only channel in which failures that happen asynchronously after evaluation returns** appear". The three matching passages in `CLAUDE.md` ("asserting on `ok` proves nothing") were updated to the post-`#614` meaning as well. **The range over which `ok` carries meaning has widened, but there is still a region where `get_log` is the only observation point** — that is the accurate understanding as of 2026-09-02.
 
@@ -446,7 +449,7 @@ The general lesson points the same way as #756, with the sign flipped: **a singl
 
 Prefixing per line also means that **every line the engine writes to stderr becomes an `ERROR:` line**. So a single `warn!` raised by the engine on a perfectly normal path is enough to drag down any test that counts ERROR lines. [#860](https://github.com/signalcompose/orbitscore/issues/860) (PR [#861](https://github.com/signalcompose/orbitscore/pull/861)) is exactly that case.
 
-`query_note_port_index`, which runs on every CLAP plugin load, raised a `warn!` whenever it met a plugin without a `NotePortsExtension`. But **an effect having no note ports is normal**, and the fallback to port 0 works just as the CLAP convention expects. The alarm was firing on the normal path. What got dragged down was an unrelated test watching automatic plugin-state snapshots, which failed as `default-baseline cycle must add no ERROR: lines ... expected 10 to be less than or equal to 9` (`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`). The one extra line was this warn.
+`query_note_port_index`, which runs on every CLAP plugin load, raised a `warn!` whenever it met a plugin without a `NotePortsExtension`. But **an effect having no note ports is normal**, and the fallback to port 0 works just as the CLAP convention expects. The alarm was firing on the normal path. What got dragged down was an unrelated test watching automatic plugin-state snapshots, which failed as `default-baseline cycle must add no ERROR: lines ... expected 10 to be less than or equal to 9` (`tests/e2e/orbitstudio-mcp-gated.spec.ts:3681-3685`). The one extra line was this warn.
 
 Two responses were available: **loosen the classifier** (exempt some stderr from the `ERROR:` prefix) or **stop the noise at the source**. #861 took the latter and lowered the `warn!` to a `debug!`, because the former walks back toward the very "real errors get dropped" direction that #756 had just closed off.
 
@@ -738,7 +741,7 @@ export function decideStartEngineForAgent(
 }
 ```
 
-The old implementation returned `ok: true, 'engine already running'` here and silently dropped `captureWav`. The caller believed it was recording and only discovered `ENOENT` when it tried to read `capture.wav`. As the regression pin for `#528`, the gated spec asserts both "it is rejected" and "the rejection does not tear the engine down" (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1212-1222`).
+The old implementation returned `ok: true, 'engine already running'` here and silently dropped `captureWav`. The caller believed it was recording and only discovered `ENOENT` when it tried to read `capture.wav`. As the regression pin for `#528`, the gated spec asserts both "it is rejected" and "the rejection does not tear the engine down" (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1240-1250`).
 
 ### Test list
 
@@ -1489,9 +1492,9 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — the `registerTool` calls (split out of `buildServer()` into three files in #887 bundle F) ()` (source of the tool catalogue)
 - `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing)
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` merge and URL construction
-- `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — output-channel ring buffer and monkey-patch
-- `packages/vscode-extension/src/extension.ts:150-284` — playhead state and decoration application
-- `packages/vscode-extension/src/extension.ts:237-291` — MCP server startup gate and handler wiring
+- `packages/vscode-extension/src/extension.ts:139-149` / `301-312` — output-channel ring buffer and monkey-patch
+- `packages/vscode-extension/src/extension.ts:151-289` — playhead state and decoration application
+- `packages/vscode-extension/src/extension.ts:241-296` — MCP server startup gate and handler wiring
 - `packages/vscode-extension/src/engine-handlers.ts:43-149` — `shouldFilterLine()` (exclusion of `[STEP]` and bridge envelopes)
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()` (#614)
@@ -1502,15 +1505,15 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()` (spawn-only options)
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` grammar, palette, `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV analysis (peak / RMS / onsets / `soundDetected`)
-- `packages/vscode-extension/package.json:410-417` — the `orbitscore.mcpServer.port` setting
+- `packages/vscode-extension/package.json:421-428` — the `orbitscore.mcpServer.port` setting
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
 - `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-153` — env contract, stale-artifact guard
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — the first test (launch, catalogue, capture, run_selection, onset verification)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — the #654 playhead E2E
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553` — the boundary between the shared-session tests and the self-launching ones (#917)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-154` — env contract, stale-artifact guard
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:566-1042` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1044-1970` — the first test (launch, catalogue, capture, run_selection, onset verification)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2821-2928` — the #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:6805-6808` — the boundary between the shared-session tests and the self-launching ones (#917)
 - `tests/e2e/vsix-cold-install-gated.spec.ts:1-51` — the cold install gate's env contract (`ORBIT_GATED_COLD_INSTALL`) and the strict / finder configurations (#878 / #873)
 - `tests/e2e/vsix-cold-install-gated.spec.ts:160-223` — from evaluating DSL through to the RMS and `get_log` assertions
 - `tests/e2e/helpers/harness-processes.ts:1-49` — the teardown containment policy, `selectRootPids()` and `userDataDirExceedsSocketLimit()` (#830)

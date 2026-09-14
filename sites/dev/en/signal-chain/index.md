@@ -903,10 +903,10 @@ pub(crate) fn write_apply_plan(shm_path: &Path, plan: &EffectChainPlan) -> io::R
 }
 ```
 
-The rack child is spawned with three arguments: `--shm` / `--chain` / `--sample-rate`. Unlike the
+The rack child is spawned with three arguments — `--shm` / `--chain` / `--sample-rate` — plus `--host-bundle-id <value>` when, and only when, the daemon's env carries `ORBIT_HOST_BUNDLE_ID` (#940; the child uses it to float its window in front. Unset means the argument is absent entirely). Unlike the
 old child, which started with `--plugin <absolute path>`, the manifest is a temporary file, so
 `pgrep -f` cannot find it. That is why the `tracing::info!` right after
-(`outproc_effect.rs:670-674`) announces the child's own PID, and the E2E PID oracle reads it from
+(`outproc_effect.rs:665-669`) announces the child's own PID, and the E2E PID oracle reads it from
 `get_log`. The comment records the trap that writing it with `eprintln!` would classify it as
 ERROR and make the E2E fail itself.
 
@@ -1656,7 +1656,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `CLAUDE.md:658-674` — the three lines of the pre-merge gate (when `--ignored` is used, when it is not, and why)
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — the intermittent SIGBUS in the unconditional gate and the hole in the `--ignored` filter
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — the E2E numeric design and its pure unit
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4081-4111` — the full-rack segment of the `#628 R28` hardware block
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4336-4366` — the full-rack segment of the `#628 R28` hardware block
 - `tests/core/rack-chain.spec.ts:105-414` — T3–T23 (LCS, occurrence, keep updates, uncertain recovery)
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1–T19 (array classification, three categories, layer rejection)
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24 (method-form diagnostic), T25 (`remove()` removal)

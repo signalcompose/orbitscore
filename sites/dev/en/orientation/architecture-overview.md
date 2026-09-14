@@ -128,7 +128,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 
 What is interesting is that the resolved path is not handed to the engine via env. The spawned engine CLI runs the same `resolveDaemonBinaryPath()` itself, so the result is deterministically identical and there is no reason to re-inject it.
 
-Only the debug flag and the capture seam (#307) go into this `env` variable (two more are added right before the spawn; they show up in a moment). **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
+The debug flag, the capture seam (#307) and **`ORBIT_HOST_BUNDLE_ID` (#940)** go into this `env` variable (two more are added right before the spawn; they show up in a moment). The third exists to float plugin windows in front of the host; when it cannot be resolved the key is deleted rather than passed through, so that a stale inherited value never reaches the children. **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
 // packages/vscode-extension/src/engine-process.ts:360-374
@@ -668,10 +668,10 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 
 ## Sources
 
-- `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring, the two status bar items, command registration
-- `packages/vscode-extension/src/extension.ts:237-291` — MCP server start condition (`ORBITSCORE_MCP_PORT` over the setting) and the handler bundle
+- `packages/vscode-extension/src/extension.ts:291-409` — `activate()`: log ring, the two status bar items, command registration
+- `packages/vscode-extension/src/extension.ts:241-296` — MCP server start condition (`ORBITSCORE_MCP_PORT` over the setting) and the handler bundle
 - `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()`: the boundary that runtime-requires the engine's compiled JS (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
-- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: kind decision → pre-check → env → spawn
+- `packages/vscode-extension/src/engine-process.ts:302-453` — `startEngine()`: kind decision → pre-check → env → spawn
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: meta line + `setDocumentDirectory` injection and `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate shares `writeCodeToEngine`
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
@@ -694,7 +694,7 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr routing and ready-line reading
 - `packages/engine/src/audio/rust-engine/index.ts:1-8` — protocol v0.1, note on cutover #108
 - `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION` / `DSL_VERSION`
-- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/lib.rs:102-111` — `SPAWNABLE_CHILD_BINARIES`
 - `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461` — child resolution by sibling-of-exe
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — bundling policy for daemon / children / standard plugins
 - `package.json:9-11` — `build:copy-engine` calls `copy-daemon-bin.sh`

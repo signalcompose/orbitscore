@@ -373,6 +373,7 @@ drums.effect([])                                        // remove everything (re
 - Built-in plugins (such as `Gain`) have no UI, so passing a name for one is an explicit error.
 - Zero matches is also an explicit error (it never silently no-ops).
 - The open form of `ui()` is idempotent (re-evaluating the same line does not open it twice). Close is not idempotent.
+- To open **only one of several identically named inserts**, do not use the DSL: **right-click the plugin name in the score** and choose `OrbitScore: Open Plugin UI` ([Effects](../mixing/effects.md#right-click-to-open-just-one)). `ui("name")` opens every match, so the DSL has no form that names a single one.
 
 ---
 

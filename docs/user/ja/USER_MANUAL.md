@@ -658,6 +658,22 @@ drums.ui("TAL Reverb 4")      // 名前が一致する insert の UI をすべ�
 drums.ui("TAL Reverb 4", false) // 閉じる
 ```
 
+### プラグイン UI: 右クリック（#939）
+
+同名の insert が複数ある場合、`ui("名前")` は**一致するものを全部**開きます。**そのうちの
+1 つだけ**を開きたいときは、楽譜の**プラグイン名の上で右クリック**し、
+`OrbitScore: Open Plugin UI` を選びます（**カーソルが乗っている 1 つだけ**が開きます）。
+
+```orbitscore
+drums.effect(["ValhallaRoom", "TAL Reverb 4", "ValhallaRoom"])
+//                                             ^ ここで右クリック → 3 つ目だけが開く
+```
+
+- instrument 名（`"Kontakt 8.vst3"` のような文字列）の上でも同じように開けます。
+- プラグイン名でない位置・標準プラグイン（`Gain` など）・保存済み state ファイル名の上では
+  **理由を明示したエラー**になります（黙って何も起きることはありません）。
+- 開いた窓は、**OrbitStudio が前面にいる間だけ**エディタの手前に浮きます（macOS・#940）。
+
 ### LinkAudio との併用不可（v1 制限）
 
 `global.linkAudio()` と Plugin Hosting（effect / instrument / sum / aux のいずれか）は、v1 では

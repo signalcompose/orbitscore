@@ -882,9 +882,9 @@ pub(crate) fn write_apply_plan(shm_path: &Path, plan: &EffectChainPlan) -> io::R
 }
 ```
 
-rack child の spawn は `--shm` / `--chain` / `--sample-rate` の 3 引数です。旧 child が
+rack child の spawn は `--shm` / `--chain` / `--sample-rate` の 3 引数に加え、daemon の env に `ORBIT_HOST_BUNDLE_ID` があるときだけ `--host-bundle-id <値>` が付きます（#940。窓を前面に浮かせるために child が使う。未設定なら引数ごと付きません）。旧 child が
 `--plugin <絶対パス>` で起動していたのと違い、manifest は一時ファイルなので `pgrep -f` では
-捕まりません。そのため直後の `tracing::info!`（`outproc_effect.rs:670-674`）で自分の PID を
+捕まりません。そのため直後の `tracing::info!`（`outproc_effect.rs:665-669`）で自分の PID を
 名乗り、E2E の PID オラクルは `get_log` からこれを読みます。`eprintln!` で書くと ERROR に
 分類されて E2E 自身を落とす、という罠がコメントに残っています。
 
@@ -1618,7 +1618,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `CLAUDE.md:658-674` — マージ前ゲートの 3 行（`--ignored` 付き / 無しの使い分けとその理由）
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — 無条件ゲートの間欠 SIGBUS と `--ignored` フィルタの穴
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — E2E の数値設計とその純 unit
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4081-4111` — `#628 R28` 実機ブロックの full rack 区間
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4336-4366` — `#628 R28` 実機ブロックの full rack 区間
 - `tests/core/rack-chain.spec.ts:105-414` — T3〜T23（LCS・occurrence・keep 更新・uncertain 復旧）
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1〜T19（配列分類・3 カテゴリ・layer 拒否）
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24（メソッド形の診断）・T25（`remove()` 撤去）

@@ -1,12 +1,12 @@
 ---
 title: "PH-2. Plugin UI Hosting — from seq.ui() to a Window"
 chapter-id: "PH-2"
-verified-against: ca745e8
-verified-at: "2026-09-12"
+verified-against: c6b8f75
+verified-at: "2026-09-14"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. On 2026-09-14 it followed [#941](https://github.com/signalcompose/orbitscore/pull/941) (#939 / #940), adding the cursor-route and window-level sections. code is the truth; this page is only a snapshot of understanding at that time.
 
 # PH-2. Plugin UI Hosting — from seq.ui() to a Window
 
@@ -122,6 +122,82 @@ layer** while the same mechanism is shared underneath (design note #628 R9 rejec
 idempotent open in the pump" because path-dependent semantics do not belong in a layer that has no
 knowledge of the path).
 
+## The editor surface: open only the one under the cursor (#939)
+
+`ui("name")` opens **every matching insert** (SC.10.10.1 norm 3 — by specification). Insert the
+same plugin twice and both windows open.
+
+```js
+drums.effect(["ValhallaRoom", "TAL Reverb 4", "ValhallaRoom"])
+drums.ui("ValhallaRoom")   // ← both the first and the third open
+```
+
+The index form (`ui(2)`) was withdrawn in SC.10.10 norm (2): racks can nest, so a position cannot
+be named by a one-dimensional integer. MCP's `open_plugin_ui`, meanwhile, can address one insert
+via `chain_path` — which left the state where **an LLM could open exactly one and only a human
+could not**.
+
+That is the gap #939 closed. **Right-click** a plugin name in the score and choose
+`OrbitScore: Open Plugin UI` from the context menu, and **only the one under the cursor** opens.
+The norm for the primary route was **revised from Cmd+Click to right-click** in SC.10.10 (2)
+(`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`).
+
+Resolution happens in three steps.
+
+1. `resolvePluginUiTargetAtCursor()` derives the receiver (sequence name / `master` / `sum:` /
+   `aux:`) and the **path inside the chain** (`chainPath`) from **the document text and the cursor
+   position alone**. It is a pure function: it reads neither the engine nor VS Code state
+2. `pluginUiAddressFor()` is the **only place** that collapses that path into the UIH.5
+   compatibility index
+3. `openPluginUiAtCursor()` calls `pluginUiForAgent('open', ...)`, joining the **same engine path**
+   as the existing `open_plugin_ui`
+
+```typescript
+// packages/vscode-extension/src/plugin-ui-at-cursor.ts:114-136
+/** The sole cursor-route conversion from syntax paths to UIH.5 compatibility indexes. */
+export function pluginUiAddressFor(
+  target: PluginUiCursorTarget,
+):
+  | { ok: true; receiver: string; index: number; expectedName: string }
+  | { ok: false; message: string } {
+  if (target.kind === 'instrument') {
+    return { ok: true, receiver: target.receiver, index: 0, expectedName: target.expectedName }
+  }
+  if (target.chainPath.length !== 1) {
+    return {
+      ok: false,
+      message:
+        'layer() (parallel racks) is staged behind PDC (SC.10.11); v1 supports serial chains only',
+    }
+  }
+  return {
+    ok: true,
+    receiver: target.receiver,
+    index: (target.chainPath[0] ?? 0) + 1,
+    expectedName: target.expectedName,
+  }
+}
+```
+
+Confining the collapse to one place is what lets the resolver, the E2E and the wiring stay
+unchanged when `layer()` (parallel racks) arrives. v1 is serial chains only, so a `chainPath`
+whose length is not 1 is refused loudly right here.
+
+🔴 **Standard plugins such as `Gain(...)` count as elements too.** The engine consumes a chain
+offset for standard plugins as well, so failing to count one shifts the index by one. When two
+inserts share a name, the `expectedName` guard cannot stop it either.
+
+A position that cannot be resolved fails loudly in **all five cases** (never a silent no-op):
+`not-on-plugin-name` / `standard-plugin` (on `Gain` — standard plugins have no UI, SC.10.8) /
+`state-file` (on a saved state file name) / `selection-spans-outside` (the selection does not sit
+inside one plugin name) / `unresolved-receiver` (the receiver at the head of the line cannot be
+identified).
+
+MCP's `open_plugin_ui_at_cursor` (no arguments) does not call the handler directly: it goes through
+`vscode.commands.executeCommand(OPEN_PLUGIN_UI_AT_CURSOR_COMMAND)`. That leaves **the click as the
+only difference from the menu**, which puts the command-registration wiring inside the test's field
+of view too.
+
 ## Why the UI lives in the child process
 
 Before descending from the DSL, let us confirm the fundamental premise. **Why is the plugin UI
@@ -151,8 +227,10 @@ the `orbit-effect-rack-child` that #628 added.
 ```
 
 The main-thread side brings up `NSApplication` with the **Accessory** policy (no Dock icon, but
-windows and keyboard input are possible) and invokes a service callback periodically via
-`NSTimer`.
+windows and keyboard input are possible). **As of #940 it immediately registers an observer that
+watches which application is frontmost** — only when a host bundle ID was supplied at spawn time.
+That is a window-ordering concern, so it is read below in
+"[Floating the window above the editor (#940)](#floating-the-window-above-the-editor-940)".
 
 ```rust
 // rust/crates/orbit-child-runtime/src/appkit.rs:205-221
@@ -173,6 +251,21 @@ windows and keyboard input are possible) and invokes a service callback periodic
         unsafe {
             notification_center.addObserver_selector_name_object(
                 &observer,
+```
+
+The `NSTimer` that invokes the service callback periodically is assembled after that observer.
+
+```rust
+// rust/crates/orbit-child-runtime/src/appkit.rs:234-242
+    let timer = unsafe {
+        NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+            MAIN_TICK_INTERVAL.as_secs_f64(),
+            &target,
+            sel!(tick:),
+            None,
+            true,
+        )
+    };
 ```
 
 ```rust
@@ -1132,6 +1225,94 @@ primary oracle of the gated E2E is the close.
 
 > NOTE: unverified — needs confirmation (a direct record of how the CGWindowList path was left out of the gated E2E)
 
+## Floating the window above the editor (#940)
+
+A UI that opened **behind the editor** was found during the manual gate for #939. By owner
+adjudication it was folded into the same PR ("behaviourally it is the same concern").
+
+**Not one byte of the wire changed.** The window level is decided by the child itself.
+
+| Layer | What it passes on |
+|---|---|
+| Extension | `resolvePluginWindowHostBundleId()` reads `CFBundleIdentifier` from the **outer `.app`**'s `Info.plist` and puts it on the engine's env as `ORBIT_HOST_BUNDLE_ID` (`undefined` off macOS, or outside a `.app`) |
+| daemon | `host_bundle_id_from_env()` reads that env and appends `--host-bundle-id <value>` to the child's spawn arguments (nothing is appended when it is unset) |
+| child | `parse_host_bundle_id_argument()` takes the value out, and `strip_host_bundle_id_argument()` **removes it from the remaining argv** so no child's own `parse_args()` has to learn an unknown flag |
+
+The child subscribes to `NSWorkspaceDidActivateApplicationNotification` and recomputes the level
+whenever the frontmost application changes. The decision itself is factored into a pure function
+that never touches AppKit.
+
+```rust
+// rust/crates/orbit-child-runtime/src/lib.rs:26-50
+/// Decide the plugin-window level without depending on AppKit notification plumbing.
+///
+/// A missing host bundle ID is the legacy configuration and always stays normal,
+/// including when the child itself happens to be frontmost.
+/// `frontmost_is_child_process` covers standalone child executables, for which
+/// `NSRunningApplication::bundleIdentifier` is nil because there is no `Info.plist`.
+pub fn desired_plugin_window_level(
+    host_bundle_id: Option<&str>,
+    child_bundle_id: Option<&str>,
+    frontmost_bundle_id: Option<&str>,
+    frontmost_is_child_process: bool,
+) -> PluginWindowLevel {
+    let Some(host_bundle_id) = host_bundle_id else {
+        return PluginWindowLevel::Normal;
+    };
+    let host_is_frontmost = frontmost_bundle_id == Some(host_bundle_id);
+    let child_is_frontmost = frontmost_is_child_process
+        || child_bundle_id
+            .is_some_and(|child_bundle_id| frontmost_bundle_id == Some(child_bundle_id));
+    if host_is_frontmost || child_is_frontmost {
+        PluginWindowLevel::Floating
+    } else {
+        PluginWindowLevel::Normal
+    }
+}
+```
+
+🔴 **The hole `frontmost_is_child_process` closes**: a standalone child executable has no
+`Info.plist`, so `NSRunningApplication::bundleIdentifier` returns **`nil`**. Comparing bundle IDs
+alone therefore cannot tell who is frontmost when **the plugin window itself is clicked**, and the
+window would drop out of floating. The comparison is made on the same `NSRunningApplication`
+object instead.
+
+🔴 **Detecting focus on the extension side was not the design chosen.** `onDidChangeWindowState`
+only sees VS Code's own focus, so **floating would be lost the moment the plugin window is
+clicked**. A child can observe "I am frontmost" directly, which makes that trap structurally
+impossible.
+
+The resolved level is applied to **every window currently open**.
+
+```rust
+// rust/crates/orbit-child-runtime/src/window.rs:26-41
+fn appkit_window_level(level: PluginWindowLevel) -> NSWindowLevel {
+    match level {
+        PluginWindowLevel::Normal => NSNormalWindowLevel,
+        PluginWindowLevel::Floating => NSFloatingWindowLevel,
+    }
+}
+
+pub(crate) fn set_plugin_window_level(level: PluginWindowLevel) {
+    CURRENT_PLUGIN_WINDOW_LEVEL.set(level);
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    for window in NSApplication::sharedApplication(mtm).windows().iter() {
+        window.setLevel(appkit_window_level(level));
+    }
+}
+```
+
+A build that receives no `host_bundle_id` — including children spawned before #940 — stays at
+**`NSNormalWindowLevel`, exactly as before**. The leading `let ... else` in
+`desired_plugin_window_level()` guarantees it.
+
+> **Unverified**: window stacking order cannot be observed automatically, so three checks were
+> still **outstanding manually** as of PR #941 (see the checklist in its description): the window
+> rises when the host is frontmost, it does not cover another app that is frontmost, and clicking
+> the window itself does not drop it out of floating.
+
 ## Failure modes
 
 The failure modes readable from UIH.7 and the implementation, together with their escape routes.
@@ -1210,13 +1391,24 @@ must be CLAP.
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866` — the DONE wait in `closePluginUi` (acceptance ≠ completion)
 - `packages/vscode-extension/src/plugin-ui-bridge.ts:90-98` — writing the `//#pluginUi` meta line
 - `packages/vscode-extension/src/engine-handlers.ts:243-247` — routing of `{"pluginUi"` result lines
-- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-145` — the `open_plugin_ui` / `close_plugin_ui` tool definitions
+- `packages/vscode-extension/src/mcp-tools-plugins.ts:88-164` — the `open_plugin_ui` / `close_plugin_ui` / `open_plugin_ui_at_cursor` tool definitions (the registration predicate was split per tool in #939)
+- `packages/vscode-extension/src/plugin-ui-at-cursor.ts:51-112` — `resolvePluginUiTargetAtCursor` (cursor → receiver + `chainPath`, five failure reasons)
+- `packages/vscode-extension/src/plugin-ui-at-cursor.ts:114-136` — `pluginUiAddressFor` (the only collapse into the UIH.5 index)
+- `packages/vscode-extension/src/plugin-ui-at-cursor.ts:184-190` — `openPluginUiAtCursorForAgent` (MCP goes through `executeCommand`)
+- `packages/vscode-extension/src/engine-process.ts:54-96` — `resolvePluginWindowHostBundleId` (the outer `.app`'s `CFBundleIdentifier`)
 - `rust/crates/orbit-child-runtime/src/lib.rs:1-6` — the execution model (main = NSApplication runloop / audio = dedicated thread)
-- `rust/crates/orbit-child-runtime/src/lib.rs:90-108` — `service_child_main` (mailbox dispatch + `ui.tick`)
-- `rust/crates/orbit-child-runtime/src/lib.rs:110-113` — `MAIN_TICK_INTERVAL = 20 ms`
-- `rust/crates/orbit-child-runtime/src/appkit.rs:205-221` — the Accessory policy and `NSTimer`
-- `rust/crates/orbit-child-runtime/src/window.rs:36-42` — `windowShouldClose` always returns `NO`
-- `rust/crates/orbit-child-runtime/src/window.rs:188-196` — `WindowShell::close` (`performClose:` forbidden)
+- `rust/crates/orbit-child-runtime/src/lib.rs:190-208` — `service_child_main` (mailbox dispatch + `ui.tick`)
+- `rust/crates/orbit-child-runtime/src/lib.rs:210-213` — `MAIN_TICK_INTERVAL = 20 ms`
+- `rust/crates/orbit-child-runtime/src/appkit.rs:205-221` — the Accessory policy and registration of the frontmost-application observer (#940)
+- `rust/crates/orbit-child-runtime/src/appkit.rs:234-242` — the `NSTimer` for the service callback
+- `rust/crates/orbit-child-runtime/src/appkit.rs:170-185` — `ActivationObserver::update_window_level`
+- `rust/crates/orbit-child-runtime/src/lib.rs:26-50` — `desired_plugin_window_level` (the decision, with no AppKit in it)
+- `rust/crates/orbit-child-runtime/src/lib.rs:63-88` — `parse_host_bundle_id_argument`
+- `rust/crates/orbit-child-runtime/src/window.rs:26-41` — `set_plugin_window_level` (applied to every open window)
+- `rust/crates/orbit-audio-daemon/src/lib.rs:38-40` — `host_bundle_id_from_env` (`ORBIT_HOST_BUNDLE_ID`)
+- `rust/crates/orbit-audio-daemon/src/outproc_child_command.rs:11-30` — `--host-bundle-id` onto the child's spawn arguments
+- `rust/crates/orbit-child-runtime/src/window.rs:63-69` — `windowShouldClose` always returns `NO`
+- `rust/crates/orbit-child-runtime/src/window.rs:218-226` — `WindowShell::close` (`performClose:` forbidden)
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:22-23` — `UI_CLOSE_TIMEOUT = 10 s`
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:95-105` — `UiEventHubCore.open_cycle` (close-cycle ordering gate)
 - `rust/crates/orbit-child-runtime/src/ui_service.rs:197-203` — hub-wide drain check
@@ -1233,7 +1425,7 @@ must be CLAP.
 - `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:296-323` — `ClosePluginUI` is Phase A acceptance only
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1 (using close as the oracle)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1795-1817` — #633 E2E-1 (using close as the oracle)
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0–UIH.8 — the normative spec
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — the #474 P0–P6 implementation design and owner decisions Q1–Q8
 - [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — the per-window pump design (C-A / C-B, two-layer separation, rejected alternatives)
@@ -1244,3 +1436,6 @@ must be CLAP.
 - Issue [#617](https://github.com/signalcompose/orbitscore/issues/617) — the DSL surface `seq.ui()`
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — rack-shaped effect chains
 - Issue [#633](https://github.com/signalcompose/orbitscore/issues/633) — making the UI pump per-window
+- Issue [#939](https://github.com/signalcompose/orbitscore/issues/939) / PR [#941](https://github.com/signalcompose/orbitscore/pull/941) — open only the one under the cursor
+- Issue [#940](https://github.com/signalcompose/orbitscore/issues/940) — float the window only while the host is frontmost
+- [`docs/design/939-plugin-ui-by-cursor-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/939-plugin-ui-by-cursor-design.md) — the #939 / #940 design (a snapshot as drafted)

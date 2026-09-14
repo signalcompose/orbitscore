@@ -255,7 +255,7 @@ The last two are written like this.
 }
 ```
 
-The omitted block is the table that hands 25 handlers (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) to `startOrbitScoreMcpServer()`. The internals of the MCP server and the gated E2E are left to [IV-3. MCP Server and Gated Real-Device E2E](/en/editor/mcp-and-gated-e2e). `autoStartConfiguredRustEngine()` auto-starts the engine under the `rust` kind when an output device is saved, and checks liveness 5 seconds later (`engine-process.ts:234-257`).
+The omitted block is the table that hands 24 handlers (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) to `startOrbitScoreMcpServer()`. The internals of the MCP server and the gated E2E are left to [IV-3. MCP Server and Gated Real-Device E2E](/en/editor/mcp-and-gated-e2e). `autoStartConfiguredRustEngine()` auto-starts the engine under the `rust` kind when an output device is saved, and checks liveness 5 seconds later (`engine-process.ts:234-257`).
 
 ### In the shipped artifact it died before `activate()` (#873)
 
@@ -704,7 +704,7 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
         stdio: ['pipe', 'pipe', 'pipe'],
 ```
 
-**The 2026-09-10 ruling (#827 / #502) removed the `engineKind` branch entirely, along with the explicit `ORBITSCORE_ENGINE` set and the `ORBIT_SCSYNTH_PATH` hand-off.** For the sole remaining backend (the Rust daemon), only the debug flag and the capture seam (#307) are pushed into the `env` variable.
+**The 2026-09-10 ruling (#827 / #502) removed the `engineKind` branch entirely, along with the explicit `ORBITSCORE_ENGINE` set and the `ORBIT_SCSYNTH_PATH` hand-off.** For the sole remaining backend (the Rust daemon), three things are pushed into the `env` variable: the debug flag, the capture seam (#307) and **`ORBIT_HOST_BUNDLE_ID` (#940)**. The last is the `CFBundleIdentifier` that `resolvePluginWindowHostBundleId()` read from the outer `.app`'s `Info.plist`; when it cannot be resolved (off macOS, or outside a `.app`) the key is **`delete`d rather than left alone**, so that a stale inherited value cannot flow down to the children — an `if` alone would not be enough. Where the value ends up is covered in "Floating the window above the editor (#940)" in [PH-2](/en/plugin-hosting/plugin-ui).
 
 That is not, however, everything the spawn receives. **On 2026-09-12 (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)) the spawn arguments themselves changed.** The extension stopped looking up `node` on PATH and now uses **the Node that VS Code itself bundles** (`process.execPath`), because a VS Code launched from Finder or launchd has the minimal PATH from `/etc/paths` and there is no `node` there on machines where node comes from nodenv or Homebrew. The extension host is Electron, so `process.execPath` does not run as Node on its own; it becomes Node only once `ELECTRON_RUN_AS_NODE=1` is passed. `ELECTRON_NO_ASAR=1` is set alongside it because Electron's asar hook stays alive in that child, making `fs` treat a directory whose name ends in `.asar` as an archive — a difference from plain node that would only show up if such a path appeared in what the user passed to `global.audioPath(...)`.
 
@@ -1028,7 +1028,7 @@ export function applyEngineExit(
 }
 ```
 
-`deactivate()` `kill()`s the engine and disposes the playhead decoration types, the MCP server, and the Webview panel (`extension.ts:293-314`).
+`deactivate()` `kill()`s the engine and disposes the playhead decoration types, the MCP server, and the Webview panel (`extension.ts:298-319`).
 
 ---
 
@@ -1106,9 +1106,9 @@ The main changes that entered the extension between the first draft on 2026-05-0
 |---|---|---|
 | Bundle `orbit-audio-daemon` into the `.vsix` and add it as the last candidate of `resolveDaemonBinaryPath()` | #306 | `docs/archive/WORK_LOG_2026-07.md` §6.185 (2026-07-03) |
 | The `orbitscore.engine` setting (default `rust`), branching at 4 sites via `getConfiguredEngineKind()`, explicit setting of `ORBITSCORE_ENGINE` | #377 / #366 | §6.186 (2026-07-07), `extension.ts:653-669` |
-| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:203-236` |
-| MCP control server (Agent Bridge), from `evaluate_orbitscore` to 25 handlers, log ring for `get_log`, `.mcp.json` registration command | #388 | §6.188-6.192 (2026-07-07), `extension.ts:237-291`, `log-ring.ts` → [IV-3](/en/editor/mcp-and-gated-e2e) |
-| Live playhead highlight via `[STEP]` lines (per-seq colors, nested argPath, `orbitscore.playheadPalette`) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
+| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:207-240` |
+| MCP control server (Agent Bridge), from `evaluate_orbitscore` to 24 handlers, log ring for `get_log`, `.mcp.json` registration command | #388 | §6.188-6.192 (2026-07-07), `extension.ts:241-296`, `log-ring.ts` → [IV-3](/en/editor/mcp-and-gated-e2e) |
+| Live playhead highlight via `[STEP]` lines (per-seq colors, nested argPath, `orbitscore.playheadPalette`) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:151-289` |
 | Local serving of the dev learning site and `openDevDocs` / Webview panel / Walkthrough / the Learning view on the Activity Bar | #450 / #457 | §6.260-6.261 (2026-07-17), `docs-panels.ts:52-129` |
 | Passing the base directory out-of-band via the `//#documentDirectory` meta line (for import) | #456 | §6.266 (2026-07-17), `engine-process.ts:653-658` |
 | Plugin catalog name completion + `rescanPlugins` (3 surfaces: command / right-click / MCP) | #463 | §6.279 (2026-07-17), `dsl-providers.ts:92-172` |
@@ -1120,7 +1120,7 @@ The main changes that entered the extension between the first draft on 2026-05-0
 | Correlating evaluation results via `//#evalMark` (`EvalMarkBridge`), an independent stdout branch | #614 | `eval-mark-bridge.ts:1-23`, `engine-handlers.ts:248-256` |
 | The `browsePlugins` command and the unknown-plugin-name diagnostic | #638 | §6.412 (2026-08-29), `plugin-commands.ts:35-99`, `diagnostics-provider.ts:160-168` → [PH-3](/en/plugin-hosting/catalog) |
 | The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)" (rotated out of the current log), `package.json:34-43` |
-| The extension's own runtime dependencies (`@modelcontextprotocol/sdk` / `zod`) bundled into `dist/node_modules`. On a cold install hoisting kept them out of the `.vsix` and `activate()` died at module load | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)", `packages/vscode-extension/package.json:419-420`, `scripts/install-bundle-deps.sh` |
+| The extension's own runtime dependencies (`@modelcontextprotocol/sdk` / `zod`) bundled into `dist/node_modules`. On a cold install hoisting kept them out of the `.vsix` and `activate()` died at module load | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)", `packages/vscode-extension/package.json:430-431`, `scripts/install-bundle-deps.sh` |
 
 The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEngine` is synchronous and requires scsynth" no longer hold at 69dc968.
 
@@ -1161,20 +1161,20 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/package.json:34-43` — the `capabilities.untrustedWorkspaces` declaration (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — the 6 tests that inspect the declaration (including why `restrictedConfigurations` must not fall back to `?? []`)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — the shared helper for reading the manifest (`readExtensionManifest()` / `declaredConfigurationKeys()`)
-- `packages/vscode-extension/src/extension.ts:104-134` — module-level state and the 4 bridges
-- `packages/vscode-extension/src/extension.ts:150-284` — live playhead decoration management (#390)
-- `packages/vscode-extension/src/extension.ts:91-291` — entire `activate()`: log-ring monkey-patch, status bar, config listeners, command / TreeView registration, diagnostics, MCP server, auto-start
-- `packages/vscode-extension/src/extension.ts:293-314` — `deactivate()`
+- `packages/vscode-extension/src/extension.ts:105-135` — module-level state and the 4 bridges
+- `packages/vscode-extension/src/extension.ts:151-289` — live playhead decoration management (#390)
+- `packages/vscode-extension/src/extension.ts:92-296` — entire `activate()`: log-ring monkey-patch, status bar, config listeners, command / TreeView registration, diagnostics, MCP server, auto-start
+- `packages/vscode-extension/src/extension.ts:298-319` — `deactivate()`
 - `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` were removed in #502)
 - `packages/vscode-extension/src/engine-process.ts:121-134` — `updateBundleStatus()` (`maybeShowBundleNotice()` was scsynth-only and was removed in #502)
-- `packages/vscode-extension/src/extension.ts:316-333` — `showCommands()` (the engine-kind branch was removed in #502; it now always focuses the Engine view) / `restartEngine()` / `reloadWindow()`
+- `packages/vscode-extension/src/extension.ts:321-338` — `showCommands()` (the engine-kind branch was removed in #502; it now always focuses the Engine view) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`: bridge dispatch through `createLinePrefixer` + `StringDecoder`, and the `applyEngineStdoutChunk` call (#773)
 - `packages/vscode-extension/src/engine-handlers.ts:371-391` — `createLinePrefixer()`: reassembling a chunk stream into lines (carrying `partial` over, `flush()`, skipping empty lines), plus the implementation comment enumerating all four "chunk → line" routes (#756 / #773)
 - `packages/vscode-extension/src/engine-handlers.ts:407-429` — `setupStderrHandler()`: line-wise `ERROR:` prefixing and the flush on `end`
 - Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) / PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — stdout bridge envelopes split at a chunk boundary losing both fragments
 - `tests/vscode-extension/extension-wiring.spec.ts` — the four specs pinning line-wise prefixing (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
 - `packages/vscode-extension/src/engine-process.ts:234-257` — `autoStartConfiguredRustEngine()`
-- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: engine-kind pre-check, args / env, spawn, handlers, nextTick guard
+- `packages/vscode-extension/src/engine-process.ts:302-453` — `startEngine()`: engine-kind pre-check, args / env, spawn, handlers, nextTick guard
 - `packages/vscode-extension/src/engine-process.ts:459-508` — `stopEngine()`: drain, SIGTERM, SIGKILL on the `exitCode`/`signalCode` test
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
 - `packages/vscode-extension/src/dsl-providers.ts:41-173` — `registerCompletionProviders()`: the 3 families chain / pitch scope / plugin catalog
@@ -1186,7 +1186,7 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark` (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
 - `packages/vscode-extension/src/mcp-server.ts:52-80` — the top-level `require` of the MCP SDK and `zod`. Evaluated before `activate()`, so a bundling gap takes down activation entirely (#873)
-- `packages/vscode-extension/package.json:419-420` — `install-extension-deps.sh` appended to `build` / `build:clean` (#873)
+- `packages/vscode-extension/package.json:430-431` — `install-extension-deps.sh` appended to `build` / `build:clean` (#873)
 - `scripts/install-bundle-deps.sh:13-37` — the hoisting problem itself, the table of the two engine-side and one extension-side incidents, and why the esbuild migration (#875) is called the destination rather than this stopgap
 - `scripts/install-extension-deps.sh:10-28` — the two reasons the destination is `dist/node_modules`, and the path to `--no-dependencies`
 - `scripts/check-vsix-bundled-deps.mjs:83-98` — the post-package gate stating that its guarantee differs between depth 1 and depth > 1

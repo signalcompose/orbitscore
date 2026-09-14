@@ -613,6 +613,32 @@ Diagnostic 6 warns when `.output()` appears without a `linkAudio()` declaration.
 
 The skip order mirrors the engine's own resolution order (`Sequence.resolveLineDest()` / `resolveNamedOutputDest()`), with **LinkAudio last**: `"master"` → a declared sum/aux name → an `"L,R"` physical-channel pair → a LinkAudio channel name. Bus names are collected from the whole document — a live-coding file is re-evaluated as a whole, so `global.sum(...)` written *below* the sequences that target it is the normal case, not an edge case.
 
+There are two declaration shapes: the **string form** `global.sum("drums")`, and the **variable
+form** `var verb = mix.aux` (#459 — the variable's own name becomes the bus name). The #940 review
+**generalised the receiver of the latter pattern to any identifier**.
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:225-235
+/**
+ * `var verb = mix.aux` — the variable NAME is the bus name (#459).
+ *
+ * 🔴 The receiver is **any identifier**, not the literal `mix`. `mix` is itself a variable
+ * (`var mix = init global.mixer`, SC.2.1), so a score is free to call it something else and
+ * the declaration still means the same thing. Pinning it to `mix.` rejected those scores.
+ * (#940 review: a third copy of this pattern was about to be added with the general form.)
+ */
+const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(sum|aux)\b/g
+
+/**
+```
+
+`mix` is not a keyword: it is an ordinary variable produced by `var mix = init global.mixer`
+(SC.2.1), so a score is free to call it something else and the declaration still means the same
+thing. The old pattern, pinned to `mix.`, **missed the bus declarations in such scores** — `output("verb")` was then
+not skipped as a declared bus, and the "LinkAudio is required" diagnostic above misfired. To stop a third reader of this declaration shape from appearing,
+`collectDerivedMixerBuses()` is the shared entry point for both the diagnostics and the cursor
+resolver.
+
 ### 9. Unknown Plugin Name (Warning)
 
 A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
@@ -692,8 +718,8 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 |---|---|---|
 | Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `engine-process.ts:645-683` |
 | Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `run-selection.ts:176-184` / `202-206` |
-| Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
-| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:203-236` |
+| Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:151-289` |
+| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:207-240` |
 | The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `engine-process.ts:653-658` |
 | `linkAudio` added to `GLOBAL_ONCE_METHODS`, LinkAudio diagnostics 6-8 | (LinkAudio #209 family) | `diagnostics-analysis.ts:44-58` / `:194-391` |
 | No flash when sending fails | — | the comment at `run-selection.ts:199-201` |
@@ -741,13 +767,13 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate and `//#evalMark`
 - `packages/vscode-extension/src/engine-handlers.ts:248-256` — the independent `{"evalMark"` branch on stdout
-- `packages/vscode-extension/src/extension.ts:150-284` — playhead decoration management and `handleStepLine()`
+- `packages/vscode-extension/src/extension.ts:151-289` — playhead decoration management and `handleStepLine()`
 - `packages/vscode-extension/src/diagnostics-provider.ts:21-171` — `updateDiagnostics()`: 3 per-line + 6 cross-line
 - `packages/vscode-extension/src/dsl-providers.ts:176-213` — `registerOutputCodeActionProvider()`: the quick fix for `output-missing` / `dry-not-routed`
 - `packages/vscode-extension/src/playhead.ts:39-54` — the `[STEP]` line grammar and `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
-- `packages/vscode-extension/src/diagnostics-analysis.ts:110-468` — the cross-line analysis functions
+- `packages/vscode-extension/src/diagnostics-analysis.ts:110-495` — the cross-line analysis functions
 - `packages/vscode-extension/src/diagnostics-analysis.ts:349-495` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table

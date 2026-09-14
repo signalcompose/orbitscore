@@ -613,6 +613,31 @@ severity への写像は `updateDiagnostics()` 側で、`code` を `vscode.Diagn
 
 除外の判定順は engine 側の解決順 (`Sequence.resolveLineDest()` / `resolveNamedOutputDest()`) と同じで、**LinkAudio が最後**です。`"master"` → 宣言済み sum/aux 名 → `"L,R"` 物理アウト対 → LinkAudio channel 名。バス名の収集はファイル全体を対象にします — ライブコーディングのファイルはまとめて再評価されるので、`global.sum(...)` が対象 sequence の**下**に書かれているのは普通だからです。
 
+宣言の形は 2 つあります。`global.sum("drums")` の**文字列形**と、`var verb = mix.aux` の
+**変数形**（#459・変数名そのものがバス名になる）です。後者のパターンは #940 のレビューで
+**レシーバを任意の識別子に一般化**されました。
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:225-235
+/**
+ * `var verb = mix.aux` — the variable NAME is the bus name (#459).
+ *
+ * 🔴 The receiver is **any identifier**, not the literal `mix`. `mix` is itself a variable
+ * (`var mix = init global.mixer`, SC.2.1), so a score is free to call it something else and
+ * the declaration still means the same thing. Pinning it to `mix.` rejected those scores.
+ * (#940 review: a third copy of this pattern was about to be added with the general form.)
+ */
+const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(sum|aux)\b/g
+
+/**
+```
+
+`mix` は予約語ではなく `var mix = init global.mixer`（SC.2.1）で作られた**ただの変数**なので、
+別名を付けた譜面でも宣言の意味は変わりません。`mix.` に固定していた旧パターンは、そういう譜面の
+バス宣言を**取りこぼして**いました（= `output("verb")` が宣言済みバスとして skip されず、
+上の「LinkAudio が要る」系の診断が誤爆する）。同じ宣言形を読む関数が 3 つ目に増えるのを防ぐため、
+`collectDerivedMixerBuses()` を診断とカーソル解決の共通入口にしています。
+
 ### 9. 未知の plugin 名 (Warning)
 
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
@@ -692,8 +717,8 @@ flowchart TD
 |---|---|---|
 | 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`engine-process.ts:645-683` |
 | フラッシュを常に whole-line に、送信前に `revealRange` | #388 | §6.193 (2026-07-07)、`run-selection.ts:176-184` / `202-206` |
-| `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
-| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:203-236` |
+| `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:151-289` |
+| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:207-240` |
 | `//#documentDirectory` メタ行 (import の基準ディレクトリ) | #456 | §6.266 (2026-07-17)、`engine-process.ts:653-658` |
 | `GLOBAL_ONCE_METHODS` に `linkAudio` を追加、LinkAudio 系の診断 6-8 | (LinkAudio #209 系) | `diagnostics-analysis.ts:44-58` / `:194-391` |
 | 送信失敗時はフラッシュしない | — | `run-selection.ts:199-201` のコメント |
@@ -741,13 +766,13 @@ flowchart TD
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`: MCP evaluate と `//#evalMark`
 - `packages/vscode-extension/src/engine-handlers.ts:248-256` — stdout の `{"evalMark"` 独立分岐
-- `packages/vscode-extension/src/extension.ts:150-284` — playhead の decoration 管理と `handleStepLine()`
+- `packages/vscode-extension/src/extension.ts:151-289` — playhead の decoration 管理と `handleStepLine()`
 - `packages/vscode-extension/src/diagnostics-provider.ts:21-171` — `updateDiagnostics()`: 行内 3 種 + 横断 6 種
 - `packages/vscode-extension/src/dsl-providers.ts:176-213` — `registerOutputCodeActionProvider()`: `output-missing` / `dry-not-routed` の quick fix
 - `packages/vscode-extension/src/playhead.ts:39-54` — `[STEP]` 行の文法と `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
-- `packages/vscode-extension/src/diagnostics-analysis.ts:110-468` — 横断解析の関数群
+- `packages/vscode-extension/src/diagnostics-analysis.ts:110-495` — 横断解析の関数群
 - `packages/vscode-extension/src/diagnostics-analysis.ts:349-495` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
