@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12, and **only the engine / daemon spawn sections** brought up to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889) — starting the engine on VS Code's bundled Node and not passing `ELECTRON_RUN_AS_NODE` on to the daemon) on the same day. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12, and **only the engine / daemon spawn sections** brought up to #878 (PR [#889](https://github.com/signalcompose/orbitscore/pull/889) — starting the engine on VS Code's bundled Node and not passing `ELECTRON_RUN_AS_NODE` on to the daemon) on the same day. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**. It was further brought up to the v4.2.0 release (PR [#941](https://github.com/signalcompose/orbitscore/pull/941) — #939 cursor-addressed plugin UI / #940 host-frontmost floating windows) on 2026-09-14 — **the extension version string only**.
 
 # 0-2. Architecture Overview
 
@@ -614,10 +614,10 @@ export const DSL_VERSION = '2.0'
 
 - **`ENGINE_VERSION`**: `2.0.0` — the version the `.orbslog` meta header carries; the WCTM milestone including MIDI output + Pitch DSL + session log
 - **DSL spec version**: `2.0` — the DSL spec axis (separate from both `ENGINE_VERSION` and the extension version)
-- **VS Code extension package version**: `4.1.0` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
+- **VS Code extension package version**: `4.2.0` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `4.1.0` is by design, not an accident. In #883, removing implicit terminals is the incompatible change that takes the extension to 4.0.0 and `DSL_VERSION` to 2.0.
+Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `4.2.0` is by design, not an accident. In #883, removing implicit terminals is the incompatible change that takes the extension to 4.0.0 and `DSL_VERSION` to 2.0.
 
 Note that the "DSL v3.0" that appears in CLAUDE.md and the glossary names the syntax generation (the `sequence` → `init` pivot, [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)); it is a different axis from `DSL_VERSION = '2.0'` (the DSL spec version).
 
