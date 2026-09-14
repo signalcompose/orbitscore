@@ -1194,12 +1194,17 @@ describe('daemonEnv (#878)', () => {
       PATH: '/usr/bin',
       ELECTRON_RUN_AS_NODE: '1',
       ORBIT_CAPTURE_WAV: '/x.wav',
+      ORBIT_HOST_BUNDLE_ID: 'dev.orbitscore.OrbitStudio',
     })
 
     expect(result.ELECTRON_RUN_AS_NODE).toBeUndefined()
     // 🔴 「消したこと」だけを見ると、env ごと空にする実装でも通ってしまう。
     // **他の変数が残っている**ことまで見る（daemon は audio device 名や capture の seam を env で受ける）。
-    expect(result).toEqual({ PATH: '/usr/bin', ORBIT_CAPTURE_WAV: '/x.wav' })
+    expect(result).toEqual({
+      PATH: '/usr/bin',
+      ORBIT_CAPTURE_WAV: '/x.wav',
+      ORBIT_HOST_BUNDLE_ID: 'dev.orbitscore.OrbitStudio',
+    })
   })
 
   it('does not mutate the source env', () => {

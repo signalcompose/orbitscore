@@ -18,17 +18,15 @@ use orbit_clap_host::{ClapEffectAudio, ClapEffectProcessor, ClapParamValue, Clap
 use orbit_vst3_host::{Vst3EffectAudio, Vst3EffectProcessor, Vst3PluginMain};
 use serde::Deserialize;
 
+mod args;
+
+use args::Args;
+
 use crate::{
     host_format_for_path, ok_outcome, read_apply_plan, read_manifest, resolve_standard_plugin_path,
     ApplyFailure, AudioStage, ChainExchange, ControlStage, HostFormat, RackController,
     ResolvedParam, StageFactory, StageInstance, StageSpec,
 };
-
-struct Args {
-    shm: PathBuf,
-    chain: PathBuf,
-    sample_rate: u32,
-}
 
 fn parse_args() -> Result<Args> {
     let mut shm = None;
@@ -53,6 +51,9 @@ fn parse_args() -> Result<Args> {
                     .context("--sample-rate requires a value")?
                     .parse()
                     .context("parse --sample-rate")?;
+            }
+            orbit_child_runtime::HOST_BUNDLE_ID_ARG => {
+                args.next().context("--host-bundle-id requires a value")?;
             }
             other => bail!("unknown argument: {other}"),
         }

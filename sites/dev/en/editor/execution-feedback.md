@@ -188,7 +188,7 @@ When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP
 The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:592-598
+// packages/vscode-extension/src/engine-process.ts:623-629
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると

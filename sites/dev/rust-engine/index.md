@@ -125,7 +125,7 @@ daemon から能動的に push できます。`PROTOCOL_VERSION` は `"0.3"` で
 // rust/crates/orbit-audio-daemon/src/protocol.rs:8-61
 pub const PROTOCOL_VERSION: &str = "0.3";
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-// ...
+
 /// Handshake フレーム（接続後に daemon が最初に送る）。
 #[derive(Debug, Serialize)]
 pub struct Handshake {

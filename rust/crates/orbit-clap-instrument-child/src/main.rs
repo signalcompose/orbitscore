@@ -53,6 +53,9 @@ fn parse_args() -> Result<Args> {
             }
             // #557: VST3 child と同じ意味論で state を復元する（形式中立の要件 CAP.6）。
             "--state" => state = Some(PathBuf::from(it.next().context("--state に値が必要")?)),
+            orbit_child_runtime::HOST_BUNDLE_ID_ARG => {
+                it.next().context("--host-bundle-id に値が必要")?;
+            }
             other => bail!("未知の引数: {other}"),
         }
     }

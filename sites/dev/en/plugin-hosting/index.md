@@ -232,7 +232,7 @@ with them through shared memory. The children it may spawn are enumerated in
 and roles).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
+// rust/crates/orbit-audio-daemon/src/lib.rs:101-110
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -310,7 +310,7 @@ pub(crate) fn child_exe_for_attach(
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:155-192
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:140-177
 /// instrument child のフォーマット別デフォルト binary 名。VST3 だけが専用 child を持ち、
 /// それ以外（.clap・raw .dylib CLAP 等）は従来どおり CLAP child が担当する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

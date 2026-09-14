@@ -188,7 +188,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:592-598
+// packages/vscode-extension/src/engine-process.ts:623-629
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると

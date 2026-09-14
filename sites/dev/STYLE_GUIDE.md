@@ -122,14 +122,30 @@ SoT との対応を破ると、サイト全体の信頼性が失われます。�
 OK の例 (verbatim):
 ```typescript
 // packages/engine/src/cli/repl-mode.ts:30-53
+ */
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')
 
   // Create a global interpreter
   const globalInterpreter = new InterpreterV2()
-  // ...
-}
+  // 🔴 #607: startREPLMode() は返らないので、戻り値経由では shutdown ハンドラに
+  // 届かない。生成した時点で publish する（詳細は active-interpreter.ts）。
+  setActiveInterpreter(globalInterpreter)
+
+  // §L1 (#229): session-log は 2.0.0 では dormant（既定 off）。file-scoped ログが
+  // 複数ファイルをまたぐライブセッションに合わない設計ミスマッチのため、session-scoped で
+  // 再設計するまで明示 opt-in に退避（writer/API/ユニットは保持・resurrect 可）。
+  // 詳細・redesign 北極星: docs/development/POST_2.0_ROADMAP_NOTES.md
+  if (shouldEnableSessionLog()) {
+    globalInterpreter.enableSessionLog({ cwd: process.cwd() })
+  }
+
+  // Boot the audio engine backend once at startup with optional audio device
+  await globalInterpreter.boot(options.audioDevice)
+
+  console.log('🎵 Live coding mode')
+  await startREPL(globalInterpreter)
 ```
 
 NG の例 (無印省略):

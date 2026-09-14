@@ -18,10 +18,23 @@ pub mod engine_wrap;
 /// コンパイルされ、GPL crate `orbit-link-audio` を保持する consumer thread を起動する。
 #[cfg(feature = "link-audio")]
 pub mod link_audio;
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+mod outproc_child_command;
 /// attach する plugin の拡張子から child binary を選ぶ規則。**effect と instrument で共有する**
 /// （規則を2箇所に持つと、片方だけ直し忘れる — #548 がまさにその形のバグだった）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) mod outproc_child_exe;
+#[cfg(feature = "outproc-instrument")]
+mod outproc_instrument_transport;
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+const HOST_BUNDLE_ID_ENV: &str = "ORBIT_HOST_BUNDLE_ID";
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+const HOST_BUNDLE_ID_ARG: &str = "--host-bundle-id";
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn host_bundle_id_from_env() -> Option<std::ffi::OsString> {
+    std::env::var_os(HOST_BUNDLE_ID_ENV).filter(|value| !value.is_empty())
+}
 /// 起動時に、死亡した旧 daemon が残した out-of-process 共有メモリを best-effort で回収する。
 pub mod outproc_shm_sweep;
 

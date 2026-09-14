@@ -54,6 +54,9 @@ fn parse_args() -> Result<Args> {
                     .context("--sample-rate の parse")?
             }
             "--state" => state = Some(PathBuf::from(it.next().context("--state に値が必要")?)),
+            orbit_child_runtime::HOST_BUNDLE_ID_ARG => {
+                it.next().context("--host-bundle-id に値が必要")?;
+            }
             other => bail!("未知の引数: {other}"),
         }
     }

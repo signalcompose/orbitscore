@@ -20,6 +20,7 @@ import {
   resolveDaemonBinaryForExtension,
 } from '../../packages/vscode-extension/src/engine-startup-runtime'
 import * as ext from '../../packages/vscode-extension/src/extension'
+import { resolvePluginWindowHostBundleId } from '../../packages/vscode-extension/src/engine-process'
 import {
   fakeSpawnedProcess,
   resetExtensionEngineTestState,
@@ -87,5 +88,34 @@ describe('engine spawn runtime (#878)', () => {
     const [, args] = vi.mocked(child_process.spawn).mock.calls[0]
     expect(Array.isArray(args)).toBe(true)
     expect(String((args as string[])[0])).toMatch(/cli-audio\.js$/)
+  })
+
+  it('resolves the outer macOS host bundle ID for plugin-window children', () => {
+    let plistPath = ''
+    const bundleId = resolvePluginWindowHostBundleId(
+      '/Applications/OrbitStudio.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
+      'darwin',
+      (filePath) => {
+        plistPath = filePath
+        return `<?xml version="1.0"?><plist><dict>
+          <key>CFBundleIdentifier</key><string>dev.orbitscore.OrbitStudio</string>
+        </dict></plist>`
+      },
+    )
+
+    expect(plistPath).toBe('/Applications/OrbitStudio.app/Contents/Info.plist')
+    expect(bundleId).toBe('dev.orbitscore.OrbitStudio')
+    expect(
+      resolvePluginWindowHostBundleId('/usr/local/bin/node', 'darwin', () => ''),
+    ).toBeUndefined()
+    expect(
+      resolvePluginWindowHostBundleId(
+        '/Applications/OrbitStudio.app/Contents/MacOS/OrbitStudio',
+        'linux',
+        () => {
+          throw new Error('non-macOS must not read a bundle')
+        },
+      ),
+    ).toBeUndefined()
   })
 })

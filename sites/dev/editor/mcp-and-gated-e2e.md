@@ -424,7 +424,15 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
             fs.rmSync(dirPath, { recursive: true, force: true })
           }
         } catch (error) {
-          // ...
+          // 🔴 TOCTOU: `readdirSync` above listed this entry, but another engine instance's
+          // own cleanup (the gated E2E suite starts and stops the engine many times against
+          // ONE temp root) can remove it before `statSync` runs. That the directory is
+          // already gone is exactly the outcome this loop wants — it is not a failure.
+          //
+          // Reporting it was not harmless: engine stderr is classified as `ERROR:` by the
+          // log reader, so a benign race inflated the ERROR count and failed whichever
+          // gated test happened to be counting at the time (measured 2026-09-11, PR #840's
+          // merge gate: "expected 9 to be less than or equal to 8").
           if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error
         }
       }
@@ -449,7 +457,21 @@ CLAP プラグインをロードするたびに呼ばれる `query_note_port_ind
 fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
     let mut handle = instance.plugin_handle();
     let Some(note_ports) = handle.get_extension::<PluginNotePorts>() else {
-// ...
+        // 🔴 `debug!` であって `warn!` ではない（#860・2026-09-11）。
+        //
+        // この関数は**すべての CLAP ロードで無条件に**呼ばれる（`controller.rs:246`）。
+        // エフェクトが note ポートを持たないのは**正常**なので、`warn!` は正常系で鳴る警報
+        // だった。しかも port 0 というフォールバックは実際に機能する（CLAP の慣習）。
+        //
+        // 実害: 拡張は engine の stderr を**全行 `ERROR:` として**出力する
+        // （`extension.ts:1453`。実エラーを取りこぼさないための意図的な設計・#756）。
+        // したがってこの warn は gated E2E の ERROR 件数に乗り、件数を数えるテストを
+        // 巻き添えにする。実測 2026-09-11:
+        // 「default-baseline cycle must add no ERROR: lines ... expected 10 to be less
+        // than or equal to 9」— 増えた 1 行がこの warn だった。
+        //
+        // 分類側（stderr → ERROR）を緩めるのは筋が悪い（実エラーを取りこぼす方向）。
+        // ノイズは**源で止める**。
         tracing::debug!("[orbit-clap-host] NotePortsExtension なし; port 0 を使用");
         return 0;
     };
@@ -501,7 +523,26 @@ flowchart LR
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:104-128
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
-// ...
+/**
+ * 🔴 Temp roots live under `/tmp`, not `os.tmpdir()`, and the prefix is short.
+ *
+ * VS Code's main process opens a Unix domain socket at `<user-data-dir>/<version>-main.sock`,
+ * and macOS caps a socket path at 103 characters. `os.tmpdir()` alone is 48 characters here
+ * (`/var/folders/<2>/<28>/T/`), so a descriptive prefix pushed the socket path to 105 and the
+ * app died with `listen EINVAL` before opening a window. The harness saw only a 60 s MCP
+ * timeout, which reads as "the extension did not activate" and sends you looking in the wrong
+ * place. Keep this short, and keep the preflight check below.
+ */
+const HARNESS_TMP_BASE = '/tmp'
+const HARNESS_TMP_PREFIX = 'orbe2e-'
+
+/**
+ * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
+ * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart. Extended regex,
+ * passed to `pgrep -f` the same way as the other PID oracles in this file.
+ */
+const HARNESS_PGREP_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
+
 const gated = Boolean(process.env[GATE_ENV])
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
@@ -560,7 +601,12 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
     path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
-      // ...
+      // Stock VS Code greets a brand-new profile with the welcome tab, release notes and a
+      // sign-in nudge. The fork we used to launch had those disabled in its product build,
+      // so the harness never needed these. They are pure UI suppression: nothing about the
+      // extension under test changes.
+      // Updates and telemetry are switched off twice on purpose: the flags stop the very first
+      // check, which can fire before the user settings written below are read.
       '--skip-welcome',
       '--skip-release-notes',
       '--disable-updates',
@@ -820,7 +866,15 @@ PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありま�
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
-    // ...
+    ...(opts?.perChannel
+      ? channelSeries(
+          buf,
+          dataOff,
+          frames,
+          format,
+          opts.windowMs && opts.windowMs > 0 ? opts.windowMs / 1000 : WINDOW_SEC,
+        )
+      : {}),
   }
 ```
 

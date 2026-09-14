@@ -48,6 +48,31 @@ import {
 import type { PluginUiAction } from './plugin-ui-bridge'
 import { clearAllPlayheadDecorations } from './playhead-decorations'
 
+type ReadTextFile = (filePath: string) => string
+
+/** Resolve the outer host `.app`, not a nested Electron helper app. */
+export function resolvePluginWindowHostBundleId(
+  executablePath: string,
+  platform: NodeJS.Platform,
+  readTextFile: ReadTextFile = (filePath) => fs.readFileSync(filePath, 'utf8'),
+): string | undefined {
+  if (platform !== 'darwin') return undefined
+  const appContentsMarker = '.app/'
+  const appEnd = executablePath.indexOf(appContentsMarker)
+  if (appEnd < 0) return undefined
+
+  const appPath = executablePath.slice(0, appEnd + '.app'.length)
+  try {
+    const plist = readTextFile(path.join(appPath, 'Contents', 'Info.plist'))
+    const match = plist.match(
+      /<key>\s*CFBundleIdentifier\s*<\/key>\s*<string>\s*([A-Za-z0-9.-]+)\s*<\/string>/,
+    )
+    return match?.[1]
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Resolve the native Rust daemon binary via shared resolver (engine の
  * compiled JS を runtime require). Returns null on failure — reason is logged
@@ -312,6 +337,12 @@ export async function startEngine(
 
   // Set environment
   const env = { ...process.env }
+  const hostBundleId = resolvePluginWindowHostBundleId(process.execPath, process.platform)
+  if (hostBundleId) {
+    env.ORBIT_HOST_BUNDLE_ID = hostBundleId
+  } else {
+    delete env.ORBIT_HOST_BUNDLE_ID
+  }
   if (effectiveDebugMode) {
     env.ORBITSCORE_DEBUG = '1'
   }

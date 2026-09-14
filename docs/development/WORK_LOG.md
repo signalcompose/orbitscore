@@ -17,6 +17,80 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(plugin-ui): float plugin windows above the editor while OrbitStudio is frontmost (#940) (Sep 14, 2026)
+
+owner 裁定で **#939 の PR に畳んだ**（「振る舞いとしては同じ関心ですよね」）。
+利用者から見れば「楽譜から UI を開く」ひとつの体験で、**#939 の手動ゲート中に発見**された。
+加えて**手動ゲートは人手が要る一番高い工程**なので、分けると owner に 2 回やってもらうことになる。
+
+🔴 main が当初「検算の機会で切る」を理由に分離を提案したのは**筋違い**だった。あの規律は
+「**振る舞いを変えない**変更を、変える変更と混ぜるな」であり、本件は両方とも変え、互いの検算を潰さない。
+
+#### 方式: child 自己完結 — **wire 変更なし**
+
+child が `NSWorkspace` の `didActivateApplicationNotification` を購読し、
+**前面が「ホストまたは自分自身」なら `NSFloatingWindowLevel`** を child の中だけで判定する。
+ホストの bundle id は **spawn 時の固定値**（`ORBIT_HOST_BUNDLE_ID` → `--host-bundle-id`）。
+
+🔴 **拡張側でフォーカスを検知する案を採らなかった理由**: `onDidChangeWindowState` は
+VS Code のフォーカスしか見ないので、**プラグイン窓をクリックした瞬間に floating が外れる**。
+child なら「自分が前面」を直接見られるので、この罠が構造的に起きない。
+**wire を使わない方が正しい**という珍しいケース。
+
+判定は純関数 `desired_plugin_window_level(host, child, frontmost, frontmost_is_child)` に切り出し。
+**未指定時は `Normal`**（後方互換）。
+
+#### 🔴 Codex が実測で見つけた穴（main の設計に無かった）
+
+standalone の child では **`NSRunningApplication.current.bundleIdentifier` が `nil`** を返す
+（Swift で実際に叩いて確認）。bundle id 比較だけでは「**窓自体をクリック**」が成立しない。
+同一 `NSRunningApplication` オブジェクトの比較で塞いだ。IPC も host focus 購読も増やしていない。
+
+#### 🔴 main の発注ミス: 500 行ラチェットの規律を書き忘れた
+
+4 ファイルが超過した（`orbit-child-runtime/src/lib.rs` 551/500 ほか）。#939 のブリーフには
+「`agent-handlers.ts` に足すな」と書いたのに、#940 では同じ規律が抜けていた。
+baseline の書き換えは #888 子 0 の裁定で禁止なので**分割で対応**:
+
+| 新規 | 内容 | コード行 |
+|---|---|---|
+| `orbit-child-runtime/src/appkit.rs` | AppKit run loop と `NSWorkspace` observer | 214 |
+| `orbit-audio-daemon/src/outproc_child_command.rs` | effect child のコマンド構築 | 24 |
+| `orbit-audio-daemon/src/outproc_instrument_transport.rs` | instrument の transport context | 18 |
+| `orbit-effect-rack-child/src/macos/args.rs` | rack child の `Args` 型 | 6 |
+
+`lib.rs` は **551 → 332 行**。🔴 **3 ファイルが `allowed` と同値**（余裕ゼロ）なので、
+次に 1 行足すと赤くなる。レビューで扱う。
+
+#### 引用の追従は `--fix` だけでは終わらなかった
+
+10 件が `--fix` で解決できなかった。**コードが別ファイルへ移動**していたため
+（`lib.rs:481-497` → `appkit.rs:205-221`）で、行シフトではない。ヘッダのパスごと直し、
+**引用ブロックの中身も実コードから再同期**した。
+
+🔴 `(env の組み立てを省略)` と注記のある**意図的な省略引用**を、再同期スクリプトが
+全行で上書きしてしまい 1 度壊した。`git checkout` で戻し、範囲と差分行だけ手で直した。
+**注記つきの引用は機械的な再生成の対象にしない。**
+
+#### 🔴 `git add -A packages` で無関係な 18,916 行を巻き込みかけた
+
+未追跡の `packages/sc-link-audio/`（ビルド成果物 + 埋め込み git リポジトリ）が入った。
+`git reset` して**変更ファイルを明示**する形に直した（最終 1,424 行）。
+memory `dont-use-git-add-all` を自分で破っていた。
+
+#### 検証
+
+`npm test` **2,542 passed / 77 skipped** / lint / `typecheck:e2e` / `docs:check`（986 引用 0 失敗）/
+500 行ラチェット 70 passed / `cargo fmt --check` / `clippy --workspace --all-targets -D warnings` /
+child-runtime 37 / daemon 305 / std-gain 実機 3 行。
+
+🔴 **窓の重なり順は自動で観測できない。** 手動ゲート 4 項目（VS Code 前面で上に出る /
+他アプリ前面で被さらない / **窓自体をクリックしても外れない** / 未指定時は normal）は**未了**。
+
+Part of #940
+
+---
+
 ### feat(extension): open one plugin's UI from the cursor position (#939) (Sep 14, 2026)
 
 楽譜上のプラグイン名を右クリックし、`OrbitScore: Open Plugin UI` からそのインスタンスだけを
@@ -1872,87 +1946,6 @@ E0308 の行番号を抜いて該当行だけを包む処理を収束するま�
 3 件は移動先が別ファイル、3 件は**範囲がファイル外**（`session.rs` が短くなったため
 `range 2412-2413 is outside the file (2120 lines)`）。引用ブロックの中身から移動先を検索して
 特定し、第 9 束で書いた再生成スクリプトで本文を同期した。**6 件とも着地先を目視で照合済み。**
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): finish splitting engine_wrap.rs — 6,418 to 424 code lines (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-ui-types`
-
-🎯 **#888 子 1 完了。`engine_wrap.rs` が 6,418 → 424 コード行（閾値 500 以下）。**
-baseline から削除した。子モジュール **21 本**、いずれも 500 以下。
-
-第 12 束（最終）で移したもの: wire に載る公開型（`wire_types.rs` 130）/ `EngineWrap` の構築と
-OOP プラグインの load 本体（`build_and_load.rs` 303）/ エフェクトバス stage の構築（`bus_stages.rs`）。
-
-### 子 1 の全経過
-
-```
-6,418 → 6,014 → 5,585 → 5,127 → 4,409 → 3,655
-      → 3,417 → 2,857 → 2,362 → 1,989 → 1,468 → 995 → 424
-```
-
-### 🔴 12 束を通して分かったこと
-
-1. **「純粋な移動」は目標ではなく性質。** 相互依存があれば可視性の変更は避けられない。
-   大事なのは**変更を最小に留め、それが residual に見えること**（第 4 束以降）
-2. **必要な作業は対象の種類で変わる。** メソッド（1〜7 束）→ 自由関数（8 束）→
-   構造体フィールド（9 束）→ トレイト（11 束）と、`pub(super)` を付ける対象が深くなった。
-   元が 1 つの巨大モジュールだったので、内部の結合が可視化されていなかっただけ
-3. 🔴 **境界の失敗には検出可能性の差がある。** 属性の分断は**コンパイルエラー**になるが、
-   doc コメントの分断は **`cargo fmt --check` しか捕まえない**（第 4 束で実際に残った）
-4. 🔴 **構文を正規表現で判定するのをやめ、コンパイラの指摘行を使う**方式に切り替えたら速くなった
-   （第 11 束）。子 0 の **D9**（heuristic を改良せず基準を言語の正規実装に置く）と同じ転換
-5. **cfg は定義側と一致させる** — 第 9・10 束で 2 度同じ誤りをした。
-   毎回 `check-cfg-matrix.sh` を回していたので 2 回とも即座に検出できた
-
-**検証**（全 12 束で毎回実施）: cfg 4 象限 + `clap-host` 単独 / `cargo fmt --check` /
-`cargo test` / `npm test` **2,445 passed**（**12 束を通して 1 件も変わっていない**）/ lint /
-`docs:check` 948 引用。
-
-
-### refactor(daemon): move the OOP role abstraction into a child module (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-role-traits`
-
-#888 子 1 の**第 11 束**。`OutProcRole` トレイトとその 2 実装、`StreamGuard`、
-リトライ付き push（696 行）を `engine_wrap/role.rs`（483 コード行）へ。
-🔴 **`engine_wrap.rs` が 1,000 行を切った**（1,468 → **995** コード行）。
-
-### 🔴 トレイトの中では `pub(super)` が使えない
-
-一括で `pub(super)` を付けたところ **E0449「visibility qualifiers are not permitted here」が 33 件**
-出た。トレイト定義の本体とトレイト実装ブロックのメソッドは、**可視性がトレイト側で決まる**ので
-修飾子を書けない。これまでの束は inherent impl（`impl EngineWrap`）だったので出なかった。
-
-**対処**: 正規表現で構文を判定するのをやめ、**コンパイラの指摘行をそのまま使って**外した。
-`cargo clippy` の出力から `role.rs:<行>` を抜き、その行の `pub(super) ` を削るループを回して収束させた。
-同じ手法を「フィールドが private」47 件にも使い、エラーメッセージから
-`struct 名 + フィールド名` を抜いて該当行だけに付けた。
-
-**再エクスポート 2 件**: `DeviceSwitchRequest`（`main.rs` から）と `ClapPluginRole`（`session.rs` から）。
-
-**検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
-`npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
-
-
-### refactor(daemon): move the instrument slot types and plugin UI wiring out (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `888-c1-instrument-slot-types`
-
-#888 子 1 の**第 10 束**。instrument slot の型群とプラグイン UI の配線（606 行）を 2 ファイルへ
-（`instrument_slot_types.rs` 392 / `plugin_ui_wiring.rs` 144）。
-`engine_wrap.rs` は **1,989 → 1,468** コード行。
-
-**可視性**: `pub(super)` を 63 箇所（第 9 束の知見どおり**フィールドにも**）。
-`PluginUiWiring` 等 5 つは `outproc_effect.rs` / `outproc_respawn_guard.rs` からも使われるので
-`pub(crate)` のまま、親から再エクスポート。
-
-🔴 **再エクスポートの cfg を狭く書いて 1 象限落とした。** `outproc-instrument` と書いたが、
-定義側は `any(outproc-effect, outproc-instrument)` だった。**cfg は定義側と一致させる** —
-第 9 束と同じ誤りを繰り返した。
 
 **検証**: cfg 4 象限緑 + `clap-host` 単独 / `cargo fmt --check` / `cargo test` 58 passed /
 `npm test` **2,445 passed**（不変）/ lint / `docs:check` 948 引用 0 failed。
