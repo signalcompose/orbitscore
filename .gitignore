@@ -43,8 +43,10 @@ test-assets/audio/*.wav
 !test-assets/audio/sine_880.wav
 !test-assets/audio/snare.wav
 
-# Ignore temporary extension build files
+# Ignore temporary extension build files (#954: bundled end-user docs site, copied
+# in by scripts/copy-user-site.sh -- same reasoning as engine/ below)
 packages/vscode-extension/engine/
+packages/vscode-extension/sites/
 
 # Serena - 各開発者が個別にオンボーディング
 .serena/

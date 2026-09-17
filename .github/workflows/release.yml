@@ -31,6 +31,7 @@ on:
       - 'packages/vscode-extension/**'
       - 'packages/engine/**'
       - 'scripts/copy-daemon-bin.sh'
+      - 'scripts/copy-user-site.sh'
       - 'scripts/install-bundle-deps.sh'
       - 'scripts/install-engine-deps.sh'
       - 'scripts/install-extension-deps.sh'
@@ -106,6 +107,16 @@ jobs:
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
         run: npm run build
+
+      # #954: bundle the end-user learning site (Markdown + built VitePress dist)
+      # into packages/vscode-extension/sites/user/ before packaging. Without this
+      # the shipped .vsix has zero bytes of site data -- the Docs panel and
+      # get_user_doc/search_user_docs are dead on a cold install. The dev site is
+      # deliberately NOT bundled (owner decision -- its only reader is the owner,
+      # who is always in the monorepo when reading it); see mcp-docs.ts for the
+      # resolution order.
+      - name: Build and bundle the end-user docs site
+        run: npm run build:copy-user-site
 
       - name: Package .vsix
         working-directory: packages/vscode-extension
@@ -204,6 +215,22 @@ jobs:
             fi
             echo "standard plugin $STD_PLUGIN.clap present in packaged .vsix"
           done
+
+          # #954: the end-user docs site (Markdown + built dist) must be present --
+          # a missing sites/user/ means the Docs panel and get_user_doc/search_user_docs
+          # are dead on a cold install while build+package still succeed silently.
+          # The dev site is NOT checked here: it is deliberately never bundled.
+          USER_DOC_MD="$VSIX_CHECK/extension/sites/user/index.md"
+          if [ ! -f "$USER_DOC_MD" ]; then
+            echo "::error::sites/user/index.md missing from packaged .vsix -- get_user_doc/search_user_docs would find no documents" >&2
+            exit 1
+          fi
+          USER_DOC_DIST="$VSIX_CHECK/extension/sites/user/.vitepress/dist/index.html"
+          if [ ! -f "$USER_DOC_DIST" ]; then
+            echo "::error::sites/user/.vitepress/dist/index.html missing from packaged .vsix -- the Docs panel WebView would 503" >&2
+            exit 1
+          fi
+          echo "end-user docs site (Markdown + dist) present in packaged .vsix"
 
       # ─────────────────────────────────────────────────────────────────────
       # Steps below this point only run for tag pushes (not pull_request).

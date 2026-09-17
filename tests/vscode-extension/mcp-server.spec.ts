@@ -423,7 +423,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     // `createStubHandlers()` は任意ハンドラ（`savePluginState` / `openPluginUi` /
     // `closePluginUi` / `registerMcpServer`）を持たないので、条件付きの 4 本
     // （`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server`）は
-    // ここには現れない。**それでもこの 21 本は退行を捕まえる** — 壊れていたのは
+    // ここには現れない。**それでもこの 23 本は退行を捕まえる**（#954 で get_user_doc /
+    // search_user_docs の 2 本を追加）。壊れていたのは
     // 「docs 系 2 本が plugin 系より前へ繰り上がる」形で、どちらも無条件登録だからである。
     expect(body.result.tools.map((tool) => tool.name)).toEqual([
       'evaluate_orbitscore',
@@ -447,6 +448,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       'rescan_plugins',
       'get_dev_doc',
       'search_dev_docs',
+      'get_user_doc',
+      'search_user_docs',
     ])
   })
 
@@ -473,7 +476,7 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     const body = response.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
     const names = body.result.tools.map((tool) => tool.name)
 
-    expect(names).toHaveLength(26)
+    expect(names).toHaveLength(28) // #954: +get_user_doc, +search_user_docs
     expect(
       names.slice(names.indexOf('open_plugin_ui'), names.indexOf('open_plugin_ui') + 3),
     ).toEqual(['open_plugin_ui', 'close_plugin_ui', 'open_plugin_ui_at_cursor'])
