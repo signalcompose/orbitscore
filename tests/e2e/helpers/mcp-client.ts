@@ -1,7 +1,7 @@
 import * as http from 'http'
 
 /**
- * Minimal raw JSON-RPC / MCP Streamable HTTP client shared by the OrbitStudio
+ * Minimal raw JSON-RPC / MCP Streamable HTTP client shared by the OrbitScore
  * gated E2E spec (tests/e2e/orbitstudio-mcp-gated.spec.ts). Deliberately
  * dependency-free (no MCP SDK client) — this talks to the real
  * `packages/vscode-extension/src/mcp-server.ts` the same way `mcp-server.spec.ts`
@@ -55,7 +55,7 @@ function postJson(
   })
 }
 
-/** One MCP session against a real OrbitStudio extension host. */
+/** One MCP session against a real OrbitScore extension host. */
 export class McpClient {
   sessionId: string | undefined
   private nextId = 1

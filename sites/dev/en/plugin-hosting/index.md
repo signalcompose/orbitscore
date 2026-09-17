@@ -413,7 +413,7 @@ enabled objectively exercises the whole path: DSL →
 confirmed on real hardware per WORK_LOG 6.258 on 2026-07-17; not re-measured during the
 2026-09-01 re-read).
 
-The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated in
+The E2E that goes through the user's own path (OrbitScore + MCP) is accumulated in
 `tests/e2e/orbitstudio-mcp-gated.spec.ts` and runs with `npm run test:e2e:gated`
 ([RE-4](/en/rust-engine/capture-verification)).
 

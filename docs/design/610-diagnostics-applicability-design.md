@@ -499,7 +499,7 @@ throw するようになる）。ただし **その譜面は今日すでに壊�
 ## 8. データの通り道 1 本（端から端まで）
 
 ```
-[編集] OrbitStudio で .orbs を開く / 打鍵
+[編集] OrbitScore で .orbs を開く / 打鍵
   → extension.ts:421 / :426 / :441  updateDiagnostics(document, collection)
   → analyzeWithEngine(text)                            // §4.1 runtime require（失敗なら正規表現へ縮退 + ログ）
       → engine/dist/diagnostics/analyze-source.js

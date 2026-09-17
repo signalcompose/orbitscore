@@ -625,8 +625,8 @@ orbitscore replay <log> --render out.wav   # オフラインレンダー（faste
 |---|---|
 | gate は `ORBITSCORE_SESSION_LOG === '1'` のときだけ有効。**既定は dormant**（2.0.0 の意図的な段階 — core spec:63「dormant by default. Opt in with `ORBITSCORE_SESSION_LOG=1`」） | `cli/session-log-gate.ts:12-13` / core spec:63-64 |
 | gate を呼ぶのは **CLI の 2 箇所だけ**（`play-mode.ts:64` / `repl-mode.ts:44`） | grep |
-| **拡張は env を渡していない**（拡張が渡す env は `ORBITSCORE_ENGINE` / `MCP_PORT` / `DEBUG` / `DSL` の 4 種。`SESSION_LOG` は 0 件）。**OrbitStudio から opt-in する手段が無い** | `packages/vscode-extension/src/extension.ts` の grep |
-| したがって **OrbitStudio で書いている限り `.orbslog` は 1 本も生成されない**。spec §3.1「editor 経路は `untitled.<timestamp>.orbslog` フォールバック」は**その手前で成立していない**。`~/Src/proj_orbitscore` 配下に `.orbslog` は 0 件（`find`・深さ 4） | — |
+| **拡張は env を渡していない**（拡張が渡す env は `ORBITSCORE_ENGINE` / `MCP_PORT` / `DEBUG` / `DSL` の 4 種。`SESSION_LOG` は 0 件）。**OrbitScore から opt-in する手段が無い** | `packages/vscode-extension/src/extension.ts` の grep |
+| したがって **OrbitScore で書いている限り `.orbslog` は 1 本も生成されない**。spec §3.1「editor 経路は `untitled.<timestamp>.orbslog` フォールバック」は**その手前で成立していない**。`~/Src/proj_orbitscore` 配下に `.orbslog` は 0 件（`find`・深さ 4） | — |
 | 意図的か欠落か: **dormant 自体は全エントリ共通の意図的な段階**（CLI も同じ）。しかし spec §3.1 は「実エントリ（CLI play / REPL / **拡張**）でのみ writer を装着する」と拡張を数えており、**拡張に opt-in の経路（設定・env 伝達）が無いのは実装の欠落** | spec §3.1 |
 
 **owner「現状ログが壊れている」の具体的な症状は未確認**（❓ §9） — 上の「そもそも書かれない」がそれに当たる可能性が高いが、CLI 経路で書かれたログの中身の問題（§3.1 の割り切り: `effect: null`・`execute()` 粒度）を指している可能性もある。**起票時に owner に確認する。**
@@ -970,7 +970,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | `tests/e2e/rack-chain-gain-expectations.ts` | **#628 ラックのゲイン期待値表**（catalogA 0.8 × catalogB 0.63 × -6 dB・leave-one-out の比率・RMS 許容 15%・分離 25%）。unit と gated E2E が**同じ表**を読む | ✅（gated E2E が capture の RMS 比で判定） | 同ファイル冒頭「#628 gated rack E2E のゲイン入力と期待比率の唯一の正本」 |
 | `test-assets/verify-fixtures/*.orbs` + `.schedule.json`（4 本: `chop_region` / `examples22_parity` / `pan_three_voices` / `per_event_gain`） + `tests/audio/verify/schedule-golden.ts`（Leg 2） + `verify_schedule_pcm.rs`（Leg 1） | **Leg 2**: fixture `.orbs` → interpreter → production `toDaemonParams` → **golden schedule JSON をコミット**し「生成 == コミット済み」で drift 検出（`UPDATE_GOLDEN=1` で更新）。**Leg 1**: golden JSON → `play_at` でオフライン決定論レンダ → PCM を `orbit-audio-verify` で解析（gain dB 許容・pan 逆算） | ✅ オフライン（StubBackend・実機不要・CI 常駐） | `schedule-golden.ts:1-10` / `verify_schedule_pcm.rs:1-12` |
 | `capture_realtime_gated.rs` | 実 cpal stream + `ORBIT_CAPTURE_WAV` で **master 出力**を録り、`examples/22` の pan / slice / per-slice gain を同じ解析で自己検証。`drops == 0` | ✅ 実時間・master 1 本 | 同ファイル冒頭 |
-| `tests/e2e/orbitstudio-mcp-gated.spec.ts`（`it(` 20 件） | 実 OrbitStudio を MCP で駆動・capture の RMS 等で判定 | ✅ ただし **fixture は `tests/fixtures/mcp-e2e/` の 2 本**（`kick_loop.orbs` / `diagnostic_case.orbs`）+ テスト内で生成する譜面 | `:153-154` |
+| `tests/e2e/orbitstudio-mcp-gated.spec.ts`（`it(` 20 件） | 実 OrbitScore を MCP で駆動・capture の RMS 等で判定 | ✅ ただし **fixture は `tests/fixtures/mcp-e2e/` の 2 本**（`kick_loop.orbs` / `diagnostic_case.orbs`）+ テスト内で生成する譜面 | `:153-154` |
 | `tests/e2e/end-to-end.spec.ts` | SC 時代。`describe.skip` | ❌ 死んでいる | `:1-14` |
 
 **譜面の資産と、固定されている範囲**（worktree の複製を除く実数）:
@@ -1495,7 +1495,7 @@ input.effect("Reverb").rec()     // ウェットを録る
 | **(6) LinkAudio egress の CLAP 化** | 同上。#671 本文「CLAP プラグイン化 🟢 できる」に対応する issue が無い。DSP Plugin Spec が egress（tap）型を許すかが先 | §4.E |
 | ~~回帰の固定（golden capture）~~ → **新規ではなく #543 の分割 (a)**（§4.G.1・§6.2）。裁定 ④ の issue (9) は**これに依存**と書く |
 | **(9) フェーダー = `output` の level（裁定 ④）の実装 issue** | owner 指示「起票する」。#649 実装 B の形を変える（`_lineOrder` の `gain` 要素ではなく出口の属性）。§4.A.1 を指す | §4.A.1 |
-| ~~(10) セッションログを OrbitStudio で有効化~~ → **起票済み #694**（editor 経路がログを有効化しない）。同時に **#695**（選択評価が別レコードに割れ replay が同時性を失う）も起票された。置き場（ディレクトリ）は #694 に含めるか要確認。**有効化の実装先は #662 の設定面になる可能性**（§4.H.1 論点 4） | §4.A.3 / §4.H.1 |
+| ~~(10) セッションログを OrbitScore で有効化~~ → **起票済み #694**（editor 経路がログを有効化しない）。同時に **#695**（選択評価が別レコードに割れ replay が同時性を失う）も起票された。置き場（ディレクトリ）は #694 に含めるか要確認。**有効化の実装先は #662 の設定面になる可能性**（§4.H.1 論点 4） | §4.A.3 / §4.H.1 |
 | **(11) 書き出しの操作面（演奏中の開始 / 停止・ボタン / MCP / DSL・per-bus）** | capture は engine 起動時の env でしか始められず、途中で止められない（`session.rs` に RPC 無し）。§4.A.3 の欠け (i)(ii)。**(7) と 1 つにまとめるか**は owner。**「レコーディング」ではない**（それは #679・§4.P） | §4.A.3 |
 | **(12) 性能の実測（スレッド構成・CPU・メモリ内訳）** | owner「マルチスレッド使えてる？メモリ有効に使えてる？」に**答える材料が無い**。#662 バッチ B（CPU / RSS）で足りるか、プロファイル（スレッド別・メモリ内訳）まで要るかは owner | §4.O |
 | **(8) 書き出しファイル名のプレースホルダ（`%…`）** | owner 要望（2026-09-03）。上書きせず複数バージョンを残す。`.orbslog` の `<basename>.<YYYYMMDD-HHMMSS>` 規則と揃えるのが自然。spec に構文は無い = 新規 | §4.A.3 (e) |

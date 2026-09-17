@@ -26,7 +26,7 @@
 
 ## 1. 到達点（1 文）
 
-**OrbitStudio の Engine ビューと MCP `get_engine_state` が、`GetStatus` という 1 つの供給源から「掴んでいるデバイス名・実効サンプルレート / バッファ・コールバックが回っているか・締切に対する使用率・child の PID と生死・各設定変数の実効値」を同じ内容で返し、`--audio-device` を指定しても音が出て、idle の child が 1 コアを食い切らず、プール上限がユーザーから見えなくなる。**
+**OrbitScore の Engine ビューと MCP `get_engine_state` が、`GetStatus` という 1 つの供給源から「掴んでいるデバイス名・実効サンプルレート / バッファ・コールバックが回っているか・締切に対する使用率・child の PID と生死・各設定変数の実効値」を同じ内容で返し、`--audio-device` を指定しても音が出て、idle の child が 1 コアを食い切らず、プール上限がユーザーから見えなくなる。**
 
 ---
 
@@ -578,14 +578,14 @@ $ grep -rn "engineView\|EngineViewProvider" packages/vscode-extension/src/extens
 | **PR-3** | `feat(daemon): report the real stream config and callback liveness in GetStatus` | バッチ A の土台 | `output.rs`（StreamStats に `callbacks` / `last_frames`・`OutputStream.device_name`）/ `engine_wrap.rs`（config snapshot・`record_stream_config`）/ `session.rs`（`GetStatus` 拡張・ticker に停止検知）（+400 / -60） | PR-1 | E-4 の daemon 部分を `cargo test` + 実機 `get_log` | ❌（追加のみ） |
 | **PR-4** | `fix(daemon): make --audio-device produce a live stream` | **#661**（`must-fix`） | `main.rs`（CLI → typed 引数）/ `output.rs`（起動ログ・first-callback 検証・縮退）/ `engine_wrap.rs`（切替の確認とロールバック）（+250 / -80） | **PR-3**（`callbacks` が要る） | **E-1 / E-2 / E-9** + 実機で `--audio-device` 指定して音を聴く | ❌ |
 | **PR-5** | `fix(mcp): list audio devices through the daemon on the rust path` | **#660** + `get_engine_state` 拡張 + child 一覧 | `extension.ts`（`listAudioDevicesForAgent` / `getEngineStateForAgent`）/ `mcp-server.ts`（型）/ `repl-mode.ts` + `rust-engine-player.ts`（`//#engineStatus`）/ 新 `engine-status-bridge.ts`（+350 / -40） | PR-3 | **E-3 / E-4 / E-5** | ❌（`AudioDeviceInfo` は optional 追加） |
-| **PR-6** | `feat(orbitstudio): show device, headroom, dropouts and children in the Engine view` | バッチ B 本体（**closes #483**） | `engine-view.ts`（行の組み立て・pure）/ `extension.ts`（`ps` ポーリング）/ user docs `engine-settings.md` 日英（+450 / -60） | PR-5 | E-4 を UI 経由でも確認（実機スクリーンショット不要・MCP で同値） | ❌ |
-| **PR-7** | `feat(orbitstudio): list engine settings with their scope` | §8 の 32 変数表を UI と MCP へ | `engine-view.ts` + 新 `engine-settings-table.ts`（pure・単一の表）（+300 / -10） | PR-6・**§17 (1) の裁定** | 表の内容が `GetStatus.config` と食い違ったら red にする unit test | ❌ |
+| **PR-6** | `feat(orbitscore): show device, headroom, dropouts and children in the Engine view` | バッチ B 本体（**closes #483**） | `engine-view.ts`（行の組み立て・pure）/ `extension.ts`（`ps` ポーリング）/ user docs `engine-settings.md` 日英（+450 / -60） | PR-5 | E-4 を UI 経由でも確認（実機スクリーンショット不要・MCP で同値） | ❌ |
+| **PR-7** | `feat(orbitscore): list engine settings with their scope` | §8 の 32 変数表を UI と MCP へ | `engine-view.ts` + 新 `engine-settings-table.ts`（pure・単一の表）（+300 / -10） | PR-6・**§17 (1) の裁定** | 表の内容が `GetStatus.config` と食い違ったら red にする unit test | ❌ |
 | **PR-8a** | `perf(spike): measure cross-process wake latency for the child audio loop` | #667 の**計測だけ**（本番コードを触らない） | `orbit-sandbox-spike`（+200 / -0） | — | スパイクの出力を本書 §9.4 に追記 | ❌ |
 | **PR-8b** | `perf(child): replace the busy-wait with a hybrid park` | **#667** | `orbit-audio-sandbox/src/transport.rs`（共有ヘルパ）+ 5 child の loop（+250 / -50） | PR-8a・**PR-3**（余裕の観測が要る） | **E-6** + `ps` の実測を報告に貼る（5 種すべて） | ❌ |
 | **PR-9** | `docs(perf): record the measured thread and memory breakdown` | 地図 §7 (12) の答え | 本書 §10 への追記のみ | PR-6・PR-8b | `ps -M` の出力を貼る | ❌ |
-| **PR-10** | `feat(orbitstudio): wire MIDI panic and live device selection` | バッチ C（**closes #484** のデバイス部分） | `extension.ts` + `mcp-server.ts`（`panic()` は `midi-output.ts:90` に実装済み・配線のみ）（+200 / -10） | PR-5 | **E-8 / E-9** | ❌ |
+| **PR-10** | `feat(orbitscore): wire MIDI panic and live device selection` | バッチ C（**closes #484** のデバイス部分） | `extension.ts` + `mcp-server.ts`（`panic()` は `midi-output.ts:90` に実装済み・配線のみ）（+200 / -10） | PR-5 | **E-8 / E-9** | ❌ |
 | **PR-11** | `feat(engine): grow the slot pools off-thread` | **#663**（バッチ D）。§11 の順に**さらに分ける** | `output.rs` / `outproc_instrument.rs`（+600 / -200） | PR-6（余裕の表示が前提・確定事項 4）・PR-8b | **E-7** + #663 受け入れ 5 項目 | 🔴 設定項目の消滅は**ユーザーに見える** |
-| **PR-12** | `feat(orbitstudio): rework the Engine view as a WebviewView` | バッチ E（**closes #503**） | 新 webview（+500 / -300） | PR-7・PR-10・PR-11 | 既存 E2E がすべて通ること（ロジックは pure 関数のまま） | ❌ |
+| **PR-12** | `feat(orbitscore): rework the Engine view as a WebviewView` | バッチ E（**closes #503**） | 新 webview（+500 / -300） | PR-7・PR-10・PR-11 | 既存 E2E がすべて通ること（ロジックは pure 関数のまま） | ❌ |
 
 **#661 が `must-fix` なので PR-3 → PR-4 が最短経路。** PR-1/PR-2 は §17 (3) の裁定が要るので、**裁定が出るまでは PR-3 を先に着手してよい**（PR-1 は改名を含まないので後から入れても衝突は小さい）。
 

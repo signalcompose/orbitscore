@@ -6,7 +6,7 @@
 VitePress のビルド対象に混入しないようにするための前提条件）。
 
 > 本計画は [`docs/development/DEV_LEARNING_SITE.md`](../../../docs/development/DEV_LEARNING_SITE.md)
-> の 2026-07-17 決定（バイリンガル必須・step-by-step = E2E 検証二重役割・ローカル配信 MCP/OrbitStudio）
+> の 2026-07-17 決定（バイリンガル必須・step-by-step = E2E 検証二重役割・ローカル配信 MCP/OrbitScore）
 > を実装するための章立てである。決定そのものはそちらが正本。
 
 ---
@@ -124,7 +124,7 @@ framing）。乖離が見つかっても即修正せず、まず現状を記述�
 
 - Pitch DSL v1.1 / Session Log (.orbslog) / WCTM 章群（Epic #224・別トラック。学習サイト章化は
   WCTM 実装が Stage 3 に進んでから判断）
-- ローカル配信（MCP サーバ `/docs/`・OrbitStudio ワンクリック）の実装自体（Issue #450 側で対応。
+- ローカル配信（MCP サーバ `/docs/`・OrbitScore ワンクリック）の実装自体（Issue #450 側で対応。
   本計画は章コンテンツのみ）
 - cross-LLM-family audit への格上げ（DEV_LEARNING_SITE.md §5 Future Upgrade のまま未着手）
 

@@ -1488,7 +1488,7 @@ engine の schedule は空なので render は無音（0.0）、そこへ `FillP
 
 ## capture E2E がどう測っているか
 
-`tests/e2e/orbitstudio-mcp-gated.spec.ts` の `captureInstrumentScenario` は、実 OrbitStudio を
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の `captureInstrumentScenario` は、実 OrbitScore を
 MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定します。区間の RMS は
 区間内の各 window の RMS を二乗平均して平方根を取ったもので、区間の両端に guard（既定
 0.15 秒）を取って遷移の影響を除きます。

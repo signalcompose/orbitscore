@@ -687,7 +687,7 @@ type IsolatedOrbitStudio = {
   tmpRoot: string
 }
 
-/** Launch one clean OrbitStudio process with the same directory/settings/MCP bootstrap contract. */
+/** Launch one clean OrbitScore process with the same directory/settings/MCP bootstrap contract. */
 async function launchIsolatedOrbitStudio({
   tmpPrefix,
   settings,
@@ -973,7 +973,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
    *
    * #633 の修正後にこの7本を回すこと。**削除しない** — 直れば自動的に検証になる。
    *
-   * #643 の7シナリオを、同じ実 OrbitStudio → run_selection → daemon capture → get_log
+   * #643 の7シナリオを、同じ実 OrbitScore → run_selection → daemon capture → get_log
    * 経路で駆動する。`evaluate_orbitscore` の受理結果は補助的にしか使わず、成功判定は必ず
    * capture の区間 RMS/peak と固定500行窓の ERROR 件数で行う。
    */

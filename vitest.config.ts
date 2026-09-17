@@ -29,7 +29,7 @@ export default defineConfig({
     // `vitest run tests/e2e/orbitstudio-mcp-gated.spec.ts` と書いても worktree 内の
     // 同名パスまで一致してしまう。
     //
-    // 実害は理論上の話ではない: これで **実機 OrbitStudio が 7 個同時起動**し、
+    // 実害は理論上の話ではない: これで **実機 OrbitScore が 7 個同時起動**し、
     // daemon が 19 本残留した（2026-07-28。同種の事故は WORK_LOG にも記録がある）。
     // gated spec 側のコメントは危険を警告しているだけで、何も強制していなかった。
     //
