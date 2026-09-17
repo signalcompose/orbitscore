@@ -9,7 +9,7 @@ OrbitScore の音は **Audio Engine**（Rust 製・orbit-audio-daemon）が鳴�
 
 ## エンジンの起動と停止
 
-OrbitStudio の Activity Bar にある **Audio Engine Settings** ビューから操作します。
+OrbitScore の Activity Bar にある **Audio Engine Settings** ビューから操作します。
 ステータスバー右下の **OrbitScore: Stopped** をクリックすると、このビューが開きます。
 
 `.orbs` ファイルを開いているときは、エディタ右上のボタン（**OrbitScore: Start / Stop Engine**）でも

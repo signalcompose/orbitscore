@@ -442,7 +442,7 @@ gain ratio **≈ 0.5**（テストは `(0.4..=0.6).contains(&bus_ratio)` で許�
 WORK_LOG の記述であり、本ページの再読（2026-09-01）でも `outproc_effect_bus_gated.rs` を
 実機で再実行してはいません（テスト自体の assert は `0.4..=0.6` という許容レンジです）。
 
-ユーザーと同じ動線（OrbitStudio + MCP）を通す E2E は `tests/e2e/orbitstudio-mcp-gated.spec.ts`
+ユーザーと同じ動線（OrbitScore + MCP）を通す E2E は `tests/e2e/orbitstudio-mcp-gated.spec.ts`
 に積まれており、`npm run test:e2e:gated` で回します（[RE-4](/rust-engine/capture-verification)
 参照）。
 

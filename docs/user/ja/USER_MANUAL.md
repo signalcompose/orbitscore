@@ -672,7 +672,7 @@ drums.effect(["ValhallaRoom", "TAL Reverb 4", "ValhallaRoom"])
 - instrument 名（`"Kontakt 8.vst3"` のような文字列）の上でも同じように開けます。
 - プラグイン名でない位置・標準プラグイン（`Gain` など）・保存済み state ファイル名の上では
   **理由を明示したエラー**になります（黙って何も起きることはありません）。
-- 開いた窓は、**OrbitStudio が前面にいる間だけ**エディタの手前に浮きます（macOS・#940）。
+- 開いた窓は、**OrbitScore が前面にいる間だけ**エディタの手前に浮きます（macOS・#940）。
 
 ### LinkAudio との併用不可（v1 制限）
 

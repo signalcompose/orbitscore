@@ -10,7 +10,7 @@ configure.
 
 ## Starting and stopping the engine
 
-Use the **Audio Engine Settings** view in the OrbitStudio Activity Bar.
+Use the **Audio Engine Settings** view in the OrbitScore Activity Bar.
 Clicking **OrbitScore: Stopped** in the status bar (bottom right) opens that view.
 
 While a `.orbs` file is open, the button at the top right of the editor

@@ -405,7 +405,7 @@ DSL → `LoadPlugin(role=instrument, instance="plugin:synth")` → 拡張子ベ�
 **期待値**: capture peak = **0.25000**（`SynthOracle` の既知振幅との厳密一致。WORK_LOG 6.258
 で実機確認済み・2026-07-17。2026-09-01 の再読では再実測していません）。
 
-ユーザーと同じ動線（OrbitStudio + MCP）を通す E2E は `tests/e2e/orbitstudio-mcp-gated.spec.ts` に
+ユーザーと同じ動線（OrbitScore + MCP）を通す E2E は `tests/e2e/orbitstudio-mcp-gated.spec.ts` に
 積まれており、`npm run test:e2e:gated` で回します（[RE-4](/rust-engine/capture-verification)）。
 
 > **注意（既知の落とし穴）**: `play()` はパターンの buffering のみを行い、実際の発音には

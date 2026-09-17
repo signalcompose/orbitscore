@@ -96,7 +96,7 @@
 |---|---|---|---|---|---|---|
 | PR-L0 ⟂ | `docs(spec): session log v2 — directory, frame, code purity, replay CLI` | #694 spec §2 改訂・#695 §3.1・#241 §4 | `SESSION_LOG_SPEC_v1.md`（±80）・core spec `:62-64`（±5）・doc 611 §3.9（±5）| — | docs | — |
 | PR-L1a | `feat(session-log): <DIR>/ placement, //#sourceFile, code purity, logVersion 2` | #694 (2)(3)・純度 | `session-log-writer.ts`（±60）・`repl-mode.ts`（+80: `//#sourceFile`・`stripMetaLines`・単独メタ行）・`interpreter-v2.ts`（±30）・`tests/session-log/*`（+120）| PR-L0 | integration test（ディレクトリ・相対 `sourceFile`・純度）| W-6 / W-7 |
-| PR-L1b | `feat(extension): enable the session log from OrbitStudio (setting + env + //#sourceFile)` | **#694 (A) 受け入れ** | `package.json`（+8）・`extension.ts`（±40: env・`writeCodeToEngine` の 3 引数・注入廃止）・gated E2E（+180: S1/S2/S4/S5/S6）| PR-L1a | **E2E-S1**（ファイル実在 + 中身）・S4（off）・S5（untitled）・S6（純度）。実機: `open_file` → `run_selection` → `<DIR>/` を `ls` | W-17 |
+| PR-L1b | `feat(extension): enable the session log from OrbitScore (setting + env + //#sourceFile)` | **#694 (A) 受け入れ** | `package.json`（+8）・`extension.ts`（±40: env・`writeCodeToEngine` の 3 引数・注入廃止）・gated E2E（+180: S1/S2/S4/S5/S6）| PR-L1a | **E2E-S1**（ファイル実在 + 中身）・S4（off）・S5（untitled）・S6（純度）。実機: `open_file` → `run_selection` → `<DIR>/` を `ls` | W-17 |
 | PR-L2 🔴 | `feat(repl): //#evalBegin / //#evalEnd frame — one selection, one execute` | **#695 (1)**・doc 611 §3.9 の前提 | `repl-mode.ts`（+90）・`extension.ts` `writeCodeToEngine`（+6）・unit（+80）・gated E2E-S3（+40）| PR-L1a | E2E-S3（1 選択 = 1 レコード）・unit `execute` 1 回 | W-8 |
 | PR-L3 ⟂ | `feat(session-log): hook every GLOBAL; transport.global` | #695 (2) | `interpreter-v2.ts`（±40）・`session-log-writer.ts`（±40）・integration（+60）| PR-L1a | integration（2 GLOBAL・開閉規則）| 形式（加算）|
 | PR-L4 | `feat(cli): orbitscore replay <log> — faithful, transport-driven` | **#241 忠実リプレイ**・**#694 (B) の実測**（doc 694 §2b: 今日のログは再現に使えない → L7/L8 の後）| `cli/replay-mode.ts`（新 +200）・`parse-arguments.ts` `execute-command.ts`（+40）・`global.ts` `msUntilTransportPosition`（+25）・gated E2E-R1/R2/R3（+200）| PR-L2（フレーム粒度）・**PR-L7（result/import）・PR-L8（timeline）**| **E2E-R1**（ライブ capture と replay capture の窓 RMS 一致 ±15%）。実機: `orbitscore replay <log>` を `ORBIT_CAPTURE_WAV` 付きで | W-9 |
@@ -195,14 +195,14 @@
 | PR-V3 ⟂ | `feat(daemon): report the real stream config and callback liveness in GetStatus` | バッチ A 土台（`StreamStats.callbacks`/`last_frames`・`device_name`・config snapshot・停止検知）| `output.rs` `engine_wrap.rs` `session.rs`（+400/−60）| PR-V1（裁定前なら先に着手可）| cargo + 実機 `get_log` | 加算のみ |
 | PR-V4 | `fix(daemon): make --audio-device produce a live stream` | **#661 must-fix**（原因は C1/C2/C3 の 3 候補・それぞれ潰す実験・切替は pause→play→確認→ロールバック）| `main.rs`（typed 引数）・`output.rs`・`engine_wrap.rs`（+250/−80）| PR-V3 | **E-1/E-2/E-9**（起動時指定なら capture RMS > 0・走行中切替は `callback.count` の前進）| — |
 | PR-V5 | `fix(mcp): list audio devices through the daemon on the rust path` | #660 + `get_engine_state` 拡張 + child 一覧 | `extension.ts` `mcp-server.ts` `repl-mode.ts` `rust-engine-player.ts`・新 `engine-status-bridge.ts`（+350/−40）| PR-V3 | E-3/E-4/E-5 | — |
-| PR-V6 | `feat(orbitstudio): show device, headroom, dropouts and children in the Engine view` | バッチ B 本体（closes #483・%CPU/RSS は拡張の `ps`・identity は `GetStatus.children`）| `engine-view.ts` `extension.ts`・user docs 日英（+450/−60）| PR-V5 | E-4（MCP で同値）| — |
-| PR-V7 | `feat(orbitstudio): list engine settings with their scope` | 32 変数表（`ORBITSCORE_DSL` は env ではないので 33 → 32）| `engine-settings-table.ts`（新・単一の表）（+300）| PR-V6・**§17 (1) の裁定**（推奨 A 全部出す・テスト用 6 個は折りたたみ）| 表と `GetStatus.config` の不一致で red | — |
+| PR-V6 | `feat(orbitscore): show device, headroom, dropouts and children in the Engine view` | バッチ B 本体（closes #483・%CPU/RSS は拡張の `ps`・identity は `GetStatus.children`）| `engine-view.ts` `extension.ts`・user docs 日英（+450/−60）| PR-V5 | E-4（MCP で同値）| — |
+| PR-V7 | `feat(orbitscore): list engine settings with their scope` | 32 変数表（`ORBITSCORE_DSL` は env ではないので 33 → 32）| `engine-settings-table.ts`（新・単一の表）（+300）| PR-V6・**§17 (1) の裁定**（推奨 A 全部出す・テスト用 6 個は折りたたみ）| 表と `GetStatus.config` の不一致で red | — |
 | PR-V8a ⟂ | `perf(spike): measure cross-process wake latency for the child audio loop` | #667 の計測だけ | `orbit-sandbox-spike`（+200）| — | 実測を doc 662 §9.4 へ | — |
 | PR-V8b | `perf(child): replace the busy-wait with a hybrid park; raise audio thread to TIME_CONSTRAINT` | **#667**（共有ヘルパ 1 本・waiters フラグ + タイムアウト安全網・**QoS を TIME_CONSTRAINT へ**〔owner 2026-09-03〕。上げる前後で CPU / wake / daemon callback p99 を測る）| `transport.rs` + 5 child + `orbit-child-runtime`（+280/−50）| PR-V8a・PR-V3 | **E-6** + `ps` 実測 5 種 | — |
 | PR-V9 | `docs(perf): record the measured thread and memory breakdown` | 地図 §7 (12) の答え（`ps -M`）| doc 662 §10 追記 | PR-V6・PR-V8b | 出力を貼る | — |
-| PR-V10 | `feat(orbitstudio): wire MIDI panic and live device selection` | バッチ C（closes #484 のデバイス部分・`panic()` は実装済み・配線のみ）| `extension.ts` `mcp-server.ts`（+200）| PR-V5 | E-8/E-9 | — |
+| PR-V10 | `feat(orbitscore): wire MIDI panic and live device selection` | バッチ C（closes #484 のデバイス部分・`panic()` は実装済み・配線のみ）| `extension.ts` `mcp-server.ts`（+200）| PR-V5 | E-8/E-9 | — |
 | PR-V11 | `feat(engine): grow the slot pools off-thread` | **#663**（バッチ D・さらに分割）| `output.rs` `outproc_instrument.rs`（+600/−200）| PR-V6・PR-V8b | E-7 + #663 受け入れ 5 項目 | 🔴 設定項目の消滅 |
-| PR-V12 | `feat(orbitstudio): rework the Engine view as a WebviewView` | バッチ E（closes #503）| 新 webview（+500/−300）| V7・V10・V11 | 既存 E2E 全件 | — |
+| PR-V12 | `feat(orbitscore): rework the Engine view as a WebviewView` | バッチ E（closes #503）| 新 webview（+500/−300）| V7・V10・V11 | 既存 E2E 全件 | — |
 
 **最短経路（must-fix）**: PR-V3 → PR-V4。#156 の裁定を待たずに V3 は着手できる。
 
@@ -551,7 +551,7 @@ O3 が互換のために残した経路は、**O4 が実機で確かめられた
 
 ### ステージ 3 — ログ → リプレイ（PR-L1a/L1b/L2/L3/L7/L8/L9 → L4/L5/L6）
 
-- **結果**: OrbitStudio で演奏すると `<DIR>/<basename>.<stamp>.orbslog` が出て、`orbitscore replay <log>` が**同じ音**を鳴らす（840 / 1260 型の演奏を後から再生できる）。
+- **結果**: OrbitScore で演奏すると `<DIR>/<basename>.<stamp>.orbslog` が出て、`orbitscore replay <log>` が**同じ音**を鳴らす（840 / 1260 型の演奏を後から再生できる）。
 - **確認**: `open_file` → `run_selection`（`global.start()`）→ `ls <scoreDir>/<DIR>/` → `readOrbsLog` で meta/eval/transport → `stop_engine` → `orbitscore replay <log>` を capture 付きで → 窓 RMS がライブと一致（E2E-R1）。
 - **閉じる**: #694 全項目（B 含む）/ #695 (1)(2) / #241 忠実リプレイ・`--until` v1。
 

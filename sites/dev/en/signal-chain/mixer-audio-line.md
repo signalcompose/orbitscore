@@ -1535,7 +1535,7 @@ leaves `hw` at 0.75 (the gain merely scales silence) and the test fails.
 ## How the capture E2E measures
 
 `captureInstrumentScenario` in `tests/e2e/orbitstudio-mcp-gated.spec.ts` drives the real
-OrbitStudio via MCP and measures the RMS of the daemon's capture WAV per segment. A segment's RMS
+OrbitScore via MCP and measures the RMS of the daemon's capture WAV per segment. A segment's RMS
 is the root of the mean of the squared RMS of each window inside it, with a guard (default 0.15
 seconds) trimmed from both ends of the segment to exclude transitions.
 

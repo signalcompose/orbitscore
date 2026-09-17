@@ -676,7 +676,7 @@ mmap target of a test run in progress.
 
 The only diagnostic is the single `tracing::info!` line at the end of `sweep_orphaned_outproc_shm`
 (`scanned` / `removed` / `kept_*` / `failed` / `elapsed_ms`). What is worth noticing here is that
-**as long as startup succeeds, that line never shows up in OrbitStudio's `get_log`**. The TS side
+**as long as startup succeeds, that line never shows up in OrbitScore's `get_log`**. The TS side
 (`daemon-client.ts:891-910`) only accumulates the daemon's stderr into `stderrChunks` until the
 ready line arrives, without forwarding it, and what was accumulated surfaces only on the
 startup-failure diagnostic path. The sweep runs before the first shm is created — that is, before
