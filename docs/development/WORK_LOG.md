@@ -17,6 +17,57 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(index): follow PR #947 — the archive period label stayed at 09-12 (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr947` / **追従元**: PR [#947](https://github.com/signalcompose/orbitscore/pull/947)（マージコミット `b89ce0e`）
+
+#947 は docs のみの PR で、実装・テストは 1 行も触っていない（35 files すべて `README.md` /
+`docs/` / `sites/`）。したがって仕様・ランタイム・エディタの各層に追従する対象は無い。
+ただし **#947 自身がアーカイブの索引を 3 箇所のうち 2 箇所しか更新していなかった**ので、
+残り 1 箇所を揃えた。
+
+#### 直したもの（1 行）
+
+| ファイル | 変更 |
+|---|---|
+| `docs/archive/WORK_LOG_2026-09.md:1` | H1 の期間ラベル `2026-09（前半・09-01〜09-12）` → `09-01〜09-13` |
+
+#947 はアーカイブへ 20 エントリ（219 → 239）を移し、そこには **`(Sep 13, 2026)` の
+エントリが 12 本**含まれていた（移設前のアーカイブには 0 本）。本体末尾の索引
+（本体末尾 `## Archived sections` の索引行）と `docs/core/INDEX.md:177` は両方 `09-01〜09-13` へ
+更新済みだったが、**アーカイブ側 H1 だけが `09-01〜09-12` のまま**だった。
+
+🔴 **これは 3 度目の同じ取り残しである。** 同じ形の追従を過去に 2 回やっている
+（`docs/archive/WORK_LOG_2026-09.md:1882` の「期間ラベルを `09-01〜09-06` → `09-01〜09-07`」、
+および `:2497` の「docs(index): follow PR #805 — the archive period label stayed at 09-05」）。
+
+原因は仕組みの穴で説明できる:
+
+- `PROJECT_RULES.md` §1a のアーカイブ手順は「本体末尾に参照リンク」と
+  「`docs/core/INDEX.md` の表」の 2 つしか挙げておらず、**アーカイブ側 H1 の期間ラベルを
+  挙げていない**（`docs/core/PROJECT_RULES.md:118-125`）
+- `tests/docs/worklog-size.spec.ts` が突合するのは本体の行数と
+  「`## Archived sections` から辿れるファイル名」だけで、**期間ラベルは 3 箇所とも見ていない**
+  （`tests/docs/worklog-size.spec.ts:36-50`）
+
+手順に無く、テストも見ていないので、毎回人の注意力だけが防波堤になっている。
+手順への追記とラチェット化は仕組みの変更なので、本 PR では**やらずに提案として出す**。
+
+#### 直さなかったもの
+
+- **`docs/user/en/USER_MANUAL.md`**: #947 は `docs/user/ja/USER_MANUAL.md` に
+  「プラグイン UI: 右クリック（#939）」節を 16 行足したが en 側には足していない。
+  これは片翼ではなく**意図された非対称**で、`README.md:245` が en 版を
+  「deprecated, see learning site above」と明記しており、対になる公開文書
+  （`sites/user/en/plugins/instrument.md` / `sites/user/en/mixing/effects.md`）は
+  #947 が ja と対で更新している
+- **直下のエントリ（「docs: fold the two pending docs-sync PRs, and archive 20 entries」）の
+  移設前後の表にある「1,093 行 / 19 エントリ」**: 一見実測と合わないが
+  （現在 1,159 行 / 20 エントリ）、**移設直後・本エントリ追記前**の値として正しい
+  （`git show d67c9a5:docs/development/WORK_LOG.md | wc -l` = 1093）。自己参照の宿命であって誤りではない
+- **`docs/design/883-explicit-output-routing-design.md:175` の壊れた行番号参照**: #947 の PR 本文
+  §4 が既に owner へ挙げている。設計書は起案時点のスナップショットなので触らない
+
 ### docs: fold the two pending docs-sync PRs, and archive 20 entries (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `946-fold-docs-sync-prs` / **Issue**: #946
