@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): land the revised OrbitStudio design and the new docs-structure design (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `848-native-design-revised` / **Issue**: #848
+
+Fable 起案の改訂版 4 本（計 **1,592 行**）を配置する。🔴 **main による審査はこれから**
+（owner 指示により **#948 の用語統一を先に完了させてから**設計の議論に入る）。
+
+| ファイル | 行数 | |
+|---|---|---|
+| `docs/design/848-native-orbitstudio-design.md` | 659 | 改訂（初版 577）。**§2b 改訂判定表**を新設 |
+| `docs/design/848-docs-structure-design.md` | **380** | 🆕 **新設**（文書の保持構造・Q1〜Q4） |
+| `docs/planning/IMPLEMENTATION_PLAN_NATIVE.md` | 241 | 改訂 |
+| `docs/planning/NATIVE_DEVELOPMENT_MAP.md` | 312 | 改訂 |
+
+初版は PR [#849](https://github.com/signalcompose/orbitscore/pull/849)（`848-native-design`
+`1bd65b80`）に残る。**そのブランチは main から 277 コミット遅れ**ていたので、
+main から切り直した。
+
+#### なぜ改訂が要ったか
+
+初版は **2026-09-11 の main `229d6387`** を根拠に書かれており、その後 #887 / #888 の
+リファクタリングで §2「現在地」の表が古くなっていた。特に「**21 モジュールのうち `vscode` を
+import するのは 2 本だけ・残り 19 本はそのまま層 2 へ移せる**」が §3 の結論の土台だった。
+
+#### 主要な発見（main が実測で検算済み）
+
+| 発見 | 出典 |
+|---|---|
+| 依存は **15 本 4,409 行 / pure 26 本 6,062 行**。ただし**依存の行数は 08-30 の 4,405 からほぼ不変** — #887 は依存コードを `extension.ts` から 14 ファイルへ**配った**だけ | `grep -rl "from 'vscode'"` |
+| 🔴 **W-22「同梱 node」が失効**。#878 以降 engine は `spawn(process.execPath, …, {ELECTRON_RUN_AS_NODE:'1'})` | `engine-process.ts:407` |
+| 🔴 **cold install で Docs パネル / `get_dev_doc` が動かない**。`.vsix` に `sites/` は同梱されないのにパス解決がモノレポ前提。**この経路の gated E2E は 0 本** | `mcp-server.ts:137-138` / `.vscodeignore` / `grep get_dev_doc tests/e2e/` |
+| 「実装依存 / 非依存」は **1 軸ではなく 2 軸**（軸 A = host 表面・段落粒度 / 軸 B = 可用性・機能粒度） | 別冊 §2 |
+
+#### 🔴 main のブリーフに誤りが 2 件あった
+
+Fable が検算で発見した。どちらも main が調査報告を**検算せずに転記**したもの:
+
+1. 「MCP 層 `mcp-*.ts` **9 ファイルは完全に vscode 非依存**」→ 誤り。9 本目
+   `mcp-register-command.ts:12` が `import * as vscode`（`:159` で `showQuickPick`）。
+   非依存は **8 本**
+2. 「`*-bridge.ts` は **6 本**」→ **5 本**（`playhead-decorations.ts` はブリッジではない）
+
+調査報告の**要約と列挙が食い違っていた**（列挙は正しく、要約が誤っていた）。
+**列挙が一次情報で、要約は二次**である。
+
+#### 裁定待ち
+
+owner 裁定が要る項目が **7 件**（同梱範囲・可用性の表記法・凍結スナップショットの要否・
+ルーチンのトリガー・リリース後の更新経路など。すべて Fable の推奨つき）。
+#948 の完了後に整理して上げる。
+
+Part of #848
+
+---
+
 ### docs: fold the two pending docs-sync PRs, and archive 20 entries (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `946-fold-docs-sync-prs` / **Issue**: #946
