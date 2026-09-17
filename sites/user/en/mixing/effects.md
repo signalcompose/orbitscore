@@ -157,9 +157,9 @@ drums.effect(["ValhallaRoom", "TAL Reverb 4", "ValhallaRoom"])
 - It does not open on a saved state file name either; move the cursor onto the plugin name.
 - In every case **nothing ever silently does nothing**: you get a message saying why.
 
-### The window floats above OrbitStudio (macOS)
+### The window floats above OrbitScore (macOS)
 
-An open plugin window floats above the editor **only while OrbitStudio is the frontmost app**. Bring another app to the front and the plugin window does not cover it. While you are clicking the plugin window itself, it stays floating.
+An open plugin window floats above the editor **only while OrbitScore is the frontmost app**. Bring another app to the front and the plugin window does not cover it. While you are clicking the plugin window itself, it stays floating.
 
 ---
 

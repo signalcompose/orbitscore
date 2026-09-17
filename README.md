@@ -175,7 +175,7 @@ orbitscore/
 │   ├── planning/             # Roadmaps
 │   └── user/                 # Legacy in-repo user docs
 ├── tests/                    # Vitest suite (unit / integration / e2e)
-│   └── e2e/                  # Gated real-device E2E (OrbitStudio + MCP), coverage ratchet
+│   └── e2e/                  # Gated real-device E2E (OrbitScore + MCP), coverage ratchet
 ├── scripts/                  # Build helpers (daemon bundling, engine deps)
 ├── examples/
 │   └── *.orbs                # Sample files

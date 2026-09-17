@@ -8,7 +8,7 @@
 //! 2. panic hook も `eprintln!` を使っていると**再 panic** し、
 //!    `panic_with_hook` の再帰検知が `std::process::abort` を呼ぶ → **SIGABRT**
 //!
-//! 実際に 2026-08-01 の OrbitStudio 起動経路で 14 回再現した（04:03〜05:16 JST・
+//! 実際に 2026-08-01 の OrbitScore 起動経路で 14 回再現した（04:03〜05:16 JST・
 //! `~/Library/Logs/DiagnosticReports/orbit-audio-daemon-*.ips`）。
 //!
 //! ## なぜ書き込みエラーを握りつぶすか

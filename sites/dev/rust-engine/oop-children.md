@@ -650,7 +650,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 
 診断は `sweep_orphaned_outproc_shm` の末尾が出す `tracing::info!` の 1 行（`scanned` /
 `removed` / `kept_*` / `failed` / `elapsed_ms`）だけです。ここで気をつけたいのは、**起動が成功
-する限り、この行は OrbitStudio の `get_log` には出てこない**という点です。TS 側の
+する限り、この行は OrbitScore の `get_log` には出てこない**という点です。TS 側の
 `daemon-client.ts:891-910` が ready 行が来るまで daemon の stderr を `stderrChunks` へ溜める
 だけで転送しないためで、蓄積分が表に出るのは起動失敗の診断経路だけです。sweep は最初の shm 生成
 より前、つまり ready 行より前に走るので、ちょうどその窓に入ります。上の E2E がログを主オラクル

@@ -11,7 +11,7 @@
 | ステージ 0 | 安全網 | 既存の譜面が同じ音のまま、という事実が capture の数値で固定される。以後どの変更でも「音が変わった」を機械が検出する。ユーザーの操作は何も変わらない。 |
 | ステージ 1 | must-fix | 演奏が壊れる 5 件が直る。`global.gain(-6)` が instrument にも効く。演奏中に engine が throw で止まらない。選んだオーディオデバイスから本当に音が出る。RUN の終端で音が止まる。untrusted なフォルダでも動く。 |
 | ステージ 2 | 出口の一般化 | `kick.output(verb, thru: true, db: -12).output(master)` と書ける。master も aux も物理アウトも同じ書き方。`send` は dB。`pan` がバス上で効く。instrument の `outs:` でマルチアウト。 |
-| ステージ 3 | ログ → リプレイ | OrbitStudio で演奏すると譜面の隣の `orbslog/` にログが自動で残り、`orbitscore replay <log>` が同じ音を同じ小節で鳴らす。`--until 57:1` で途中から続きを演奏できる。 |
+| ステージ 3 | ログ → リプレイ | OrbitScore で演奏すると譜面の隣の `orbslog/` にログが自動で残り、`orbitscore replay <log>` が同じ音を同じ小節で鳴らす。`--until 57:1` で途中から続きを演奏できる。 |
 | ステージ 4 | render | `mix.render("stems/%n_%v.wav")` で演奏しながら stem が書け、`orbitscore render` / `replay --render` が実時間より速く同じファイル群を作る。4ch 以上の WAV にも置ける。 |
 | ステージ 5 | 可視化・設定・性能 | engine が掴んでいるデバイス・レート・バッファ・callback 統計・設定の実効値が Studio に出る。child がアイドルで CPU を食わない。プール上限を気にしなくてよい。 |
 | ステージ 6 | リリースゲート連鎖 | note が transport 時刻どおりに届く。プラグインのパラメータをパターンで動かせる。並列ラックの位相が揃う。`layer()` が並列に走る。instrument ラック。標準 compressor/limiter を好きな位置に挿せる。 |
@@ -36,7 +36,7 @@
 |---|---|---|---|
 | PR-L0 | 📄 仕様・文書 | ステージ 0 | セッションログ v2 の仕様が読める（置き場・フレーム・純度・replay CLI）。 |
 | PR-L1a | 🧱 土台・変化なし | ステージ 3 | CLI（`ORBITSCORE_SESSION_LOG=1`）で試すと、ログが譜面の隣の `orbslog/` に出て、`code` にはユーザーの書いたテキストだけが残る。Studio からはまだ出ない。 |
-| PR-L1b | 👀 見える | ステージ 3 | **OrbitStudio で演奏すると `orbslog/<譜面名>.<日時>.orbslog` が自動で残る**。設定 `orbitscore.sessionLog` で off にできる。untitled は `untitled.*`。（ここが #694 の完了） |
+| PR-L1b | 👀 見える | ステージ 3 | **OrbitScore で演奏すると `orbslog/<譜面名>.<日時>.orbslog` が自動で残る**。設定 `orbitscore.sessionLog` で off にできる。untitled は `untitled.*`。（ここが #694 の完了） |
 | PR-L2 | 🎵 音・操作が変わる | ステージ 3 | 1 回の選択が 1 まとまりで評価される。選択の途中に構文エラーがあれば**何も実行されない**（今は途中まで実行される）。ログも 1 選択 = 1 レコード。 |
 | PR-L3 | 👀 見える | ステージ 3 | GLOBAL を複数書いても、全部のログに start / stop が残る。 |
 | PR-L7 | 👀 見える | ステージ 3 | ログに評価の成功 / 失敗と診断、import した module の本文、MCP（エージェント）由来の印が残る。後から読んで「何が起きたか」が分かる。 |

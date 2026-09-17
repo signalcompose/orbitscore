@@ -72,7 +72,7 @@ skill の Phase 1 (Discovery interview) では audience / scope / language 等�
 | **research depth** | spec-grade (primary source = code 自身、reading 時は逐語引用) |
 | **deploy target** | post-ICMC で GitHub Pages、initial は local-only (`docs:dev`) |
 | **curriculum structure** | **ステップバイステップ構成**。各ステップは実機で再現可能な手順とし、その手順集合が **網羅的 E2E テストのタスクを兼ねる**（learning = E2E 検証の二重役割。(2026-07-17 owner 指示)） |
-| **local delivery** | ローカル配信は **MCP サーバ `/docs/`**（[#450](https://github.com/signalcompose/orbitscore/issues/450)）と **OrbitStudio ワンクリック** の 2 経路（(2026-07-17 owner 指示)） |
+| **local delivery** | ローカル配信は **MCP サーバ `/docs/`**（[#450](https://github.com/signalcompose/orbitscore/issues/450)）と **OrbitScore ワンクリック** の 2 経路（(2026-07-17 owner 指示)） |
 
 ---
 
@@ -215,7 +215,7 @@ cross-LLM-family audit に格上げする選択肢は post-ICMC で検討:
   - 公開範囲: public (OSS なので隠す理由なし、contributor 用途でも有用)
   - 「個人の学習ノート」 disclaimer は landing page (`sites/dev/index.md` / `sites/dev/en/index.md`) で明記
 - **開発時**: local-only (`npm run docs:dev -w @orbitscore/dev-site` で hot reload)。飛行機内などのオフライン作業もこれで足りる
-- **ローカル配信（追加経路・(2026-07-17 owner 指示)）**: MCP サーバ `/docs/`（[#450](https://github.com/signalcompose/orbitscore/issues/450)）経由・OrbitStudio からのワンクリック起動の 2 経路を予定。GitHub Pages 版と並存し、オフライン/エージェント駆動での参照を担う
+- **ローカル配信（追加経路・(2026-07-17 owner 指示)）**: MCP サーバ `/docs/`（[#450](https://github.com/signalcompose/orbitscore/issues/450)）経由・OrbitScore からのワンクリック起動の 2 経路を予定。GitHub Pages 版と並存し、オフライン/エージェント駆動での参照を担う
 
 ---
 

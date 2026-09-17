@@ -456,7 +456,7 @@ record states an **exact ratio of 0.50000** (single-sine peak 0.70711 →
 `outproc_effect_bus_gated.rs` was not re-run on real hardware during this page's re-read on
 2026-09-01 either (the test's own assertion is the wider `0.4..=0.6` range).
 
-The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated in
+The E2E that goes through the user's own path (OrbitScore + MCP) is accumulated in
 `tests/e2e/orbitstudio-mcp-gated.spec.ts` and runs with `npm run test:e2e:gated` (see
 [RE-4](/en/rust-engine/capture-verification)).
 

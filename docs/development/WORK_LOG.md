@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: reconcile OrbitScore (frozen extension) vs OrbitStudio (native app) prose (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `948-orbitscore-orbitstudio-terminology` / **Issue**: #948
+
+2026-09-18 の呼称確定（OrbitScore = 拡張版・OrbitStudio = ネイティブ版）を受けて、それより前の
+散文が旧い意味（拡張版）のまま残っている箇所を洗い出した。`grep -rio orbitstudio` は 1,100 件超
+（識別子・`OrbitStudio.app` を含む）ヒットするため、5 系統（`sites/user/`・`sites/dev/`・
+`docs/`（archive・design 除く）・`docs/design/`・`tests/`）に分けて並行で読み、1 行ずつ文脈判定
+した。**一括置換（sed 等）は使っていない。**
+
+**変換**: 34 ファイル・59 箇所を `OrbitStudio` → `OrbitScore` に更新（`docs/` 15・`sites/dev/` 9
+（ja/en 対）・`sites/user/` 4（ja/en 対）・`tests/` 3・`rust/crates/orbit-audio-daemon` 2・
+`README.md` 1・`vitest.config.ts` 1）。識別子（`orbitstudio-mcp-gated.spec.ts` /
+`ORBIT_GATED_ORBITSTUDIO` / `launchIsolatedOrbitStudio` / `dev.orbitscore.OrbitStudio` 等）・
+ネイティブ版の計画/設計・`docs/archive/` は対象外のまま。
+
+以下は **意図的に変換しなかった**（いずれも「拡張版を指す散文」ではないため）:
+- `docs/development/POST_2.0_*`（12 ファイル）: Epic #292・2026-07 起案の計画文書群。
+  `POST_2.0_ENGINE_AND_DISTRIBUTION.md` に「OrbitScore = 言語 / OrbitStudio = 専用アプリ
+  （候補名）」の記述があり、当時から今回確定した命名と一致していたため無変換
+- `docs/design/656-release-design.md` / `docs/research/EDITOR_HOST_AND_APP_SIZE.md` /
+  `docs/planning/2026-09-03-issue-triage.md`: VSCodium フォークを「OrbitStudio」名でリブランド
+  していた旧配布パイプライン（#830/#827 で廃止・`docs/planning/NATIVE_MIGRATION_2026-09.md` が
+  「`OrbitStudio.app` = VSCodium フォーク」の枠組みを畳むと明記）。`sites/dev/editor/mcp-and-
+  gated-e2e.md`（ja/en）にも同じ史実の説明段落があり、そのまま
+- `docs/development/evidence/628-gated-evidence.md`: 実行ログの逐語キャプチャ（当時の実際の
+  `describe` 名）
+- `sessions/claude/20260707-mlts-live-jam/README.md`: 2026-07-07 時点の記録（archive 相当）
+- `docs/research/WCTM_AGENT_HARNESS_EXTERNAL_DATA_RESEARCH.md` / `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md`
+  §「pi ベースの外部データ受信ハーネス」/ `WCTM_SYSTEM_SPEC_v1.md`: WCTM 文脈の小文字
+  `orbitstudio`（対象リポジトリ外の可能性・owner 確認要）
+- `CLAUDE.md:38` の「orbitstudio 集約」（Epic #413・private レポ名の可能性）
+- `sites/dev/editor/vscode-architecture.md`（ja/en）1 箇所: 「OrbitScore 自身の拡張の宣言は
+  効くが、**同居する `anthropic.claude-code` の宣言には効かない**」という対比の文で、後者を
+  指す語を当初 fork が `OrbitScore` に変換していたのを **`OrbitStudio` へ差し戻した**（同一文に
+  `OrbitScore` が二重に出て「拡張が拡張を同居させる」という意味不明な文になっていたため）。
+  ここは今回定義の「OrbitScore」でも「OrbitStudio」でもない**第三の対象**（複数拡張を同居させる
+  エディタプロセスそのもの）を指していた。🔴 **owner 裁定により「VS Code」と書き直した**
+  （2026-09-18）。ja `:93` / en `:93` の 1 文ずつ。
+
+  同じ行の後半「**OrbitStudio のビルド側で** workspace trust を既定 off にする層 2」
+  （`product.overrides.json` + `build_orbitstudio.sh`）は**そのまま残した** — こちらは
+  #830 / #827 で廃止済みの VSCodium フォークを当時「OrbitStudio」と呼んでいた**史実**で、
+  識別子 `build_orbitstudio.sh` と結びついている
+
+検証: `npm ci` / `npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` /
+`npm run docs:check` すべて green（996 citation 検証・0 failed・54 ファイル走査）。
+
+---
+
 ### docs: fix the product names — OrbitScore is the extension, OrbitStudio is the native app (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `948-terminology-in-claude-md` / **Issue**: #948
@@ -670,7 +720,7 @@ Part of #940
 
 ---
 
-### feat(plugin-ui): float plugin windows above the editor while OrbitStudio is frontmost (#940) (Sep 14, 2026)
+### feat(plugin-ui): float plugin windows above the editor while OrbitScore is frontmost (#940) (Sep 14, 2026)
 
 owner 裁定で **#939 の PR に畳んだ**（「振る舞いとしては同じ関心ですよね」）。
 利用者から見れば「楽譜から UI を開く」ひとつの体験で、**#939 の手動ゲート中に発見**された。

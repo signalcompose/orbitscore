@@ -1654,7 +1654,7 @@ UIH.5.1。
   VST3 を `moduleinfo.json` だけで読み、過去の fingerprint 一致 probe 結果があれば復元する。
   一方 CLAP は #463 前からの互換挙動として descriptor を in-process で読み、
   `plugins` 投影から消してはならない。`orbit-plugin-scan --probe-artifacts` と
-  OrbitStudio/MCP の明示 rescan は、pending と再試行対象を 1 artifact / 1 child で検査する。
+  OrbitScore/MCP の明示 rescan は、pending と再試行対象を 1 artifact / 1 child で検査する。
 - fingerprint は `format + canonical bundle path + executable の相対パス/解決経路
   + executable の size/mtime(ns) + Info.plist の size/mtime + scanner schema version`。
   解決経路は `coreFoundation` / `infoPlistXml` / `convention` / `directoryScan`
@@ -1671,7 +1671,7 @@ UIH.5.1。
 - キャッシュ = `~/.orbitscore/plugin-catalog.json`（正本はこのファイル。エンジン・
   拡張・MCP はこれを読むだけ）。生成/更新 = 初回スキャン + 明示 rescan（自動 watch は
   v1 スコープ外）。スキャンは crash-isolated な独立 `orbit-plugin-scan` バイナリが所有し、
-  OrbitStudio と MCP は明示 rescan 時に同バイナリを起動する。
+  OrbitScore と MCP は明示 rescan 時に同バイナリを起動する。
 
 ### PC.2 DSL の名前指し
 
@@ -1704,7 +1704,7 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
   はエラー
 - カタログ未生成・名前未ヒット時のエラーは「rescan 手順」を含む actionable メッセージ
 
-### PC.3 OrbitStudio 自動補完
+### PC.3 OrbitScore 自動補完
 
 - 拡張の completion provider が `effect("` / `instrument("` の引数位置で
   カタログから候補（name・vendor 修飾形・format ラベル付き）をサジェスト
