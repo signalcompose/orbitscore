@@ -255,7 +255,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 ```
 
-省略したブロックが `startOrbitScoreMcpServer()` に 25 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`engine-process.ts:234-257`)。
+省略したブロックが `startOrbitScoreMcpServer()` に 24 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`engine-process.ts:234-257`)。
 
 ### 出荷物では `activate()` の手前で落ちていた (#873)
 
@@ -704,7 +704,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
         stdio: ['pipe', 'pipe', 'pipe'],
 ```
 
-**2026-09-10 の裁定（#827 / #502）で `engineKind` による分岐・`ORBITSCORE_ENGINE` の明示 set・`ORBIT_SCSYNTH_PATH` の受け渡しはすべて削除**されました。唯一のバックエンドである Rust daemon 向けに、`env` 変数へ積むのは debug フラグと capture seam（#307）だけです。
+**2026-09-10 の裁定（#827 / #502）で `engineKind` による分岐・`ORBITSCORE_ENGINE` の明示 set・`ORBIT_SCSYNTH_PATH` の受け渡しはすべて削除**されました。唯一のバックエンドである Rust daemon 向けに、`env` 変数へ積むのは debug フラグ・capture seam（#307）・**`ORBIT_HOST_BUNDLE_ID`（#940）** の 3 つです。最後のものは `resolvePluginWindowHostBundleId()` が外側の `.app` の `Info.plist` から読んだ `CFBundleIdentifier` で、macOS 以外や `.app` の外では解決できないため **`delete` して渡しません**（親から継承した古い値がそのまま child へ流れるのを防ぐためで、`if` だけでは足りません）。値の行き先は [PH-2](/plugin-hosting/plugin-ui) の「窓を前面に浮かせる（#940）」にあります。
 
 ただし spawn に渡る env はそれだけではありません。**2026-09-12（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）に、spawn の引数そのものが変わりました。** PATH から `node` を引くのをやめ、**VS Code 自身が同梱している Node**（`process.execPath`）を使います。Finder や launchd から起動された VS Code の PATH は `/etc/paths` の最小構成で、nodenv や Homebrew で node を入れている環境ではそこに `node` がないためです。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` を渡して初めて Node になります。`ELECTRON_NO_ASAR=1` が併記されているのは、その子では Electron の asar フックが生きていて `fs` が「`.asar` で終わるディレクトリ」をアーカイブとして扱うからで、利用者が `global.audioPath(...)` で与えたパスに `.asar` が現れたときだけ素の node と挙動が変わるのを消すためです。
 
@@ -1028,7 +1028,7 @@ export function applyEngineExit(
 }
 ```
 
-`deactivate()` は engine を `kill()` し、playhead の decoration type と MCP サーバ、Webview panel を dispose します (`extension.ts:293-314`)。
+`deactivate()` は engine を `kill()` し、playhead の decoration type と MCP サーバ、Webview panel を dispose します (`extension.ts:298-319`)。
 
 ---
 
@@ -1105,9 +1105,9 @@ flowchart TD
 |---|---|---|
 | `.vsix` に `orbit-audio-daemon` を同梱し、`resolveDaemonBinaryPath()` の最終候補に追加 | #306 | `docs/archive/WORK_LOG_2026-07.md` §6.185 (2026-07-03) |
 | `orbitscore.engine` 設定 (既定 `rust`) と `getConfiguredEngineKind()` による 4 サイトの分岐、`ORBITSCORE_ENGINE` の明示 set | #377 / #366 | §6.186 (2026-07-07)、`extension.ts:653-669` |
-| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:203-236` |
-| MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 25 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:237-291`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
-| `[STEP]` 行による live playhead highlight (per-seq 色・nested argPath・`orbitscore.playheadPalette`) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
+| 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:207-240` |
+| MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 24 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:241-296`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
+| `[STEP]` 行による live playhead highlight (per-seq 色・nested argPath・`orbitscore.playheadPalette`) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:151-289` |
 | dev 学習サイトのローカル配信と `openDevDocs` / Webview panel / Walkthrough / Activity Bar の Learning view | #450 / #457 | §6.260-6.261 (2026-07-17)、`docs-panels.ts:52-129` |
 | `//#documentDirectory` メタ行で基準ディレクトリを帯域外先渡し (import 対応) | #456 | §6.266 (2026-07-17)、`engine-process.ts:653-658` |
 | plugin catalog の名前補完 + `rescanPlugins` (3 面: コマンド / 右クリック / MCP) | #463 | §6.279 (2026-07-17)、`dsl-providers.ts:92-172` |
@@ -1119,7 +1119,7 @@ flowchart TD
 | `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`engine-handlers.ts:248-256` |
 | `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`plugin-commands.ts:35-99`、`diagnostics-provider.ts:160-168` → [PH-3](/plugin-hosting/catalog) |
 | `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"（本体はローテーション済み）、`package.json:34-43` |
-| 拡張自身の実行時依存 (`@modelcontextprotocol/sdk` / `zod`) を `dist/node_modules` へ同梱。cold install では hoist によりこれらが `.vsix` に入らず、`activate()` がモジュール読み込みの時点で落ちていた | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)"、`packages/vscode-extension/package.json:419-420`、`scripts/install-bundle-deps.sh` |
+| 拡張自身の実行時依存 (`@modelcontextprotocol/sdk` / `zod`) を `dist/node_modules` へ同梱。cold install では hoist によりこれらが `.vsix` に入らず、`activate()` がモジュール読み込みの時点で落ちていた | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)"、`packages/vscode-extension/package.json:430-431`、`scripts/install-bundle-deps.sh` |
 
 初稿の「8 つのコマンド」「診断は 3 種 (+2)」「`startEngine` は同期で scsynth 必須」はいずれも 69dc968 では成り立ちません。
 
@@ -1160,20 +1160,20 @@ flowchart TD
 - `packages/vscode-extension/package.json:34-43` — `capabilities.untrustedWorkspaces` の宣言 (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — 宣言を検査する 6 本 (`restrictedConfigurations` を `?? []` に落とさない理由もここ)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — マニフェスト読み取りの共有ヘルパー (`readExtensionManifest()` / `declaredConfigurationKeys()`)
-- `packages/vscode-extension/src/extension.ts:104-134` — モジュールレベル状態と 4 つの bridge
-- `packages/vscode-extension/src/extension.ts:150-284` — live playhead の decoration 管理 (#390)
-- `packages/vscode-extension/src/extension.ts:91-291` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
-- `packages/vscode-extension/src/extension.ts:293-314` — `deactivate()`
+- `packages/vscode-extension/src/extension.ts:105-135` — モジュールレベル状態と 4 つの bridge
+- `packages/vscode-extension/src/extension.ts:151-289` — live playhead の decoration 管理 (#390)
+- `packages/vscode-extension/src/extension.ts:92-296` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
+- `packages/vscode-extension/src/extension.ts:298-319` — `deactivate()`
 - `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
 - `packages/vscode-extension/src/engine-process.ts:121-134` — `updateBundleStatus()` (`maybeShowBundleNotice()` は scsynth 専用だったため #502 で削除)
-- `packages/vscode-extension/src/extension.ts:316-333` — `showCommands()` (engine kind による分岐は #502 で削除・常に Engine ビューを focus) / `restartEngine()` / `reloadWindow()`
+- `packages/vscode-extension/src/extension.ts:321-338` — `showCommands()` (engine kind による分岐は #502 で削除・常に Engine ビューを focus) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`: `createLinePrefixer` + `StringDecoder` による bridge 振り分けと `applyEngineStdoutChunk` 呼び出し (#773)
 - `packages/vscode-extension/src/engine-handlers.ts:371-391` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756 / #773)
 - `packages/vscode-extension/src/engine-handlers.ts:407-429` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
 - Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) / PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — stdout の bridge 封筒が chunk 境界で割れて両断片とも失われる問題
 - `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
 - `packages/vscode-extension/src/engine-process.ts:234-257` — `autoStartConfiguredRustEngine()`
-- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
+- `packages/vscode-extension/src/engine-process.ts:302-453` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
 - `packages/vscode-extension/src/engine-process.ts:459-508` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: `//#documentDirectory` メタ行と `setDocumentDirectory` 注入
 - `packages/vscode-extension/src/dsl-providers.ts:41-173` — `registerCompletionProviders()`: chain / pitch scope / plugin catalog の 3 系統
@@ -1185,7 +1185,7 @@ flowchart TD
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由 (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
 - `packages/vscode-extension/src/mcp-server.ts:52-80` — MCP SDK と `zod` のトップレベル `require`。`activate()` より前に評価されるので、同梱漏れは activation 全体を落とす (#873)
-- `packages/vscode-extension/package.json:419-420` — `build` / `build:clean` の末尾に付いた `install-extension-deps.sh` (#873)
+- `packages/vscode-extension/package.json:430-431` — `build` / `build:clean` の末尾に付いた `install-extension-deps.sh` (#873)
 - `scripts/install-bundle-deps.sh:13-37` — hoist 問題そのものの説明と、engine 2 件 / 拡張 1 件の事故の対応表、esbuild への移行 (#875) を stopgap と呼ぶ理由
 - `scripts/install-extension-deps.sh:10-28` — 同梱先が `dist/node_modules` である 2 つの理由と、`--no-dependencies` に至った経緯
 - `scripts/check-vsix-bundled-deps.mjs:83-98` — post-package ゲートの保証が depth 1 と depth > 1 で一様でないことの明示

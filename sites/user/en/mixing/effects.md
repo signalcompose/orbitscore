@@ -141,6 +141,26 @@ sum("bus").ui("ValhallaRoom")     // also works on a sum bus's inserts
 - Zero matches is also an explicit error (nothing silently does nothing).
 - Re-evaluating the score does not open an already-open UI a second time (idempotent).
 
+### Right-click to open just one
+
+Sometimes the same plugin is inserted twice and you want **only one of them**. `ui("name")` opens all matches, so it cannot do this.
+
+Instead, **put the cursor on the plugin name in the score and right-click**, then choose `OrbitScore: Open Plugin UI`. **Only the one under the cursor** opens.
+
+```text
+drums.effect(["ValhallaRoom", "TAL Reverb 4", "ValhallaRoom"])
+//                                             ^^^^^^^^^^^^ right-click here → only the third opens
+```
+
+- Right-click **on the plugin name itself**. Anywhere else reports "the cursor is not on a plugin name".
+- On a built-in plugin such as `Gain` it reports that built-in plugins have no UI — their parameters are written in the score instead.
+- It does not open on a saved state file name either; move the cursor onto the plugin name.
+- In every case **nothing ever silently does nothing**: you get a message saying why.
+
+### The window floats above OrbitStudio (macOS)
+
+An open plugin window floats above the editor **only while OrbitStudio is the frontmost app**. Bring another app to the front and the plugin window does not cover it. While you are clicking the plugin window itself, it stays floating.
+
 ---
 
 Next, let us look at `sum` and `aux/send`, which let you route multiple sequences together into buses.

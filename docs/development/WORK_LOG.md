@@ -17,6 +17,93 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: fold the two pending docs-sync PRs, and archive 20 entries (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `946-fold-docs-sync-prs` / **Issue**: #946
+
+拡張版の機能凍結（owner 裁定 2026-09-18）を受けて **OrbitStudio**（= macOS ネイティブ版。
+今後この語は拡張版を指さない）の開発に入る前に、溜まっていた docs-sync PR 2 本を畳んだ。
+`BUNDLE_BRANCH_WORKFLOW.md` §「束を開く前にルーティンの追従 PR を全部消化する」に従う。
+
+| 畳んだ PR | 追従元 | マージ前の状態 |
+|---|---|---|
+| [#944](https://github.com/signalcompose/orbitscore/pull/944) | #941（右クリックで 1 つの UI / 窓の floating） | `CONFLICTING`・32 files |
+| [#945](https://github.com/signalcompose/orbitscore/pull/945) | #943（4.2.0 bump） | `MERGEABLE`・1 file |
+
+衝突したのは `WORK_LOG.md` の 1 ファイルのみで、dev / user サイトの 31 ファイルは auto-merge した。
+時系列に合わせて 4.2.0 bump を上、#941 追従をその下（`#940 wiring fix` の直上）に置いた。
+
+#### 🔴 アーカイブが誘発された — 規律が正しく発火した
+
+エントリが 2 つ増えて **`WORK_LOG.md` が 2,017 行**になり、`tests/docs/worklog-size.spec.ts` が
+red になって **commit が pre-commit hook で止まった**（`PROJECT_RULES §1a` の上限 2,000 行）。
+
+**この hook 構成には、規律違反を直す途中経過そのものがコミットできないという性質がある。**
+2,000 行を超えた状態では何もコミットできないので、アーカイブを別コミットに分けられない。
+そのため owner 裁定により**マージとアーカイブを 1 コミットにまとめた**。
+
+移設: 本体 38 エントリのうち**古い 20 エントリ（944 行）**を
+`docs/archive/WORK_LOG_2026-09.md` へ（`PROJECT_RULES §1a`「最新 15-20 を残す」に従い 18 本残した）。
+
+| | 移設前 | 移設後 |
+|---|---|---|
+| 本体 | 2,016 行 / 38 エントリ | **1,093 行 / 19 エントリ** |
+| アーカイブ | 12,715 行 | 13,663 行（+948） |
+
+索引は**本体末尾と `docs/core/INDEX.md` の両方**を更新した。この 2 つは
+**移設前から範囲表記がずれていた**（本体「09-01〜09-12」/ INDEX「09-01〜09-11」）ので、
+どちらも「09-01〜09-13」に揃えた。
+
+#### 参照の張り替え
+
+🔴 **本ログ内の自己参照が、2 度続けてずれた。** #945 のエントリが 4.2.0 bump の版掃除を
+`:57` と**行番号で**名指ししていたが、マージで 21 行（→ `:78`）、本エントリの追加でさらに
+61 行（→ `:139`）下がった。**追記のたびに壊れる形だった**ので、行番号ではなく
+**見出し名（「軸が逆だった」節）で引く**形に変えた。
+
+**次から本ログ内を行番号で自己参照しない。** 本ログは先頭に追記するので、
+自己参照の行番号は**書いた瞬間から陳腐化が始まる**。
+
+**直していない壊れた参照が 1 件ある**（発見のみ・報告）:
+`docs/design/883-explicit-output-routing-design.md:175` が `docs/development/WORK_LOG.md:967` を
+行番号で名指ししているが、行 967 は引用されている owner 発言（「マスターが 1、2 固定」）とは
+別の内容を指している。**今回の移設は行 1059 以降を削ったので、この参照は移設前から壊れていた。**
+設計書は起案時点のスナップショットなので触らない（`CLAUDE.md`「docs/design/ の過去の設計書を書き換えない」）。
+
+#### 検証
+
+```
+npm test                                    → 2577 passed / 79 skipped（hook 経由・0 failed）
+npm run docs:check                          → 996 citations verified, 0 failed, 54 files
+npm run docs:build -w @orbitscore/user-site → exit 0（dead link 0）
+npm run docs:build -w @orbitscore/dev-site  → exit 0（dead link 0）
+```
+
+Closes #946
+
+---
+
+### docs: report-only follow-up for the 4.2.0 release bump (#943) (Sep 14, 2026)
+
+**ブランチ**: `claude/docs-sync-pr943` / **追従元**: PR [#943](https://github.com/signalcompose/orbitscore/pull/943)（merge `1276ab1f`）
+
+**doc の追従は不要だった。** #943 は版番号の文字列と本ログのエントリしか変えておらず、
+追従先（`CLAUDE.md` / `README.md` / `docs/core` / dev サイト ja+en 6 ページ）は PR 自身が更新済み。
+本ログ 4.2.0 bump エントリの「軸が逆だった」節が言う「番号を固定して形を一切仮定しない」grep で検算し、
+現在の版を名乗る箇所に `4.1.0` の残りが **0 件**であることを確認した
+（`tests/vscode-extension/playhead.spec.ts:136` の `resolve('4.1.0')` は `play()` の引数パスで無関係）。
+
+🔴 直さず報告（PR 本文へ）:
+
+- **`CHANGELOG.md` が 4.2.0 で 6 版分の未記載**（`CHANGELOG.md:34` の `[1.1.0]` が最新）。
+  4.1.0 の時（本ログ `:1015`）と同じ理由で、遡って書き起こすかはリリース判断
+- **版表記の同期を守らせる仕組みが依然として無い**（#943 自身が `:47` で **4 回目**の取りこぼしを記録）。
+  `scripts/check-release-tag-version.mjs` はタグ ↔ `package.json` しか見ず、`tests/docs/` に版の spec は無い
+
+**検証**: `npm ci` / `docs:build`（user・dev）/ `docs:check` すべて exit 0・引用 986 件 0 failed。
+
+---
+
 ### chore(release): bump the extension to 4.2.0 (Sep 14, 2026)
 
 **Date**: 2026-09-14 / **ブランチ**: `942-release-4.2.0` / **Issue**: #942
@@ -82,6 +169,72 @@ DSL の表面・wire・出力の意味論はいずれも変えていない。
 
 `npm test` **2577 passed / 79 skipped**・lint 0・`docs:check` 986 引用 0 failed・
 ratchet 68 passed。
+
+---
+
+### docs: follow PR #941 (#939 / #940) in the dev and user sites (Sep 14, 2026)
+
+マージ済み PR [#941](https://github.com/signalcompose/orbitscore/pull/941)（`939-plugin-ui-by-cursor` →
+main・merge commit `c6b8f75`）への**ドキュメント追従のみ**。`packages/` / `rust/` / `tests/` は 1 行も
+触っていない。
+
+#### 🔴 散文の参照が、PR 自身のマージ時点で既に stale だった（4 回目）
+
+#941 は本文のコード引用（` // FILE:START-END ` 付き）を張り直したが、**引用ブロックの外にある
+`path:行` 参照**（各章末の「参考にしたコード」・表のセル・本文中の丸括弧）は
+`docs:check` の検査対象外なので取りこぼしが残った。しかも PR 内の後続コミットが
+`engine-process.ts` を +47 行動かしたため、**PR が自分で更新した参照まで**ずれていた。
+
+`147b742..abbc545` の差分から old→new の行マッピングを作り、**引用ブロック外の参照だけ**を
+機械的に張り直した（102 件 + basename 形 14 件 = 116 件・ja/en 対）。内容が動いていない参照は
+触っていない。
+
+**取りこぼしていた「内容の誤り」3 件**（行ずれではなく、記述が事実と食い違うもの）:
+
+| 章 | 旧記述 | 実際 |
+|---|---|---|
+| `editor/vscode-architecture.md:707` ほか計 6 箇所 | 「engine の spawn が env へ積むのは debug フラグと capture seam だけ」 | **`ORBIT_HOST_BUNDLE_ID` が 3 つ目**（#940）。解決できないときは `delete` する |
+| `signal-chain/index.md:885` | 「rack child の spawn は `--shm` / `--chain` / `--sample-rate` の 3 引数」 | env があるときだけ **`--host-bundle-id <値>` が付く** |
+| `plugin-hosting/plugin-ui.md:153` | 「Accessory ポリシーで立ち上げ、`NSTimer` で service を呼ぶ」＋ appkit.rs:205-221 の引用 | その行範囲は #940 で**前面アプリ observer に入れ替わっており**、`NSTimer` は 234-242 へ移っていた（引用は緑・散文だけが嘘） |
+
+3 件目は「引用が緑でも散文は検査されない」の再演である。**引用を張り直すときは、その引用が
+支えている散文を読み直すこと。**
+
+#### 追記した章
+
+- `plugin-hosting/plugin-ui.md`（ja/en）— 「エディタ面: カーソルが乗っている 1 つだけを開く（#939）」と
+  「窓を前面に浮かせる（#940）」の 2 節。`pluginUiAddressFor` / `desired_plugin_window_level` /
+  `set_plugin_window_level` / `NSTimer` の引用 4 本を追加。frontmatter を `c6b8f75` / 2026-09-14 へ
+- `editor/mcp-and-gated-e2e.md`（ja/en）— MCP ツール表に `open_plugin_ui_at_cursor` を追加。
+  **登録の述語が #939 で「組」から「1 本ずつ」に変わった**ことを明記（旧 `if (open && close)` は
+  片方だけ持つホストで両方消えた）
+- `editor/execution-feedback.md`（ja/en）— `var verb = mix.aux` の**レシーバが任意の識別子へ一般化**
+  された件（#940 レビュー）。`mix` はただの変数なので、別名の譜面ではバス宣言を取りこぼし、
+  「LinkAudio が要る」診断が誤爆していた
+- user サイト（ja/en）+ `docs/user/ja/USER_MANUAL.md` — **右クリック → `OrbitScore: Open Plugin UI`**。
+  `ui("名前")` が全部開くのに対しカーソルの 1 つだけを開くこと、5 種の loud な失敗、
+  macOS で窓がホスト前面時だけ浮くこと
+
+#### 直さず報告に回したもの
+
+- `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`（UIH の正本）に**ウィンドウレベルの規範が無い**。
+  仕様を決める作業なので追従では触らない（PR 本文で質問）
+- `sites/dev/decisions/adr-003-scsynth-bundle.md` の `extension.ts:2053-2088` 等 4 件は
+  **#887 の分割より前**を指しており、#941 とは無関係の既存 stale
+- MCP の `chain_path` / `site` が gated E2E で一度も検査されていない（ユニットのみ）
+
+#### 検証
+
+```
+npm ci                                     → exit 0
+npm run docs:build -w @orbitscore/user-site → exit 0（dead link 0）
+npm run docs:build -w @orbitscore/dev-site  → exit 0（dead link 0）
+npm run docs:check                          → 996 citations verified, 0 failed, 54 files
+```
+
+引用は 986 → **996**（新規 10 本 = ja 5 + en 5）。
+
+Follows #941 / #939 / #940
 
 ---
 
@@ -990,950 +1143,6 @@ Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して 
 - `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
   退避した既存エントリ。過去ログなので触らない
 
-### docs: record the 4.1.0 follow in the dev-site provenance Notes (Sep 13, 2026)
-
-PR [#928](https://github.com/signalcompose/orbitscore/pull/928)（#926・4.1.0 バンプ）への
-docs 追従（実装・テストは変更なし）。
-
-#928 は dev サイト 4 ページ（`orientation/architecture-overview.md` と
-`decisions/adr-002-dsl-v3-pivot.md` の ja + en）の**本文の版表記だけ**を 4.1.0 に上げ、
-同じページの冒頭 Note は「2026-09-12 に #883（拡張 **4.0.0**）まで追従しました」のままだった。
-**本文と来歴注記が同一ファイル内で食い違う**ので、Note に 2026-09-13 の 4.1.0 追従を追記した。
-
-`verified-against` / `verified-at` は**据え置き**。STYLE_GUIDE §4「`verified-against` の更新
-ポリシー」では「小規模 cross-link / 体裁修正のみ」は更新しない、であり、版表記の差し替えは
-本文と code の対応関係を変えない。2026-09-12 の #883 追従も同じ 4 ページで `56c34c3` /
-`2026-09-11` を据え置いており、その前例に合わせた。
-
-🔴 直さず報告（PR 本文へ）:
-
-- **版表記の同期を守らせる仕組みが無い。** #928 の記述（本ログ上方）自身が「4.0.1 でも
-  取りこぼして `10d3c7eb` を後から出した」「**2 回連続で同じ形**」と書いているのに、
-  `packages/vscode-extension/package.json` の版と doc の版を突合するテストは存在しない
-  （`tests/docs/` は `planning-issue-state` と `worklog-size` のみ）。CLAUDE.md の
-  「規律を足す時は、同時にそれを守らせる仕組みを足すこと」に対して、仕組みだけが欠けている
-- **`CHANGELOG.md` が 1.1.0（2026-05-06）で止まっている。** 2.0.0 / 3.0.0 / 4.0.0 / 4.0.1 /
-  4.1.0 のどれも項が無く、`[Unreleased]` は #212 の内容のまま。どの版を遡って書き起こすかは
-  リリース判断なので追従作業では決めない
-
-Part of #926
-
----
-
-### chore(release): bump the extension to 4.1.0 (Sep 13, 2026)
-
-**Issue**: #926。出すのは **#922（振る舞いの修正）** + #918 / #920（テストのみ）。
-
-#### 🔴 なぜ patch ではなく minor か
-
-**patch は「振る舞いが変わらない」の意味**で、それは嘘になる（audio が +3 dB）。
-**major でもない** — semver が問うのは**利用者の入力との契約**で、v3.0.0（設定とコマンドが消えた）
-v4.0.0（暗黙 master が消えた）と違い、**4.1.0 では譜面を 1 文字も変えなくていい**。
-加えて #922 は実質バグ修正（誤って 3 dB 減衰されていた audio を戻した）。
-**minor が「聞いて分かる変化はあるが書いたものは壊れない」の信号。**
-
-#### 🔴 版を名乗る箇所は 11 ではなく 12 あった
-
-**最初の列挙は 11 で止まり、`README.md:55` を落とした**（`- **Post-2.0 (shipped on \`main\`,
-extension 4.0.1)**` の行）。同じ README の 5 行目は直っていたので、**ファイル単位では
-「直した」ように見えていた**。`git diff --stat` が `README.md | 2 +-` と出ているのを
-「1 行で足りる」と読んだのが誤り。
-
-パターンの穴はこうだった: 最初の grep は `**4.0.1**`（強調記法）と `"version"` を狙っており、
-**地の文に埋まった `extension 4.0.1`** を拾わなかった。数え直しは
-`(拡張|extension)[^0-9]{0,14}4\.0\.[0-9]` の双方向パターンで行い、残る 4.0.0 の言及が
-**すべて #883 の履歴記述**であることまで確認した。
-
-
-前回（4.0.1）も取りこぼして `10d3c7eb`「follow the bump into the pages it missed」を
-後から出している。**2 回連続で同じ形で落ちた** — 「grep で列挙して件数を固定する」だけでは
-足りず、**落ちるのは常にパターンが想定していない書き方の方**である。
-内訳は `package.json` 正本 / `CLAUDE.md` / `README.md` **×2** / core spec ×2 /
-dev サイト ja+en ×6。設計文書の「4.0.1」は当時の記録なので触っていない。
-`ENGINE_VERSION` / `DSL_VERSION` は別軸（設計 656 §4.4）。
-
-#### マージ前ゲート（main `77a17905` で実測）
-
-実機 gated **46 passed / 46（skip 0）** / cold install exit 0 / build / std-gain 実機 3 行 /
-CI 4 チェック全 pass。
-
-🔴 **E2E-5 の比率は `× √2` が消えても不動** — `9.999999829984711`（期待 10・誤差 1.7e-8）。
-絶対レベルは √2 倍（`0.0867` → `0.1226`）でも比率は動かないことを実測で確認。
-
-#### リリースノートに書くこと
-
-audio が +3 dB / 🔴 **ヘッドルームが 3 dB 減る**（リミッタが無い系なので重ねたミックスは
-0 dBFS に近づく）/ pan がフルスケールを超えなくなった / gated が skip 0 の 46 件に。
-
-### docs: follow PR #918 — the self-launching test placement rule, and two WORK_LOG separators (Sep 13, 2026)
-
-PR [#918](https://github.com/signalcompose/orbitscore/pull/918)（マージ `77a1790`）の追従。
-実装は触らない（差分は `tests/` と `CLAUDE.md` と WORK_LOG のみ）。
-
-#### 1. 自前アプリのテストの配置規則が CLAUDE.md にしか無かった
-
-元 PR は `launchIsolatedOrbitStudio()` が冒頭で `killHarnessInstances()` を呼ぶため、
-自己完結のテストを共有セッションの途中に置くと後続が `ECONNREFUSED` で落ちることを
-実測し、spec の境界にコメントを残した（`tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553`）。
-これはハーネスの不変条件なので、以下へ展開した:
-
-- `docs/testing/E2E_HARNESS_SPEC.md` §3.1（新設）— 共有セッション / 自己完結の 2 種別と順序規則
-- `sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/editor/mcp-and-gated-e2e.md`
-  — `killHarnessInstances()` の節の直後に節を 1 つ追加（引用は 6550-6553）。
-  `verified-against` を `77a1790` へ、Note の追従先に #917 / #918 を追記
-
-#### 2. WORK_LOG の区切りが 2 箇所崩れていた
-
-| ファイル | 症状 |
-|---|---|
-| `docs/development/WORK_LOG.md` | #918 のエントリと次のエントリの間に `---` が無く、本文の次の行が `###` 見出しになっていた |
-| `docs/archive/WORK_LOG_2026-09.md` | アーカイブへの追記で `---` が 2 連続になっていた |
-
-どちらも他のエントリの形（空行 + `---` + 空行）に揃えた。
-
-#### 検証
-
-`npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` / `npm run docs:check`。
-
-#### 追従しなかったもの（PR 本文に出す）
-
-- `sites/user/getting-started/engine-settings.md:29,33` の「チャンネル = ステレオ（2ch）」/
-  「マルチチャンネル出力は未実装」が、同じサイトの `sites/user/mixing/routing.md:115` と
-  食い違う。元 PR は 8ch デバイスで ch3/4 に音が出ることを実測しているが、
-  この警告文の「マルチチャンネル出力」が DSL の宛先を指すのか設定 UI を指すのかは
-  差分から確定できないので、書き換えずに報告に回した
-
-
----
-
-### test(e2e): implement E2E-4/E2E-5 against a real >=4ch device (Sep 13, 2026)
-
-owner が Loopback で **`OrbitScore E2E`（8ch）** を作成したので、`#611` O-surface で
-唯一 skip されていた `E2E-4 / E2E-5` の本体を書いた。**実機 gated が初めて skip 0 の
-46 passed になった**（#917 / #851 B-2）。
-
-#### 固定したもの
-
-| | 期待値 | 実測（4 周） |
-|---|---|---|
-| **E2E-5** `output(master, thru: true).output("3,4", db: -20)` | ch1/2 : ch3/4 = `10^(20/20)` | **9.999999818**（8 桁一致） |
-| **E2E-4** `output(master, thru: false).output(cue)` | 終端の後ろには到達しない | `cutCue` = **厳密に 0** |
-
-8ch あるので **ch5/6 を「誰も宛先にしていない対照」**として使い、E2E-4 の無音を
-「小さい」ではなく「**未使用チャンネルと同じ床**」で判定している（4ch デバイスでは飛ばす）。
-
-#### 🔴 Monitors を繋がなくてよいことを実測で確かめた
-
-capture は **cpal へ渡す最終 `hw` を読み取り専用で tap** している
-（`orbit-audio-native/src/output/render.rs:56-59`「tap であって mutation ではない」）ので、
-デバイスがその先へ流すかに依存しない。クロックも刻む（**first callback 12 ms**）。
-→ **BlackHole は不要**（設計 §8.3 の元案）。
-
-#### red-first ではない。変異で代替した
-
-O-surface の実装は v4.0.0 で出荷済みなので「実装前に書いて赤」は成立しない。
-代わりに**期待値を壊す変異 2 種**で、この判定が区別できることを確かめた:
-
-| 変異 | 結果 |
-|---|---|
-| E2E-5 の期待比 `10 → 3` | red（`expected 2.33 to be <= 0.12`） |
-| E2E-4 が ch3/4 ではなく **ch1/2 を見る**（off-by-one） | red（`cutCue` が `cutMaster` と同値・`cutLeak = 1`） |
-
-後者が重要で、**DSL は 1 始まり・`channelRms` は 0 始まり**なので取り違えが最も起きやすい。
-
-#### 🔴 自分の誤り 3 つ
-
-1. **配置**: 共有セッションのブロックの真ん中に置いたので、`launchIsolatedOrbitStudio` の
-   `killHarnessInstances()` が共有アプリを殺し、後続の `#606 T1` / `E2E-K3` が
-   `ECONNREFUSED` で落ちた。自前アプリ群の側へ移し、**境界にコメントを残した**
-2. **後始末**: `fs.rmSync` を裸で呼んでいて `ENOTEMPTY` で 2 周続けて赤くなった
-   （アサーションは全部通っていた）。**既に `removeHarnessTree` が
-   kill → 終了待ち → best-effort 削除を持っていた**ので、手書きをやめてそれを使った
-3. **Spotlight を索引中だと誤断**した。CPU は 0.0〜0.1% で、12 日間常駐していただけ。
-   **メモリ使用量だけを見て動いていると推測した**のが誤り
-
-#### 実機ゲートが 2 回メモリ不足で kill された
-
-`claude` プロセスが **89 個 / 5.28GB**（11 日 23 時間動く `--resume` が 17 個）積み上がり、
-free が 0.1GB まで落ちていた（swap は 0）。owner の許可を得て自分以外の **47 セッション**を停止し、
-free 0.2GB → **8.5GB**。その後 1 周で全件緑。
-
-#### 🔴 `-t` の限界を CLAUDE.md に足した
-
-`-t 'E2E-4/E2E-5'` は 2 分で回る（自己完結テストなので）。**だが `-t` は
-「そのテストが後続を壊すこと」を原理的に検出できない** — 上の誤り 1 は単独実行では
-**自分だけ緑**になる。**開発は `-t`、影響の確認とマージ前ゲートは全件**。
-
-### docs: follow the attenuate-only pan ruling into the specs and both sites (Sep 13, 2026)
-
-PR [#922](https://github.com/signalcompose/orbitscore/pull/922)（#921 / `#851` B-3 の裁定 D′）へ
-docs を追従（実装・テストは変更なし）。`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 に
-「pan 則の改訂」を追記し、dev サイト SC-2 / RE-1 / RE-3 と user サイト `methods.md`（ja + en）を
-`balance_pan`（中央素通り・端 `(1, 0)`）へ更新。audio が
-+3 dB になる破壊的変更と `gain(-3)` の回避策を user 側に明記した。RE-1 の capture peak `0.70711` は「#921 より前の値・要再測定」と注記するに留めた（実機で測っていないため）。
-
-🔴 **`docs/user/{ja,en}/USER_MANUAL.md` は追従させない**（main が bot の変更から落とした）。
-両ファイルは冒頭で **`⚠️ DEPRECATED（非推奨・2.0.0 時点）… 本ファイルは履歴として保持しています（#237）`**
-と宣言している。**履歴として凍結してあるものを現在の仕様へ更新すると、凍結の意味が消える**。
-同じ判断は 2026-09-11 の「`USER_MANUAL.md` を直さない」（本ログ下方）と一致する。
-
-🔴 SC-2 `Pan` 節のコードブロック 2 つが `line_pan_coefficients` を説明しながら `bus_topology.rs:226-229`（`channel_egress_active`）を引用していた誤りも直した。逐語一致なので `docs:check` は緑のまま通っていた — **引用チェッカは「正しい関数を引用しているか」を見ない**。
-
-🔴 直さず報告: `INSTRUCTION_ORBITSCORE_DSL.md:1771`「`pan(random)` は発音側のまま」と #922 の前提「`event.pan` は本番コードで一度も設定されない」が食い違う（`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:125`）。仕様判断なので追従作業では決めない。
-
-### docs: record the #920 doc-sync audit (no spec follow-up needed) (Sep 13, 2026)
-
-[#920](https://github.com/signalcompose/orbitscore/pull/920)（merge `59511c9`）の追従監査。
-差分は `scheduler.rs` の `mod tests` 内テスト 1 本と #920 自身の WORK_LOG entry だけで、
-**振る舞いを 1 行も変えていない**ため spec / site の追従は不要。`docs:check` 982 引用 0 失敗。
-
-🔴 #920 が固定した「端で +3 dB」は **20 分後の #922（裁定 D′）が置き換えた**ので、
-仕様文書へ書き写していない。書けば main と食い違う記述を新規に作ることになる。
-
-追従できなかった点（E2E の穴・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1992` の旧法則残存・
-E2E-P の比のみアサーション）は **PR 本文に path:line 付きで列挙した**。E2E と baseline は触っていない。
-
-
-
----
-
-### feat(audio)!: make both pan stages attenuate-only so panning can never clip (Sep 13, 2026)
-
-`#851` B-3 の owner 裁定 **D′**（#921）。**発音側とライン側の両方**を減衰のみの
-`balance_pan`（中央は素通り・端で持ち上げない）へ揃えた。
-
-#### 🔴 調査で前提が覆った
-
-裁定の選択肢は当初 A（現状維持）/ B（feed にも発音側 pan）/ C（DAW の pan 流儀）だったが、
-**`event.pan` が本番コードで一度も設定されない**ことが分かって前提が変わった
-（DSL の `pan` は wire 上 `BusLineOp::Pan` = ライン側へ行く・`session/params.rs:141`）。
-
-つまり発音側の `equal_power_pan(event.pan)` は**定位ではなく、全 audio への固定 −3 dB**。
-その結果:
-
-- **audio は instrument feed より常時 3 dB 小さかった**（pan の有無に無関係）
-- ライン側の `× √2` は「audio を戻す補正」として働き、**発音側を通らない feed だけを
-  +3 dB へ押し上げて**いた
-
-🔴 **一度 D（ライン側だけ減衰のみにする）を推奨して、実装前に撤回した。**
-`dsp.rs` の doc コメントが `Do not remove the factor as "double compensation"` と
-明示しており、発音側との合成を見ていなかった。**ライン側だけ変えると audio が端で
-0.707 になって壊れる。** 発音側と対にして初めて成立する（それが D′）。
-
-#### なぜ持ち上げをやめたか
-
-🔴 **この系にはリミッタもクランプも無い**（実測）。`limiter()` / `compressor()` /
-`normalizer()` は #502 で実装ごと消滅し代替経路が無く、float 出力にクランプも無い
-（クランプは i16/i32/u16 変換時のみ）。**1.0 超はそのままデバイスへ行く。**
-加えてライン Pan は**バランス**で、端へ振ると片チャンネルの中身を実際に捨てている。
-`× √2` は**存在しないエネルギーを足していた**。
-
-#### 旧則を固定していたテストは 16 件。うち pan のテストは 2 件だけだった
-
-残る 14 件は `render_block_one_bus_applies_effect_then_sums` のような**合成・配線**のテストで、
-期待値の式に `√0.5` が埋まっていた:
-
-```
-// center pan の equal-power gain は √0.5。tagged=2.0×√0.5×0.5、untagged=3.0×√0.5
-```
-
-**全 audio が一律に減衰されていたせいで、無関係なテストの算術にまで係数が漏れていた。**
-これが「pan の設計判断ではなく audio 全体のレベルの問題だった」ことの裏づけになった。
-
-🔴 置換は**網羅を確認してから**行った（18 箇所を grep で列挙し、期待件数を `assert` で固定）。
-目的が「係数」でないテスト（channel stride / global gain）は、係数を落としても
-**目的が残っているか**を見てから直した。
-
-#### 実機の実測が予測と厳密に一致した
-
-旧実測 `0.08701663` → 新実測 **`0.12306010509914503`**。比は **1.41421356 = √2**。
-3 回の実測が 11 桁一致し、`noBus` と `sumOutput` も一致した（同じ信号が同じ経路を通るので
-一致するのが正しい。旧 golden では 0.03% ずれていた）。
-
-🔴 **旧 golden `0.0846173` は実測より 2.8% 低い緩い基準だった**（許容 12% に収まるので
-誰も気づかない）。今回は実測値を根拠に置き換えたので基準が締まった。
-
-#### 🔴 TS 側のユニットテストは 1 件も動かなかった
-
-audio の絶対レベルが変わる変更なのに `npm test` 2,497 件が全部通った。
-**この層を守っているのは E2E の golden だけ**である。
-
-#### 補正機能は作らない
-
-`.gain(db)` で書けるため。🔴 ただし **pan をスイープさせる時は補正量が位置で変わる**ので
-`.gain()` では追随できない。必要になったら `global.panLaw()` を検討する。
-
-#### 検証
-
-`cargo test --workspace` 97 suite 緑 / fmt / clippy / cfg 4 象限 緑 /
-`npm test` 2,497 passed / lint / `typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 /
-実機 gated **45 passed**（残る 1 件は E2E-4/E2E-5 の `unimplemented`。実装は PR #918 側で
-このブランチには無い）。
-
----
-
-### test(core): pin the instrument-feed vs centered-event pan asymmetry (Sep 13, 2026)
-
-`#851` B-3 の裁定材料。**裁定そのものは owner**（#919）。
-
-#### 🔴 まず訂正: 「未検証」は不正確だった
-
-`#851` に「B-3 はまだ事実かは未検証」と書いたが、**「端で +3 dB」自体は cargo test が
-既に固定していた**（`orbit-audio-native/src/output/startup.rs:2590` の `hard_left = SQRT_2`）。
-
-未検証だったのは「**instrument feed が発音側の pan を通らない**」という**非対称の方**である。
-
-#### 一次ソースで確認した事実
-
-`render_multi_feeds` は feed を `*dst += *sample` と**素のまま加算**しており、
-`equal_power_pan` を一切通らない。一方 audio event は通る（中央 0.707）。
-
-| 素材 | 発音側 | ライン pan（端） | 着地 |
-|---|---|---|---|
-| audio event | 0.707（`equal_power_pan(0)`） | × √2 | **1.0 = unity** |
-| instrument feed | **1.0（素通り）** | × √2 | **1.414 = +3 dB** |
-
-#### 数値で固定した
-
-`orbit-audio-core` に、**両者を同じ条件に並べて測る**テストを足した。
-実測 `centered event = 0.70710677` / `feed = 1.0` / `ratio = √2`。
-
-🔴 **`equal_power_pan(0) * SQRT_2` の掛け算では済ませていない。** それでは
-**feed の経路を一度も通らない**ので、あとで誰かが feed にも発音側 pan を掛けても
-緑のまま通る。`render_multi_feeds` を実際に走らせている。
-
-変異 2 種で確認:
-
-| 変異 | 結果 |
-|---|---|
-| feed にも発音側 pan を掛ける（= 非対称を解消する変更） | red（`feed must pass through unattenuated; actual=0.70710677`） |
-| `equal_power_pan` を `(1,1)` にする | red（`centered event must be 1/sqrt(2); actual=1`） |
-
-#### 🔴 未コミットのまま変異を当てて、新テストを消した
-
-`git checkout -- <file>` で変異を戻そうとしたが、**テスト自体が未コミットだったので
-一緒に消えた**。書き直して**先にコミットしてから**変異を当て直した。
-memory `mutation-backup-must-use-tmpdir` は「コミット済みなら `git checkout --` が確実」と
-書いているが、**その前提（コミット済み）を自分で満たしていなかった**。
-
-#### 裁定に残る事実
-
-**+3 dB は事実だが「クリップする」かは素材の振幅次第**（ピーク 0.708 超で 1.0 を超える）。
-その先のリミッタ/飽和は未確認。選択肢 A（現状維持）/ B（feed にも発音側 pan）/
-C（ライン pan の正規化を外す）と実測値は **`#851` のコメント**に整理した。
-**B と C はどちらも既存の譜面の音を変える。**
-
----
-
-### fix(hooks): let pre-edit-check.sh allow writes outside the repo on main (Sep 13, 2026)
-
-owner 指摘:
-
-> メモリ書くためだけにブランチ作るの良くないのでmainからでもメモリは書けるように出来んの？
-
-#### 何が問題だったか
-
-`.claude/hooks/pre-edit-check.sh` は `main` にいる時 Edit / Write を一律に deny していた。
-判定は**ブランチ名だけ**で、**編集先のパスを見ていなかった**
-（例外は `*/.claude/plans/*` のホワイトリスト 1 件）。
-
-そのため**リポジトリの外**（`~/.claude/projects/<project>/memory/` / scratchpad / `~/.cvi`）も
-巻き込まれ、**memory を 1 ファイル書くためだけに差分 0 のブランチを作って消す**という
-運用が発生した（本日実際にやった）。
-
-**このフックが守っているのは「main に直接実装を積まない」こと**で、repo の外は保護対象ではない。
-
-#### 直し方
-
-**リポジトリ外の絶対パスを一律に対象外にする。** 個別ホワイトリストは増やさない
-（次に別の外部パスで同じことが起きる）。判定は「repo 配下かどうか」の 1 本。
-
-**安全側の倒し方**: 相対パスは repo 相対なので repo 内扱い。
-`..` を含む絶対パスは解決せず repo 内扱い（fail closed）。`file_path` 無しも deny へ落ちる。
-
-#### 🔴 最初に書いたテストが 2 回続けて何も検査していなかった
-
-**1 回目**: 「今 main にいるなら検査する」形にしたので、**feature ブランチと CI では
-主要な検査が全部 skip され、空で緑**になった（memory `a-test-that-exists-may-never-run`）。
-→ 使い捨ての git repo を 2 つ作り、HEAD を `main` / `1-feature` に固定して
-`CLAUDE_PROJECT_DIR` で指す形に変えた。どのブランチから走らせても同じ判定を検査できる。
-
-**2 回目**: fail-closed の検査に `${REPO}/../evil.ts` を使っていたが、これは
-`"$PROJECT_DIR"/*` のグロブに `../evil.ts` が一致するので **`*..*` ガードが無くても deny** =
-何も検査していなかった。**変異を当てて緑のまま通ったので判明した。**
-→ **prefix から外れて `..` で repo 内へ戻る**形（`${REPO}-decoy/../${basename}/secret.ts`）に変えた。
-これは `*..*` ガードが無いと allow に倒れるが、実際には repo 内へ着地する。
-
-#### 変異検証（3 種・実出力を確認）
-
-| 変異 | 結果 |
-|---|---|
-| `*..*` の fail-closed を外す | red（「判定できない入力は deny」が `expected 'allow' to be 'deny'`） |
-| repo 内/外の判定を反転 | red（「repo 外は allow」と「repo 内は deny」の**両方**） |
-| ガードを丸ごと無効化 | red（「repo 外は allow」） |
-
-restore 後はいずれも 6 passed。
-
-🔴 **`.claude/hooks/` は Bash の sandbox 書き込み拒否対象**なので、変異は Edit ツールで当てた。
-最初は `python3` / `cp` で当てようとして**3 回とも書き込みが失敗しており、
-「6 passed」は何も証明していなかった**（`git diff --stat` が無変更だったので気づいた）。
-
-Closes #913
-
----
-
-### docs(dev-site): re-anchor the extension-split file references and record the new module layout (Sep 13, 2026)
-
-PR [#909](https://github.com/signalcompose/orbitscore/pull/909)（#887・`extension.ts` /
-`mcp-server.ts` の 19 モジュール分割、マージコミット `ca745e8`）への**ドキュメント追従のみ**。
-`packages/` と `rust/` とテストは 1 行も触っていない。
-
-#### 何を直したか
-
-dev 学習サイトの散文にある `extension.ts` / `mcp-server.ts` への行参照を、分割後の位置へ
-付け替えた（ja / en 同時・合計 160 参照）。
-
-- 範囲付き参照（`<file>:<a>-<b>`）: **110 件のうち 96 件**を再アンカー
-- 基底名だけの参照（`` `extension.ts:3405` `` 等）: **62 件**を再アンカー
-- `sites/dev/editor/vscode-architecture.md` の drift 節に、**分割の対応表**（主題 → 分割後の
-  ファイル）と MCP `tools/list` の順序復帰（`8561210`）を追記
-- 誤った地の文 2 件を修正: 「候補の組み立ては `extension.ts` 側」→ `dsl-providers.ts`、
-  `EngineViewProvider` (`extension.ts` 側) → `engine-view-provider.ts`
-
-#### 🔴 参照は分割より前から既に腐っていた
-
-再アンカーの方法として、まず**分割前の `extension.ts` のその行範囲の中身**を新モジュール群から
-内容一致で探した。**54 組中 17 組しか一致しなかった。**
-
-原因は、**分割より前の時点で散文の行番号が既にずれていたこと**である。実測（`0f930f3` =
-マージ直前の main）:
-
-| 散文が指していた範囲 | 実際にそこに在ったもの | 記述 |
-|---|---|---|
-| `extension.ts:286-498` | `if (playheadActiveRanges.size > 0) {` | `activate()` 全体 |
-| `extension.ts:500-521` | `decorationType.dispose()` | `deactivate()`（実際は 489 行目） |
-| `extension.ts:2044-2198` | `globalInitialized = false` | `startEngine()`（実際は 1927 行目） |
-| `extension.ts:3716-3726` | `function registerHoverProvider(` | カタログ不在の案内 |
-
-**「範囲内」は「正しい」を意味しない**（#911 が同じ指摘をしている）。したがって内容一致では
-引けず、**箇条書きが明示しているシンボル名で引き直した** — 各シンボルの定義位置を現在の
-ツリーで読んで範囲を確定させている。
-
-#### 直していないもの
-
-- **#502 で削除された関数を指す 14 件**（`getConfiguredEngineKind()` /
-  `resolveScsynthForUI()` / `startEngine()` の `sc` 分岐 / `bundleStatusItem` の engine kind
-  コメント）。`sites/dev/decisions/adr-003-scsynth-bundle.md` と
-  `sites/dev/editor/vscode-architecture.md:1066` に在る。**指す先が存在しない**ので範囲の
-  付け替えでは直らず、箇条書きの文章そのものを書き換える判断が要る（#911 の 3 番）
-- **`check-citations.mjs` に散文の範囲外検査を足すこと**（#911 の 1 番・本体）。仕組みの追加は
-  テスト / スクリプトの変更なので、この追従 PR の範囲外
-
-
-### docs(extension): fix a comment that the split itself made false, and record the split rationale (Sep 13, 2026)
-
-`/code:peer-review-team` の comment-analyzer が出した 2 件。**コメントのみの変更**で、
-差分にコメント行以外の追加 / 削除が 1 件も無いことを機械的に確認した。
-
-#### 🔴 同じ PR 内で偽になったコメント
-
-`docs-panels.ts` の `resolveDevDocsUrl` の doc が「`mcp-server.ts` の `DOCS_PUBLIC_BASE`」と
-書いていたが、**定義元は `mcp-docs.ts:12`** で `mcp-server.ts` は再輸出しているだけ。
-
-このコメントは `docs-panels.ts` を作った束 C（`9143a233`）の時点では**正しかった**。
-束 F（`d8bda308`）で `mcp-docs.ts` を新設して定義元が移った時に、
-**この横参照だけが追随しなかった。**
-
-**束をまたいだ相互参照は自動では追随しない。** import なら型チェッカが捕まえるが、
-**地の文の参照は誰も見ていない。**
-
-#### 新設 19 モジュールのうち doc の無かった 6 本に module doc を足した
-
-`mcp-sdk` / `mcp-types` / `mcp-docs` / `mcp-tools-engine` / `mcp-tools-editor` / `mcp-tools-plugins`。
-
-🔴 **comment-analyzer の「他 16 ファイルには必ずある」は不正確だった** — doc が無いのは
-40 ファイル中 12 件で、`completion-context.ts` / `plugin-state-bridge.ts` 等**分割前から
-無いもの**も含まれる。「3 ファイルが普遍的な規約を破っている」わけではない。
-
-ただし**設計 D5 の分割意図がコード側に一切残っていなかった**のは事実なので、
-6 本に足した。特に `mcp-tools-*` には **`tools/list` の順序の制約**を書いた
-（これが今日の退行の原因だった）。
-
-#### 検証
-
-差分がコメントのみ（機械確認）/ `npm test` 2,491 passed / lint 緑 / `tsc --noEmit` 緑 /
-`typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 / リポジトリのラチェット 64 passed。
-
-**実機 gated は再実行していない。** コメントは出荷物の振る舞いに届かないので、
-先の全件緑（`45 passed | 1 skipped`・`ratio 1.000015`）が有効なままである。
-
----
-
-### fix(mcp): restore the tool registration order the split had changed (Sep 13, 2026)
-
-Fable 監査が、Sonnet レビュアー 8 体が全員通した後に **MCP ツール一覧の順序の変化**を検出した。
-
-#### 何が起きていたか
-
-分割前の `mcp-server.ts` は docs 系 3 本（`get_dev_doc` / `search_dev_docs` /
-`register_mcp_server`）を **plugin 系 6 本より後ろ**（23–25 番）に登録していた。
-束 F で `registerEditorTools` に docs 系を含めたため、**17–19 番へ繰り上がり、
-plugin 系 6 本が 3 つ後ろへずれた。**
-
-MCP SDK の `tools/list` は `Object.entries(this._registeredTools)` を返す
-= **登録順がそのまま一覧の順序**なので、これは**クライアントに見える観測可能な変化**である。
-
-#### 🔴 なぜ 8 体が見落としたか — done 条件の検証コマンドが条件を見ていなかった
-
-設計 §7.7 の done 条件は「25 本・**順序も**同一」と書いていたが、
-指定していた検証コマンドが
-
-```
-grep -oE "'[a-z_]+'" | sort
-```
-
-で、**`| sort` が順序の情報を消していた。** レビュアーも私も Codex も
-「集合が diff ゼロ」までしか確かめておらず、**順序は誰も見ていなかった**
-（「列挙は一段手前で止まる」の形）。
-
-**done 条件を書く時は、それを検査するコマンドが本当にその条件を見ているかを確かめること。**
-
-#### 直し方
-
-`registerDocsTools(server, handlers, docsSourceRoot)` を `mcp-tools-editor.ts` 内に切り出し、
-`buildServer` を **engine → editor → plugins → docs** の 4 呼び出しにした。
-これが分割前の 25 本の順序を再現する唯一の並びである。
-副作用として `registerEditorTools` から `docsSourceRoot` が外れ、署名が揃った。
-
-**恒久対策**: `mcp-server.spec.ts` に `tools/list keeps the exact registration order` を追加。
-実サーバを立てて `tools/list` を叩き、順序を配列で固定する。
-退行を再現する変異（docs を plugins の前へ）で red を確認済み。
-
-#### 同時に直した 1 件
-
-`extension.ts` の export が 27 → 28 に増えていた（`export type { EngineViewProvider }` を
-分割時に足していた）。葉の `extension-state.ts` が根から型を取る形は設計が棄却した向きなので、
-本籍の `engine-view-provider.ts` から取るようにし、根の型 re-export を落とした。
-**main と HEAD の export 集合が完全一致（対称差が空）** になった。
-
-#### 🔴 自分の件数主張が誤っていた
-
-PR 本文と束 A のコミットに書いた「**31 箇所の代入を setter 化**」は再現できない。
-実測は main の直接代入 **37 件** / HEAD の setter 呼び出し **32 件**。
-設計 §14 の「件数の主張を書かない。何を変えたかを書く」に従い、
-**数値を別の数値に差し替えず、主張自体を落とす**。
-
-#### 別 issue に切り出した 1 件
-
-散文の `## Sources` 参照 **110 件が存在しない行を指すようになった**（#911）。
-`docs:check` はコードブロックのヘッダ引用しか見ないため、**982 件が緑のまま**起きていた。
-108 件はこの分割が壊したもの。「振る舞い不変の分割」と「#887 より前から在る腐りの修復」を
-同じ束に混ぜると双方の検算ができなくなるので分けた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1）。
-
-#### 検証
-
-`npm test` 2,491 passed（既存の期待値は 1 つも変えていない）/ lint 緑 /
-`tsc --noEmit` 緑 / `typecheck:e2e` 緑 / `docs:check` 982 引用 0 失敗 /
-ファイルサイズのラチェット 64 passed。
-
----
-
-### fix(extension): remove a docblock that was copy-pasted from extension.ts, and mechanize the check (Sep 12, 2026)
-
-`/simplify` のラウンド 1（4 観点並行）で見つかった 1 件を直し、同じ欠陥クラスを機械化した。
-
-#### 何が起きていたか
-
-`diagnostics-provider.ts` と `dsl-providers.ts` に、**`extension.ts` を説明する docblock が
-そのまま複製**されていた。死んだ `// import * as os from 'os'` 行まで一緒に付いてきていた。
-
-どちらのファイルにも**正しいファイル固有の doc が先頭に既にある**ので、複製は 2 つ目に居た。
-先頭が正しいと、人は 2 つ目を読み飛ばす。
-
-`// import * as os from 'os'` は main の `extension.ts:6` に元からあったもので、
-`extension.ts` 側は触っていない（この PR の持ち込みではない）。
-複製された 2 ファイルは**この PR で新規追加**したので、両方とも分割作業でのコピペである。
-
-#### 🔴 最初に書いた検査は何も見ていなかった
-
-`module-doc-purity.spec.ts` に足した最初の版は**先頭の doc ブロックだけ**を見ていた。
-複製は 2 つ目に居るので、**実際の欠陥を戻す変異を当てても緑のまま通った**。
-「新しいテストが緑」は「そのテストが何かを検査している」証明にならない
-（memory `test-assertions-must-discriminate` の 3 回目）。
-
-書き直して**ファイル内のすべての doc ブロック**を対象にし、変異 3 種で red を確認した:
-
-| 変異 | 結果 |
-|---|---|
-| TS 間のコピペ（実際に起きた欠陥を戻す） | red・両ファイルを名指し |
-| baseline の組を解消して表から消さない | red（厳密等価の向き） |
-| 無関係な Rust 2 ファイル間のコピペ | red・両ファイルを名指し |
-
-#### baseline は 2 組
-
-364 ファイル / 1,355 ブロックを走査して衝突は 2 件だけで、どちらも effect / instrument の
-並行実装（同じ構造の同じフィールドに同じ説明）という正当なもの。`KNOWN_SHARED_DOCS` に明示した。
-**厳密等価**にしてあるので、解消したら表から消さないと red になる。
-
-#### 引用の追随
-
-2 ファイルから 8 行 / 7 行を削ったので、引用 20 件が落ちた。`--fix` の後、
-**start と end が同じだけ動いたこと**（範囲の長さが変わった引用 0 件）と、
-**オフセットが実際の削除行数と一致すること**（−8 が 12 件 / −7 が 8 件・ファイル単位で一意）を
-検算した。`--fix` が別ブロックへ着地した形は排除できている。
-
-#### `__*ForTest` は減っていない（実測）
-
-#887 本文が「何が実際に困るか」として挙げたテスト専用の裏口は、
-**分割前 13 本 → 分割後 13 本で 1 本も減っていない**（本文の「14 本」は末尾が `...` の概数）。
-裏口を外すにはテストを書き直す必要があり、それは「既存テストの期待値を 1 つも変えていない」
-という #887 の検算そのものを壊す。**分割では解消しない**ことを記録しておく。
-
-#### 検証
-
-`npm test` 2,490 passed（2,488 + 新規 2 件・**既存の期待値は 1 つも変えていない**）/
-lint 緑 / `tsc --noEmit` 緑 / `docs:check` 982 引用 0 失敗。
-
----
-
-### refactor(extension): split mcp-server.ts — the TS split is complete (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887 の**束 F（最終）**。**`packages/vscode-extension/src/` の全ファイルが 500 コード行以下**に
-なった（超過 **0 件**）。
-
-| ファイル | コード行 |
-|---|---|
-| `mcp-server.ts` | 1,161 → **271** |
-| `mcp-tools-editor.ts` | 251 |
-| `mcp-tools-plugins.ts` | 217 |
-| `mcp-types.ts` | 148 |
-| `mcp-tools-engine.ts` | 140 |
-| `mcp-docs.ts` | 129 |
-| `mcp-sdk.ts` | 96 |
-
-### `buildServer` は 616 コード行の単一関数だった
-
-ファイルを分けても 1 つの式なので閾値を満たせない。`session.rs` の `handle_command`
-（1,028 行の単一 `match`）と同じ問題で、**owner 裁定（#888 子 2）に倣い中身を引数付きの
-`register*Tools` へ切った**。`registerTool` の本文はインデントも含めて不変。
-
-Codex が **ツール名 25 本の一覧が diff ゼロ**であること、および条件付き登録の 3 群
-（`save_plugin_state` / `open_plugin_ui`・`close_plugin_ui` / `register_mcp_server`）の
-述語が byte 単位で一致することを確認した。
-
-### #887 全体の成果
-
-| ファイル | 前 | 後 |
-|---|---|---|
-| `extension.ts` | 2,779 | **301**（89% 削減） |
-| `mcp-server.ts` | 1,161 | **271**（77% 削減） |
-
-新設 **19 モジュール**。ラチェットの baseline は 19 → **17 件**（`packages/vscode-extension/src/`
-からは 1 件も残っていない）。
-
-🔴 **`npm test` は 7 束すべてで 2,488 passed。既存テストの期待値の変更は 0 件。**
-これが分割の検算そのものである。
-
-### 引用と散文
-
-引用は束ごとに壊れ、合計 **約 300 件**を直した。手順は
-`--fix`（行番号）→ 本文一致で再アンカー → 本文をソースから再生成、の 3 段。
-
-🔴 **散文の帰属は 4 束連続で腐っていた**（`extension.ts` の…と書いてあるものが別モジュールへ移った）。
-`docs:check` は行が合っているかしか見ない。束 F では `buildServer` の `registerTool` 群と
-docs 配信部の帰属を直した。
-
-### refactor(extension): extension.ts is under 500 code lines (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887 の**束 E**。**`extension.ts` が 2,779 → 301 コード行（89% 削減）**になり、
-ラチェットの baseline から外れた。
-
-| 新設 | コード行 |
-|---|---|
-| `dsl-providers.ts` | **302**（補完・quick fix・hover の登録） |
-| `diagnostics-provider.ts` | **127**（`updateDiagnostics`） |
-
-`extension.ts` に残ったのは `activate` / `deactivate` / `showCommands` / `restartEngine` /
-`reloadWindow` / `isTransportCommand` と、import・再輸出ブロックだけ。
-
-### 🔴 この束は main が直接やった
-
-Codex の発注が sandbox の `EPERM`（companion のログ書き込み）で**起動しなかった**
-（memory `codex-rescue-sandbox-broker-gotcha`）。残りが小さかったので main が実装した
-（CLAUDE.md「4 ラウンド目は main が直す」の一般化）。
-
-### 🔴 import は「推測」せず「引き写す」
-
-新モジュールに import を**自分で書こうとして名前を 5 つ外した**
-（`detectPitchScopeContext` / `detectPlayArgContext` / `detectOutputArgContext` /
-`detectEffectArgContext` / `analyzeMissingOutput` の受け方）。
-
-そこで**束 E 前の `extension.ts` の import 群 111 行をそのまま引き写し**、
-未使用分を `eslint --format json` の指摘で機械的に刈る方式へ切り替えた。**推測が 0 になった。**
-残った型エラー 2 件（`registerHoverProvider` / `updateDiagnostics` に `export` が必要）も
-コンパイラが名指ししたものだけを直した。
-
-### 散文参照は「範囲を保てない限り動かさない」
-
-束 D で範囲を 1 点に潰した失敗を踏まえ、**束 E 前の内容と一致した場合のみ**移す実装にした。
-今回は 12 件すべて一致せず（散文の行番号がもっと古い版を指している）、**据え置いた**。
-壊すより据え置く方が良い。
-
-### 検証
-
-`npm test` **2,488 passed**（6 束連続で不変・**既存テストの期待値の変更 0 件**）/
-`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
-`dsl-completion-provider.spec` 15 passed / `output-code-action.spec` 1 passed /
-`public-surface.spec` 38 passed（設計 §7.6 の done 条件）。
-
-**残るは `mcp-server.ts`（1,161）= 束 F。**
-
-### refactor(extension): move evaluation and agent handlers out of extension.ts (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887 の**束 D**。純粋な移動。
-
-| 新設 | コード行 |
-|---|---|
-| `agent-handlers.ts` | **392**（`*ForAgent` 17 本 + `__pluginUiForAgentForTest`） |
-| `run-selection.ts` | **152** |
-| `mcp-register-command.ts` | **152** |
-| `plugin-commands.ts` | **127** |
-
-`extension.ts` は 1,461 → **715** コード行（開始時 2,779 の **26%**。目標 500 まであと 215）。
-
-Codex は全 10 塊を `9143a233` と **verbatim 一致**で照合し、27 export の維持も確認している。
-`activate().handlers` のオブジェクトリテラルは byte-for-byte 不変。
-
-### 🔴 Codex に `npm test` の全件を頼んだのが間違いだった（束 0〜C）
-
-束 C の Codex が構造的な事実を報告した:
-
-```
-Error: listen EPERM: operation not permitted 127.0.0.1:<port>
-Tests  107 failed | 2381 passed
-```
-
-**sandbox が loopback の listen を禁じるので、localhost を使う 4 スイート（107 テスト）は
-原理的に走らない。** CLAUDE.md が「Codex は sandbox で daemon protocol（localhost bind）・
-MCP 系・実機 E2E が原理的に走らない」と明記しているとおりで、**私が読んでいたはずのこと**。
-
-束 B / C の Codex はどちらも「2,488 passed は自分の出力ではない」と明記して報告を拒んだ。
-**正しい態度である。** 束 D からブリーフを focused な spec だけに変えたところ、
-**衝突なしで完走した。**
-
-### 🔴 散文の参照は「範囲を潰さずに」直す
-
-散文中に `extension.ts:3000-3032` のような**行範囲つきの参照**が 12 件あり、これは引用 header
-ではないので `docs:check` が一切見ない。機械的に「関数の定義行 1 点」へ置き換えたところ
-`3000-3032` → `592` のように**範囲が潰れた**。**劣化なので取り消した。**
-
-取り消しに `git checkout -- sites/dev` を使って**引用の再アンカーまで巻き戻し**、やり直した。
-さらにその過程で `extension.ts:654-654`（`} else {` の 1 行）という**潰れた引用**を作ってしまい、
-元の 50 行（`run-selection.ts:63-112`）へ復元した。
-
-**範囲を保って移せた 2 件だけを移し、残り 10 件は据え置いた。** 内容が一致しないものを
-機械で動かすと、今回のように壊す。
-
-### 検証
-
-`npm test` **2,488 passed**（5 束連続で不変・**既存テストの期待値の変更 0 件**）/
-`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
-`public-surface.spec` 38 passed / `start-engine-for-agent.spec` 4 passed。
-
-### refactor(extension): move view, docs and flash out of extension.ts (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887 の**束 C**。純粋な移動。
-
-| 新設 | コード行 |
-|---|---|
-| `engine-view-provider.ts` | **243** |
-| `flash-config.ts` | **222** |
-| `docs-panels.ts` | **104** |
-
-`extension.ts` は 1,991 → **1,461** コード行（開始時 2,779 の **53%**）。
-
-🔴 既存の `engine-view.ts` へは入れていない。あれは header で「vscode 非依存」を宣言した
-純モジュールで、vscode に触る配線は**対になる新ファイル**へ置く（設計 §4.1 / D4）。
-
-### 🔴 引用が緑でも散文は検査されない（3 回目）
-
-`vscode-architecture.md` が「`engine-view.ts` の純関数がノードを組み立て、**`extension.ts` の**
-`EngineViewProvider` がそれを `vscode.TreeItem` に写します」と書いていた。ja/en とも直した。
-
-**3 束連続で同じ形の腐りが出ている**（束 A: 行数と状態の置き場所 / 束 B: stdout ルータの帰属 /
-束 C: `EngineViewProvider` の帰属）。`docs:check` は**行が合っているか**しか見ないので、
-**移した関数名で散文を横断検索する**のを各束の手順に入れている。
-
-### 🔴 委譲先と同じツリーで作業して衝突させた（main の運用ミス）
-
-束 B の Codex が正直に報告した: 検証中に main（私）が `npm test` を並走させ、さらに
-コミットまでしたため、**Codex は一度も全テストを完走できなかった**（exit 130 で停止）。
-Codex は「2,488 passed は自分の出力ではない」と明記して報告を拒んでいる。**正しい態度である。**
-
-memory `delegate-work-needs-its-own-worktree` がそのまま当たっている。
-検証は main の仕事なので結果に影響は無いが、**委譲先の時間を無駄にした**。
-以後の束では、ブリーフから「全テストを回す」を外し、**focused な spec だけを求める**。
-
-なお Codex は **AST 比較で 26 関数すべての本文が IDENTICAL** であることを確認しており、
-これは main の residual 分類より強い証拠である。
-
-### 検証
-
-`npm test` **2,488 passed**（4 束連続で不変・**既存テストの期待値の変更 0 件**）/
-`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
-`engine-command-awaits.spec` 10 passed（設計 §7.4 の追加 done）/ `public-surface.spec` 38 passed。
-
-### refactor(extension): move the engine wiring out of extension.ts (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887 の**束 B**。束 A で代入を setter に替えたので、ここは**純粋な移動**。
-
-| 新設 | コード行 | 中身 |
-|---|---|---|
-| `engine-handlers.ts` | **321** | stdout / stderr / exit / error のハンドラ 9 本 |
-| `engine-process.ts` | **423** | engine パス解決・`startEngine` / `stopEngine` / `toggleEngine` ほか 11 本 |
-
-`extension.ts` は 2,662 → **1,991** コード行。
-
-### 🔴 `engine-lifecycle.ts` へ戻さなかったことが、テストで証明された
-
-issue #887 の本文は「stdout/exit ハンドラは `engine-lifecycle.ts`（既存）へ」と書いていたが、
-設計（Fable 起案・main が `grep` で裏取り）がこれを覆した。
-`extension-wiring.spec.ts:48` が `engine-lifecycle` を `vi.mock` して `applyEngineExit` /
-`applyEngineError` を spy にしており、**同一モジュール内の呼び出しは mock を通らない**。
-戻した瞬間に spy が一度も呼ばれなくなり、テストを書き換えるしかなくなる。
-
-**`extension-wiring.spec.ts` が 58 passed であることが、mock 境界の外側に置けた証拠**である。
-
-### 引用 122 件 — 束 A で作った手順がそのまま効いた
-
-`--fix`（行番号のみ）70 → 本文をソースから再生成して再アンカー 52。
-束 A で書いた再アンカー手順を `$TMPDIR` のスクリプトとして再利用した。
-
-🔴 **引用が緑でも散文は検査されない（2 回目）。** `plugin-ui.md` が
-「**`extension.ts` の** stdout ルータはこの結果行を拾います」と書いているのに、
-引用は `engine-handlers.ts` を指していた。ja/en とも帰属を直した。
-移した関数名 7 つで横断検索し、他に同型が無いことも確認した。
-
-### 検証
-
-`npm test` **2,488 passed**（束 0 / A と同値・**既存テストの期待値の変更 0 件**。
-`tests/` の差分はラチェットの baseline のみ）/ `npm run lint` / `npm run typecheck:e2e` /
-`npm run build` / `npm run docs:check` 982 引用 / `extension-wiring.spec` 58 passed /
-`public-surface.spec` 38 passed。
-
-### refactor(extension): move module state to a leaf and turn 31 assignments into setters (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887 の**束 A**。分割の核心で、以降の束が「純粋な移動」になるための前提。
-
-### 読みは live binding・書きは setter
-
-ES module の import 束縛は**代入できない**が、読みは常に最新値が見える。そこで:
-
-- **読み出し約 220 箇所の本文は 1 文字も変えていない**
-- **代入 31 箇所だけ**が `setX(v)` になった
-
-新設は `extension-state.ts`（103 コード行・leaf）と `playhead-decorations.ts`（124）。
-`__*ForTest` **13 本**は名前も引数も本文も変えず、閉じている状態と同じモジュールへ移し、
-`extension.ts` が `export { … } from` で再輸出する。**テスト側 239 箇所の変更は 0**。
-
-`extension.ts` は 2,779 → **2,662** コード行。
-
-### residual 322 行をすべて分類した
-
-設計 §7.2 の done 条件。**未分類 0**:
-
-| 分類 | 行数 |
-|---|---|
-| setter の定義と本体 | 54 |
-| setter の呼び出し | 32 |
-| 局所定数化 / 旧宣言 | 31+ |
-| import / 再輸出 | 89 |
-| 宣言・関数に `export` を前置（移動） | 25 |
-| doc / コメント | 11 |
-
-分類中に `outputChannel.appendLine` → `channel.appendLine` が一度「未分類」に落ちたが、
-設計 §4.5 が予告した **narrowing のための局所定数化**だった
-（`const channel = vscode.window.createOutputChannel(...)` の直後に `setOutputChannel(channel)`。
-**同一オブジェクト**であることを実物で確認）。
-
-### 🔴 今朝作った L-3 ガードが、今日のうちに TS 側で仕事をした
-
-新設 2 ファイルが `git add` 前だったため、ラチェットが**名指しで検出**した
-（`docs/design/888-file-size-ratchet-design.md` §13.10）。Rust 側で踏んだ穴が TS でも同じ形で出る。
-
-### 引用 124 件が壊れた — 3 段階で直した
-
-| 手段 | 解決 |
-|---|---|
-| `--fix`（行番号のみ） | 88 |
-| 本文一致で移動先を特定（`export` 前置を剥がす） | 12 |
-| 先頭行・末尾行を鍵にした再アンカー + **本文をソースから再生成** | 22 |
-| 手で 1 組 | 2 |
-
-🔴 途中で relocate スクリプトが **`/tmp` の一時パスを markdown に書き込んだ**（2 件）。
-候補ディレクトリに `/tmp` を渡した私の使い方の誤りで、直した。
-
-🔴 **引用が緑になっても散文は検査されない。** `vscode-architecture.md` が
-「`extension.ts` は 4,115 行の大きなファイルで、状態はモジュールレベル変数に置かれています」と
-書いており、**分割後は両方とも事実でない**。ja/en とも実態に合わせた。
-
-### 検証
-
-`npm test` **2,488 passed**（束 0 と同値・**既存テストの期待値の変更 0 件**）/
-`npm run lint` / `npm run typecheck:e2e` / `npm run build` / `npm run docs:check` 982 引用 /
-`grep -cE '^let ' extension.ts` = **0**。
-
-### test(extension): freeze the public surface before splitting extension.ts (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `887-extension-split`
-
-#887（TS 分割）の**束 0 = 道具を先に置く**。**ソースは 1 行も動かしていない**
-（`git diff --stat main -- packages/` が空）。
-
-### 🔴 Rust で 2 度踏んだ欠陥の TS 版を先に塞ぐ
-
-Rust では `pub` 項目が `pub(crate) use` 経由で crate 外から消え、**全ゲート緑のまま通過**した。
-TS に `pub(crate)` は無いが、同型の欠陥は「再輸出ブロックから 1 本抜ける」「型だけ export されて
-値が消える」形で出る。しかも **`tests/vscode-extension/` は一度も型検査されていなかった**
-（`tsconfig.tests.json` の include は `tests/e2e/**` のみ）。
-
-`tests/vscode-extension/public-surface.spec.ts` を置き、**tsc と vitest の 2 層**に通した。
-凍結したのは `extension.ts` **27** + `mcp-server.ts` 値 **11** = **38 値**と、型 **25**。
-（設計文書の一覧を写さず、現物を `grep -E '^export'` して突き合わせた結果が一致）
-
-main が実測した fail-before **3 件**:
-
-| 変異 | 検出した層 |
-|---|---|
-| 存在しない export を import | tsc **TS2724** |
-| 型を値として使う | tsc **TS2693** |
-| 🔴 **実際に `export` を 1 本消す** | vitest（実行時に `undefined`） |
-
-3 番目が本題。Rust で踏んだ欠陥はこの形だった。
-
-### 引用追随スクリプトもリポジトリへ
-
-`sites/dev/scripts/relocate-citations.mjs`。引用は `extension.ts` **248 箇所** /
-`mcp-server.ts` **46 箇所**あり、全束で動く。`--fix` は**行番号しか直せない**ので、
-移動先を中身から特定するこれが要る。Rust 分割では scratchpad に置いていて毎回探していた。
-
-### 検証
-
-`npm test` **2,488 passed**（main の基準 2,450 + surface spec 38・**既存テストの期待値の変更 0 件**）/
-`npm run typecheck:e2e` / `npm run lint` / `npm run docs:check` 982 引用。
-
 
 ## Archived sections
 
@@ -1947,4 +1156,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-12）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1、#883 束 S / 本体 (#883)、#888 子 1、#878 を含む
+- [2026-09（前半・09-01〜09-13）](../archive/WORK_LOG_2026-09.md) — #883 束 C のレビュー round 1、#883 束 S / 本体 (#883)、#888 子 1、#878、4.1.0 リリース (#926)、pan を両段とも減衰のみにした裁定 (#921/#922)、E2E-4/E2E-5 の実機実装 (#917) を含む

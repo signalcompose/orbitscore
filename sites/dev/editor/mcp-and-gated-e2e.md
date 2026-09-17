@@ -116,7 +116,7 @@ export function handleStepLine(step: StepEvent): void {
   if (mcpPort && mcpPort > 0) {
 ```
 
-`orbitscore.mcpServer.port` の既定値は `0`（= 無効）です（`packages/vscode-extension/package.json:410-417`）。環境変数 `ORBITSCORE_MCP_PORT` が優先されるのは、gated E2E がアプリを **CLI から** 起動するときに設定ファイルを触らずに済ませるためです。CLAUDE.md の「マージ前ゲート」節が「`ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）」と書いているのも同じ経路です。
+`orbitscore.mcpServer.port` の既定値は `0`（= 無効）です（`packages/vscode-extension/package.json:421-428`）。環境変数 `ORBITSCORE_MCP_PORT` が優先されるのは、gated E2E がアプリを **CLI から** 起動するときに設定ファイルを触らずに済ませるためです。CLAUDE.md の「マージ前ゲート」節が「`ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）」と書いているのも同じ経路です。
 
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
@@ -184,10 +184,13 @@ export function buildMcpServerUrl(port: number): string {
 | **プラグイン** | `list_plugins` / `rescan_plugins` | プラグインカタログの読み出し / 再スキャン（#463） |
 | | `save_plugin_state` | 実行中プラグインの state を保存（transport 停止中のみ） |
 | | `open_plugin_ui` / `close_plugin_ui` | プラグイン UI の開閉。close は `UI_CLOSED_DONE` 受信まで待つ（#474 P4c） |
+| | `open_plugin_ui_at_cursor` | **引数なし**。アクティブエディタのカーソルが乗っているプラグイン名 1 つだけを開く（#939） |
 | **ドキュメント** | `get_dev_doc` / `search_dev_docs` | 本サイトの Markdown を読む / 検索する |
 | **登録** | `register_mcp_server` | このサーバを Claude Code に登録（`.mcp.json` または `claude mcp add`） |
 
-`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` はハンドラが optional で、無いホストでは登録されません。WCTM の pi ハーネスのような「別ホスト」がこの seam を再利用するときに、既存のスタブ suite を壊さないための配慮です。
+`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `open_plugin_ui_at_cursor` / `register_mcp_server` はハンドラが optional で、無いホストでは登録されません。WCTM の pi ハーネスのような「別ホスト」がこの seam を再利用するときに、既存のスタブ suite を壊さないための配慮です。
+
+🔴 **述語は #939 で「自分が実際に使うハンドラだけを見る」形に変わりました。** それまで `open_plugin_ui` と `close_plugin_ui` は `if (openPluginUi && closePluginUi)` という**組**で登録されており、片方だけ持つホストでは**両方とも消えて**いました。3 本目（`open_plugin_ui_at_cursor`）を同じ連言に足すと、カーソル経路を持たないホストから既存 2 本が消えるので、条件を 1 本ずつに割りました（`packages/vscode-extension/src/mcp-tools-plugins.ts:88-164`）。ツールの**登録順**は `tools/list` に出るため変えられない、という既存の制約はそのままです。
 
 面白いのは、このカタログの大半が「人間がコマンドパレットや設定から到達できる操作」の写しであることです。`start_engine` は "Start Engine" コマンド、`configure_flash` は "Configure Flash"、`rescan_plugins` は "Rescan Plugin Catalog" — 各 description が対応するコマンド名を明示しています。**新しい観測手段を増やすときも MCP のツール面を増やさない**、という方針が E2E 側のヘルパにも見えます（`tests/e2e/helpers/rack-child-pid.ts` の `rackChildPidsFromLog` に付いたコメント: 「**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある」）。
 
@@ -280,7 +283,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 
 2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (#773) で、この 4 分岐は `createLinePrefixer` の callback の中へ移りました。分岐そのものと prefix の順序は変わっていませんが、**行が chunk 境界で割れても両断片が失われなくなった**ぶん、`evalMark` 封筒の取りこぼし経路が 1 つ減っています。詳細は [IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773) を参照してください。
 
-では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
+では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1045-1057`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
 
 `log-ring.ts` のコメントには `#614` より前の記述（「`get_log` はエンジン側のエラーが現れる**唯一のチャネル**である」）が残っていましたが、本 PR で「**評価が返ったあとに非同期に起きる失敗が現れる唯一のチャネル**」へ改めました。同時に `CLAUDE.md` の 3 箇所（「`ok` に assert しても何も証明しない」）も、`#614` 後の意味へ更新しています。**`ok` が意味を持つ範囲は広がったが、`get_log` が唯一の観測点である領域は残っている** — これが 2026-09-02 時点の正確な理解です。
 
@@ -446,7 +449,7 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 
 前置が行単位になったということは、**engine の stderr に出た行はすべて `ERROR:` になる**ということでもあります。すると engine 側が正常系で `warn!` を 1 行出しただけで、ERROR 件数を数えているテストが巻き添えになります。[#860](https://github.com/signalcompose/orbitscore/issues/860)（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)）がその実例です。
 
-CLAP プラグインをロードするたびに呼ばれる `query_note_port_index` は、`NotePortsExtension` を持たないプラグインに出会うと `warn!` を上げていました。ところが**エフェクトが note ポートを持たないのは正常**で、port 0 へフォールバックする挙動も CLAP の慣習どおり機能します。つまり正常系で警報が鳴っていたわけです。巻き添えになったのはプラグイン状態の自動保存を見ている別のテストで、`default-baseline cycle must add no ERROR: lines ... expected 10 to be less than or equal to 9` という形で落ちました（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）。増えた 1 行がこの warn です。
+CLAP プラグインをロードするたびに呼ばれる `query_note_port_index` は、`NotePortsExtension` を持たないプラグインに出会うと `warn!` を上げていました。ところが**エフェクトが note ポートを持たないのは正常**で、port 0 へフォールバックする挙動も CLAP の慣習どおり機能します。つまり正常系で警報が鳴っていたわけです。巻き添えになったのはプラグイン状態の自動保存を見ている別のテストで、`default-baseline cycle must add no ERROR: lines ... expected 10 to be less than or equal to 9` という形で落ちました（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3681-3685`）。増えた 1 行がこの warn です。
 
 ここで取りうる対処は 2 つあります。**分類側を緩める**（stderr の一部を `ERROR:` から外す）か、**源で止める**かです。#861 は後者を採り、`warn!` を `debug!` へ下げました。前者は #756 が塞いだばかりの「実エラーを取りこぼす」方向へ戻る道だからです。
 
@@ -738,7 +741,7 @@ export function decideStartEngineForAgent(
 }
 ```
 
-旧実装はここで `ok: true, 'engine already running'` を返して `captureWav` を黙って捨てていました。呼び出し側は録れていると信じ、`capture.wav` を読む段で初めて `ENOENT` に気づく — `#528` の回帰ピンとして、gated spec は「拒否されること」と「拒否しても engine が落ちないこと」の両方を assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1212-1222`）。
+旧実装はここで `ok: true, 'engine already running'` を返して `captureWav` を黙って捨てていました。呼び出し側は録れていると信じ、`capture.wav` を読む段で初めて `ENOENT` に気づく — `#528` の回帰ピンとして、gated spec は「拒否されること」と「拒否しても engine が落ちないこと」の両方を assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1240-1250`）。
 
 ### テスト一覧
 
@@ -1479,9 +1482,9 @@ npm run test:e2e:cold-install
 - `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — `registerTool` 群（#887 束 F で `buildServer()` から 3 ファイルへ切り出した。ツールカタログの出典）
 - `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` マージと URL 組み立て
-- `packages/vscode-extension/src/extension.ts:138-148` / `301-312` — 出力チャネルのリングバッファと monkey-patch
-- `packages/vscode-extension/src/extension.ts:150-284` — playhead の状態と decoration 適用
-- `packages/vscode-extension/src/extension.ts:237-291` — MCP サーバの起動ゲートとハンドラ配線
+- `packages/vscode-extension/src/extension.ts:139-149` / `301-312` — 出力チャネルのリングバッファと monkey-patch
+- `packages/vscode-extension/src/extension.ts:151-289` — playhead の状態と decoration 適用
+- `packages/vscode-extension/src/extension.ts:241-296` — MCP サーバの起動ゲートとハンドラ配線
 - `packages/vscode-extension/src/engine-handlers.ts:43-149` — `shouldFilterLine()`（`[STEP]` と bridge envelope の除外）
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`（#614）
@@ -1492,15 +1495,15 @@ npm run test:e2e:cold-install
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()`（spawn 専用オプション）
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` 文法・パレット・`findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV 解析（peak / RMS / onset / `soundDetected`）
-- `packages/vscode-extension/package.json:410-417` — `orbitscore.mcpServer.port` 設定
+- `packages/vscode-extension/package.json:421-428` — `orbitscore.mcpServer.port` 設定
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
 - `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-153` — env contract・stale artifact ガード
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — `launchIsolatedOrbitStudio()`・describe のセットアップ・teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — #654 playhead E2E
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:6550-6553` — 自前アプリのテストと共有セッションのテストの境界（#917）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-154` — env contract・stale artifact ガード
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:566-1042` — `launchIsolatedOrbitStudio()`・describe のセットアップ・teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1044-1970` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2821-2928` — #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:6805-6808` — 自前アプリのテストと共有セッションのテストの境界（#917）
 - `tests/e2e/vsix-cold-install-gated.spec.ts:1-51` — cold install ゲートの env contract（`ORBIT_GATED_COLD_INSTALL`）と strict / finder の 2 構成（#878 / #873）
 - `tests/e2e/vsix-cold-install-gated.spec.ts:160-223` — DSL 評価から RMS と `get_log` のアサーションまで
 - `tests/e2e/helpers/harness-processes.ts:1-49` — teardown の封じ込めポリシー・`selectRootPids()`・`userDataDirExceedsSocketLimit()`（#830）
