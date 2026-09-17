@@ -17,13 +17,79 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: fold the two pending docs-sync PRs, and archive 20 entries (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `946-fold-docs-sync-prs` / **Issue**: #946
+
+拡張版の機能凍結（owner 裁定 2026-09-18）を受けて **OrbitStudio**（= macOS ネイティブ版。
+今後この語は拡張版を指さない）の開発に入る前に、溜まっていた docs-sync PR 2 本を畳んだ。
+`BUNDLE_BRANCH_WORKFLOW.md` §「束を開く前にルーティンの追従 PR を全部消化する」に従う。
+
+| 畳んだ PR | 追従元 | マージ前の状態 |
+|---|---|---|
+| [#944](https://github.com/signalcompose/orbitscore/pull/944) | #941（右クリックで 1 つの UI / 窓の floating） | `CONFLICTING`・32 files |
+| [#945](https://github.com/signalcompose/orbitscore/pull/945) | #943（4.2.0 bump） | `MERGEABLE`・1 file |
+
+衝突したのは `WORK_LOG.md` の 1 ファイルのみで、dev / user サイトの 31 ファイルは auto-merge した。
+時系列に合わせて 4.2.0 bump を上、#941 追従をその下（`#940 wiring fix` の直上）に置いた。
+
+#### 🔴 アーカイブが誘発された — 規律が正しく発火した
+
+エントリが 2 つ増えて **`WORK_LOG.md` が 2,017 行**になり、`tests/docs/worklog-size.spec.ts` が
+red になって **commit が pre-commit hook で止まった**（`PROJECT_RULES §1a` の上限 2,000 行）。
+
+**この hook 構成には、規律違反を直す途中経過そのものがコミットできないという性質がある。**
+2,000 行を超えた状態では何もコミットできないので、アーカイブを別コミットに分けられない。
+そのため owner 裁定により**マージとアーカイブを 1 コミットにまとめた**。
+
+移設: 本体 38 エントリのうち**古い 20 エントリ（944 行）**を
+`docs/archive/WORK_LOG_2026-09.md` へ（`PROJECT_RULES §1a`「最新 15-20 を残す」に従い 18 本残した）。
+
+| | 移設前 | 移設後 |
+|---|---|---|
+| 本体 | 2,016 行 / 38 エントリ | **1,093 行 / 19 エントリ** |
+| アーカイブ | 12,715 行 | 13,663 行（+948） |
+
+索引は**本体末尾と `docs/core/INDEX.md` の両方**を更新した。この 2 つは
+**移設前から範囲表記がずれていた**（本体「09-01〜09-12」/ INDEX「09-01〜09-11」）ので、
+どちらも「09-01〜09-13」に揃えた。
+
+#### 参照の張り替え
+
+🔴 **本ログ内の自己参照が、2 度続けてずれた。** #945 のエントリが 4.2.0 bump の版掃除を
+`:57` と**行番号で**名指ししていたが、マージで 21 行（→ `:78`）、本エントリの追加でさらに
+61 行（→ `:139`）下がった。**追記のたびに壊れる形だった**ので、行番号ではなく
+**見出し名（「軸が逆だった」節）で引く**形に変えた。
+
+**次から本ログ内を行番号で自己参照しない。** 本ログは先頭に追記するので、
+自己参照の行番号は**書いた瞬間から陳腐化が始まる**。
+
+**直していない壊れた参照が 1 件ある**（発見のみ・報告）:
+`docs/design/883-explicit-output-routing-design.md:175` が `docs/development/WORK_LOG.md:967` を
+行番号で名指ししているが、行 967 は引用されている owner 発言（「マスターが 1、2 固定」）とは
+別の内容を指している。**今回の移設は行 1059 以降を削ったので、この参照は移設前から壊れていた。**
+設計書は起案時点のスナップショットなので触らない（`CLAUDE.md`「docs/design/ の過去の設計書を書き換えない」）。
+
+#### 検証
+
+```
+npm test                                    → 2577 passed / 79 skipped（hook 経由・0 failed）
+npm run docs:check                          → 996 citations verified, 0 failed, 54 files
+npm run docs:build -w @orbitscore/user-site → exit 0（dead link 0）
+npm run docs:build -w @orbitscore/dev-site  → exit 0（dead link 0）
+```
+
+Closes #946
+
+---
+
 ### docs: report-only follow-up for the 4.2.0 release bump (#943) (Sep 14, 2026)
 
 **ブランチ**: `claude/docs-sync-pr943` / **追従元**: PR [#943](https://github.com/signalcompose/orbitscore/pull/943)（merge `1276ab1f`）
 
 **doc の追従は不要だった。** #943 は版番号の文字列と本ログのエントリしか変えておらず、
 追従先（`CLAUDE.md` / `README.md` / `docs/core` / dev サイト ja+en 6 ページ）は PR 自身が更新済み。
-本ログ `:57` が言う「番号を固定して形を一切仮定しない」grep で検算し、
+本ログ 4.2.0 bump エントリの「軸が逆だった」節が言う「番号を固定して形を一切仮定しない」grep で検算し、
 現在の版を名乗る箇所に `4.1.0` の残りが **0 件**であることを確認した
 （`tests/vscode-extension/playhead.spec.ts:136` の `resolve('4.1.0')` は `play()` の引数パスで無関係）。
 
