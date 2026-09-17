@@ -44,7 +44,7 @@ They look like three independent features, but a single line — the engine's st
 The comment at the top of the file explains where it comes from.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:28-37
+// packages/vscode-extension/src/mcp-server.ts:31-40
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
@@ -121,7 +121,7 @@ The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:121-126
+// packages/vscode-extension/src/mcp-server.ts:128-133
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -135,7 +135,7 @@ A `McpServer` instance is created per session, but the handlers are shared. Whic
 There is also a judgement that a loopback bind alone is not enough.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:140-147
+// packages/vscode-extension/src/mcp-server.ts:156-163
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -588,7 +588,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 And as a remedy one step stronger than the guard, the choice was made to **remove the manual step altogether**.
 
 ```jsonc
-// package.json:18-19
+// package.json:20-21
     "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build && bash scripts/install-engine-deps.sh",
     "test:e2e:gated": "ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir tests --config vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true e2e/orbitstudio-mcp-gated",
 ```
@@ -1029,7 +1029,7 @@ The gate env var is **`ORBIT_GATED_COLD_INSTALL`**, not `ORBIT_GATED_ORBITSTUDIO
 The oracle is not `ok`. The `.vsix` goes into an empty extensions-dir, the app starts **without** `--extensionDevelopmentPath`, and the assertion reaches the RMS of the captured WAV.
 
 ```typescript
-// tests/e2e/vsix-cold-install-gated.spec.ts:195-203
+// tests/e2e/vsix-cold-install-gated.spec.ts:217-225
   expect(windows, 'no capture windows were produced').toBeDefined()
   // 🔴 `ok` で終わらせない。音が出たことは WAV の RMS でしか言えない。
   expect(windows!.rms('sound')).toBeGreaterThan(0.01)

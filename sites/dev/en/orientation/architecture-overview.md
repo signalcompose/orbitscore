@@ -206,7 +206,7 @@ This is the first step of the "press `Cmd+Enter` and sound comes out" flow: **de
 Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Model Context Protocol) server inside the Extension Host. An external agent (Claude Code, for example) can drive OrbitScore with tools such as `evaluate_orbitscore` / `start_engine` / `get_log`, going through the same path as an editor user.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:28-37
+// packages/vscode-extension/src/mcp-server.ts:31-40
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
@@ -234,7 +234,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:294-298
+// packages/vscode-extension/src/mcp-server.ts:314-318
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())

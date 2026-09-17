@@ -490,7 +490,7 @@ cargo build + `npm run build` **first, unconditionally** (the owner's call: "onc
 is reliable, make it not manual").
 
 ```jsonc
-// package.json:17-17
+// package.json:19-19
     "test": "npm -w @orbitscore/engine test",
 ```
 

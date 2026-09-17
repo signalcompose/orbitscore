@@ -466,7 +466,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 手動ではない形にする」という owner 判断）。
 
 ```jsonc
-// package.json:17-17
+// package.json:19-19
     "test": "npm -w @orbitscore/engine test",
 ```
 
