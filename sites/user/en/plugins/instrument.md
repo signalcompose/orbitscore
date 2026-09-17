@@ -90,6 +90,7 @@ piano.ui()   // opens the instrument's UI (no arguments = instrument)
 - **The no-argument form opens the instrument's UI.** A sequence has only one instrument, so no name is needed.
 - Re-evaluating the score does not open a second copy of the UI (idempotent) — live coding assumes the same line gets re-evaluated repeatedly.
 - To close an open UI, close the panel directly.
+- **Right-clicking the instrument name in the score** (the string, e.g. `"Kontakt 8.vst3"`) and choosing `OrbitScore: Open Plugin UI` opens the same UI — useful when you do not want to add a `ui()` line.
 
 ## v1 Constraints (Honest Disclosure)
 

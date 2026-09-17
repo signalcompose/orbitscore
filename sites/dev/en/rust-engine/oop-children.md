@@ -668,7 +668,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 Because it does not care what follows `.shm`, sidecars such as `....shm.chain.json` (the
 `ApplyEffectChain` manifest) are picked up by the same rule. The gated E2E checks on the file
 system that both the `.shm` of a dead PID and its `.chain.json` disappear, and that **a file
-belonging to a live PID survives** (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516`).
+belonging to a live PID survives** (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5700-5771`).
 
 Incidentally, the idea of "matching on the process name to decide whether it is a daemon" was not
 taken. `cargo test` binaries create shm files under the same names, so matching would unlink the
@@ -697,18 +697,18 @@ but on "one generation's worth". Adding a SIGTERM handler remains #448.
 
 ## Sources
 
-- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
+- `rust/crates/orbit-audio-daemon/src/lib.rs:102-111` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
 - `rust/crates/orbit-audio-sandbox/src/transport/layout.rs:67-97,127-239` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost` (pipelined submit/read state machine, RT-safe `process_block`)
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard` (child-teardown RAII guard: QUIT → reap → kill fallback → shm removal)
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124` (full file) — `ParentWatch` (`getppid()`-based parent-liveness monitoring, rate-limited, `orphaned_for_tests`)
-- `rust/crates/orbit-child-runtime/src/lib.rs:61-72` — `child_should_quit` (folds QUIT and parent death into one predicate)
+- `rust/crates/orbit-child-runtime/src/lib.rs:161-172` — `child_should_quit` (folds QUIT and parent death into one predicate)
 - `rust/crates/orbit-audio-sandbox/tests/parent_watch_integration.rs` — real-process-hierarchy test of `ParentWatch`
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,311-318,488-761` — `InstrumentChildSupervisor` (watchdog thread, #573 fast-fail guard, respawn, `measurement_invalid` fire-once, #618 `SlotSignals`)
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:34-39,311-318,488-761` — `InstrumentChildSupervisor` (watchdog thread, #573 fast-fail guard, respawn, `measurement_invalid` fire-once, #618 `SlotSignals`)
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,121-145` — the startup sweep (prefix constant, `MIN_ORPHAN_AGE`, the three-valued predicate, file-name parsing, the deletion branch)
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm` (the thin shell stage 0.5 calls, and its `tracing::info!` summary line)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:891-910` — the stderr accumulation until the ready line (why the sweep's INFO line does not reach `get_log`)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516` — the gated E2E asserting that a dead PID's shm and sidecar are swept while a live PID's file survives
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5700-5771` — the gated E2E asserting that a dead PID's shm and sidecar are swept while a live PID's file survives
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — confirmed in-process/OOP architecture split
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure (PR: `a0449b8`)
 - Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — reclaiming orphaned shm at startup (a mitigation for the paths where `Drop` never runs)

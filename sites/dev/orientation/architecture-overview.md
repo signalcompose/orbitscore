@@ -128,7 +128,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 
 面白いのは、解決した path を env で engine に渡さないことです。spawn される engine CLI 自身が同じ `resolveDaemonBinaryPath()` を実行するので結果は決定的に一致し、再注入する理由がありません。
 
-この `env` 変数へ積むのは debug フラグと capture seam（#307）だけです（spawn の直前にもう 2 つ足されます。すぐあとで出てきます）。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
+この `env` 変数へ積むのは debug フラグ・capture seam（#307）・**`ORBIT_HOST_BUNDLE_ID`（#940）** です（spawn の直前にもう 2 つ足されます。すぐあとで出てきます）。3 つ目はプラグインの窓をホストの手前に浮かせるためのもので、解決できない場合は `delete` して渡します（親から継承した古い値を child へ流さないため）。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
 // packages/vscode-extension/src/engine-process.ts:360-374
@@ -668,10 +668,10 @@ export const DSL_VERSION = '2.0'
 
 ## Sources
 
-- `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring、ステータスバー 2 本、コマンド登録
-- `packages/vscode-extension/src/extension.ts:237-291` — MCP サーバーの起動条件 (`ORBITSCORE_MCP_PORT` > 設定) とハンドラ束
+- `packages/vscode-extension/src/extension.ts:291-409` — `activate()`: log ring、ステータスバー 2 本、コマンド登録
+- `packages/vscode-extension/src/extension.ts:241-296` — MCP サーバーの起動条件 (`ORBITSCORE_MCP_PORT` > 設定) とハンドラ束
 - `packages/vscode-extension/src/engine-process.ts:104-112` — `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界 (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
-- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: kind 判定 → pre-check → env → spawn
+- `packages/vscode-extension/src/engine-process.ts:302-453` — `startEngine()`: kind 判定 → pre-check → env → spawn
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
@@ -694,7 +694,7 @@ export const DSL_VERSION = '2.0'
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr ルーティングと ready line 読み取り
 - `packages/engine/src/audio/rust-engine/index.ts:1-8` — protocol v0.1、cutover #108 の注記
 - `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION` / `DSL_VERSION`
-- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/lib.rs:102-111` — `SPAWNABLE_CHILD_BINARIES`
 - `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461` — sibling-of-exe による child 解決
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — daemon / child / 標準プラグインの同梱方針
 - `package.json:9-11` — `build:copy-engine` が `copy-daemon-bin.sh` を呼ぶ

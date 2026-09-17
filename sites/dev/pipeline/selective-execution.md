@@ -22,7 +22,7 @@ Cmd+Enter でコードの一部だけを実行する — これが OrbitScore �
 - **「未完の入力か」の判定は parse エラーの `\bEOF\b` だけ** になった (2026-08 の #607 / #612)。2026-05 版の `Expected RPAREN` 一致は「行の途中の本物の構文エラー」まで未完扱いにしてセッションを沈黙させていました
 - **メタ行の語彙が増えた**: `//#selectAudioDevice` (#484)、`//#savePluginState` (#562)、`//#pluginUi` (#474)、`//#evalMark` (#614)。いずれも DSL バッファには積まず、即時処理して相関 ID 付きの 1 行 JSON を stdout に返します
 - **評価結果が呼び出し元に返る** ようになった (#614)。parse / runtime の診断を `pendingDiagnostics` に溜め、`//#evalMark` の到達時にまとめて返します。MCP の `evaluate_orbitscore` はこれを待ってから `ok` を決めます
-- **engine の spawn が env に積むのは debug フラグと capture seam（#307）だけ** になった。cutover 後の #377 で `ORBITSCORE_ENGINE` を必ず明示する形になっていましたが、[#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）が SC 経路ごとこの env var を撤去しました。バックエンドは Rust daemon の 1 択で、`repl` サブコマンドの起動シーケンスは変わりません
+- **engine の spawn が env に積むのは debug フラグ・capture seam（#307）・`ORBIT_HOST_BUNDLE_ID`（#940）** です。cutover 後の #377 で `ORBITSCORE_ENGINE` を必ず明示する形になっていましたが、[#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）が SC 経路ごとこの env var を撤去しました。バックエンドは Rust daemon の 1 択で、`repl` サブコマンドの起動シーケンスは変わりません
 
 ## 全体の流れ
 
@@ -123,7 +123,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
         env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
 ```
 
-`stdio: ['pipe', 'pipe', 'pipe']` がポイントです。stdin、stdout、stderr がすべてパイプで接続されるため、拡張側から `engineProcess.stdin.write(...)` でコードを流し込めます。省略した部分で組み立てている `env` には、debug フラグと capture seam（#307）だけが載ります。バックエンド種別を伝えていた `ORBITSCORE_ENGINE` は #502 で撤去されました ([0-2](/orientation/architecture-overview) 参照)。`repl` サブコマンドを受けたエンジンは `startREPLMode()` を呼び出します。
+`stdio: ['pipe', 'pipe', 'pipe']` がポイントです。stdin、stdout、stderr がすべてパイプで接続されるため、拡張側から `engineProcess.stdin.write(...)` でコードを流し込めます。省略した部分で組み立てている `env` には、debug フラグ・capture seam（#307）・`ORBIT_HOST_BUNDLE_ID`（#940・プラグイン窓を前面に浮かせるためのホスト bundle id）が載ります。解決できないときは `delete` して渡します。バックエンド種別を伝えていた `ORBITSCORE_ENGINE` は #502 で撤去されました ([0-2](/orientation/architecture-overview) 参照)。`repl` サブコマンドを受けたエンジンは `startREPLMode()` を呼び出します。
 
 ```typescript
 // packages/engine/src/cli/repl-mode.ts:31-54
@@ -551,8 +551,8 @@ sequenceDiagram
 
 ## Sources
 
-- `packages/vscode-extension/src/extension.ts:110-112` — `globalInitialized` フラグの宣言と用途
-- `packages/vscode-extension/src/engine-process.ts:302-447` — `startEngine()`: pre-check → env → `stdio: ['pipe','pipe','pipe']` のプロセス起動
+- `packages/vscode-extension/src/extension.ts:111-113` — `globalInitialized` フラグの宣言と用途
+- `packages/vscode-extension/src/engine-process.ts:302-453` — `startEngine()`: pre-check → env → `stdio: ['pipe','pipe','pipe']` のプロセス起動
 - `packages/vscode-extension/src/run-selection.ts:27-40` — `getLineSubject()` の正規表現マッチ
 - `packages/vscode-extension/src/run-selection.ts:42-207` — `runSelection()` の全体フロー (選択 / subject ブロック / standalone / flash)
 - `packages/vscode-extension/src/run-selection.ts:60-62` — 選択テキストがある場合のパス
