@@ -4,6 +4,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## 🔴 製品名（owner 確定 2026-09-18）
+
+| 語 | 指すもの |
+|---|---|
+| **OrbitScore** | **VS Code 拡張版**（機能凍結・現 4.2.0）。`packages/vscode-extension/`。DSL とリポジトリの名前でもある |
+| **OrbitStudio** | **macOS ネイティブ版アプリ**（これから作る・未着手）。`docs/planning/NATIVE_MIGRATION_2026-09.md` §12 |
+
+🔴 **2026-09-18 より前の記述では「OrbitStudio」が拡張版を指している。** 呼称が移動したので、
+同じ語が 2 つの意味で使われている状態にある。**新しく書く文章では上の定義に従うこと。**
+
+既存記述の棚卸しは **[#948](https://github.com/signalcompose/orbitscore/issues/948)** で追跡する。
+同日の実測で `grep -rio "orbitstudio"` が **1,103 箇所 / 176 ファイル**、うち:
+
+| 種別 | 件数 | 扱い |
+|---|---|---|
+| `OrbitStudio.app` | 71 | **そのまま**（ネイティブ版を指す） |
+| 識別子（`orbitstudio-mcp-gated.spec.ts` / `ORBIT_GATED_ORBITSTUDIO` / `ORBITSTUDIO_APP` 等） | 597 | **当面そのまま** |
+| **散文** | **435** | #948 の対象 |
+
+🔴 **一括置換しない。** `NATIVE_MIGRATION_2026-09.md` と `docs/design/848-*.md` の散文には
+**ネイティブ版を指す「OrbitStudio」が混ざっている**ので、文脈ごとに判断する。
+
+識別子を据え置くのは、本ファイルの**マージ前ゲート手順が `ORBIT_GATED_ORBITSTUDIO` /
+`orbitstudio-mcp-gated.spec.ts` を名指ししている**ため。名前の中立化は、ハーネスを
+ターゲット非依存にする作業（設計 848 §10.2）と一緒に行う。
+
+---
+
 ## 📚 Documentation Structure
 
 **IMPORTANT**: Detailed design and specification documentation is maintained in Japanese in the `/docs` directory. Always refer to `/docs` for:

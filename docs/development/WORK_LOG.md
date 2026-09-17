@@ -17,6 +17,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: fix the product names — OrbitScore is the extension, OrbitStudio is the native app (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `948-terminology-in-claude-md` / **Issue**: #948
+
+**owner 確定（2026-09-18）**: 呼称が移動した。
+
+| 語 | 指すもの |
+|---|---|
+| **OrbitScore** | **VS Code 拡張版**（機能凍結・現 4.2.0） |
+| **OrbitStudio** | **macOS ネイティブ版アプリ**（これから作る・未着手） |
+
+🔴 **2026-09-18 より前の記述では「OrbitStudio」が拡張版を指している。** 同じ語が 2 つの意味で
+使われている状態なので、`CLAUDE.md` 冒頭に用語表を置いて**正本を 1 箇所に固定**した。
+
+#### なぜ正本に書くか
+
+ルーチンのプロンプトにだけ書いても、**同じ取り違えが別の場所で起きる**（実際に main が
+この日 1 度やった。下記）。加えて **user サイトを OrbitStudio.app に同梱してローカル LLM に
+読ませる計画**があり（設計 `848-docs-structure-design.md`）、**LLM は書いてあることを実行可能だと
+解釈する**ので語の二義性はそのまま誤動作になる。
+
+#### 既存記述の棚卸しは #948 へ
+
+`grep -rio "orbitstudio"` で **1,103 箇所 / 176 ファイル**。内訳:
+
+| 種別 | 件数 | 扱い |
+|---|---|---|
+| `OrbitStudio.app` | 71 | そのまま（ネイティブ版を指す） |
+| 識別子（`orbitstudio-mcp-gated.spec.ts` / `ORBIT_GATED_ORBITSTUDIO` / `ORBITSTUDIO_APP` 等） | 597 | **当面そのまま**（本ファイルのマージ前ゲート手順が名指ししている） |
+| **散文** | **435** | #948 の対象 |
+
+🔴 **一括置換しない。** `NATIVE_MIGRATION_2026-09.md` と `docs/design/848-*.md` の散文には
+**ネイティブ版を指す「OrbitStudio」が混ざっている**。
+
+#### ルーチン（cloud routine `Documentation and test coverage update`）も修正した
+
+`trig_01Qo1CTXp27QqJa6e6175BGS`。CLI（`/schedule` → `RemoteTrigger`）から更新できる
+（**削除だけは Web / Desktop でしかできない**）。修正は 3 点:
+
+1. 冒頭に**用語表**（正本は `CLAUDE.md`）と「**既存の記述をついでに書き換えない**」（#948 の仕事）
+2. 分類表の「OrbitStudio（凍結版）」→ **「OrbitScore（VS Code 拡張・凍結）」**
+3. 🔴 **「追従対象外」の範囲を狭めた**
+
+3 が main の誤りだった。同日先に書いた「新ライン（追従対象外）」は **engine 線（`rust/` /
+`packages/engine/`）まで除外してしまう**もので、O-multiout・ラック等の共有層が文書化されず、
+**アプリの初回リリース時に一括で書くことになる**。main は直前に「リリーストリガーは差分を
+まとめて読むから取りこぼす」と論じておきながら、**自分の制約で同じ状態を作っていた**。
+
+> **除外は先送りであって削除ではない。**
+
+正しくは「**OrbitStudio（ネイティブ app）の新規ディレクトリだけ**が追従対象外」。
+
+#### 検証
+
+`npm test` は pre-commit hook 経由（全件緑）。本 PR は `CLAUDE.md` と本ログのみで、
+`sites/` のコード引用に触れていないため `docs:check` の対象差分は無い。
+
+Part of #948
+
+---
+
 ### docs: fold the two pending docs-sync PRs, and archive 20 entries (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `946-fold-docs-sync-prs` / **Issue**: #946
