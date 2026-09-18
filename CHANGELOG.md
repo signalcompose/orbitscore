@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **エンドユーザー向け学習サイト (`sites/user/`) が `.vsix` に同梱されておらず、cold install した利用者が Docs パネル / `get_dev_doc` を使えなかった** ([`#955`](https://github.com/signalcompose/orbitscore/pull/955))
+  - `mcp-server.ts` のパス解決がモノレポのルートを決め打ちしており、出荷 `.vsix` の中には対応するパスが存在しなかった
+  - モノレポ / 同梱バンドルの両方を候補にするパス解決 (`resolveUserDocsLocation`) に変更し、ビルド時に `sites/user/` を `.vsix` へコピーするようにした
+  - dev サイト (`sites/dev/`) は同梱せず GitHub Pages へ誘導する方針は維持
+
+## [4.2.0] - 2026-09-14
+
+拡張のみの機能追加リリース。DSL・wire・出力の意味論は変更なし。詳細は [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md)（"chore(release): bump the extension to 4.2.0"）を参照。
+
+### Added
+
+- **プラグイン UI: 譜面上のプラグイン名を右クリックしてその 1 インスタンスだけの UI を開く経路** ([`#939`](https://github.com/signalcompose/orbitscore/issues/939))
+  - 従来 DSL の `ui("name")` は同名プラグインの挿入をすべて開いてしまい、個別に開く経路がなかった
+- **プラグイン UI ウィンドウが VS Code のフォーカスに追従して floating するように変更**（VS Code が最前面のときだけ最前面表示。DAW と同様の挙動） ([`#940`](https://github.com/signalcompose/orbitscore/issues/940))
+
+## [4.1.0] - 2026-09-13
+
+### Fixed
+
+- 🔴 **`global.gain()` / ミキサーの `pan` 実装が audio を誤って約 3 dB 減衰させていた不具合を修正** ([`#922`](https://github.com/signalcompose/orbitscore/issues/922))
+  - 修正により **audio の出力レベルが約 +3 dB 上がる**（実質的な音量変化のため patch ではなく minor リリース）
+  - 副作用として **ヘッドルームが約 3 dB 減る**（リミッタの無い系では、重ねたミックスが 0 dBFS に近づきやすくなる）
+  - `pan` がフルスケールを超えて信号を増幅することがなくなった
+
+既存の譜面（DSL のテキスト）を書き換える必要はない。詳細は [`docs/archive/WORK_LOG_2026-09.md`](docs/archive/WORK_LOG_2026-09.md)（"chore(release): bump the extension to 4.1.0"）を参照。
+
+## [4.0.1] - 2026-09-12
+
+### Changed
+
+- Rust コードベースを複数の crate へ分割（内部リファクタリングのみ） ([`#888`](https://github.com/signalcompose/orbitscore/issues/888))
+  - DSL・振る舞い・出力の意味論への変更は無し。patch リリース
+
+## [4.0.0] - 2026-09-12
+
+### Breaking Changes
+
+- 🔴 **暗黙の master バス終端を廃止**（"テキストが完全な真実" 原則） ([`#883`](https://github.com/signalcompose/orbitscore/issues/883))
+  - 従来、出力経路 (`.output()` / `.send()` 等) を 1 つも書かなくても `kick.play()` は暗黙的に master へ届いていた
+  - 新挙動: 出口を明示しない audio / instrument や、出口を持たない sum / aux バスは **無音になる**（master への暗黙のフォールバックが無くなった）
+  - 既存の譜面が暗黙 master 終端に依存していた場合、`.output()` を明示しないと鳴らなくなる（下位互換なし）
+  - `program()` の暗黙的な出力合成も削除（`[rack]` の前置記法は残る）
+  - VS Code 診断: 出口が無い `.play()` に Warning (`output-missing`)、aux send のみで dry が未経路の場合に Information (`dry-not-routed`) を表示し、いずれも `.output()` の quick fix を提供
+- `DSL_VERSION` を `1.2` → `2.0` に更新
+
+## [3.0.0] - 2026-09-11
+
+owner 裁定によりネイティブ移行前の拡張版ラインを凍結した安定版リリース。v2.0.0 以降、Rust オーディオデーモンへの完全移行・プラグインホスティング・ミキサーグラフなど、SuperCollider バックエンドを前提としない新しい実行基盤へ大規模に置き換えられた。詳細な PR 一覧は [`docs/archive/WORK_LOG_2026-07.md`](docs/archive/WORK_LOG_2026-07.md) / [`WORK_LOG_2026-08.md`](docs/archive/WORK_LOG_2026-08.md) / [`WORK_LOG_2026-09.md`](docs/archive/WORK_LOG_2026-09.md) を参照(本エントリはコミット単位までは網羅していない)。
+
+### Breaking Changes
+
+- 🔴 **`send()` の第 2 引数（送出量）を線形係数から dB へ変更** ([`#611`](https://github.com/signalcompose/orbitscore/issues/611))
+  - 既存譜面の `send(bus, 0.5)`（従来: 50%）は新仕様では `+0.5 dB` として解釈されるため、意味が変わる
+  - `output(dest, thru, db)` の導入、`pan` のライン要素化もあわせて行われた
+- 🔴 **SuperCollider バックエンドの完全撤去に伴う設定 / コマンドの削除** ([`#502`](https://github.com/signalcompose/orbitscore/issues/502))
+  - `ORBITSCORE_ENGINE` 環境変数を削除
+  - VS Code 設定 `orbitscore.engine` / `orbitscore.scsynthPath` を削除
+  - VS Code コマンド `Force Kill scsynth` / MCP ツール `force_kill_scsynth` を削除
+  - 出荷 `.vsix` から `scsynth` / SuperCollider 関連ファイルを完全に除去（Rust `orbit-audio-daemon` が唯一のオーディオバックエンドに）
+- `DSL_VERSION` を `1.1` → `1.2` に更新
+
+### Added
+
+v2.0.0 以降に積まれた主な機能（網羅的な列挙ではない）:
+
+- **Rust オーディオデーモン `orbit-audio-daemon` への完全移行**（`cpal` ベース・WebSocket IPC） ([`#108`](https://github.com/signalcompose/orbitscore/issues/108))
+- **プラグインホスティング**: CLAP / VST3 プラグインを out-of-process child として起動し、UI ウィンドウとエフェクト / インストゥルメントラックを提供 ([`#395`](https://github.com/signalcompose/orbitscore/issues/395), [`#416`](https://github.com/signalcompose/orbitscore/issues/416), [`#628`](https://github.com/signalcompose/orbitscore/issues/628))
+- **ミキサーグラフ**: sum / aux バスと `send` によるバスルーティング、per-sequence effect insert ([`#337`](https://github.com/signalcompose/orbitscore/issues/337), [`#459`](https://github.com/signalcompose/orbitscore/issues/459), [`#434`](https://github.com/signalcompose/orbitscore/issues/434))
+- **プラグインカタログ**: インストール済み CLAP / VST3 の起動時スキャンと管理 ([`#463`](https://github.com/signalcompose/orbitscore/issues/463))
+- **import / project システム**: 複数ファイルにまたがるプロジェクト構成 (`project.yaml`) ([`#456`](https://github.com/signalcompose/orbitscore/issues/456))
+- **状態の永続化**: プロジェクト状態の自動保存 / 復元 ([`#541`](https://github.com/signalcompose/orbitscore/issues/541), [`#577`](https://github.com/signalcompose/orbitscore/issues/577))
+- **LinkAudio**: Ableton Link 経由のオーディオルーティング（🔴 出荷ビルドでは egress が無効化されている）
+
+### Removed
+
+- SuperCollider バックエンド opt-out 経路一式（上記 Breaking Changes 参照）
+
+## [2.0.0] - 2026-06-19
+
+> **Note**: このバンプは semver の破壊的変更ではなく、**製品ポジショニング判断**として major 番号を採用したもの。v1.1.1 以降に積まれた変更はすべて追加的（既存譜面を壊さない）で、厳密な semver では 1.2.0 に相当するが、MIDI 出力という新しいピラーと録音（session log）機構の追加を「世代交代」とみなし、大和さんの判断で 2.0.0 とした。詳細は [`docs/archive/WORK_LOG_2026-06.md`](docs/archive/WORK_LOG_2026-06.md)（6.116 エントリ）を参照。v2.0.0 は post-2.0 のネイティブアプリ移行前における**最後の機能追加 .vsix リリース**という位置付けだった。
+
+### Added
+
+- **MIDI 出力**: Pitch DSL Phase 1（度数解決・MIDI ノート生成） ([`#228`](https://github.com/signalcompose/orbitscore/issues/228))
+- **Pitch DSL**: Phase 0（検証）・Phase R・Phase 2（root/group chain）・Phase 3（stack chord）・Phase 4（expression: velocity / articulation）・和声 / ボイシング機能 ([`Epic #224`](https://github.com/signalcompose/orbitscore/issues/224))
+- **comp**: ボイスリーディング機能 C1 / C2a ([`#269`](https://github.com/signalcompose/orbitscore/issues/269), [`#271`](https://github.com/signalcompose/orbitscore/issues/271), [`#273`](https://github.com/signalcompose/orbitscore/issues/273))
+- **セッションログ (`.orbslog`)**: 評価の因果記録を書き出す writer 層 L1（既定 off・dormant） ([`#229`](https://github.com/signalcompose/orbitscore/issues/229))
+- **LinkAudio**: DSL 構文・UGen 実装・sum バスへの合流・`.vsix` への `OrbitLinkAudio.scx` 同梱 ([`Epic #187`](https://github.com/signalcompose/orbitscore/issues/187))
+- **DSL: launch quantize**（v1.1.1 で先行リリース済、詳細は [1.1.1] を参照）
+
+### Fixed
+
+- npm audit: 出荷 `.vsix` に含まれる production 依存の `ws`（high: memory disclosure / DoS）を解消
+
+## [1.1.1] - 2026-05-09
+
+ICMC 2026 Hamburg (5/10-16) 直前の patch リリース。v1.1.0 にバンドルされていた quantize 関連の不具合修正 ([`#212`](https://github.com/signalcompose/orbitscore/issues/212)) をカンファレンス期間の配布物として ship した。詳細は [`docs/archive/WORK_LOG_2026-05.md`](docs/archive/WORK_LOG_2026-05.md)（6.87 / 6.88 エントリ）を参照。
+
 ### Added
 
 - **DSL: launch quantize** ([`#212`](https://github.com/signalcompose/orbitscore/issues/212))
@@ -30,6 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - LOOP 起動が即時で行われていたため、 走行中の他ループとの整列ができなかった問題 ([`#212`](https://github.com/signalcompose/orbitscore/issues/212))
+- **CI**: v1.1.x リリースラインに Marketplace publish gate（`vars.PUBLISH_MARKETPLACE`）が backport されておらず、stable tag push が必ず partial failure していた問題 ([`#216`](https://github.com/signalcompose/orbitscore/issues/216))
 
 ## [1.1.0] - 2026-05-06
 
@@ -71,5 +172,12 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
 - ローカル / オフライン閲覧手順を README に追記
 - README に学習サイト (web) セクションを追加
 
-[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/signalcompose/orbitscore/compare/v4.1.0...v4.2.0
+[4.1.0]: https://github.com/signalcompose/orbitscore/compare/v4.0.1...v4.1.0
+[4.0.1]: https://github.com/signalcompose/orbitscore/compare/v4.0.0...v4.0.1
+[4.0.0]: https://github.com/signalcompose/orbitscore/compare/v3.0.0...v4.0.0
+[3.0.0]: https://github.com/signalcompose/orbitscore/compare/v2.0.0...v3.0.0
+[2.0.0]: https://github.com/signalcompose/orbitscore/compare/v1.1.1...v2.0.0
+[1.1.1]: https://github.com/signalcompose/orbitscore/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/signalcompose/orbitscore/releases/tag/v1.1.0

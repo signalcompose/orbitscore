@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: backfill CHANGELOG.md for the 7 untracked releases v1.1.1-v4.2.0 (#959) (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `959-changelog-backfill` / **Issue**: [#959](https://github.com/signalcompose/orbitscore/issues/959)
+
+`CHANGELOG.md` が `[1.1.0] - 2026-05-06` で止まっており、以降の 7 版（v1.1.1 / v2.0.0 / v3.0.0 /
+v4.0.0 / v4.0.1 / v4.1.0 / v4.2.0・約 4 ヶ月分）が未記載だった。docs のみの作業（実装・テストは
+変更なし）。各版のタグ間差分（`git log --first-parent`）と `docs/archive/WORK_LOG_2026-{05,06,09}.md`
+の該当エントリを一次情報として遡及記載した。
+
+**根拠にした主なエントリ**: v1.1.1 = WORK_LOG_2026-05 6.87/6.88 / v2.0.0 = WORK_LOG_2026-06 6.116・
+6.131 / v3.0.0 = WORK_LOG_2026-09「release: tag v3.0.0」「chore(release): bump the extension to
+3.0.0」 / v4.0.0 = WORK_LOG_2026-09「design: explicit output routing (#883)」 / v4.0.1 = 同
+「chore(release): bump the extension to 4.0.1」 / v4.1.0 = 同「chore(release): bump the extension
+to 4.1.0」 / v4.2.0 = `docs/development/WORK_LOG.md`「chore(release): bump the extension to 4.2.0」。
+
+**確証が持てず個別コミット単位までは書かなかったもの**: v2.0.0→v3.0.0 間（239 マージコミット・
+約 3 ヶ月）は Rust デーモン移行・プラグインホスティング・ミキサーグラフ等を主要ピラー単位で要約し、
+網羅的な列挙ではない旨を明記。`[Unreleased]` は #212（quantize）の内容を [1.1.1] へ移し、
+v4.2.0 以降の実際の未リリース変更（#955: user サイトの `.vsix` 同梱漏れ修正）に差し替えた。
+
+検証: `CHANGELOG.md` を参照するテストは存在しない（`grep -rl CHANGELOG tests/` 該当なし）ため
+`npm test` への影響は無い想定。docs のみの変更。
+
 ### docs: follow PR #955 — the two learning sites now differ in how they ship (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr955` / **追従元**: PR [#955](https://github.com/signalcompose/orbitscore/pull/955)（マージコミット `3899456`・Issue [#954](https://github.com/signalcompose/orbitscore/issues/954)）
