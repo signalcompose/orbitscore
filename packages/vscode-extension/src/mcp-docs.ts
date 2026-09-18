@@ -36,6 +36,93 @@ export function resolveUserDocsRoot(baseDir: string): string {
 }
 
 /**
+ * Shown to a human (Docs panel WebView, 503 body) and to an LLM (`get_dev_doc` /
+ * `search_dev_docs` error text) when the dev site is structurally absent —
+ * i.e. not merely unbuilt, but not shipped at all (#954). Unlike the user site,
+ * the dev site is **never bundled into the .vsix** (owner decision, 2026-09-18):
+ * its only reader is the owner, who is always in the monorepo when reading it,
+ * and bundling would add ~27 MB for a reader who never needs the offline copy.
+ */
+export const DEV_DOCS_UNAVAILABLE_MESSAGE =
+  'Development docs are only available in the monorepo checkout, not in this ' +
+  'installed extension. Published version: https://signalcompose.github.io/orbitscore/dev/'
+
+/** Where a resolved docs tree was found (or would be, if it existed here). */
+export type DocsLocationSource = 'monorepo' | 'extension-bundle'
+
+/** A resolved docs tree: its built dist (HTTP/WebView) and Markdown source (MCP tools). */
+export interface DocsLocation {
+  /** Built VitePress dist — may not exist yet even when `available` is true (unbuilt). */
+  readonly root: string
+  /** Markdown source directory — reading it (get_dev_doc/get_user_doc) never requires a build. */
+  readonly sourceRoot: string
+}
+
+/** A resolved dev-docs tree, plus whether it exists in this environment at all. */
+export interface DevDocsLocation extends DocsLocation {
+  /**
+   * False means "structurally absent" (cold install — the dev site isn't bundled),
+   * distinct from "present but not yet built" (sourceRoot exists, root/dist doesn't).
+   */
+  readonly available: boolean
+}
+
+/** A resolved user-docs tree, plus where it was found. */
+export interface UserDocsLocation extends DocsLocation {
+  readonly source: DocsLocationSource
+}
+
+/**
+ * Resolve the dev site from the monorepo checkout base directory (three levels
+ * above `mcp-server.ts`'s own compiled `dist/`). The dev site is deliberately
+ * never bundled (see `DEV_DOCS_UNAVAILABLE_MESSAGE`), so there is only ever one
+ * candidate — `available` tells callers whether it exists here at all.
+ */
+export function resolveDevDocsLocation(monorepoBaseDir: string): DevDocsLocation {
+  const sourceRoot = path.resolve(monorepoBaseDir, 'sites/dev')
+  return {
+    root: resolveDocsRoot(monorepoBaseDir),
+    sourceRoot,
+    available: fs.existsSync(sourceRoot),
+  }
+}
+
+/**
+ * Resolve the end-user site: the monorepo checkout if present, else the copy
+ * bundled into the .vsix (#954 — Markdown + built dist, 45 files / ~7.7 MB).
+ *
+ * Mirrors the candidate-list style of `resolveDaemonBinaryPath`
+ * (`packages/engine/src/audio/rust-engine/daemon-client.ts`): probe candidates
+ * in order, first existing one wins. The order here — monorepo before bundle —
+ * also matches that precedent (there: `explicit → env → monorepo → extension-bundle`),
+ * chosen deliberately so **nothing changes for a monorepo dev host**: the
+ * monorepo candidate is checked first and resolves exactly as
+ * `resolveUserDocsRoot` always has, so a dev host that happens to carry a
+ * stale bundled copy (e.g. left over from a local `vsce package` run) still
+ * sees its own live `sites/user` tree, never the stale one. Only a cold
+ * install — whose monorepo candidate points outside the extension and never
+ * exists — falls through to the bundled copy.
+ */
+export function resolveUserDocsLocation(
+  monorepoBaseDir: string,
+  extensionRootDir: string,
+): UserDocsLocation {
+  const monorepoSourceRoot = path.resolve(monorepoBaseDir, 'sites/user')
+  if (fs.existsSync(monorepoSourceRoot)) {
+    return {
+      root: resolveUserDocsRoot(monorepoBaseDir),
+      sourceRoot: monorepoSourceRoot,
+      source: 'monorepo',
+    }
+  }
+  return {
+    root: resolveUserDocsRoot(extensionRootDir),
+    sourceRoot: path.resolve(extensionRootDir, 'sites/user'),
+    source: 'extension-bundle',
+  }
+}
+
+/**
  * Resolve a docs-relative URL path without allowing it to escape docsRoot.
  * Directory URLs (including the root URL) serve their index.html.
  */

@@ -5,12 +5,15 @@ import * as path from 'path'
 
 import {
   contentTypeForDocsFile,
+  DEV_DOCS_UNAVAILABLE_MESSAGE,
+  type DevDocsLocation,
   DOCS_PUBLIC_BASE,
   isDocsDistStale,
   matchDocsRequest,
+  resolveDevDocsLocation,
   resolveDocsFilePath,
-  resolveDocsRoot,
-  resolveUserDocsRoot,
+  resolveUserDocsLocation,
+  type UserDocsLocation,
   USER_DOCS_PUBLIC_BASE,
 } from './mcp-docs'
 import {
@@ -37,16 +40,20 @@ import type { OrbitScoreToolHandlers } from './mcp-types'
  */
 
 export {
+  DEV_DOCS_UNAVAILABLE_MESSAGE,
   DOCS_PUBLIC_BASE,
   isDocsDistStale,
   matchDocsRequest,
   readDevDoc,
+  resolveDevDocsLocation,
   resolveDocsFilePath,
   resolveDocsRoot,
+  resolveUserDocsLocation,
   resolveUserDocsRoot,
   searchDevDocs,
   USER_DOCS_PUBLIC_BASE,
 } from './mcp-docs'
+export type { DevDocsLocation, UserDocsLocation } from './mcp-docs'
 export { resolveMcpPluginUiIndex } from './mcp-sdk'
 export type { McpServerHandle } from './mcp-sdk'
 export type {
@@ -83,10 +90,10 @@ export type {
 function buildServer(
   version: string,
   handlers: OrbitScoreToolHandlers,
-  docsRoot: string,
+  devDocs: DevDocsLocation,
+  userDocs: UserDocsLocation,
 ): McpServerLike {
   const server = new McpServer({ name: 'orbitscore', version })
-  const docsSourceRoot = path.resolve(docsRoot, '../..')
 
   // 🔴 **この 4 行の順序が MCP の `tools/list` の順序である**（SDK は登録順を返す）。
   // 分割前の 25 本の並びを再現する唯一の順序で、docs 系を editor 系に含めると
@@ -95,7 +102,7 @@ function buildServer(
   registerEngineTools(server, handlers)
   registerEditorTools(server, handlers)
   registerPluginTools(server, handlers)
-  registerDocsTools(server, handlers, docsSourceRoot)
+  registerDocsTools(server, handlers, devDocs, userDocs)
 
   return server
 }
@@ -134,8 +141,17 @@ export async function startOrbitScoreMcpServer(opts: {
   const { port, version, handlers, log } = opts
 
   const sessions = new Map<string, SessionEntry>()
-  const docsRoot = resolveDocsRoot(path.resolve(__dirname, '../../..'))
-  const userDocsRoot = resolveUserDocsRoot(path.resolve(__dirname, '../../..'))
+  // `__dirname` is this compiled module's own directory: `<pkg>/dist` both in a
+  // monorepo dev host and inside an installed .vsix. `extensionRootDir` (1 level
+  // up) is where a bundled sites/user/ would live; `monorepoBaseDir` (3 levels
+  // up) is where sites/dev/ and sites/user/ live in a monorepo checkout — see
+  // resolveDevDocsLocation / resolveUserDocsLocation (mcp-docs.ts) for why the
+  // dev site only ever checks the monorepo candidate and the user site checks
+  // monorepo before bundle (#954).
+  const extensionRootDir = path.resolve(__dirname, '..')
+  const monorepoBaseDir = path.resolve(__dirname, '../../..')
+  const devDocs = resolveDevDocsLocation(monorepoBaseDir)
+  const userDocs = resolveUserDocsLocation(monorepoBaseDir, extensionRootDir)
 
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
@@ -166,7 +182,7 @@ export async function startOrbitScoreMcpServer(opts: {
         sessions.delete(transport.sessionId)
       }
     }
-    const server = buildServer(version, handlers, docsRoot)
+    const server = buildServer(version, handlers, devDocs, userDocs)
     entry.transport = transport
     entry.server = server
     await server.connect(transport)
@@ -197,13 +213,17 @@ export async function startOrbitScoreMcpServer(opts: {
       const docsMatch = matchDocsRequest(pathname, [
         {
           base: DOCS_PUBLIC_BASE,
-          root: docsRoot,
-          buildHint:
-            'Development docs are not built. Run npm run docs:build -w @orbitscore/dev-site',
+          root: devDocs.root,
+          // #954: the dev site is structurally absent on a cold install (never
+          // bundled) — that's a different situation from "present but unbuilt",
+          // so it gets a different, actionable message.
+          buildHint: devDocs.available
+            ? 'Development docs are not built. Run npm run docs:build -w @orbitscore/dev-site'
+            : DEV_DOCS_UNAVAILABLE_MESSAGE,
         },
         {
           base: USER_DOCS_PUBLIC_BASE,
-          root: userDocsRoot,
+          root: userDocs.root,
           buildHint: 'User docs are not built. Run npm run docs:build -w @orbitscore/user-site',
         },
       ])

@@ -206,7 +206,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 2026-07-07 の #388 (WORK_LOG 6.188-6.192) から、extension は MCP (Model Context Protocol) サーバーを Extension Host の中でホストするようになりました。外部の agent (Claude Code 等) が `evaluate_orbitscore` / `start_engine` / `get_log` といったツールで、エディタのユーザーと同じ動線を通って OrbitScore を操作できます。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:28-37
+// packages/vscode-extension/src/mcp-server.ts:31-40
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
@@ -234,7 +234,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 サーバーは loopback にしか bind しません。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:294-298
+// packages/vscode-extension/src/mcp-server.ts:314-318
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())

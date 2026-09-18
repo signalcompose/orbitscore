@@ -76,6 +76,71 @@ fixture（`makeRepo`）が git を呼ぶ**前**に `git config --list --local`�
   環境変数を挙げたが、将来 git が新しい環境変数を追加した場合はこの列挙から漏れうる。
   そのための保険として汚染検出テスト（全体比較）を独立に置いている
 
+---
+
+### fix(docs): bundle the end-user docs site into the .vsix so it survives a cold install (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `954-vsix-docs-bundling` / **Issue**: [#954](https://github.com/signalcompose/orbitscore/issues/954)
+
+出荷済みの `.vsix` にサイトのデータが 1 バイトも入っていなかった（`unzip -l *.vsix | grep -c 'sites/'` が 0）。
+Docs パネル（WebView）と `get_dev_doc` は cold install で死んでいた。原因は
+`mcp-server.ts` の `__dirname/../../..` がモノレポのルート決め打ちだったこと
+（インストール済み拡張にはそのパスが存在しない）。
+
+#### 実装した 4 点（owner 裁定どおり）
+
+1. **パス解決を候補リスト化**（`mcp-docs.ts` に `resolveDevDocsLocation` /
+   `resolveUserDocsLocation` を追加）。daemon バイナリの解決
+   （`daemon-client.ts` の `resolveDaemonBinaryPath`: explicit → env → monorepo → 拡張同梱）と
+   同じ「候補を順に existsSync、最初に見つかったものを使う」流儀。**順序はモノレポを先に見る**
+   （daemon と同じ順）— こうすると **モノレポ dev host の挙動は一切変わらない**
+   （モノレポ候補が常に先に見つかる）。dev サイトは owner 裁定により**同梱しない**ので
+   候補は 1 本のみ（`available` で存在有無を返す）
+2. **user サイト（Markdown 45 ファイル + built dist）を `.vsix` に同梱**。
+   `scripts/copy-user-site.sh` を新設（`copy-daemon-bin.sh` と同じ形: ビルド→コピー、
+   `npm run build:copy-user-site` として root package.json に配線、
+   `pretest:e2e:cold-install` と `release.yml` の両方から呼ぶ）。コピー先
+   `packages/vscode-extension/sites/user/` は `.gitignore` へ追加（`engine/` と同じ扱い —
+   ビルド成果物であり手で編集しない）
+3. **dev 側の「黙って null」をやめる**。`DEV_DOCS_UNAVAILABLE_MESSAGE` を新設し、
+   HTTP 503 の body と `get_dev_doc`/`search_dev_docs` のエラーメッセージの両方に使う
+   （公開 URL `https://signalcompose.github.io/orbitscore/dev/` を含む）
+4. **`get_user_doc` / `search_user_docs` を新設**（`get_dev_doc`/`search_dev_docs` と同じ形）。
+   これで MCP 経由で LLM が user サイト（DSL の使い方）を読む経路ができた
+
+#### 検証
+
+- ユニット/統合テスト: `resolveDevDocsLocation` / `resolveUserDocsLocation` の純粋関数テスト、
+  HTTP 経由の `get_user_doc`/`search_user_docs` ラウンドトリップ、`tools/list` の順序テスト
+  （23→28 本へ更新）を追加。`npm test` 全件 2588 passed / 79 skipped（既存含め regression 無し）
+- `npm run typecheck:e2e` / `npx eslint` とも green
+- **実際に `.vsix` をビルドして実測**（このセッションの sandbox 内・`npm run build` は成功した
+  — 事前の懸念だった `safe-chain` の EPERM は発生しなかった）:
+  `unzip -l orbitscore-darwin-arm64-4.2.0.vsix | grep -c 'sites/'` = **247**（旧: 0）、
+  `sites/dev` = **0**（意図どおり同梱していない）、`sites/user/index.md` と
+  `sites/user/.vitepress/dist/index.html` の両方が存在。`.vsix` サイズ増分は実測 **+7.08 MB**
+  （`vsce package` の内訳表示 `sites/ (247 files) [7.08 MB]`）
+- パッケージ済み `.vsix` を展開し、`__dirname` を実際のインストール先レイアウトに見立てて
+  `resolveDevDocsLocation`/`resolveUserDocsLocation` を直接叩いて確認:
+  `dev.available=false`・`user.source='extension-bundle'`・`get_user_doc` 相当の読み出しが
+  実際に本文を返すことを確認した
+- 🔴 **VS Code を実際に cold install して起動する E2E（`tests/e2e/vsix-cold-install-gated.spec.ts`）は
+  この worktree では走らせていない**（`ORBIT_GATED_COLD_INSTALL` 未設定でスキップ・実機検証は
+  main が sandbox 外で行う）。同 spec に `assertDocsBundled`（`get_user_doc` 成功・`get_dev_doc` が
+  理由付きエラー・`/orbitscore/` が 200）を追加済みなので、次の cold-install ゲート実行時に
+  自動でこの経路もカバーされる
+
+#### 判断に迷った点
+
+- **候補の優先順（モノレポ先 vs 同梱先）**: issue の見出しは「同梱優先 → モノレポ fallback」だったが、
+  本文の必須事項は「モノレポでの挙動を変えない」で、同順序は設計判断に委ねられていた。
+  daemon の前例（モノレポ→同梱）をそのまま踏襲し、**モノレポを先に見る**順にした
+  （`vsce package` を一度ローカルで走らせた後に leftover が `packages/vscode-extension/sites/user/`
+  へ残っていても、モノレポ dev host は自分の `sites/user` を見続けるという安全側の理由。
+  コード内のコメントに理由を明記した）
+
+---
+
 ### docs(index): follow PR #947 — the archive period label stayed at 09-12 (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr947` / **追従元**: PR [#947](https://github.com/signalcompose/orbitscore/pull/947)（マージコミット `b89ce0e`）
@@ -131,7 +196,7 @@ fixture（`makeRepo`）が git を呼ぶ**前**に `git config --list --local`�
 
 ### docs: reconcile OrbitScore (frozen extension) vs OrbitStudio (native app) prose (Sep 18, 2026)
 
-**Date**: 2026-09-18 / **ブランチ**: `948-orbitscore-orbitstudio-terminology` / **Issue**: #948
+**Date**: 2026-09-18 / **ブランチ**: `948-terminology-prose` / **Issue**: #948 / **PR**: [#952](https://github.com/signalcompose/orbitscore/pull/952)（merge `966fa7b`）
 
 2026-09-18 の呼称確定（OrbitScore = 拡張版・OrbitStudio = ネイティブ版）を受けて、それより前の
 散文が旧い意味（拡張版）のまま残っている箇所を洗い出した。`grep -rio orbitstudio` は 1,100 件超
@@ -139,11 +204,26 @@ fixture（`makeRepo`）が git を呼ぶ**前**に `git config --list --local`�
 `docs/`（archive・design 除く）・`docs/design/`・`tests/`）に分けて並行で読み、1 行ずつ文脈判定
 した。**一括置換（sed 等）は使っていない。**
 
-**変換**: 34 ファイル・59 箇所を `OrbitStudio` → `OrbitScore` に更新（`docs/` 15・`sites/dev/` 9
-（ja/en 対）・`sites/user/` 4（ja/en 対）・`tests/` 3・`rust/crates/orbit-audio-daemon` 2・
-`README.md` 1・`vitest.config.ts` 1）。識別子（`orbitstudio-mcp-gated.spec.ts` /
+**変換**: 37 ファイル・54 箇所（`OrbitScore` へ 52・「VS Code」へ 2）。内訳は `docs/` 15
+（本ファイルを含む）・`sites/dev/` 11（ja/en 対）・`sites/user/` 4（ja/en 対）・`tests/` 3・
+`rust/crates/orbit-audio-daemon` 2・`README.md` 1・`vitest.config.ts` 1。
+識別子（`orbitstudio-mcp-gated.spec.ts` /
 `ORBIT_GATED_ORBITSTUDIO` / `launchIsolatedOrbitStudio` / `dev.orbitscore.OrbitStudio` 等）・
 ネイティブ版の計画/設計・`docs/archive/` は対象外のまま。
+
+🔴 **訂正（2026-09-18・docs 追従ルーチンがマージ済み差分を実測）**: 起草時の「34 ファイル・
+59 箇所」「`sites/dev/` 9」「ブランチ `948-orbitscore-orbitstudio-terminology`」はいずれも
+差分と一致していなかったので、上の行を実測値へ直した。数え方は `git diff 53873a9 8439d96`
+（= PR #952 の head `8439d96` と base `53873a9`）に対して:
+
+- ファイル数 = `git diff --name-only` の行数 **37**
+- 箇所数 = 本ファイルを除く 36 ファイルの `-` 行に現れる `OrbitStudio` **56 回**のうち、同じ行の
+  `+` 側に残った **3 回**を引いて **53**。これに本ファイルの見出し 1 箇所（`feat(plugin-ui):
+  float plugin windows above the editor while OrbitScore is frontmost` の #940 エントリ）を
+  足して **54**
+- うち 2 箇所は `OrbitScore` ではなく**「VS Code」**へ書き換わっている
+  （`sites/dev/editor/vscode-architecture.md:93` と `sites/dev/en/editor/vscode-architecture.md:93`。
+  下の owner 裁定の項を参照）
 
 以下は **意図的に変換しなかった**（いずれも「拡張版を指す散文」ではないため）:
 - `docs/development/POST_2.0_*`（12 ファイル）: Epic #292・2026-07 起案の計画文書群。

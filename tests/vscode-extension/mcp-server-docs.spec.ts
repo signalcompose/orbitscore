@@ -5,9 +5,12 @@ import * as path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  DEV_DOCS_UNAVAILABLE_MESSAGE,
   readDevDoc,
+  resolveDevDocsLocation,
   resolveDocsFilePath,
   resolveDocsRoot,
+  resolveUserDocsLocation,
   searchDevDocs,
 } from '../../packages/vscode-extension/src/mcp-server'
 
@@ -83,5 +86,61 @@ describe('development docs helpers', () => {
     } finally {
       fs.chmodSync(path.join(root, 'bad.md'), 0o600)
     }
+  })
+})
+
+describe('resolveDevDocsLocation (#954 -- cold install has no dev site at all)', () => {
+  it('is available when sites/dev exists under the base dir (a monorepo checkout)', () => {
+    const base = temporaryDirectory()
+    fs.mkdirSync(path.join(base, 'sites/dev'), { recursive: true })
+
+    const location = resolveDevDocsLocation(base)
+
+    expect(location.available).toBe(true)
+    expect(location.sourceRoot).toBe(path.resolve(base, 'sites/dev'))
+    expect(location.root).toBe(resolveDocsRoot(base))
+  })
+
+  it('is unavailable when sites/dev does not exist (cold install -- never bundled)', () => {
+    const base = temporaryDirectory() // empty: no sites/dev at all
+
+    const location = resolveDevDocsLocation(base)
+
+    expect(location.available).toBe(false)
+  })
+
+  it('DEV_DOCS_UNAVAILABLE_MESSAGE names the published GitHub Pages URL', () => {
+    expect(DEV_DOCS_UNAVAILABLE_MESSAGE).toContain(
+      'https://signalcompose.github.io/orbitscore/dev/',
+    )
+  })
+})
+
+describe('resolveUserDocsLocation (#954 -- monorepo checkout wins over the bundled copy)', () => {
+  it('picks the monorepo candidate when sites/user exists under the monorepo base', () => {
+    const monorepoBase = temporaryDirectory()
+    const extensionRoot = temporaryDirectory()
+    fs.mkdirSync(path.join(monorepoBase, 'sites/user'), { recursive: true })
+    // A stale bundled copy left over from a local `vsce package` run must NOT
+    // shadow the live monorepo tree -- this is the scenario the doc comment on
+    // resolveUserDocsLocation calls out by name.
+    fs.mkdirSync(path.join(extensionRoot, 'sites/user'), { recursive: true })
+    fs.writeFileSync(path.join(extensionRoot, 'sites/user', 'stale.md'), 'stale bundled copy')
+
+    const location = resolveUserDocsLocation(monorepoBase, extensionRoot)
+
+    expect(location.source).toBe('monorepo')
+    expect(location.sourceRoot).toBe(path.resolve(monorepoBase, 'sites/user'))
+  })
+
+  it('falls back to the extension-bundled copy when no monorepo sites/user exists', () => {
+    const monorepoBase = temporaryDirectory() // no sites/user here (cold install shape)
+    const extensionRoot = temporaryDirectory()
+    fs.mkdirSync(path.join(extensionRoot, 'sites/user'), { recursive: true })
+
+    const location = resolveUserDocsLocation(monorepoBase, extensionRoot)
+
+    expect(location.source).toBe('extension-bundle')
+    expect(location.sourceRoot).toBe(path.resolve(extensionRoot, 'sites/user'))
   })
 })

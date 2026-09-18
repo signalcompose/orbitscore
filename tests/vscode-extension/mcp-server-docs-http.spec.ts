@@ -341,4 +341,47 @@ describe('OrbitScore MCP server — docs serving (real HTTP)', () => {
     const matches = JSON.parse(result.content[0]?.text ?? '[]') as unknown[]
     expect(Array.isArray(matches)).toBe(true)
   })
+
+  // #954: this test process runs from the monorepo checkout (this spec file's
+  // own __dirname sits under it), so resolveUserDocsLocation always picks the
+  // 'monorepo' candidate here -- the 'extension-bundle' candidate is exercised
+  // by the pure resolveUserDocsLocation unit tests in mcp-server-docs.spec.ts
+  // (a real cold-install run is covered by tests/e2e/vsix-cold-install-gated.spec.ts).
+  it('MCP get_user_doc round-trips a real sites/user document', async () => {
+    handle = await startTestServer(createStubHandlers())
+    const sessionId = await connectMcpSession(handle.port)
+
+    const result = await toolsCall(handle.port, sessionId, 'get_user_doc', {
+      path: 'index.md',
+    })
+
+    expect(result.isError).toBeFalsy()
+    expect(result.content[0]?.text.length).toBeGreaterThan(0)
+  })
+
+  it('MCP get_user_doc returns an error for a path that does not exist', async () => {
+    handle = await startTestServer(createStubHandlers())
+    const sessionId = await connectMcpSession(handle.port)
+
+    const result = await toolsCall(handle.port, sessionId, 'get_user_doc', {
+      path: 'does-not-exist.md',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0]?.text).toContain('user document not found')
+  })
+
+  it('MCP search_user_docs returns a JSON array through the real user docsSourceRoot', async () => {
+    handle = await startTestServer(createStubHandlers())
+    const sessionId = await connectMcpSession(handle.port)
+
+    const result = await toolsCall(handle.port, sessionId, 'search_user_docs', {
+      query: 'OrbitScore',
+      limit: 5,
+    })
+
+    expect(result.isError).toBeFalsy()
+    const matches = JSON.parse(result.content[0]?.text ?? '[]') as unknown[]
+    expect(Array.isArray(matches)).toBe(true)
+  })
 })
