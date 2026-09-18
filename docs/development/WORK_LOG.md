@@ -72,7 +72,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### docs: reconcile OrbitScore (frozen extension) vs OrbitStudio (native app) prose (Sep 18, 2026)
 
-**Date**: 2026-09-18 / **ブランチ**: `948-orbitscore-orbitstudio-terminology` / **Issue**: #948
+**Date**: 2026-09-18 / **ブランチ**: `948-terminology-prose` / **Issue**: #948 / **PR**: [#952](https://github.com/signalcompose/orbitscore/pull/952)（merge `966fa7b`）
 
 2026-09-18 の呼称確定（OrbitScore = 拡張版・OrbitStudio = ネイティブ版）を受けて、それより前の
 散文が旧い意味（拡張版）のまま残っている箇所を洗い出した。`grep -rio orbitstudio` は 1,100 件超
@@ -80,11 +80,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 `docs/`（archive・design 除く）・`docs/design/`・`tests/`）に分けて並行で読み、1 行ずつ文脈判定
 した。**一括置換（sed 等）は使っていない。**
 
-**変換**: 34 ファイル・59 箇所を `OrbitStudio` → `OrbitScore` に更新（`docs/` 15・`sites/dev/` 9
-（ja/en 対）・`sites/user/` 4（ja/en 対）・`tests/` 3・`rust/crates/orbit-audio-daemon` 2・
-`README.md` 1・`vitest.config.ts` 1）。識別子（`orbitstudio-mcp-gated.spec.ts` /
+**変換**: 37 ファイル・54 箇所（`OrbitScore` へ 52・「VS Code」へ 2）。内訳は `docs/` 15
+（本ファイルを含む）・`sites/dev/` 11（ja/en 対）・`sites/user/` 4（ja/en 対）・`tests/` 3・
+`rust/crates/orbit-audio-daemon` 2・`README.md` 1・`vitest.config.ts` 1。
+識別子（`orbitstudio-mcp-gated.spec.ts` /
 `ORBIT_GATED_ORBITSTUDIO` / `launchIsolatedOrbitStudio` / `dev.orbitscore.OrbitStudio` 等）・
 ネイティブ版の計画/設計・`docs/archive/` は対象外のまま。
+
+🔴 **訂正（2026-09-18・docs 追従ルーチンがマージ済み差分を実測）**: 起草時の「34 ファイル・
+59 箇所」「`sites/dev/` 9」「ブランチ `948-orbitscore-orbitstudio-terminology`」はいずれも
+差分と一致していなかったので、上の行を実測値へ直した。数え方は `git diff 53873a9 8439d96`
+（= PR #952 の head `8439d96` と base `53873a9`）に対して:
+
+- ファイル数 = `git diff --name-only` の行数 **37**
+- 箇所数 = 本ファイルを除く 36 ファイルの `-` 行に現れる `OrbitStudio` **56 回**のうち、同じ行の
+  `+` 側に残った **3 回**を引いて **53**。これに本ファイルの見出し 1 箇所（`feat(plugin-ui):
+  float plugin windows above the editor while OrbitScore is frontmost` の #940 エントリ）を
+  足して **54**
+- うち 2 箇所は `OrbitScore` ではなく**「VS Code」**へ書き換わっている
+  （`sites/dev/editor/vscode-architecture.md:93` と `sites/dev/en/editor/vscode-architecture.md:93`。
+  下の owner 裁定の項を参照）
 
 以下は **意図的に変換しなかった**（いずれも「拡張版を指す散文」ではないため）:
 - `docs/development/POST_2.0_*`（12 ファイル）: Epic #292・2026-07 起案の計画文書群。
