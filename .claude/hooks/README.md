@@ -46,6 +46,28 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 `main` / `1-feature` に固定して `CLAUDE_PROJECT_DIR` で指すので、**どのブランチから走らせても**
 同じ判定を検査できる（本物の HEAD に依存させると feature ブランチと CI で空で緑になる）。
 
+🔴 **この spec から git を呼ぶときは `sanitizedGitEnv()` を必ず通す**（#951 / PR #956）。
+git はフックを起動するとき `GIT_DIR` などを子プロセスの環境変数として設定するので、
+husky 経由（`git commit` → `.husky/pre-commit` → `npm test` → vitest）だと vitest が
+それを継承し、`execFileSync` へ再継承する。**`cwd` を使い捨て repo に向けても `GIT_DIR` が
+優先される**ため、`git init` / `git config` の書き込み先がこのリポジトリの共有 `.git/config`
+にすり替わる。実際に `core.bare=true` が書き込まれて git 操作が一切できなくなった
+（`fatal: this operation must be run in a work tree`）。**`npx vitest run` の直接実行では
+再現しない** — その経路では git 自身がこれらの環境変数を設定しないため。
+
+除去対象は `tests/repo/pre-edit-hook.spec.ts:53-61` の `GIT_ENV_LEAK_KEYS`
+（`GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_OBJECT_DIRECTORY` /
+`GIT_ALTERNATE_OBJECT_DIRECTORIES` / `GIT_COMMON_DIR` / `GIT_PREFIX`）。
+`-c user.name=...` のような個別上書きでは足りない — `git init` 自体が `GIT_DIR` の影響で
+**対象リポジトリごと**すり替わるため。
+
+検出側の担保は `:181-188` の `describe('fixture はこのリポジトリの .git/config を汚染しない（#951）')`。
+fixture が git を呼ぶ**前**（モジュール読み込み時点・`:81`）に `git config --list --local` の
+スナップショットを取り、全 fixture 実行後に**丸ごと文字列比較**する。🔴 **キーを列挙して
+当てにいっていない** — #951 では `user.email` だけ見て「復元した」と報告した後に `core.bare`
+も壊れていたことが判明しており、汚染されるキーを予測すると一段手前で止まる。
+`GIT_ENV_LEAK_KEYS` の列挙が将来の git で漏れても、この全体比較が拾う。
+
 **重要**: このフックにより、ワークフロー違反（Issue・ブランチ作成前の実装開始）を**システムとして防止**
 
 ### 2. SessionStart Hook (`session-start.sh`) ⚠️ CRITICAL

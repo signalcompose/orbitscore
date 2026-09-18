@@ -17,9 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(hooks): follow PR #956 — record the GIT_* leak guard on the pre-edit-hook fixture (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr956` / **追従元**: PR [#956](https://github.com/signalcompose/orbitscore/pull/956)（マージコミット `0004d6b`）
+
+#956 は `tests/repo/pre-edit-hook.spec.ts` と `docs/development/WORK_LOG.md` の 2 ファイルのみ
+（+124 / -2）。**DSL・ランタイム / MCP・エディタのいずれの層にも表面の変更が無い**ため、
+`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `sites/user/` / `docs/user/ja/` /
+`sites/dev/` に追従対象は無い（分類理由は下表）。
+
+ただし **`.claude/hooks/README.md` が当該 spec を名指しで説明している**ので、そこだけ揃えた。
+
+#### 直したもの
+
+| ファイル | 変更 | 対応する差分 |
+|---|---|---|
+| `.claude/hooks/README.md:47-69` | `sanitizedGitEnv()` を通す義務・`GIT_ENV_LEAK_KEYS` の列挙・汚染検出 describe を追記 | `tests/repo/pre-edit-hook.spec.ts:53-61, 64-67, 71-81, 181-188` |
+| `docs/development/WORK_LOG.md:22` | #951 エントリの **ブランチ名を PR の head ref へ**（`worktree-agent-a3106dacd95436d4e` → `951-git-env-leak`）+ PR / merge SHA を追記 | PR #956 head `64255d4` / merge `0004d6b` |
+
+`.claude/hooks/README.md` の「**テスト**」段落は、使い捨て repo を 2 つ作る理由（本物の HEAD に
+依存させない）しか書いていなかった。#956 が足した制約 —「この spec から git を呼ぶときは
+env から `GIT_*` を落とす」— は fixture を次に触る人が**知らないと踏む**種類のもので、
+コード側のコメントにしか無い状態だった。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論に差分が無い（変更は `tests/` 配下のみ） |
+| `sites/user/` / `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語に変更が無い |
+| `sites/dev/`（全 9 章） | git フック / husky / テスト fixture を扱う章が無い（`grep -rn "husky\|pre-commit\|git hook\|\.git/config" sites/` が 0 件）。したがって `sites/dev/en/` 側の追記も発生しない |
+
+---
+
 ### fix(test): pre-edit-hook.spec.ts の fixture が共有 `.git/config` を汚染しないようにする (Sep 18, 2026)
 
-**Date**: 2026-09-18 / **ブランチ**: `worktree-agent-a3106dacd95436d4e` / **Issue**: [#951](https://github.com/signalcompose/orbitscore/issues/951)
+**Date**: 2026-09-18 / **ブランチ**: `951-git-env-leak`（作業は worktree `worktree-agent-a3106dacd95436d4e` 上） / **Issue**: [#951](https://github.com/signalcompose/orbitscore/issues/951) / **PR**: [#956](https://github.com/signalcompose/orbitscore/pull/956)（merge `0004d6b`）
 
 #### 実害
 
