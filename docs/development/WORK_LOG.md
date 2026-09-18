@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 4.2.1 (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `961-release-4.2.1` / **Issue**: #961
+
+#### なぜ patch か
+
+**利用者に届く挙動の変化は 1 つだけ**で、DSL の表面・wire・出力の意味論は変えていない。
+
+> 🔴 **cold install した `.vsix` で Docs パネルと user サイトの MCP ツールが使えるようになる**
+> （#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955)）
+
+4.2.0 までは**出荷物にサイトのデータが 1 バイトも入っていなかった**（`unzip -l` で実測・`sites/`
+のエントリが 0 件）。それなのにパス解決がモノレポ前提だったので、Marketplace / GitHub Release
+から入れた利用者には**機能そのものが届いていなかった**。`.vsix` は **+2.5 MB**（9,876,835 →
+12,385,004 bytes）。
+
+同時に入った開発側の修正（**出荷物には影響しない**）: `.git/config` 汚染バグ（#951 / PR #956）・
+呼称統一（#948）・`CHANGELOG.md` の 7 版分の遡及（#959）。
+
+#### 🔴 版の掃除 — 「番号を固定して形を仮定しない」を今回も守った
+
+過去 4 回連続で取りこぼしている（`README.md:55` / `docs/core/INDEX.md:5` / 強調記法を狙った
+grep など）。今回は **素の `4.2.0` で数え、更新後は「古い番号が 0 件になったこと」で検算**した。
+
+🔴 **道具も変えた**: `grep -rn` ではなく **`git grep`** を使う。worktree・`node_modules`・
+`.vitepress/dist` は**追跡対象外なので原理的に混ざらない**。本日 `grep -rn` の除外パターンを
+**4 回間違えた**（ベース不一致の 2 木比較 / 引き算の重複 / `grep -o` の出力に周辺文脈を期待 /
+`^./` の有無）末の結論で、**パスの形を仮定するより、対象集合が正しい道具を選ぶ**方が確実である。
+
+| | |
+|---|---|
+| 更新した箇所 | **19**（正本 `package.json` + 現在の版を名乗る 18 箇所 / 11 ファイル） |
+| 触っていない箇所 | 各 dev サイト章 `:9` の**追従履歴 Note** 6 件（「v4.2.0 のリリースまで追従しました」= 過去の記録）と `docs/archive/` と本ログ |
+| 検算 | 現在の版を名乗る箇所に `4.2.0` が **0 件** |
+
+#### CHANGELOG
+
+`[Unreleased]` を `[4.2.1] - 2026-09-18` へ。#955 の記述に加えて `get_user_doc` /
+`search_user_docs` の新設（Added）と、dev サイトを同梱しない方針（Changed）を足した。
+リンク参照も `[4.2.1]` を追加し `[Unreleased]` の compare 基点を移した。
+
+#### 検証
+
+```
+npm run docs:check                          → 996 citations verified, 0 failed, 54 files
+npm run docs:build -w @orbitscore/user-site → build complete（dead link 0）
+npm run docs:build -w @orbitscore/dev-site  → build complete（dead link 0）
+```
+
+マージ前ゲート（ビルド + cold install の実機）は PR で実施する。
+
+Closes #961
+
+---
+
 ### docs: backfill CHANGELOG.md for the 7 untracked releases v1.1.1-v4.2.0 (#959) (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `959-changelog-backfill` / **Issue**: [#959](https://github.com/signalcompose/orbitscore/issues/959)

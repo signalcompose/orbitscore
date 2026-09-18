@@ -12,7 +12,7 @@ status: draft
 
 # IV-1. VS Code Extension Architecture
 
-How does OrbitScore's VS Code extension (`packages/vscode-extension`, package version 4.2.0) start up, and how is it connected to the engine? This chapter reads its internal structure in order, from the extension's activation to the communication with the engine process. What changed most since the first draft in 2026-05 is "the engine-kind branch," "the extraction of the engine lifecycle into a vscode-free module," and "the growth of peripheral features such as the MCP server, the playhead, and the Engine view"; a list of the drift is collected at the end.
+How does OrbitScore's VS Code extension (`packages/vscode-extension`, package version 4.2.1) start up, and how is it connected to the engine? This chapter reads its internal structure in order, from the extension's activation to the communication with the engine process. What changed most since the first draft in 2026-05 is "the engine-kind branch," "the extraction of the engine lifecycle into a vscode-free module," and "the growth of peripheral features such as the MCP server, the playhead, and the Engine view"; a list of the drift is collected at the end.
 
 ---
 
@@ -1157,7 +1157,7 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 
 ## Sources
 
-- `packages/vscode-extension/package.json` — version 4.2.0, `activationEvents`, `contributes.commands` (15), `viewsContainers` / `views` / `viewsWelcome`, `walkthroughs`, `menus`, `keybindings`, `configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette`, etc.)
+- `packages/vscode-extension/package.json` — version 4.2.1, `activationEvents`, `contributes.commands` (15), `viewsContainers` / `views` / `viewsWelcome`, `walkthroughs`, `menus`, `keybindings`, `configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette`, etc.)
 - `packages/vscode-extension/package.json:34-43` — the `capabilities.untrustedWorkspaces` declaration (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — the 6 tests that inspect the declaration (including why `restrictedConfigurations` must not fall back to `?? []`)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — the shared helper for reading the manifest (`readExtensionManifest()` / `declaredConfigurationKeys()`)
