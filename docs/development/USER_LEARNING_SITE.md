@@ -186,7 +186,10 @@ dev サイト同様、advisor 単段で十分（user 向けは hallucination リ
   - URL 案: `signalcompose.github.io/orbitscore/`、`orbitscore.signalcompose.com`、`orbitscore.dev` 等
   - dev サイトの URL とは別パスを与えるか、user を default にして dev は `/dev` 配下に置くか、はデプロイ時に決定
 - **拡張への同梱（2026-09-18・#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955) で確定）**:
-  user サイトは **`.vsix` に入れる** — 読み手は利用者と LLM で、オフラインでも読めた方がいいという owner 判断
+  user サイトは **`.vsix` に入れる** — **オフラインでも読めた方がいい**という owner 判断（2026-09-18）。
+  これは DSL の使い方を書いた文書で、**手元にソースが無くても単独で読める**（dev サイトのように
+  引用でコードに接地していない）。読むのは利用者と、DSL を書く LLM の両方
+  （`DESIGN_PRINCIPLES.md` の LLM-first 方針）。
   （dev サイトは逆に入れない。[DEV_LEARNING_SITE.md](./DEV_LEARNING_SITE.md) §6）
   - `npm run build:copy-user-site`（`package.json:18`）= VitePress の build → `scripts/copy-user-site.sh`。
     **Markdown（`*.md`・`.vitepress/` を除く）と build 済み dist の両方**を

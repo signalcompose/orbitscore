@@ -219,7 +219,15 @@ cross-LLM-family audit に格上げする選択肢は post-ICMC で検討:
 
 🔴 **同梱しないことが確定した（2026-09-18・#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955)）。**
 上の「ローカル配信」のうち、**dev サイトを `.vsix` に入れる経路は取らない**（owner 裁定）。
-読み手は owner であり、読むときは必ず monorepo にいるため、27 MB を配る意味が薄いという理由である。
+
+理由は**この文書の性質**にある。dev サイトは**実装を読むためのノート**であり、
+読むときには対象のソースが手元にある（monorepo checkout）ことが前提になっている
+（引用が `// FILE:START-END` でコードに接地しており、`docs:check` がそれを検証している）。
+`.vsix` だけを cold install した環境にはそのソースが無いので、**サイトだけあっても
+引用先を確かめられない**。加えて dev サイトの dist は **27 MB** ある
+（`assets/` 14 MB — 全文検索インデックス 2.3 MB・Mermaid のグラフ描画 1.0 MB、
+`en/` 4.7 MB、KaTeX フォント 1.2 MB）。公開版は GitHub Pages にあるので、
+オンラインで読む経路は失われない。
 
 | 経路 | dev サイト |
 |---|---|
