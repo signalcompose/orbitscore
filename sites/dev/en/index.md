@@ -1,14 +1,14 @@
 ---
-title: "OrbitScore Dev — Personal Learning Notes"
+title: "OrbitScore Dev — Implementation Reading Notes"
 chapter-id: index
 status: stable
 ---
 
-# OrbitScore Dev — Personal Learning Notes
+# OrbitScore Dev — Implementation Reading Notes
 
-> **Note**: This site is not "documentation" but rather **a trace of the author's (yamato) reading of the OrbitScore implementation**. The code is the truth; this site is merely a snapshot of understanding at that point in time.
+> **Note**: This site is not "documentation" but rather **a record of reading the OrbitScore implementation**. The code is the truth; this site is merely a snapshot of understanding at that point in time.
 
-Given that we currently use an LLM (Claude Code, etc.) as the primary implementer, there is a structural deficit on the author's side: **understanding of the implementation layer does not accumulate**. This site exists to compensate for that, built and maintained through a loop of generating explanations from the code → auditing with another LLM → the author reading and editing.
+Given that we currently use an LLM (Claude Code, etc.) as the primary implementer, there is a structural deficit: **understanding of the implementation layer does not accumulate on the human side**. This site exists to compensate for that, built and maintained through a loop of generating explanations from the code → auditing with another LLM → a human reading and editing.
 
 For details, see [`docs/development/DEV_LEARNING_SITE.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/DEV_LEARNING_SITE.md) (project brief).
 
@@ -44,8 +44,8 @@ The `status` in each chapter's frontmatter indicates the writing stage:
 | status | meaning |
 |---|---|
 | `stub` | skeleton only, body not yet written |
-| `draft` | initial draft by writing agent (may be advisor-audited, not yet read by yamato) |
-| `reviewed` | passed advisor audit + yamato has read it |
+| `draft` | initial draft by writing agent (may be advisor-audited, not yet read by a human) |
+| `reviewed` | passed advisor audit + read by a human |
 | `stable` | long-term stable, re-verified against code |
 
 ## Glossary

@@ -153,6 +153,12 @@ dev 学習サイト本体（VitePress、日英バイリンガル）。`main` の
 | [`sites/dev/scripts/check-citations.mjs`](../../sites/dev/scripts/check-citations.mjs) | 引用 (`// file:start-end`) を code と文字単位で突合する機械検証（`npm run docs:check`） |
 | [`sites/dev/.plan/refresh-2026-07.md`](../../sites/dev/.plan/refresh-2026-07.md) | 2026-07 リフレッシュ計画と 2026-09 の到達状況 |
 
+🔴 **dev サイトは `.vsix` に同梱しない**（#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955)・owner 裁定 2026-09-18）。
+候補は monorepo checkout ただ 1 つで（`resolveDevDocsLocation`・`packages/vscode-extension/src/mcp-docs.ts:81-88`）、
+cold install した拡張では `available: false` になる。そこでの `get_dev_doc` / `search_dev_docs` と
+`/orbitscore/dev` の 503 body は、黙って「見つからない」ではなく公開 URL を案内する固定文言
+（`DEV_DOCS_UNAVAILABLE_MESSAGE`・`packages/vscode-extension/src/mcp-docs.ts:46-48`）を返す。
+
 ### User Learning Site (`sites/user/`)
 
 user 向け学習サイト本体（VitePress、日英）。同 workflow で https://signalcompose.github.io/orbitscore/ へ deploy:
@@ -161,6 +167,16 @@ user 向け学習サイト本体（VitePress、日英）。同 workflow で http
 |---|---|
 | [`sites/user/`](../../sites/user/) | user 学習サイト（getting-started / basics / midi / plugins / mixing / projects / reference / troubleshooting） |
 | [`sites/user/STYLE_GUIDE.md`](../../sites/user/STYLE_GUIDE.md) | 章執筆規約 (ですます調、子供扱いしない、コードのみ) |
+| [`scripts/copy-user-site.sh`](../../scripts/copy-user-site.sh) | user サイトを `.vsix` へ同梱するコピー（`npm run build:copy-user-site`。dist が無ければ失敗する = best-effort ではない） |
+
+加えて **`.vsix` に同梱される**（#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955)）。
+`npm run build:copy-user-site`（`package.json:18`）が VitePress を build してから
+`scripts/copy-user-site.sh` を呼び、**Markdown と build 済み dist の両方**を
+`packages/vscode-extension/sites/user/` へ置く（`scripts/copy-user-site.sh:39,58,66`。
+コピー先は `engine/` と同じくビルド生成物なので `.gitignore` 済み）。
+cold install した拡張では Docs パネル（`/orbitscore`）と MCP の `get_user_doc` / `search_user_docs` が
+この同梱コピーを読む。monorepo checkout があるときは常にそちらが優先される
+（`resolveUserDocsLocation`・`packages/vscode-extension/src/mcp-docs.ts:106-123`）。
 
 ### Archived WORK_LOG (`docs/archive/`)
 

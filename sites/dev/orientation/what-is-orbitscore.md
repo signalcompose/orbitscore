@@ -4,7 +4,7 @@ chapter-id: "0-1"
 status: stub
 ---
 
-> **Note**: 本ページは執筆中です。当面は [Glossary](/glossary) と [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) を参照してください。 完成版は yamato 自身が DSL 設計者として執筆予定 (Epic [#166](https://github.com/signalcompose/orbitscore/issues/166))。
+> **Note**: 本ページは執筆中です。当面は [Glossary](/glossary) と [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) を参照してください。 完成版は DSL 設計者が執筆予定 (Epic [#166](https://github.com/signalcompose/orbitscore/issues/166))。
 
 OrbitScore の DSL 設計哲学、論文との関係、なぜ作ったか (動機・問題提起)。
 
