@@ -17,6 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #955 — the two learning sites now differ in how they ship (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr955` / **追従元**: PR [#955](https://github.com/signalcompose/orbitscore/pull/955)（マージコミット `3899456`・Issue [#954](https://github.com/signalcompose/orbitscore/issues/954)）
+
+#955 は「`.vsix` にサイトのデータが 1 バイトも入っていない」を直した PR で、同時に
+**2 つの学習サイトの配り方が初めて分かれた**（user = 同梱する / dev = 同梱しない）。
+この決定は owner 裁定（2026-09-18）で、コード側にはコメントとして残っているが、
+**サイトの運用を語る文書側には 1 行も入っていなかった**ので入れた。
+
+#### 直したもの
+
+| ファイル | 変更 |
+|---|---|
+| `docs/core/INDEX.md` Dev Learning Site 節 | dev サイトは `.vsix` に同梱しない旨と、cold install での `get_dev_doc` / `search_dev_docs` / 503 の挙動（`DEV_DOCS_UNAVAILABLE_MESSAGE`）を追記 |
+| `docs/core/INDEX.md` User Learning Site 節 | user サイトは Markdown + dist の両方が同梱される旨、`scripts/copy-user-site.sh` の行、monorepo 優先の解決順を追記 |
+| `docs/development/DEV_LEARNING_SITE.md` §6 | 2026-07-17 の「ローカル配信を 2 経路予定」に対し、**dev を同梱する経路は取らない**ことが確定した旨を表付きで追記 |
+| `docs/development/USER_LEARNING_SITE.md` §6 | 「拡張への同梱」を Deployment の項目として追加（呼び出し元・package 後ゲート・best-effort でない理由・cold install 後の読み口） |
+
+#### 直さなかったもの
+
+- **`sites/dev/editor/mcp-and-gated-e2e.md:188`（および en 同行）の MCP ツール表** — ドキュメント系を
+  `get_dev_doc` / `search_dev_docs` の 2 本として載せており、#955 で 4 本になった事実に追いついていない。
+  ただし **OrbitScore（拡張版）は 4.2.0 で機能凍結**（owner 裁定 2026-09-18）で、editor 章は
+  その時点のスナップショットとして扱う運用なので**意図的に触っていない**
+- **`docs/design/*`** — 起案時点のスナップショット。`887-extension-split-design.md:395` のツール番号表などは
+  そのまま
+- **`sites/user/` / `docs/user/`** — DSL の語は 1 つも変わっていない。Docs パネルはそもそも
+  ユーザー向け文書に登場しないので、陳腐化した記述が無い
+
+#### 検証
+
+`npm ci` / `npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` / `npm run docs:check`
+（出力は PR 本文）。sites/ に変更が無いため引用（`// FILE:START-END`）の再アンカーは発生していない。
+
+---
+
 ### fix(docs): bundle the end-user docs site into the .vsix so it survives a cold install (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `954-vsix-docs-bundling` / **Issue**: [#954](https://github.com/signalcompose/orbitscore/issues/954)

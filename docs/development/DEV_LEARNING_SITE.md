@@ -217,6 +217,23 @@ cross-LLM-family audit に格上げする選択肢は post-ICMC で検討:
 - **開発時**: local-only (`npm run docs:dev -w @orbitscore/dev-site` で hot reload)。飛行機内などのオフライン作業もこれで足りる
 - **ローカル配信（追加経路・(2026-07-17 owner 指示)）**: MCP サーバ `/docs/`（[#450](https://github.com/signalcompose/orbitscore/issues/450)）経由・OrbitScore からのワンクリック起動の 2 経路を予定。GitHub Pages 版と並存し、オフライン/エージェント駆動での参照を担う
 
+🔴 **同梱しないことが確定した（2026-09-18・#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955)）。**
+上の「ローカル配信」のうち、**dev サイトを `.vsix` に入れる経路は取らない**（owner 裁定）。
+読み手は owner であり、読むときは必ず monorepo にいるため、27 MB を配る意味が薄いという理由である。
+
+| 経路 | dev サイト |
+|---|---|
+| GitHub Pages | ✅ https://signalcompose.github.io/orbitscore/dev/ |
+| monorepo checkout（`npm run docs:dev` / MCP の `get_dev_doc` / `search_dev_docs`） | ✅ |
+| **cold install した `.vsix` の中** | ❌ **入らない** |
+
+したがって `resolveDevDocsLocation` の候補は monorepo 1 本しかなく、`available: false` は
+「たまたま見つからない」ではなく「そもそも同梱されていない」を意味する
+（`packages/vscode-extension/src/mcp-docs.ts:81-88`）。その状態では `get_dev_doc` /
+`search_dev_docs` と `/orbitscore/dev` の 503 body が、黙って null を返すのをやめて
+公開 URL を案内する（`DEV_DOCS_UNAVAILABLE_MESSAGE`・同 `:46-48`）。
+**同梱するのは user サイトのみ**（[USER_LEARNING_SITE.md](./USER_LEARNING_SITE.md) §6）。
+
 ---
 
 ## 7. 決定済み / 未決事項
