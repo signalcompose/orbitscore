@@ -17,6 +17,65 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(test): pre-edit-hook.spec.ts の fixture が共有 `.git/config` を汚染しないようにする (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `worktree-agent-a3106dacd95436d4e` / **Issue**: [#951](https://github.com/signalcompose/orbitscore/issues/951)
+
+#### 実害
+
+husky の `pre-commit` → `npm test` → vitest → `tests/repo/pre-edit-hook.spec.ts` という経路で、
+このリポジトリの**共有 `.git/config`** の `user.name` / `user.email` / `core.bare` が書き換わった。
+`core.bare=true` になると **git 操作が一切できなくなる**（`fatal: this operation must be run in
+a work tree`）。手で復旧したが、次に踏めば再発する状態だった。
+
+#### 原因
+
+`makeRepo()` が使い捨てリポジトリを作るための `git init` / `git config` / `git commit` を、
+**env を明示せず**（= `process.env` をそのまま継承して）呼んでいた。git はフックを起動する際
+`GIT_DIR` 等を子プロセスの環境変数として設定するため、husky 経由の実行では vitest プロセスが
+それを継承し、そのまま子プロセスへ再継承される。`cwd` を使い捨てリポジトリに向けていても
+`GIT_DIR` が優先されるため、**書き込み先がこのリポジトリの共有 `.git`（worktree 構成では
+common dir）にすり替わる**。`npx vitest run tests/repo/pre-edit-hook.spec.ts` を直接叩くだけ
+では git 自身がこれらの環境変数を設定しないため再現しない。
+
+#### 直したこと
+
+`tests/repo/pre-edit-hook.spec.ts` に `sanitizedGitEnv()` を追加し、ファイル内で git / フック
+スクリプトを呼ぶすべての箇所（`makeRepo()` 内の `git()` ヘルパ、前提テストの `head()`、
+`decide()`）に明示的に渡すようにした。除去対象は `GIT_DIR` / `GIT_WORK_TREE` /
+`GIT_INDEX_FILE` / `GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` /
+`GIT_COMMON_DIR` / `GIT_PREFIX`。個別キーの `-c user.name=...` 上書きではなく env 側を洗う
+方向を選んだ — `git init` 自体が `GIT_DIR` の影響で書き込み先を変えてしまうため、
+`-c` では `git init` の対象リポジトリのすり替わりまでは防げない。
+
+#### 汚染検出テストを追加（受け入れ基準）
+
+同ファイルに `describe('fixture はこのリポジトリの .git/config を汚染しない（#951）')` を追加。
+fixture（`makeRepo`）が git を呼ぶ**前**に `git config --list --local`（このリポジトリの
+ローカル分）のスナップショットを取り、全 fixture 実行後に再度読んで**丸ごと文字列比較**する。
+個別キーを列挙して当てにいく形は取らなかった — #951 のコメントで「最初 `user.email` だけ見て
+『復元した』と報告した後、`core.bare` も壊れていたことが判明した」実例があり、同じ轍を踏む。
+
+#### 検証
+
+- `npx vitest run tests/repo/pre-edit-hook.spec.ts --config vitest.config.ts` で 7 件全て green
+  （既存 6 件 + 新規汚染検出 1 件）。実行前後で `git config --list --local` を手動比較し、
+  差分が無いことを確認（`core.bare=false` / `user.email=yamato@gmail.com` /
+  `user.name=Hiroshi Yamato` のまま）
+- 🔴 **上記は直接実行であり、Issue が指摘する再現条件（husky 経由）を満たさない。** この
+  コミット自体が `.husky/pre-commit` → `npm test`（フル suite・このファイルを含む）を通るため、
+  **このコミットが成立すること自体が husky 経由の検証**になる。コミット後、
+  `git config --list --local` を再確認して問題ないことを見た
+
+#### 判断に迷った点
+
+- 汚染検出テストを既存の `pre-edit-hook.spec.ts` に同居させるか、別ファイルに切り出すか。
+  汚染源が `makeRepo()` というこのファイル固有の fixture なので、検出も同じファイルに置いた
+  （汚染源と検出が離れると、将来 fixture を変更した人が検出テストの存在に気づきにくくなる）
+- `GIT_ENV_LEAK_KEYS` の網羅性: git のドキュメントに載っている「リポジトリ発見・上書き系」の
+  環境変数を挙げたが、将来 git が新しい環境変数を追加した場合はこの列挙から漏れうる。
+  そのための保険として汚染検出テスト（全体比較）を独立に置いている
+
 ### docs(index): follow PR #947 — the archive period label stayed at 09-12 (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr947` / **追従元**: PR [#947](https://github.com/signalcompose/orbitscore/pull/947)（マージコミット `b89ce0e`）

@@ -30,11 +30,61 @@ const HOOK = path.join(REPO_ROOT, '.claude/hooks/pre-edit-check.sh')
 
 type Decision = 'allow' | 'deny' | 'other'
 
+/**
+ * git がフック実行時に子プロセスへ渡す環境変数（#951）。
+ *
+ * husky の `pre-commit` から `npm test` → vitest → このファイルが呼ばれる経路では、
+ * git 自身がこれらを親プロセス（node）の環境に設定している。このファイルが
+ * `execFileSync('git', ...)` を **env を明示せず**に呼ぶと、そのまま子プロセスへ継承され、
+ * `cwd` で使い捨て repo を指定していても **`GIT_DIR` が優先されてこのリポジトリの
+ * 共有 `.git`（worktree 構成では common dir の `config`）が対象になる**。
+ *
+ * 実際に踏んだ被害（#951）: `git init` が `GIT_DIR` 経由で共有 `.git` を再初期化し
+ * `core.bare=true` を書き込み、続く `git config user.name/user.email` が
+ * `test`/`test@example.com` を共有 `config` に上書きした。`git rev-parse --show-toplevel` の
+ * 直接実行では再現しない（そちらは git 自身が呼ぶのではなく手で叩くだけなので、この
+ * 継承経路を通らない）。
+ *
+ * 🔴 個別キーを予測して列挙で足りるとは限らない（#951 コメント: 最初 `user.email` だけ見て
+ * 「復元した」と報告した後、`core.bare` も壊れていたことが判明した）。ここでの unset は
+ * 「書き込みそのものを afflicted リポジトリへ向けさせない」防御であり、下の
+ * `readLocalGitConfig` による全体比較が検出側の担保になる。
+ */
+const GIT_ENV_LEAK_KEYS = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_PREFIX',
+] as const
+
+/** git / このフックを呼ぶための env: 漏れうる GIT_* を除去してから extra を重ねる。 */
+function sanitizedGitEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  for (const key of GIT_ENV_LEAK_KEYS) delete env[key]
+  return { ...env, ...extra }
+}
+
+/** このリポジトリ（REPO_ROOT）の `.git/config`（ローカル分）をそのまま読む。汚染検出用。 */
+function readLocalGitConfig(): string {
+  return execFileSync('git', ['config', '--list', '--local'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: sanitizedGitEnv(),
+  })
+}
+
+// 🔴 fixture（下の makeRepo）が git を呼ぶ**前**に取る。モジュール読み込み時点で
+// makeRepo が実行されるため、これより後ろに置くと「前」の状態を取り損なう。
+const gitConfigBeforeFixtures = readLocalGitConfig()
+
 /** HEAD が `branch` の使い捨て repo を作る（`rev-parse HEAD` には 1 コミット要る）。 */
 function makeRepo(branch: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orb-hook-'))
   const git = (...args: string[]): void => {
-    execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
+    execFileSync('git', args, { cwd: dir, stdio: 'ignore', env: sanitizedGitEnv() })
   }
   git('init', '-b', branch)
   git('config', 'user.email', 'test@example.com')
@@ -59,7 +109,7 @@ function decide(projectDir: string, filePath: string | undefined): Decision {
   )
   const out = execFileSync('bash', [HOOK], {
     cwd: projectDir,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: sanitizedGitEnv({ CLAUDE_PROJECT_DIR: projectDir }),
     input: payload,
     encoding: 'utf8',
   })
@@ -75,6 +125,7 @@ describe('pre-edit-check.sh の判定（#913）', () => {
       execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
         cwd: dir,
         encoding: 'utf8',
+        env: sanitizedGitEnv(),
       }).trim()
     expect(head(MAIN_REPO)).toBe('main')
     expect(head(FEATURE_REPO)).toBe('1-feature')
@@ -124,5 +175,15 @@ describe('pre-edit-check.sh の判定（#913）', () => {
 
   it('feature ブランチでは repo 配下も allow', () => {
     expect(decide(FEATURE_REPO, `${FEATURE_REPO}/packages/engine/src/core/global.ts`)).toBe('allow')
+  })
+})
+
+describe('fixture はこのリポジトリの .git/config を汚染しない（#951）', () => {
+  // 🔴 キーを予測して当てにいかない（`user.email` だけ見て「復元した」と報告した後、
+  // `core.bare` も壊れていたことが判明した実例が #951 コメントにある）。
+  // `git config --list --local` の全体を fixture 実行前後で比較し、1文字でも
+  // 変化していたら red にする。
+  it('makeRepo() 前後で `git config --list --local` が一致する', () => {
+    expect(readLocalGitConfig()).toBe(gitConfigBeforeFixtures)
   })
 })
