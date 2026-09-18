@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 語 | 指すもの |
 |---|---|
-| **OrbitScore** | **VS Code 拡張版**（機能凍結・現 4.2.0）。`packages/vscode-extension/`。DSL とリポジトリの名前でもある |
+| **OrbitScore** | **VS Code 拡張版**（機能凍結・現 4.2.1）。`packages/vscode-extension/`。DSL とリポジトリの名前でもある |
 | **OrbitStudio** | **macOS ネイティブ版アプリ**（これから作る・未着手）。`docs/planning/NATIVE_MIGRATION_2026-09.md` §12 |
 
 🔴 **2026-09-18 より前の記述では「OrbitStudio」が拡張版を指している。** 呼称が移動したので、
@@ -190,7 +190,7 @@ git branch --show-current
 
 ### Project Overview
 **OrbitScore** - Audio-based live coding DSL for modern music production
-- Product: 拡張 **4.2.0**（`.vsix` と git タグが担う版・正本は `packages/vscode-extension/package.json`）。
+- Product: 拡張 **4.2.1**（`.vsix` と git タグが担う版・正本は `packages/vscode-extension/package.json`）。
   `ENGINE_VERSION 2.0.0`（セッションログの meta ヘッダ）と `DSL_VERSION 2.0`（spec 版）は
   **別軸で同期しない**（`docs/design/656-release-design.md` §4.4）
 - Audio Backend: Rust `orbit-audio-daemon`（唯一のバックエンド。cutover #108 で既定化・SuperCollider opt-out 経路は #502 で削除）

@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-09-18
+
+利用者に届く変化は **cold install した `.vsix` でドキュメントが読めるようになったこと** 1 点。DSL・wire・出力の意味論は変更なし。
+
 ### Fixed
 
-- **エンドユーザー向け学習サイト (`sites/user/`) が `.vsix` に同梱されておらず、cold install した利用者が Docs パネル / `get_dev_doc` を使えなかった** ([`#955`](https://github.com/signalcompose/orbitscore/pull/955))
-  - `mcp-server.ts` のパス解決がモノレポのルートを決め打ちしており、出荷 `.vsix` の中には対応するパスが存在しなかった
-  - モノレポ / 同梱バンドルの両方を候補にするパス解決 (`resolveUserDocsLocation`) に変更し、ビルド時に `sites/user/` を `.vsix` へコピーするようにした
-  - dev サイト (`sites/dev/`) は同梱せず GitHub Pages へ誘導する方針は維持
+- 🔴 **エンドユーザー向け学習サイト (`sites/user/`) が `.vsix` に同梱されておらず、cold install した利用者が Docs パネルを開けなかった** ([`#954`](https://github.com/signalcompose/orbitscore/issues/954) / [`#955`](https://github.com/signalcompose/orbitscore/pull/955))
+  - 出荷済み 4.2.0 の `.vsix` を展開したところ `sites/` のエントリが **0 件**だった。それにもかかわらず `mcp-server.ts` のパス解決がモノレポのルートを決め打ちしていたため、Marketplace / GitHub Release から入れた利用者には機能そのものが届いていなかった
+  - モノレポ / 同梱バンドルの両方を候補にするパス解決 (`resolveUserDocsLocation`) へ変更。モノレポを先に見るので、開発時の挙動は変わらない
+  - ビルド時に `sites/user/` の Markdown と built dist を `.vsix` へコピーする (`scripts/copy-user-site.sh`)。**`.vsix` は +2.5 MB**
+  - この経路の実機 E2E が 1 本も無かったため、cold install した `.vsix` に対する同梱チェックを追加した
+
+### Added
+
+- **`get_user_doc` / `search_user_docs`** — LLM が DSL の使い方（user サイト）を読む MCP ツール ([`#954`](https://github.com/signalcompose/orbitscore/issues/954))
+  - これまで docs 系の MCP ツールは `get_dev_doc`（実装読解ノート）だけで、**利用者と LLM が使う側のサイトに入口が無かった**
+
+### Changed
+
+- dev サイト (`sites/dev/`) は **`.vsix` に同梱しない**方針を明文化した。実装読解ノートは引用でコードに接地しており、ソースが手元に無いと引用先を確かめられないため。cold install では黙って null を返すのをやめ、公開 URL (https://signalcompose.github.io/orbitscore/dev/) を案内する
 
 ## [4.2.0] - 2026-09-14
 
@@ -172,7 +186,8 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
 - ローカル / オフライン閲覧手順を README に追記
 - README に学習サイト (web) セクションを追加
 
-[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.2.0...HEAD
+[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.2.1...HEAD
+[4.2.1]: https://github.com/signalcompose/orbitscore/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/signalcompose/orbitscore/compare/v4.1.0...v4.2.0
 [4.1.0]: https://github.com/signalcompose/orbitscore/compare/v4.0.1...v4.1.0
 [4.0.1]: https://github.com/signalcompose/orbitscore/compare/v4.0.0...v4.0.1
