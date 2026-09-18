@@ -6,9 +6,9 @@ status: stable
 
 # OrbitScore Dev — 技術解説ラーニング
 
-> **Note**: 本サイトは「ドキュメント」ではなく **OrbitScore 実装に関する著者 (yamato) の reading の足跡** です。code が真実、本サイトはその時点の理解の snapshot に過ぎません。
+> **Note**: 本サイトは「ドキュメント」ではなく **OrbitScore の実装を読んだ記録** です。code が真実、本サイトはその時点の理解の snapshot に過ぎません。
 
-LLM (Claude Code 等) を主要な実装担当として運用している現状、著者側に **実装レイヤーの理解が蓄積しない** という構造的欠落がある。本サイトはそれを補うため、code から explanation を生成 → 別 LLM で audit → 著者が読んで編集する loop で構築・維持される。
+LLM (Claude Code 等) を主要な実装担当として運用している現状、**実装レイヤーの理解が人間側に蓄積しない** という構造的欠落がある。本サイトはそれを補うため、code から explanation を生成 → 別 LLM で audit → 人間が読んで編集する loop で構築・維持される。
 
 詳細は [`docs/development/DEV_LEARNING_SITE.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/DEV_LEARNING_SITE.md) (project brief) 参照。
 
@@ -42,8 +42,8 @@ code と文字単位で突き合わせています（`npm run docs:check`）。�
 | status | 意味 |
 |---|---|
 | `stub` | 骨格のみ、本文未執筆 |
-| `draft` | writing agent による初稿 (advisor audit 済の場合あり、yamato 読了は未) |
-| `reviewed` | advisor audit 通過 + yamato 読了 |
+| `draft` | writing agent による初稿 (advisor audit 済の場合あり、人間の読了は未) |
+| `reviewed` | advisor audit 通過 + 人間が読了 |
 | `stable` | 長期 stable、再度 code 突合済 |
 
 ## 用語

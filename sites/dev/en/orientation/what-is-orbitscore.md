@@ -4,7 +4,7 @@ chapter-id: "0-1"
 status: stub
 ---
 
-> **Note**: This page is a work in progress. For now, please refer to the [Glossary](/en/glossary) and [ADR-002 DSL v3 Pivot](/en/decisions/adr-002-dsl-v3-pivot). The full version is planned to be written by yamato as the DSL designer (Epic [#166](https://github.com/signalcompose/orbitscore/issues/166)).
+> **Note**: This page is a work in progress. For now, please refer to the [Glossary](/en/glossary) and [ADR-002 DSL v3 Pivot](/en/decisions/adr-002-dsl-v3-pivot). The full version is planned to be written by the DSL designer (Epic [#166](https://github.com/signalcompose/orbitscore/issues/166)).
 
 The DSL design philosophy of OrbitScore, its relationship to the paper, and why it was created (motivation and problem statement).
 

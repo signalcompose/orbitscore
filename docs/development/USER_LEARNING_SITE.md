@@ -185,6 +185,23 @@ dev サイト同様、advisor 単段で十分（user 向けは hallucination リ
   - 候補: GitHub Pages、Vercel、カスタムドメイン
   - URL 案: `signalcompose.github.io/orbitscore/`、`orbitscore.signalcompose.com`、`orbitscore.dev` 等
   - dev サイトの URL とは別パスを与えるか、user を default にして dev は `/dev` 配下に置くか、はデプロイ時に決定
+- **拡張への同梱（2026-09-18・#954 / PR [#955](https://github.com/signalcompose/orbitscore/pull/955) で確定）**:
+  user サイトは **`.vsix` に入れる** — **オフラインでも読めた方がいい**という owner 判断（2026-09-18）。
+  これは DSL の使い方を書いた文書で、**手元にソースが無くても単独で読める**（dev サイトのように
+  引用でコードに接地していない）。読むのは利用者と、DSL を書く LLM の両方
+  （`DESIGN_PRINCIPLES.md` の LLM-first 方針）。
+  （dev サイトは逆に入れない。[DEV_LEARNING_SITE.md](./DEV_LEARNING_SITE.md) §6）
+  - `npm run build:copy-user-site`（`package.json:18`）= VitePress の build → `scripts/copy-user-site.sh`。
+    **Markdown（`*.md`・`.vitepress/` を除く）と build 済み dist の両方**を
+    `packages/vscode-extension/sites/user/` へコピーする（`scripts/copy-user-site.sh:58,66`）
+  - 🔴 このコピーは **best-effort ではない**。dist が無ければ `exit 1` で落ちる
+    （`scripts/copy-user-site.sh:42-45`）。部分的・古いサイトを焼いた `.vsix` は
+    「ビルドは緑なのに利用者の手元だけ壊れている」という #954 そのものの形になるため
+  - 呼び出し元は `pretest:e2e:cold-install`（`package.json:22`）と
+    `.github/workflows/release.yml:119`。package 後のゲートが `sites/user/index.md` と
+    `sites/user/.vitepress/dist/index.html` の実在を確かめる（同 `:223-231`）
+  - cold install 後の読み口は Docs パネル（`/orbitscore`）と、#954 で新設した MCP の
+    `get_user_doc` / `search_user_docs`（`packages/vscode-extension/src/mcp-tools-editor.ts:314,323`）
 
 ---
 
