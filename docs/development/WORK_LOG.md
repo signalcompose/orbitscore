@@ -17,6 +17,69 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(docs): bundle the end-user docs site into the .vsix so it survives a cold install (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `954-vsix-docs-bundling` / **Issue**: [#954](https://github.com/signalcompose/orbitscore/issues/954)
+
+出荷済みの `.vsix` にサイトのデータが 1 バイトも入っていなかった（`unzip -l *.vsix | grep -c 'sites/'` が 0）。
+Docs パネル（WebView）と `get_dev_doc` は cold install で死んでいた。原因は
+`mcp-server.ts` の `__dirname/../../..` がモノレポのルート決め打ちだったこと
+（インストール済み拡張にはそのパスが存在しない）。
+
+#### 実装した 4 点（owner 裁定どおり）
+
+1. **パス解決を候補リスト化**（`mcp-docs.ts` に `resolveDevDocsLocation` /
+   `resolveUserDocsLocation` を追加）。daemon バイナリの解決
+   （`daemon-client.ts` の `resolveDaemonBinaryPath`: explicit → env → monorepo → 拡張同梱）と
+   同じ「候補を順に existsSync、最初に見つかったものを使う」流儀。**順序はモノレポを先に見る**
+   （daemon と同じ順）— こうすると **モノレポ dev host の挙動は一切変わらない**
+   （モノレポ候補が常に先に見つかる）。dev サイトは owner 裁定により**同梱しない**ので
+   候補は 1 本のみ（`available` で存在有無を返す）
+2. **user サイト（Markdown 45 ファイル + built dist）を `.vsix` に同梱**。
+   `scripts/copy-user-site.sh` を新設（`copy-daemon-bin.sh` と同じ形: ビルド→コピー、
+   `npm run build:copy-user-site` として root package.json に配線、
+   `pretest:e2e:cold-install` と `release.yml` の両方から呼ぶ）。コピー先
+   `packages/vscode-extension/sites/user/` は `.gitignore` へ追加（`engine/` と同じ扱い —
+   ビルド成果物であり手で編集しない）
+3. **dev 側の「黙って null」をやめる**。`DEV_DOCS_UNAVAILABLE_MESSAGE` を新設し、
+   HTTP 503 の body と `get_dev_doc`/`search_dev_docs` のエラーメッセージの両方に使う
+   （公開 URL `https://signalcompose.github.io/orbitscore/dev/` を含む）
+4. **`get_user_doc` / `search_user_docs` を新設**（`get_dev_doc`/`search_dev_docs` と同じ形）。
+   これで MCP 経由で LLM が user サイト（DSL の使い方）を読む経路ができた
+
+#### 検証
+
+- ユニット/統合テスト: `resolveDevDocsLocation` / `resolveUserDocsLocation` の純粋関数テスト、
+  HTTP 経由の `get_user_doc`/`search_user_docs` ラウンドトリップ、`tools/list` の順序テスト
+  （23→28 本へ更新）を追加。`npm test` 全件 2588 passed / 79 skipped（既存含め regression 無し）
+- `npm run typecheck:e2e` / `npx eslint` とも green
+- **実際に `.vsix` をビルドして実測**（このセッションの sandbox 内・`npm run build` は成功した
+  — 事前の懸念だった `safe-chain` の EPERM は発生しなかった）:
+  `unzip -l orbitscore-darwin-arm64-4.2.0.vsix | grep -c 'sites/'` = **247**（旧: 0）、
+  `sites/dev` = **0**（意図どおり同梱していない）、`sites/user/index.md` と
+  `sites/user/.vitepress/dist/index.html` の両方が存在。`.vsix` サイズ増分は実測 **+7.08 MB**
+  （`vsce package` の内訳表示 `sites/ (247 files) [7.08 MB]`）
+- パッケージ済み `.vsix` を展開し、`__dirname` を実際のインストール先レイアウトに見立てて
+  `resolveDevDocsLocation`/`resolveUserDocsLocation` を直接叩いて確認:
+  `dev.available=false`・`user.source='extension-bundle'`・`get_user_doc` 相当の読み出しが
+  実際に本文を返すことを確認した
+- 🔴 **VS Code を実際に cold install して起動する E2E（`tests/e2e/vsix-cold-install-gated.spec.ts`）は
+  この worktree では走らせていない**（`ORBIT_GATED_COLD_INSTALL` 未設定でスキップ・実機検証は
+  main が sandbox 外で行う）。同 spec に `assertDocsBundled`（`get_user_doc` 成功・`get_dev_doc` が
+  理由付きエラー・`/orbitscore/` が 200）を追加済みなので、次の cold-install ゲート実行時に
+  自動でこの経路もカバーされる
+
+#### 判断に迷った点
+
+- **候補の優先順（モノレポ先 vs 同梱先）**: issue の見出しは「同梱優先 → モノレポ fallback」だったが、
+  本文の必須事項は「モノレポでの挙動を変えない」で、同順序は設計判断に委ねられていた。
+  daemon の前例（モノレポ→同梱）をそのまま踏襲し、**モノレポを先に見る**順にした
+  （`vsce package` を一度ローカルで走らせた後に leftover が `packages/vscode-extension/sites/user/`
+  へ残っていても、モノレポ dev host は自分の `sites/user` を見続けるという安全側の理由。
+  コード内のコメントに理由を明記した）
+
+---
+
 ### docs(index): follow PR #947 — the archive period label stayed at 09-12 (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr947` / **追従元**: PR [#947](https://github.com/signalcompose/orbitscore/pull/947)（マージコミット `b89ce0e`）

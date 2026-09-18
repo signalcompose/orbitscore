@@ -1,12 +1,15 @@
 /**
- * editor 系の MCP ツール 9 本と、docs 系 3 本（#887 束 F・`buildServer` から移した）。
+ * editor 系の MCP ツール 9 本と、docs 系 5 本（#887 束 F・`buildServer` から移した。
+ * get_user_doc / search_user_docs は #954 で追加 — LLM が user サイト（DSL の使い方）を
+ * 読む経路が無かった欠落を埋める）。
  *
  * 🔴 **`registerTool` の呼び出し本文は 1 行も書き換えていない。**
  *
  * 🔴 **このファイルは `register*Tools` を 2 本持つ。** 理由は下の
  * `registerDocsTools` の doc に書いた（分割前の `tools/list` の順序を再現するため）。
  */
-import { readDevDoc, searchDevDocs } from './mcp-docs'
+import type { DevDocsLocation, UserDocsLocation } from './mcp-docs'
+import { DEV_DOCS_UNAVAILABLE_MESSAGE, readDevDoc, searchDevDocs } from './mcp-docs'
 import { errorResult, type McpServerLike, toToolResult, z } from './mcp-sdk'
 import type { OrbitScoreToolHandlers } from './mcp-types'
 
@@ -193,61 +196,135 @@ export function registerEditorTools(server: McpServerLike, handlers: OrbitScoreT
 }
 
 /**
- * dev サイトのドキュメントを読む 3 本（#887 束 F・`mcp-server.ts` から移した）。
+ * dev / user サイトのドキュメントを読む 5 本（#887 束 F・`mcp-server.ts` から移した。
+ * get_user_doc / search_user_docs は #954 で追加）。
  *
  * 🔴 **`registerEditorTools` と分けてあるのは順序のためである。** MCP SDK の
  * `tools/list` は `Object.entries(this._registeredTools)` を返す = **登録順がそのまま
  * 一覧の順序**になる（`@modelcontextprotocol/sdk/dist/cjs/server/mcp.js` の
  * `setRequestHandler(ListToolsRequestSchema, ...)`）。分割前の `mcp-server.ts` では
- * この 3 本が **plugin 系 6 本より後ろ**（23-25 番）に登録されていたので、editor 系と
+ * dev docs 系の 3 本が **plugin 系 6 本より後ろ**（23-25 番）に登録されていたので、editor 系と
  * 同じ関数に入れたままにすると 17-19 番へ繰り上がり、**クライアントに見える並びが変わる**。
+ * user docs 系の 2 本（#954 で新設）はその末尾に続けて登録する。
  *
  * `buildServer` は engine → editor → plugins → docs の順で呼ぶこと。
  * この 4 本の呼び出し順が、分割前の 25 本の順序を byte 単位で再現する唯一の並びである。
  */
-export function registerDocsTools(
+function parseSearchLimit(args: Record<string, unknown>): number {
+  const requestedLimit = typeof args.limit === 'number' ? args.limit : 10
+  return Number.isFinite(requestedLimit) ? Math.max(0, Math.floor(requestedLimit)) : 10
+}
+
+/**
+ * Register one `get_<site>_doc` tool. `unavailableMessage`, when set, means the
+ * site doesn't exist in this environment at all (#954 — the dev site is never
+ * bundled into a cold-installed .vsix) — every call short-circuits to that
+ * reason instead of silently returning "not found", which used to be
+ * indistinguishable from a typo'd path.
+ */
+function registerDocGetTool(
   server: McpServerLike,
-  handlers: OrbitScoreToolHandlers,
-  docsSourceRoot: string,
+  name: string,
+  title: string,
+  siteLabel: string,
+  sourceRoot: string,
+  notFoundMessage: string,
+  unavailableMessage: string | undefined,
 ): void {
   server.registerTool(
-    'get_dev_doc',
+    name,
     {
-      title: 'Get Dev Doc',
-      description: 'Read a development-site Markdown document by its site-relative path.',
+      title,
+      description: `Read a ${siteLabel} Markdown document by its site-relative path.`,
       inputSchema: {
         path: z.string().describe('Site-relative Markdown path, e.g. pipeline/text-to-ast.md'),
       },
     },
     async (args) => {
+      if (unavailableMessage !== undefined) return errorResult(unavailableMessage)
       const relativePath = typeof args.path === 'string' ? args.path : ''
-      const content = readDevDoc(docsSourceRoot, relativePath)
+      const content = readDevDoc(sourceRoot, relativePath)
       return content === null
-        ? errorResult('development document not found')
+        ? errorResult(notFoundMessage)
         : { content: [{ type: 'text', text: content }] }
     },
   )
+}
 
+/** Register one `search_<site>_docs` tool. Same `unavailableMessage` contract as above. */
+function registerDocSearchTool(
+  server: McpServerLike,
+  name: string,
+  title: string,
+  siteLabel: string,
+  sourceRoot: string,
+  unavailableMessage: string | undefined,
+): void {
   server.registerTool(
-    'search_dev_docs',
+    name,
     {
-      title: 'Search Dev Docs',
-      description: 'Search development-site Markdown documents for a case-insensitive substring.',
+      title,
+      description: `Search ${siteLabel} Markdown documents for a case-insensitive substring.`,
       inputSchema: {
         query: z.string().describe('Text to search for'),
         limit: z.number().describe('Maximum matches to return (default 10)').optional(),
       },
     },
     async (args) => {
+      if (unavailableMessage !== undefined) return errorResult(unavailableMessage)
       const query = typeof args.query === 'string' ? args.query : ''
-      const requestedLimit = typeof args.limit === 'number' ? args.limit : 10
-      const limit = Number.isFinite(requestedLimit) ? Math.max(0, Math.floor(requestedLimit)) : 10
+      const limit = parseSearchLimit(args)
       return {
-        content: [
-          { type: 'text', text: JSON.stringify(searchDevDocs(docsSourceRoot, query, limit)) },
-        ],
+        content: [{ type: 'text', text: JSON.stringify(searchDevDocs(sourceRoot, query, limit)) }],
       }
     },
+  )
+}
+
+export function registerDocsTools(
+  server: McpServerLike,
+  handlers: OrbitScoreToolHandlers,
+  devDocs: DevDocsLocation,
+  userDocs: UserDocsLocation,
+): void {
+  const devUnavailable = devDocs.available ? undefined : DEV_DOCS_UNAVAILABLE_MESSAGE
+  registerDocGetTool(
+    server,
+    'get_dev_doc',
+    'Get Dev Doc',
+    'development-site',
+    devDocs.sourceRoot,
+    'development document not found',
+    devUnavailable,
+  )
+  registerDocSearchTool(
+    server,
+    'search_dev_docs',
+    'Search Dev Docs',
+    'development-site',
+    devDocs.sourceRoot,
+    devUnavailable,
+  )
+
+  // #954: the end-user site (DSL usage docs) is bundled into every .vsix, so
+  // there is no "unavailable" case here short of a broken install — unlike
+  // get_dev_doc/search_dev_docs above, these two always attempt the read.
+  registerDocGetTool(
+    server,
+    'get_user_doc',
+    'Get User Doc',
+    'end-user-site',
+    userDocs.sourceRoot,
+    'user document not found',
+    undefined,
+  )
+  registerDocSearchTool(
+    server,
+    'search_user_docs',
+    'Search User Docs',
+    'end-user-site',
+    userDocs.sourceRoot,
+    undefined,
   )
 
   // Optional handler (see OrbitScoreToolHandlers.registerMcpServer): the tool

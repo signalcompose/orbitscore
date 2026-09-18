@@ -33,7 +33,7 @@ import {
   UNIX_SOCKET_PATH_MAX,
   userDataDirExceedsSocketLimit,
 } from './helpers/harness-processes'
-import { pollInitialize } from './helpers/mcp-client'
+import { type McpClient, pollInitialize } from './helpers/mcp-client'
 import { runScore } from './helpers/run-score'
 
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -153,10 +153,32 @@ async function coldInstallAndLaunch(
   return { tmpRoot, port }
 }
 
+/**
+ * #954: the shipped .vsix must carry the end-user docs site (Markdown + built
+ * dist) -- before this fix, `unzip -l *.vsix | grep -c 'sites/'` was 0 and both
+ * the Docs panel and get_user_doc/search_user_docs were dead on exactly this
+ * kind of cold install. The dev site is a separate, deliberate decision: it is
+ * never bundled, so get_dev_doc must explain why instead of silently returning
+ * "not found".
+ */
+async function assertDocsBundled(client: McpClient, port: number): Promise<void> {
+  const userDoc = await client.call('get_user_doc', { path: 'index.md' })
+  expect(userDoc.isError, `get_user_doc failed: ${userDoc.text}`).toBeFalsy()
+  expect(userDoc.text.length).toBeGreaterThan(0)
+
+  const devDoc = await client.call('get_dev_doc', { path: 'glossary.md' })
+  expect(devDoc.isError, 'get_dev_doc should report unavailable, not silently fail').toBe(true)
+  expect(devDoc.text).toContain('monorepo')
+
+  const docsPage = await fetch(`http://127.0.0.1:${port}/orbitscore/`)
+  expect(docsPage.status, 'the Docs panel WebView base must serve the bundled user site').toBe(200)
+}
+
 /** `.vsix` だけが入った VS Code で、実際に音が出るところまで通す。 */
 async function expectSoundFromColdInstall(slug: string, install: ColdInstall): Promise<void> {
   // activate() が走らなければ MCP サーバは立たない — #873 はここで落ちる。
   const client = await pollInitialize(install.port, { intervalMs: 2000, timeoutMs: 90_000 })
+  await assertDocsBundled(client, install.port)
 
   const session = createGatedSession(client, install.tmpRoot, {} as GatedCatalog)
   let windows
