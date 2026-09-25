@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
+
+**Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`
+
+Pitch DSL に「音高そのものをランダムに選ぶ」指定を加える仕様を確定した（docs のみ・実装は後続 PR、拡張 4.3.0 の想定）。
+起案 = fresh Opus subagent（初版は候補リスト `r[…]` を推奨）→ owner が表面を決定 → 改訂 r2 → main 審査 → owner の最終決定。
+
+**確定した表面**: 度数の位置に `r`（その音のスコープの格子から選ぶ。root = Ionian 1〜7 / mode = 格子全長）・`rr`（出現確率 0.5）・
+`var r1 = random.<mode変数>`（ユーザー定義の mode を定義時に写し取るランダム音源。`random.mode(...)` や組み込みの旋法ライブラリは入れない）。
+`^N` はスティッキー、振り直しは既存の `Xr` / `^r` と同じく発音ごと・サイクルごと・seed なし。audio シーケンスの意味は変えない。
+
+**変更したファイル**:
+- `docs/design/967-random-pitch-design.md`（新設）— 決定表・一次ソースの事実・意味論・診断・テスト計画・棄却案
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` — §2.1 / §2.2 / §3・§9.3（`seq.mode()` 未実装の明記）/ §6.1 / §6.2・§6.2.1（新設）/ §6.3
+- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` — §12.4 の位置の表に 2 行、§16 と決定 #80〜#84（#82 は #50「語彙を増やさない」の例外として `random` を記録）
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — P.12.1（spec 確定・未実装と明記）と実装状況の要約
+- `docs/specs-v2/SESSION_LOG_SPEC_v1.md` §5 / `docs/core/INDEX.md` の設計ノート表
+
+**起案の過程で直した既存の不整合**（文書側のみ）:
+- core spec P.12 の「`.r` は全声部を一緒に間引く」→ 実装どおり「声部ごとに独立」（`calculate-event-timing.ts:212-216`, `sequence.ts:1607`）
+- core spec の「`r0%10` (random walk)」→「center ± range の一様乱数・直前値を持たない」（`random-utils.ts:16-25`）
+- SESSION_LOG の「現行 v3.0 にランダム機能は存在しない」→ 現状に合わせて訂正
+
+**別 issue に切り出したもの**: `Xr(p)` 未実装で `5r(p)` が並置として読まれる（#968）/ `mode(0, …)` が NaN の格子になる（#969）/ `seq.mode()` 未実装（#970）。
+
+---
+
 ### chore(release): bump the extension to 4.2.1 (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `961-release-4.2.1` / **Issue**: #961
