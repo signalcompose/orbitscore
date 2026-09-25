@@ -1182,7 +1182,7 @@ m7.open() / m7.close() // open / close position; .shell() = R+3+7; .rootless() =
 決定 #80〜#84（DESIGN_DISCUSSION_RECORD §16）。実装は後続 PR（拡張 4.3.0 の想定）。**現行ビルドではまだ動かない。**
 
 ```js
-var dorian = mode(1, 2, b3, 4, 5, 6, b7)  // a user-defined mode (there is no built-in mode library)
+var dorian = mode(1, 2, b3, 4, 5, 6, b7)  // a user-defined mode (random. takes a defined mode var)
 lead.play(1, 2, r, 4)                   // r: a degree picked from the note's scope lattice (root: Ionian 1-7)
 lead.play((1, r, r, 5).mode(dorian))    // mode scope: the whole lattice
 lead.play(1, rr, r^1, r.r(0.3))         // rr = presence 0.5 / r^1 is sticky / .r(p) sets the probability
@@ -1192,7 +1192,7 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
 
 - `r` works the same at the top of `play()`, inside `( )` / `{ }`, and as a `[ ]` voice. Re-rolled per
   event per cycle like `Xr` / `^r`; no seed. `^N` is sticky for both `r^1` and `r1^1`.
-- `random.<mode var>` only (no `random.mode(...)`, no built-in mode library). The source's lattice wins
+- `random.<mode var>` only (no `random.mode(...)`; the mode var must be defined). The source's lattice wins
   over the scope's mode; the root always comes from the note's scope. Duplicates in the mode = weights.
 - `r` / `rr` are reserved at pitch positions (`var r` / `var rr` are errors); `r1` is a name unless `%`
   follows (`gain(r1%3)` is unchanged).
