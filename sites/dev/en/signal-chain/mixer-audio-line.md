@@ -1782,7 +1782,7 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 ## Sources
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing (MX.1–MX.5) normative text
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1313-1325` — PH.2b known v1 constraints, plus the note that the master gain ordering was swapped (#649 PR-O2)
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1340-1352` — PH.2b known v1 constraints, plus the note that the master gain ordering was swapped (#649 PR-O2)
 - `rust/crates/orbit-audio-native/src/output/lines.rs:9-50` / `rust/crates/orbit-audio-native/src/output/render.rs:250-279` — `MasterLine` (rack → gain) / `place_master_into_device`
 - `rust/crates/orbit-audio-native/src/output/startup.rs:2465-2497` — unit test `master_gain_applies_after_the_master_rack_generates_sound` (the only guard on the ordering)
 - `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — design source of truth for the master line and the single multiplication path

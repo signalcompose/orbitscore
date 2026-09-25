@@ -17,6 +17,44 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the #967 random pitch spec into the dev learning site (#971 follow-up) (Sep 25, 2026)
+
+**Date**: 2026-09-25 / **ブランチ**: `claude/docs-sync-pr971` / **追従元**: PR [#971](https://github.com/signalcompose/orbitscore/pull/971)（merge commit `0bab20a`）
+
+PR #971（#967 の spec 確定・docs のみ）の追従。#971 自身が specs-v2 / core spec / WORK_LOG / planning と
+`sites/dev/signal-chain/mixer-audio-line.md` の `// FILE:` 引用 2 件までは直しているので、**残っていた 2 種類だけ**を扱った。
+
+**1. ADR-002 の未解決項目に答えを入れた**（`sites/dev/decisions/adr-002-dsl-v3-pivot.md` + `en/`）
+
+「次の深掘り候補」にあった「`randseed` のサポート状況 — v1.0 にあったランダム性制御が v3.0 / Pitch DSL に
+引き継がれているか」は、#971 の `SESSION_LOG_SPEC_v1.md` §5 の訂正（旧記述「現行 v3.0 にランダム機能は存在しない」は誤り）で
+答えが確定した。v1.0 の `1r` の説明の直後に追記し、候補リストからは外した。
+
+- ランダム性そのものは引き継がれている（Pitch DSL の `Xr` / `.r` / `^r` と audio の `gain(r)` / `pan(r)`）
+- ただし **`1r` の「音高そのものを乱数で選ぶ」性質は引き継がれていない**。度数の乱数 `r` / `rr` / `random.<mode変数>` は
+  #967 で spec が確定しただけで未実装（PITCH_DSL_SPEC §6.2.1・決定 #80〜#84）
+- `randseed` は今も持たない方針（決定 #21 / #50）
+
+**2. `INSTRUCTION_ORBITSCORE_DSL.md` への行番号参照を張り直した**
+
+#971 が同ファイルの 1166 行目付近に P.12.1 を挿入して以降の行が +27 ずれた。`// FILE:` 形式ではないため
+`docs:check` の対象外で、red にならないまま残っていた。
+
+- `sites/dev/signal-chain/mixer-audio-line.md` + `en/` の Sources: `:1313-1325` → `:1340-1352`（内容は挿入前と一致を確認）
+- `sites/dev/decisions/adr-002-dsl-v3-pivot.md` + `en/` の Sources: `:1983-2035` → `:2309-2364`
+
+🔴 後者は **#971 以前から記述と中身が食い違っていた**（「§13 Versioning」と書いてあるが、`1983-2035` が指すのは
+ミキサー / wire の節）。§13 Versioning の実体は現在 2309-2364 なので、参照の説明文が名指ししている節へ合わせた。
+判断の根拠は行番号の照合だけで、仕様の判断は含まない。
+
+**追従不要と判断したもの**: `sites/user/` `docs/user/ja/USER_MANUAL.md`（#967 は未実装。出荷済み 4.2.1 の読者が
+到達できない機能を案内しないため）/ `sites/dev/` の editor 章（凍結版の差分なし）/ `docs/design/` `docs/archive/`
+`docs/research/`（起案時点のスナップショット）。
+
+**検証**: `npm run docs:build`（user / dev）+ `npm run docs:check` — 詳細は PR 本文。
+
+---
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`

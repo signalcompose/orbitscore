@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョンに触れた箇所だけ**追従しました。v0.1 → v3.0 の pivot 本論は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョンに触れた箇所だけ**追従しました。v0.1 → v3.0 の pivot 本論は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。 さらに 2026-09-25 に #967 の spec 確定（PR [#971](https://github.com/signalcompose/orbitscore/pull/971)）へ追従し、**`randseed` の未解決項目に答えを入れ、Sources の行番号を張り直しただけ**です（他の節は前回の `verified-against` 時点の読みのまま）。
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
@@ -228,6 +228,17 @@ sequence kick {
 - `1.5` → C と C# の中間 (微分音、ピッチベンドで表現)
 - `1r` → [C+0, C+0.999] のランダム値
 
+> **`1r` のランダム性のゆくえ**（2026-09-25 追記・PR [#971](https://github.com/signalcompose/orbitscore/pull/971)）:
+> 下の「次の深掘り候補」にあった `randseed` の問いは #971 の spec 追従で片が付きました。
+> **ランダム性そのものは v3.0 / Pitch DSL に引き継がれています** — Pitch DSL の `Xr`（要素の発音確率）/
+> `.r`（コードの間引き）/ `^r`（ランダムオクターブ）と、audio の `gain(r)` / `pan(r)` がそれです。
+> ただし **v1.0 の `1r` が持っていた「音高そのものを乱数で選ぶ」性質は引き継がれていません**。
+> 度数を乱数で選ぶ `r` / `rr` / `random.<mode変数>` は #967 で **spec が確定しただけで未実装**です
+> （正本 `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` §6.2.1・決定 #80〜#84）。
+> `randseed`（シード固定）は **今も持たない方針**で、完全一致検証が要るときの記録は将来の課題として
+> 残っています（決定 #21 / #50・`docs/specs-v2/SESSION_LOG_SPEC_v1.md` §5）。`.orbslog` は実行の記録で
+> あって結果の録音ではないため、再生時もランダムは振り直されます。
+
 ---
 
 ## v3.0 (Audio) DSL との対比
@@ -267,7 +278,6 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 
 - v2.0 pivot の意思決定記録の発掘 — PR やコミット本文に詳細な議論が残っていないか確認
 - Pitch DSL v1.1 (`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`) が v1.0 の度数システムをどう再解釈したか — 本 ADR の「廃止」列との対応表
-- `randseed` のサポート状況 — v1.0 にあったランダム性制御が v3.0 / Pitch DSL に引き継がれているか
 - ポリメーターの実装詳細 — `beat(N by D)` での independent タイムベースが v1.0 の `meter N/D independent` と同等かどうか
 - 論文での v1.0 度数システムの扱い — 廃止された機能が学術的貢献として論文に含まれるか
 
@@ -276,7 +286,7 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 ## Sources
 
 - `packages/engine/src/version.ts:15-18` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '2.0'` (audio line v3.0 とは別軸)
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1983-2035` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:2309-2364` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:496-631` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:365-462` — §5 片記号方式 (unidirectional toggle) の仕様
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL 仕様書アーカイブ (2025-10-06 アーカイブ)
