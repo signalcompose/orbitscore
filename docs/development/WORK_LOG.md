@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
+
+**Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`
+
+Pitch DSL に「音高そのものをランダムに選ぶ」指定を加える仕様を確定した（docs のみ・実装は後続 PR、拡張 4.3.0 の想定）。
+起案 = fresh Opus subagent（初版は候補リスト `r[…]` を推奨）→ owner が表面を決定 → 改訂 r2 → main 審査 → owner の最終決定。
+
+**確定した表面**: 度数の位置に `r`（その音のスコープの格子から選ぶ。root = Ionian 1〜7 / mode = 格子全長）・`rr`（出現確率 0.5）・
+`var r1 = random.<mode変数>`（ユーザー定義の mode を定義時に写し取るランダム音源。`random.mode(...)` や組み込みの旋法ライブラリは入れない）。
+`^N` はスティッキー、振り直しは既存の `Xr` / `^r` と同じく発音ごと・サイクルごと・seed なし。audio シーケンスの意味は変えない。
+
+**変更したファイル**:
+- `docs/design/967-random-pitch-design.md`（新設）— 決定表・一次ソースの事実・意味論・診断・テスト計画・棄却案
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` — §2.1 / §2.2 / §3・§9.3（`seq.mode()` 未実装の明記）/ §6.1 / §6.2・§6.2.1（新設）/ §6.3
+- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` — §12.4 の位置の表に 2 行、§16 と決定 #80〜#84（#82 は #50「語彙を増やさない」の例外として `random` を記録）
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — P.12.1（spec 確定・未実装と明記）と実装状況の要約
+- `docs/specs-v2/SESSION_LOG_SPEC_v1.md` §5 / `docs/core/INDEX.md` の設計ノート表
+
+**起案の過程で直した既存の不整合**（文書側のみ）:
+- core spec P.12 の「`.r` は全声部を一緒に間引く」→ 実装どおり「声部ごとに独立」（`calculate-event-timing.ts:212-216`, `sequence.ts:1607`）
+- core spec の「`r0%10` (random walk)」→「center ± range の一様乱数・直前値を持たない」（`random-utils.ts:16-25`）
+- SESSION_LOG の「現行 v3.0 にランダム機能は存在しない」→ 現状に合わせて訂正
+
+**別 issue に切り出したもの**: `Xr(p)` 未実装で `5r(p)` が並置として読まれる（#968）/ `mode(0, …)` が NaN の格子になる（#969）/ `seq.mode()` 未実装（#970）。
+
+**レビュー反映**（Commit: `ff2d190c`）— docs のみなのでレビュー方法は advisor と相談し、main の設計文書通読 + fresh Opus 1 体の整合監査（記述の一致 / 根拠の実在 / 先取りの決定）とした:
+- 🔴 旋法ライブラリを「無い／持たない」と書いていたのは、確定済みの決定 #58（教会旋法はライブラリ var 群）を黙って上書きしていた。owner の「組み込み変数じゃなくて定義した mode を…」は `random.` に渡すものの話なので、「定義なしで動く組み込みの `random.dorian` は無い・#58 は変えない」に改めた
+- chord の名前参照への `@v` / `@g` をエラーに固定していたのは、open の #609（stack 全体への `@v`・owner 裁定済み・未実装）の先取り。#609 で決めると明記
+- `rr` と `r r` は「同じトークン列」ではない（`rr` は 1 識別子）。意味が同じと改めた / DDR #81 の「パターン変数と同じ値渡し」は誤り（写し取るのは chord だけ）
+- 同じ PR の編集でずれた設計文書の行番号 10 箇所を追従
+- 地図に居場所が無かったので `DEVELOPMENT_MAP.md` §4.Q を新設し、凍結後の拡張版に新機能を載せる **owner の例外**を `NATIVE_MIGRATION_2026-09.md` §12.8 に記録
+- 別件: issue 状態のスナップショット（09-08 生成）を更新すると、`DEVELOPMENT_MAP.md:1580`（閉じた #474 を「未実装」と書く行）がラチェットに掛かる。本 PR の範囲外なので更新はしていない
+
+---
+
 ### chore(release): bump the extension to 4.2.1 (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `961-release-4.2.1` / **Issue**: #961

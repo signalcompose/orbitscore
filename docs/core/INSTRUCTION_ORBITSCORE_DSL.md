@@ -1166,12 +1166,39 @@ m7.open() / m7.close() // open / close position; .shell() = R+3+7; .rootless() =
   "Position N from the top" counts the structural (written/ascending) order. Method form,
   parens required (like `.hold()`). `.drop(...)`/`.invert(n)` take positions; the rest take none.
 - **Randomness** (`Xr` / `.r` / `.r(p)` / `^r`) is **runtime, per-cycle re-rolled**: `Xr` =
-  element presence (default 0.5), `.r` = chord thinning — **rolls once per slot; all voices in
-  the stack thin together** (not independently per voice; no minimum-voice guarantee — silence is
-  allowed), `^r` = random octave ±1. `r` is one primitive whose effect depends on its position.
+  element presence (default 0.5), `.r` = chord thinning — **each voice rolls independently**
+  (the stack's `p` is handed to every voice that has no `Xr` of its own; no minimum-voice
+  guarantee — silence is allowed. Corrected 2026-09-25 per `calculate-event-timing.ts:212-216` /
+  `sequence.ts:1607`; the earlier "all voices thin together" wording was wrong), `^r` = random octave ±1. `r` is one primitive whose effect depends on its position.
   Reproducibility is by `.orbslog` (execution record, not a result recording) — random re-rolls
   on replay; no seed (decisions #50/#52/#53).
 - **`.comp`** (jazz comping rhythm) is implemented as a *primitive* macro — see P.14 (comp C2a).
+- ⚠️ **`Xr(p)` is not implemented**: `5r(0.3)` parses as `5r` juxtaposed with a `( )` group `(0.3)`
+  ([#968](https://github.com/signalcompose/orbitscore/issues/968)). Use `.r(p)` on a stack.
+
+#### P.12.1 Random degree `r` / `rr` and random sources `random.<mode>` (#967) — 🚧 spec fixed, NOT implemented yet
+
+正本: PITCH_DSL_SPEC §6.2.1 / 設計: [`docs/design/967-random-pitch-design.md`](../design/967-random-pitch-design.md) /
+決定 #80〜#84（DESIGN_DISCUSSION_RECORD §16）。実装は後続 PR（拡張 4.3.0 の想定）。**現行ビルドではまだ動かない。**
+
+```js
+var dorian = mode(1, 2, b3, 4, 5, 6, b7)  // a user-defined mode (random. takes a defined mode var)
+lead.play(1, 2, r, 4)                   // r: a degree picked from the note's scope lattice (root: Ionian 1-7)
+lead.play((1, r, r, 5).mode(dorian))    // mode scope: the whole lattice
+lead.play(1, rr, r^1, r.r(0.3))         // rr = presence 0.5 / r^1 is sticky / .r(p) sets the probability
+var r1 = random.dorian                  // a random source: dorian's lattice, copied at definition time
+bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
+```
+
+- `r` works the same at the top of `play()`, inside `( )` / `{ }`, and as a `[ ]` voice. Re-rolled per
+  event per cycle like `Xr` / `^r`; no seed. `^N` is sticky for both `r^1` and `r1^1`.
+- `random.<mode var>` only (no `random.mode(...)`; the mode var must be defined). The source's lattice wins
+  over the scope's mode; the root always comes from the note's scope. Duplicates in the mode = weights.
+- `r` / `rr` are reserved at pitch positions (`var r` / `var rr` are errors); `r1` is a name unless `%`
+  follows (`gain(r1%3)` is unchanged).
+- Chords: `.drop()` / `.invert()` are allowed on a stack with a random voice; `.close()` / `.open()` /
+  `.shell()` / `.rootless()` are errors; `.voicelead()` leaves random voices out.
+- Audio sequences keep today's meaning (a top-level `r` is a silent slot) and get a warning.
 
 ### P.13 Auto voice-leading — `.voicelead()` / `.vl()` (正本 PITCH_DSL_SPEC §6.3, comp C1, #269)
 
@@ -2143,7 +2170,8 @@ Epic #224 phases 1/2/3/R/4:
 - **Repetition + pattern variables** (Phase R): `*n`, `var NAME = <pattern>`
 - **Ties / legato / hold** (Phase 4): `_` event tie, `_n` voice tie, `{ }` legato, `.hold()`
 - **Voicing + randomness** (E2 / §12): `.drop(n...)`/`.invert(n)`/`.open()`/`.close()`/`.shell()`/
-  `.rootless()`; `Xr`/`.r`/`^r` random (see P.12)
+  `.rootless()`; `Xr`/`.r`/`^r` random (see P.12). 🚧 Random degree `r` / `rr` / `random.<mode>` (#967):
+  spec fixed, not implemented (P.12.1)
 - **Key-center register** (E3 / #253): `global.key("D4")` base octave (see P.1)
 - **Section variables** (E4 / #254): comma-separated multi-bar bindings (see P.9)
 - **Per-note expression** (E5 / §10.3): `@v` velocity (absolute / relative) + `@g` articulation (see P.11)
@@ -2164,7 +2192,8 @@ Epic #224 phases 1/2/3/R/4:
   - `pan(position)`: Real-time stereo positioning (-100 to 100) - applies immediately even during playback
   - `defaultGain(dB)`: Set initial gain without triggering playback - use before `run()` or `loop()`
   - `defaultPan(position)`: Set initial pan without triggering playback - use before `run()` or `loop()`
-  - Random values: `r` (full random), `r0%10` (random walk)
+  - Random values: `r` (full random), `r0%10` (uniform in center ± range, drawn independently per event —
+    **not** a random walk: no previous value is kept, `random-utils.ts:16-25`)
 - **Global Mastering Effects**: 🔴 **DSL 語彙としては受理されるが、出荷ビルドでは no-op**（下の警告を読むこと）
   - `global.compressor()`: Increase perceived loudness
   - `global.limiter()`: Prevent clipping
@@ -2294,6 +2323,7 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
   - Phase R: `*n` repetition + pattern variables
   - Phase 4: `_` / `_n` ties, `{ }` legato, `.hold()`
   - Harmony/voicing (§12): bare `[ ]` chord literal, `.drop/.invert/.open/.close/.shell/.rootless`, `Xr`/`.r`/`^r` random
+  - 🚧 #967 random degree `r` / `rr` / `random.<mode>`: spec fixed (P.12.1), not implemented
   - Per-note expression (E5 / §10.3): `@v` velocity + `@g` articulation — **implemented in 2.0.0** (see Completed list above and P.11)
 
 - v3.0 (2025-01-09): **Underscore Prefix Pattern** + **Unidirectional Toggle (片記号方式)**
