@@ -16,10 +16,21 @@ import { PlayElement } from '../../parser/types'
  * layered on the running range at dispatch and never a running-range set point (§2.4).
  */
 export interface ChordVoice {
+  /** Random voices keep their unresolved identity while a chord value is stored/spread. */
+  kind?: 'random'
   degree: number
   alteration: number
   octaveShift: number // structural voicing octave; 0 for a close-position voice
   detune: number // semitones (`~`); 0 for an untuned voice
+  rangeSet?: boolean
+  random?: number
+  randomOctave?: boolean
+  velocity?: number
+  velocityDelta?: number
+  articulation?: number
+  lattice?: number[]
+  period?: number
+  from?: string
 }
 
 /**
@@ -30,8 +41,10 @@ export interface ChordVoice {
  * - `pattern` (§6.5): a horizontal/tree value — 1+ top-level play siblings, spliced
  *   at the use site (length > 1 = a juxtaposition binding)
  * - `mode` (§2.2): a user pitch lattice (semitone offsets) referenced by `.mode(name)`
+ * - `random` (#967): a definition-time copy of a mode lattice, resolved as one random voice
  */
 export type BoundValue =
   | { kind: 'chord'; voices: ChordVoice[] }
   | { kind: 'pattern'; elements: PlayElement[] }
   | { kind: 'mode'; lattice: number[]; period: number }
+  | { kind: 'random'; lattice: number[]; period: number; from: string }

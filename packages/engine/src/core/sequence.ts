@@ -13,7 +13,12 @@ import { resolveDegree } from '../midi/degree-resolution'
 import { resolveChords, cloneElement } from '../midi/chord/resolve-chords'
 import { voiceLeadOctaves } from '../midi/voice-leading'
 import { cellToGrid } from '../midi/comp-rhythm'
-import { RootContext, SymbolicPitch } from '../midi/types'
+import {
+  containsRandomDegree,
+  resolveRandomDegree,
+  validateRandomDegree,
+} from '../midi/random-degree'
+import { RootContext } from '../midi/types'
 import { MidiScheduler } from '../midi/midi-scheduler'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 import type { RackRecipe } from '../signal-chain/rack'
@@ -31,6 +36,7 @@ import { TempoManager } from './sequence/parameters/tempo-manager'
 import { SequenceQuantizeManager } from './sequence/parameters/quantize-manager'
 import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { StateManager } from './sequence/state/state-manager'
+import { PlannedNote, writtenPitchOf } from './sequence/midi-planning'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 import {
   resolveNamedOutputDest,
@@ -53,45 +59,6 @@ import {
  * of the recommended 10-30ms. TODO(§10-2): finalize by ear.
  */
 const LEGATO_OVERLAP_MS = 20
-
-/**
- * One MIDI note planned from a TimedEvent during scheduling (§5/§4 output stage).
- * Stage A fills the resolved pitch + flags; Stage B computes `offTime` and `emit`
- * (tie absorption / voice-tie suppression / legato overlap); Stage C emits.
- */
-interface PlannedNote {
-  onTime: number
-  slotDur: number
-  note: number | null // null = rest, or a `_` event-tie marker (no pitch)
-  detune: number
-  tie: boolean // `_` event tie — absorbed into the previous emitting note
-  legato: boolean
-  voiceTie: boolean
-  hold: boolean
-  tieSlots: number // extra slot duration absorbed from following `_` ties
-  offTime: number
-  emit: boolean
-  velocity: number // §10.3 resolved per-note velocity (`@v`/seq.vel())
-  articulation?: number // §10.3 per-note gate ratio (`@g`); undefined = use seq.gate()
-}
-
-/**
- * The symbolic pitch for a timed event: its explicit `pitch` (§7-0), or a bare-degree
- * fallback built from `sliceNumber` (a plain MIDI degree carries no PlayPitch). Shared by
- * every output-stage walk (validate / voice-leading / scheduling) so the fallback shape
- * stays in one place.
- */
-function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
-  return (
-    ev.pitch ?? {
-      degree: ev.sliceNumber,
-      alteration: 0,
-      octaveShift: 0,
-      rangeSet: false,
-      detune: 0,
-    }
-  )
-}
 
 /** §2.1: `output(dest, opts)` named options — `thru` defaults to false, `db` to 0. */
 export type { OutputOptions, SendOptions } from './sequence/audio-line'
@@ -233,6 +200,7 @@ export class Sequence {
         playPattern,
         globalState.tempo || 120,
         globalState.beat,
+        this.isNoteSequence(),
       )
       this.stateManager.setTimedEvents(timedEvents)
     }
@@ -1257,6 +1225,9 @@ export class Sequence {
     for (const w of warnings) {
       console.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)
     }
+    if (!this.isNoteSequence() && containsRandomDegree(resolved)) {
+      console.warn('r は note シーケンスの音高の乱数です。audio シーケンスでは休符として扱います')
+    }
 
     this.stateManager.setPlayPattern(resolved)
 
@@ -1266,6 +1237,7 @@ export class Sequence {
       resolved,
       globalState.tempo || 120,
       globalState.beat,
+      this.isNoteSequence(),
     )
 
     this.stateManager.setTimedEvents(timedEvents)
@@ -1382,6 +1354,12 @@ export class Sequence {
       // seq.root()). root and mode are mutually exclusive on a group (§3), so the
       // mode rides on the seq default root.
       const bound = this.global.getBinding(scope.mode.name)
+      if (bound?.kind === 'random') {
+        throw new Error(
+          `.mode(${scope.mode.name}): "${scope.mode.name}" はランダム音源です。` +
+            'スコープには mode 変数を渡してください（.mode(dorian)）',
+        )
+      }
       if (!bound || bound.kind !== 'mode') {
         throw new Error(
           `Sequence '${name}': .mode(${scope.mode.name}) — no such mode. ` +
@@ -1427,7 +1405,8 @@ export class Sequence {
       // root with no key) or a rejected degree throws here, in the awaited
       // chain, rather than later in the fire-and-forget scheduling callback.
       const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
-      resolveDegree(writtenPitchOf(ev), context) // throws on a rejected/invalid degree
+      if (ev.randomDegree) validateRandomDegree(ev, context)
+      else resolveDegree(writtenPitchOf(ev), context) // throws on a rejected/invalid degree
     }
   }
 
@@ -1475,6 +1454,7 @@ export class Sequence {
       // (anchor); subsequent chords: octave 0, so VL re-places it (authored octave subsumed).
       const voices: { ev: TimedEvent; base: number }[] = []
       for (const ev of byOnset.get(onset)!) {
+        if (ev.randomDegree) continue // stochastic voices keep their authored placement (#967)
         const written = writtenPitchOf(ev)
         if (written.degree === 0) continue // rest — not a voice
         const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
@@ -1601,7 +1581,7 @@ export class Sequence {
       // only — it is transient, never a running-range set point).
       const randomOctave = ev.randomOctave ? Math.floor(Math.random() * 3) - 1 : 0
       const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0) + structural + randomOctave
-      const resolved = resolveDegree({ ...written, octaveShift: effectiveOctave }, context)
+      const resolved = resolveRandomDegree(ev, written, context, effectiveOctave)
       // §12 `Xr` / `.r`: per-cycle presence roll. On failure the note is silent this cycle
       // (a rest) — no minimum-voice guarantee, silence is allowed (decision #52).
       const present = ev.random === undefined || Math.random() < ev.random

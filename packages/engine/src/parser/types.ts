@@ -169,6 +169,7 @@ export type ValueExpression =
   | ValueArray
   | PlayChordRef
   | PlayPitch
+  | PlayRandomDegree
   | PlayNested
   | PlayLegato
   | PlayTie
@@ -516,6 +517,11 @@ export type PlayRandomDegree = {
   velocity?: number
   velocityDelta?: number
   articulation?: number
+  /** Copied lattice for a `random.<mode>` source; absent means use the event scope. */
+  lattice?: number[]
+  period?: number
+  /** Original mode name for diagnostics / future notation output; `scope` for bare `r`. */
+  from?: string
 }
 
 export type PlayWithModifier = {

@@ -8,10 +8,6 @@ import {
   GlobalStatement,
   SequenceStatement,
   TransportStatement,
-  ChordBinding,
-  PatternBinding,
-  ModeBinding,
-  ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
 import { Global } from '../core/global'
@@ -28,14 +24,18 @@ import {
   resolveMixerNode,
   type MixerRuntimeNode,
 } from '../signal-chain/runtime'
-import {
-  classifyArrayBinding,
-  effectArgumentsToRack,
-  instrumentArguments,
-} from '../signal-chain/rack'
+import { effectArgumentsToRack, instrumentArguments } from '../signal-chain/rack'
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
+import {
+  processArrayBinding,
+  processImportStatement,
+  processModeBinding,
+  processPatternBinding,
+  processRandomBinding,
+  requireGlobal,
+} from './process-value-binding'
 
 /**
  * Global methods that may be written without parentheses. Mirrors the transport
@@ -100,6 +100,9 @@ export async function processStatement(
       break
     case 'mode_binding':
       processModeBinding(statement, state)
+      break
+    case 'random_binding':
+      processRandomBinding(statement, state)
       break
     case 'mixer_handle':
       await processMixerHandleStatement(statement, state)
@@ -318,62 +321,6 @@ async function processMixerNodeStatement(
     state,
     statement.chain,
     statement.invocation ?? 'call',
-  )
-}
-
-/**
- * Return the active global, or null after logging a "requires a global" error.
- * The three `var`-binding handlers (import / chord / pattern) all mutate the
- * active global's namespace, so they share this guard; `label` names the
- * construct for the message (e.g. `` `import chords` ``, `chord "foo"`).
- */
-function requireGlobal(state: InterpreterState, label: string) {
-  if (!state.currentGlobal) {
-    console.error(`${label} requires a global (declare \`var g = init GLOBAL\` first).`)
-    return null
-  }
-  return state.currentGlobal
-}
-
-/**
- * Process `import chords` (§6): load the stdlib chord qualities into the active
- * global's chord namespace. Statements execute in source order, so a later play()
- * sees the imported chords (評価時値渡し).
- */
-function processImportStatement(statement: ImportStatement, state: InterpreterState): void {
-  if (statement.module !== 'chords') {
-    console.warn(`Unknown import "${statement.module}" — v1.1 supports only \`import chords\`.`)
-    return
-  }
-  requireGlobal(state, '`import chords`')?.importChords()
-}
-
-/** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
-function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
-  const global = requireGlobal(state, `array "${statement.variableName}"`)
-  if (!global) return
-  const classified = classifyArrayBinding(statement.value, global)
-  if (classified.kind === 'chord') {
-    global.defineChord(statement.variableName, classified.voices)
-  } else {
-    global.defineRack(statement.variableName, classified.rack)
-  }
-}
-
-/** Process `var NAME = <play-expr>` (§6.5): bind the raw pattern value. */
-function processPatternBinding(statement: PatternBinding, state: InterpreterState): void {
-  requireGlobal(state, `pattern "${statement.variableName}"`)?.definePattern(
-    statement.variableName,
-    statement.elements,
-  )
-}
-
-/** Process `var NAME = mode(...)` (§2.2): bind the user pitch lattice. */
-function processModeBinding(statement: ModeBinding, state: InterpreterState): void {
-  requireGlobal(state, `mode "${statement.variableName}"`)?.defineMode(
-    statement.variableName,
-    statement.lattice,
-    statement.period,
   )
 }
 

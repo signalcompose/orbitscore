@@ -31,7 +31,9 @@ import {
   ValueRef,
 } from './types'
 import {
+  asStackVoice,
   classifyPlayIdentifier,
+  isPitchModifierToken,
   parsePitchModifiers as parsePitchModifiersAt,
   ParserUtils,
 } from './parser-utils'
@@ -157,6 +159,10 @@ export class ExpressionParser {
       return { value: parsed.value, newPos: parsed.newPos }
     }
     if (token.type === 'IDENTIFIER') {
+      if (arrayElement && (token.value === 'r' || token.value === 'rr')) {
+        const parsed = this.parsePlayIdentifier(true)
+        return { value: parsed.value as ValueExpression, newPos: parsed.newPos }
+      }
       if (ParserUtils.peek(this.tokens, this.pos).type === 'LPAREN') {
         return this.parseValueCall()
       }
@@ -376,13 +382,7 @@ export class ExpressionParser {
 
   /** True if the current token starts a pitch modifier: `^N`/`^r`, `~`, `@v`/`@g`, or `r`. */
   private nextIsPitchModifier(): boolean {
-    const cur = ParserUtils.current(this.tokens, this.pos)
-    return (
-      cur.type === 'CARET' ||
-      cur.type === 'TILDE' ||
-      cur.type === 'AT' ||
-      (cur.type === 'IDENTIFIER' && cur.value === 'r')
-    )
+    return isPitchModifierToken(ParserUtils.current(this.tokens, this.pos))
   }
 
   /**
@@ -1090,12 +1090,12 @@ export class ExpressionParser {
       if (after.type === 'ACCIDENTAL') {
         const pitchResult = this.parsePitch()
         this.pos = pitchResult.newPos
-        voices.push({ ...this.asStackVoice(pitchResult.value), tie: true })
+        voices.push({ ...asStackVoice(pitchResult.value), tie: true })
       } else if (after.type === 'NUMBER') {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         const modResult = this.parsePitchModifiers(ParserUtils.parseNumber(after), 0)
         this.pos = modResult.newPos
-        voices.push({ ...this.asStackVoice(modResult.value), tie: true })
+        voices.push({ ...asStackVoice(modResult.value), tie: true })
       } else {
         // a bare `_` voice (degenerate) — an event-tie marker
         voices.push({ type: 'tie' })
@@ -1117,13 +1117,13 @@ export class ExpressionParser {
       const voice = post.value as PlayElement
       voices.push(
         voice && typeof voice === 'object' && voice.type === 'random_degree'
-          ? this.asStackVoice(voice)
+          ? asStackVoice(voice)
           : voice,
       )
     } else if (cur === 'ACCIDENTAL') {
       const pitchResult = this.parsePitch()
       this.pos = pitchResult.newPos
-      voices.push(this.asStackVoice(pitchResult.value))
+      voices.push(asStackVoice(pitchResult.value))
     } else if (cur === 'NUMBER') {
       const numResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = numResult.newPos
@@ -1131,22 +1131,13 @@ export class ExpressionParser {
       if (this.nextIsPitchModifier()) {
         const pitchResult = this.parsePitchModifiers(value, 0)
         this.pos = pitchResult.newPos
-        voices.push(this.asStackVoice(pitchResult.value))
+        voices.push(asStackVoice(pitchResult.value))
       } else {
         voices.push(value)
       }
     } else {
       throw new Error(`Unexpected token in stack [ ]: ${cur}`)
     }
-  }
-
-  /**
-   * Mark a PlayPitch as a stack voice: clear `rangeSet` so a voice `^N` is
-   * structural (§2.4 — stack-internal `^N` places the voice's octave but does NOT
-   * move the running range, unlike a melodic `^N`).
-   */
-  private asStackVoice<T extends PlayPitch | PlayRandomDegree>(pitch: T): T {
-    return pitch.rangeSet ? { ...pitch, rangeSet: false } : pitch
   }
 
   /**

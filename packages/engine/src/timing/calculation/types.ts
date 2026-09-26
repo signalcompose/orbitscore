@@ -40,6 +40,12 @@ export interface TimedEvent {
    * using the sequence's root context.
    */
   pitch?: SymbolicPitch
+  /** #967 unresolved random-degree source; the actual lattice index is chosen at dispatch. */
+  randomDegree?: {
+    lattice?: number[]
+    period?: number
+    from: string
+  }
   /**
    * Phase 2 (§3): the lexical group scope (`.root()`/`.mode()`/`.oct()`) in
    * effect for this event, resolved inner→outer during the timing walk. Absent

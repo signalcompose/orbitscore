@@ -14,6 +14,20 @@ import {
   RandomBinding,
 } from './types'
 
+export function isPitchModifierToken(token: AudioToken): boolean {
+  return (
+    token.type === 'CARET' ||
+    token.type === 'TILDE' ||
+    token.type === 'AT' ||
+    (token.type === 'IDENTIFIER' && token.value === 'r')
+  )
+}
+
+/** Stack-internal ^N is structural and never updates the melodic running range. */
+export function asStackVoice<T extends PlayPitch | PlayRandomDegree>(pitch: T): T {
+  return pitch.rangeSet ? { ...pitch, rangeSet: false } : pitch
+}
+
 /**
  * Parser utility functions
  */

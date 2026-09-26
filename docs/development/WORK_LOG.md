@@ -31,6 +31,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - #969: `mode(0, …)` をパースエラーに（今までは格子が NaN）
 - テスト: 2589 → 2604 passed（新規 `tests/parser/random-degree.spec.ts` 15 件・先に red を確認）。既存の期待値の変更は `m7^1` の `chord_ref` に `rangeSet: true` が付く 1 行のみ
 
+**段 2: 評価・timing・出力段**（Commit: `c07b85e5`）
+- `random_binding` を評価して名前空間に `kind: 'random'`（格子と period を定義時に写し取る）。E3 / E4 / E6
+- 名前参照の解決: ランダム音源は修飾子を引き継いだ格子つきのランダム度数へ（`r1^1` もスティッキー）。chord / pattern への `^r` `~` `@v` `@g` は E8。W2 / W3 / E5
+- chord 変数の中の `r`（`var c = [1, r, 5]`）もランダム声部として持ち運ぶ（設計文書に無かった点を main が補った・K1 に揃える）
+- voicing: `.close/.open/.shell/.rootless` は E7、`.drop/.invert` は許可。`.voicelead()` はランダム声部を計算から外す
+- timing はランダム度数を格子つきの TimedEvent にする。**audio シーケンスではイベントを作らない**（オンセット数・時刻は不変を回帰テストで固定）+ W4
+- 選択は出力段 Stage A（`midi/random-degree.ts`）で TimedEvent 1 件・ループ反復ごと。格子は 音源 → スコープの mode → Ionian の順
+- ファイルサイズのラチェットを増やさないため `midi-planning.ts` / `process-value-binding.ts` を切り出し、baseline は 3 件とも**減った**（sequence 1369→1362 / process-statement 554→520 / parse-expression 1000→997）
+- テスト: 2604 → 2639 passed（新規 `tests/midi/random-degree.spec.ts` 35 件。統計は N=20・重みは N=200 の二項 99.9% 区間。1 音の格子で「2 種以上」の判定が落ちるオラクル識別テストつき）
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`
