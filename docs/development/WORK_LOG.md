@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat: implement random pitch r / rr / random.<mode> (#967) (Sep 26, 2026)
+
+**Date**: 2026-09-26 / **ブランチ**: `967-random-pitch-impl` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / #969
+
+設計 `docs/design/967-random-pitch-design.md` の実装。実装 = Codex（段ごとに発注）/ 監視と sandbox 外の検証 = main。
+
+**段 1: パーサ**（Commit: `dfaa9434`）
+- `r` / `rr` を `play()` 直下・`( )`・`{ }`・`[ ]` のどこでも同じ `random_degree` ノードとして読む（修飾子は既存の度数と同じ `parsePitchModifiers` を共有・`parser-utils.ts` へ移設）。`play()` の要素の位置だけで有効（`ExpressionParser` の `playElementContext`）なので `gain(r)` / `gain(r1%3)` / `pan(r0%10)` は不変
+- `r<数字>` は後ろに `%` が続く時だけ乱数値、それ以外は名前参照（K13）
+- `var X = random.<名前>` を `random_binding` 文として、ミキサー宣言の先読みより**前**で判定（今まで `random.sum` がミキサー宣言として受理されていた）
+- `var r` / `var rr` / `_r` / `random.mode(...)` はパースエラー。名前参照の `^r` `~` `@v` `@g` は記録のみ（評価は段 2）
+- #969: `mode(0, …)` をパースエラーに（今までは格子が NaN）
+- テスト: 2589 → 2604 passed（新規 `tests/parser/random-degree.spec.ts` 15 件・先に red を確認）。既存の期待値の変更は `m7^1` の `chord_ref` に `rangeSet: true` が付く 1 行のみ
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`

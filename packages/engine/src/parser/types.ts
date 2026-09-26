@@ -76,6 +76,7 @@ export type Statement =
   | ChordBinding
   | PatternBinding
   | ModeBinding
+  | RandomBinding
   | ImportStatement
   | FileImportStatement
   | MixerHandleStatement
@@ -250,6 +251,13 @@ export type ModeBinding = {
   period: number
 }
 
+/** `var NAME = random.MODE_NAME` (#967): a symbolic random-source binding. */
+export type RandomBinding = {
+  type: 'random_binding'
+  name: string
+  source: string
+}
+
 export type GlobalStatement = {
   type: 'global'
   target: string
@@ -280,6 +288,7 @@ export type PlayElement =
   | PlayNested // nested structure (e.g., (1)(2))
   | PlayWithModifier // with .chop(), .time(), etc.
   | PlayPitch // degree with alteration / octave-shift / detune (e.g. b3, #5, 3^+1)
+  | PlayRandomDegree // random degree `r` / `rr` (#967)
   | PlayScoped // group(s) with a .root()/.mode()/.oct() pitch-scope chain (§2.3, §3)
   | PlayStack // `[ ]` simultaneous-note-on stack (§4)
   | PlayChordRef // a bare name element (§6/§6.5); transient — resolved away at L2 (resolveChords)
@@ -368,6 +377,15 @@ export type PlayChordRef = {
   type: 'chord_ref'
   name: string
   octaveShift: number // from `^N`; 0 if none
+  /** True when `^N` was written; random bindings transfer it as a sticky range set-point. */
+  rangeSet?: boolean
+  /** Name-reference modifiers are retained for evaluation after the binding kind is known. */
+  detune?: number
+  random?: number
+  randomOctave?: boolean
+  velocity?: number
+  velocityDelta?: number
+  articulation?: number
 }
 
 /**
@@ -482,6 +500,22 @@ export type PlayPitch = {
   velocity?: number // §10.3 `@v<n>`: absolute per-note velocity (1..127). Overrides seq.vel()
   velocityDelta?: number // §10.3 `@v+n`/`@v-n`: velocity relative to seq.vel() (accent)
   articulation?: number // §10.3 `@g<ratio>`: per-note gate ratio (sounding fraction). Overrides seq.gate()
+}
+
+/**
+ * A random degree in a pitch position (#967). It carries the same modifier fields as
+ * {@link PlayPitch}, but has no degree/alteration until evaluation chooses from a lattice.
+ */
+export type PlayRandomDegree = {
+  type: 'random_degree'
+  octaveShift: number
+  rangeSet: boolean
+  detune: number
+  random?: number
+  randomOctave?: boolean
+  velocity?: number
+  velocityDelta?: number
+  articulation?: number
 }
 
 export type PlayWithModifier = {

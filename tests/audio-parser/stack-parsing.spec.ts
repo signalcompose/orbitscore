@@ -65,6 +65,7 @@ describe('Phase 3 — [ ] stack parsing', () => {
       type: 'chord_ref',
       name: 'm7',
       octaveShift: 1,
+      rangeSet: true,
     })
   })
 
