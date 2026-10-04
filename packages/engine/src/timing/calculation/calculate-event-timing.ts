@@ -247,7 +247,7 @@ export function calculateEventTiming(
         // #967: retain the random source symbolically; selection belongs to output Stage A.
         const copied = copyRandomDegreeProperties(element)
         events.push({
-          sliceNumber: 1,
+          sliceNumber: 0,
           startTime: elementStartTime,
           duration: elementDuration,
           depth,

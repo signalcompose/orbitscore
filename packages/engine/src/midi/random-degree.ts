@@ -57,3 +57,10 @@ export function containsRandomDegree(elements: readonly PlayElement[]): boolean 
   }
   return elements.some(visit)
 }
+
+/** Emit W4 at audio dispatch and clear the per-pattern pending flag. */
+export function warnAudioRandomDegree(pending: boolean): false {
+  if (pending)
+    console.warn('r は note シーケンスの音高の乱数です。audio シーケンスでは休符として扱います')
+  return false
+}

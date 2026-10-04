@@ -508,7 +508,7 @@ The runtime side of this changed in #645 (PR-D0). It used to throw for a soundin
 So the return value became a tagged union and the throw was removed. Here is the new contract:
 
 ```typescript
-// packages/engine/src/core/sequence.ts:77-80
+// packages/engine/src/core/sequence.ts:78-81
 export type DispatchTarget =
   | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
   | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
@@ -526,7 +526,7 @@ Diagnostic 8 stays at **Error** severity, not because the runtime throws, but be
 `analyzeMissingOutput()` tags every issue it returns with a `code`. That `code` is the branch point for severity, for the quick fix, and for MCP's `get_diagnostics` alike.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:349-352
+// packages/vscode-extension/src/diagnostics-analysis.ts:350-353
 export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
   code: 'output-missing' | 'dry-not-routed'
   sequenceName: string
@@ -536,7 +536,7 @@ export type OutputRoutingDiagnosticIssue = DiagnosticIssue & {
 The decision itself is a three-way branch.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:450-455
+// packages/vscode-extension/src/diagnostics-analysis.ts:451-456
     const code = !hasDestination
       ? 'output-missing'
       : !hasDryTerminal && auxTargets.size > 0 && sumTargets.size === 0 && !hasUnknownSend
@@ -602,7 +602,7 @@ The point is that `isPreferred` is true only for `output-missing`. `dry-not-rout
 Diagnostic 6 warns when `.output()` appears without a `linkAudio()` declaration. #611 widened the set of destinations `output()` accepts, so the check started catching **names that resolve long before LinkAudio is ever consulted**. `output("master")` and `output("drums")` (a declared sum/aux bus) work fine without `linkAudio()`, so warning there tells the user that **working code has no effect**.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:286-291
+// packages/vscode-extension/src/diagnostics-analysis.ts:287-292
     for (const m of line.matchAll(outputCallPattern)) {
       const target = m[1]
       // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.
@@ -618,7 +618,7 @@ form** `var verb = mix.aux` (#459 — the variable's own name becomes the bus na
 **generalised the receiver of the latter pattern to any identifier**.
 
 ```typescript
-// packages/vscode-extension/src/diagnostics-analysis.ts:225-235
+// packages/vscode-extension/src/diagnostics-analysis.ts:225-236
 /**
  * `var verb = mix.aux` — the variable NAME is the bus name (#459).
  *
@@ -627,7 +627,8 @@ form** `var verb = mix.aux` (#459 — the variable's own name becomes the bus na
  * the declaration still means the same thing. Pinning it to `mix.` rejected those scores.
  * (#940 review: a third copy of this pattern was about to be added with the general form.)
  */
-const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(sum|aux)\b/g
+const MIXER_BUS_VAR_DECL =
+  /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*(?!random\s*\.)[A-Za-z_$][\w$]*\.(sum|aux)\b/g
 
 /**
 ```

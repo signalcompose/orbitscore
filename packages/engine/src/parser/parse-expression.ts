@@ -41,6 +41,7 @@ import {
 
 /** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
 const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
+type PostfixResult = { value: PlayElement | string; newPos: number; changed: boolean }
 
 /**
  * Pitch-scope chain methods on a group (§3): `.root()`/`.mode()`/`.oct()`/`.hold()`
@@ -810,16 +811,12 @@ export class ExpressionParser {
    * postfix is left untouched (so `global.key(C)` keeps its bare-string arg — only
    * play resolution treats a bare string as a name reference).
    */
-  parsePostfix(element: PlayElement | string): {
-    value: PlayElement | string
-    newPos: number
-    changed: boolean
-  } {
+  parsePostfix(element: PlayElement | string, star = true): PostfixResult {
     let el = element
     let changed = false
     for (;;) {
       const t = ParserUtils.current(this.tokens, this.pos).type
-      if (t === 'ASTERISK') {
+      if (t === 'ASTERISK' && star) {
         if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
@@ -888,7 +885,7 @@ export class ExpressionParser {
       return { ...target, random: p }
     }
     if (target && typeof target === 'object' && target.type === 'chord_ref') {
-      return { type: 'stack', voices: [target], random: p }
+      return { type: 'stack', voices: [target], random: p, referenceThin: true }
     }
     if (target && typeof target === 'object' && target.type === 'random_degree') {
       return { ...target, random: p }
@@ -1109,7 +1106,7 @@ export class ExpressionParser {
         ? this.parsePlayIdentifier(true)
         : { value: this.parseChordRef(), newPos: this.pos }
       this.pos = parsed.newPos
-      const post = this.parsePostfix(parsed.value)
+      const post = this.parsePostfix(parsed.value, false)
       this.pos = post.newPos
       const voice = post.value as PlayElement
       voices.push(

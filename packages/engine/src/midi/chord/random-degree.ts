@@ -49,6 +49,7 @@ export function copyRandomDegreeProperties(
 /** Modifiers whose meaning is deliberately unavailable on chord/pattern references (#967 E8). */
 export function assertRandomOnlyModifiers(ref: PlayChordRef, kind: 'chord' | 'pattern'): void {
   if (
+    ref.random !== undefined ||
     ref.randomOctave ||
     ref.detune !== undefined ||
     ref.velocity !== undefined ||
@@ -56,7 +57,7 @@ export function assertRandomOnlyModifiers(ref: PlayChordRef, kind: 'chord' | 'pa
     ref.articulation !== undefined
   ) {
     throw new Error(
-      `"${ref.name}" は ${kind} です。^r / ~ / @v / @g はランダム音源と度数にだけ付けられます`,
+      `"${ref.name}" は ${kind} です。r / ^r / ~ / @v / @g はランダム音源と度数にだけ付けられます`,
     )
   }
 }

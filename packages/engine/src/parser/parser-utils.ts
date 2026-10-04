@@ -341,7 +341,10 @@ export function parseRandomBinding(
   if (ParserUtils.current(tokens, pos).type === 'LPAREN') {
     throw new Error('random.<mode変数> does not accept call form; write `var r1 = random.dorian`')
   }
-  return { statement: { type: 'random_binding', name, source: source.value }, newPos: pos }
+  return {
+    statement: { type: 'random_binding', variableName: name, source: source.value },
+    newPos: pos,
+  }
 }
 
 /** Semitone offset of one root-scope `mode(...)` element (§2.2). */

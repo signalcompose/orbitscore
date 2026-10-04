@@ -74,7 +74,7 @@ describe('#967 stage 1 — random degree parsing', () => {
   it('5: parses `random.<name>` as a random_binding statement', () => {
     expect(parseAudioDSL('var r1 = random.dorian').statements[0]).toEqual({
       type: 'random_binding',
-      name: 'r1',
+      variableName: 'r1',
       source: 'dorian',
     })
   })
@@ -82,7 +82,7 @@ describe('#967 stage 1 — random degree parsing', () => {
   it('5: gives random_binding precedence over mixer lookahead for `random.sum`', () => {
     expect(parseAudioDSL('var r1 = random.sum').statements[0]).toEqual({
       type: 'random_binding',
-      name: 'r1',
+      variableName: 'r1',
       source: 'sum',
     })
   })
@@ -111,11 +111,12 @@ describe('#967 stage 1 — random degree parsing', () => {
     })
   })
 
-  it('6: keeps `.r(p)` on a name reference as the existing one-voice thinning stack', () => {
-    expect(args('p.play(source.r(0.25))')[0]).toMatchObject({
+  it('6: distinguishes `.r(p)` on a name reference from its trailing-r modifier', () => {
+    expect(args('p.play(source.r(0.25))')[0]).toEqual({
       type: 'stack',
-      random: 0.25,
       voices: [{ type: 'chord_ref', name: 'source', octaveShift: 0 }],
+      random: 0.25,
+      referenceThin: true,
     })
   })
 
@@ -123,6 +124,12 @@ describe('#967 stage 1 — random degree parsing', () => {
     expect(() => parseAudioDSL('p.play([1, _r, 5])')).toThrow(
       '_ の声部タイは度数にだけ付けられます',
     )
+  })
+
+  it('rejects repetition postfixes inside stacks with the origin/main parse error', () => {
+    for (const source of ['p.play([c*2, 1])', 'p.play([r*2, 1])']) {
+      expect(() => parseAudioDSL(source)).toThrow(/Expected RBRACKET but got ASTERISK/)
+    }
   })
 })
 

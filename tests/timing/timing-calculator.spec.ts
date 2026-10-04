@@ -255,5 +255,19 @@ describe('TimingCalculator', () => {
 
       expect(formatted).toContain('[silence] @ beat 0.00 for 1.00 beats')
     })
+
+    it('should identify a slice-zero random degree before the silence fallback', () => {
+      const events = [
+        {
+          sliceNumber: 0,
+          startTime: 0,
+          duration: 500,
+          depth: 0,
+          randomDegree: { from: 'scope' },
+        },
+      ]
+
+      expect(formatTiming(events, 120)).toContain('[random degree] @ beat 0.00 for 1.00 beats')
+    })
   })
 })

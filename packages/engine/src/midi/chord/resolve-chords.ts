@@ -386,6 +386,13 @@ function resolveElement(
   if (!el || typeof el !== 'object') return el // bare degree / slice number
   switch (el.type) {
     case 'stack': {
+      const sole = el.voices.length === 1 ? el.voices[0] : undefined
+      if (el.referenceThin && sole && typeof sole === 'object' && sole.type === 'chord_ref') {
+        const bound = getBinding(sole.name)
+        if (bound?.kind === 'random') {
+          return randomBindingToElement({ ...sole, random: el.random }, bound)
+        }
+      }
       const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)
       return {
         type: 'stack',
@@ -521,7 +528,11 @@ export function evaluateChordDefinition(
     } else if (voice && typeof voice === 'object' && voice.type === 'chord_removal') {
       const before = result.length
       for (let i = result.length - 1; i >= 0; i--) {
-        if (result[i]!.degree === voice.degree && result[i]!.alteration === voice.alteration) {
+        if (
+          result[i]!.kind !== 'random' &&
+          result[i]!.degree === voice.degree &&
+          result[i]!.alteration === voice.alteration
+        ) {
           result.splice(i, 1)
         }
       }
@@ -545,5 +556,3 @@ export function evaluateChordDefinition(
   }
   return { voices: result, warnings }
 }
-
-/** Short internal alias used by the size-constrained Global facade. */

@@ -238,7 +238,7 @@ export interface TimedEvent {
 `TimedEvent[]` を人間が読みやすい文字列に変換するヘルパー関数があります。
 
 ```typescript
-// packages/engine/src/timing/calculation/format-timing.ts:17-38
+// packages/engine/src/timing/calculation/format-timing.ts:17-42
 export function formatTiming(events: TimedEvent[], bpm: number = 120): string {
   const lines: string[] = []
   const beatDuration = 60000 / bpm // ms per beat
@@ -248,7 +248,11 @@ export function formatTiming(events: TimedEvent[], bpm: number = 120): string {
     const durationBeats = event.duration / beatDuration
     const indent = '  '.repeat(event.depth)
 
-    if (event.sliceNumber === 0) {
+    if (event.randomDegree) {
+      lines.push(
+        `${indent}[random degree] @ beat ${startBeat.toFixed(2)} for ${durationBeats.toFixed(2)} beats`,
+      )
+    } else if (event.sliceNumber === 0) {
       lines.push(
         `${indent}[silence] @ beat ${startBeat.toFixed(2)} for ${durationBeats.toFixed(2)} beats`,
       )

@@ -119,6 +119,20 @@ function expectSubsetAndVariety(notes: number[], allowed: readonly number[]): vo
   expect(new Set(notes).size).toBeGreaterThan(1)
 }
 
+function soundingAudioEvents(source: string): Array<{
+  sliceNumber: number
+  startTime: number
+  duration: number
+}> {
+  const audio = new RecordingScheduler()
+  const sequence = new Sequence(new Global(audio), audio).setName('kick')
+  sequence.play(...(parseAudioDSL(`kick.play(${source})`).statements[0]!.args as never[]))
+  return sequence
+    .getState()
+    .timedEvents!.filter(({ sliceNumber }) => sliceNumber > 0)
+    .map(({ sliceNumber, startTime, duration }) => ({ sliceNumber, startTime, duration }))
+}
+
 describe('#967 random bindings and deterministic evaluation', () => {
   it('evaluates random_binding by copying the mode lattice and period (K6)', async () => {
     const global = await evaluate(
@@ -200,6 +214,18 @@ describe('#967 random bindings and deterministic evaluation', () => {
     }
   })
 
+  it('E8 rejects trailing r on chord and pattern references', () => {
+    const global = new Global(new RecordingScheduler())
+    global.defineChord('m7', [1, 3, 5, 7])
+    global.definePattern('riff', [1, 2])
+    const seq = new Sequence(global, new RecordingScheduler()).setName('p')
+    for (const expr of ['m7 r', 'riff r']) {
+      expect(() =>
+        seq.play(...(parseAudioDSL(`p.play(${expr})`).statements[0]!.args as never[])),
+      ).toThrow(/chord|pattern.*r|ランダム音源/i)
+    }
+  })
+
   it('W2 hints that r1r / rrr need dot-r probability syntax', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const seq = new Sequence(
@@ -247,6 +273,23 @@ describe('#967 chord random voices and voicing rules', () => {
     expect((seq.getState().playPattern![0] as any).voices[1]).toMatchObject({
       type: 'random_degree',
     })
+  })
+
+  it('keeps random voices when -1 removes only a literal degree at definition and play time', async () => {
+    const global = await evaluate('var c = [1, r, 5, -1]\nvar d = [1, r, 5]\nvar e = [d, -1]')
+    for (const name of ['c', 'e']) {
+      expect(global.getBinding(name)).toMatchObject({
+        kind: 'chord',
+        voices: [{ kind: 'random' }, { degree: 5 }],
+      })
+    }
+
+    const seq = new Sequence(global, new RecordingScheduler()).setName('p')
+    seq.play(...(parseAudioDSL('p.play([1, r, 5, -1])').statements[0]!.args as never[]))
+    expect((seq.getState().playPattern![0] as any).voices).toEqual([
+      expect.objectContaining({ type: 'random_degree' }),
+      5,
+    ])
   })
 
   it('allows drop/invert by written position and updates a random voice structurally', () => {
@@ -306,6 +349,7 @@ describe('#967 timing and audio regression', () => {
     } as const
     expect(calculateEventTiming([random], 2000)).toEqual([
       expect.objectContaining({
+        sliceNumber: 0,
         startTime: 0,
         duration: 2000,
         randomDegree: { lattice: [0, 7], period: 12, from: 'two' },
@@ -313,75 +357,69 @@ describe('#967 timing and audio regression', () => {
     ])
   })
 
-  it('keeps kick.play(1, r, 1) at the pre-change two onsets and warns W4 once', () => {
+  it('dispatches random pitch when play() precedes midi() and does not emit W4', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(T0)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const global = new Global(new RecordingScheduler())
-    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
+    try {
+      const scheduler = mockScheduler()
+      const capture: Capture = { ons: [], offs: new Map(), bends: [] }
+      const global = new Global(scheduler, new MidiManager(() => recordingOutput(capture)))
+      global.key('C').start()
+      const seq = new Sequence(global, scheduler).setName('s')
+      seq.play(...(parseAudioDSL('s.play(1, r, 4)').statements[0]!.args as never[]))
+      seq.midi('iac', 1).octave(4)
+
+      await seq.run()
+      await vi.advanceTimersByTimeAsync(2200)
+
+      expect(capture.ons).toHaveLength(3)
+      expect([60, 62, 64, 65, 67, 69, 71]).toContain(capture.ons[1]!.note)
+      expect(warn.mock.calls.flat().join('\n')).not.toMatch(/audio シーケンスでは休符/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps kick.play(1, r, 1) identical to (1, 0, 1) at audio dispatch and warns W4 once per pattern', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const audio = new RecordingScheduler()
+    const global = new Global(audio)
+    const kick = new Sequence(global, audio).setName('kick')
+    kick.audio('/tmp/kick.wav').output()
     kick.play(...(parseAudioDSL('kick.play(1, r, 1)').statements[0]!.args as never[]))
-    expect(
-      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
-        sliceNumber,
-        startTime,
-        duration,
-      })),
-    ).toEqual([
-      { sliceNumber: 1, startTime: 0, duration: 2000 / 3 },
-      { sliceNumber: 1, startTime: 4000 / 3, duration: 2000 / 3 },
-    ])
+    expect(soundingAudioEvents('1, r, 1')).toEqual(soundingAudioEvents('1, 0, 1'))
+    expect(warn).not.toHaveBeenCalled()
+
+    await kick.scheduleEvents(audio)
+    await kick.scheduleEvents(audio, 1)
     expect(
       warn.mock.calls
         .flat()
         .join('\n')
         .match(/audio シーケンスでは休符/g),
     ).toHaveLength(1)
+
+    kick.play(...(parseAudioDSL('kick.play(1, r, 1)').statements[0]!.args as never[]))
+    await kick.scheduleEvents(audio, 2)
+    expect(
+      warn.mock.calls
+        .flat()
+        .join('\n')
+        .match(/audio シーケンスでは休符/g),
+    ).toHaveLength(2)
   })
 
-  it('keeps kick.play((1, r), 1) at the pre-change audio onsets', () => {
-    const global = new Global(new RecordingScheduler())
-    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
-    kick.play(...(parseAudioDSL('kick.play((1, r), 1)').statements[0]!.args as never[]))
-    expect(
-      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
-        sliceNumber,
-        startTime,
-        duration,
-      })),
-    ).toEqual([
-      { sliceNumber: 1, startTime: 0, duration: 500 },
-      { sliceNumber: 1, startTime: 1000, duration: 1000 },
-    ])
+  it('keeps kick.play((1, r), 1) identical to ((1, 0), 1) for sounding audio events', () => {
+    expect(soundingAudioEvents('(1, r), 1')).toEqual(soundingAudioEvents('(1, 0), 1'))
   })
 
-  it('keeps kick.play({1, r}, 1) at the pre-change audio onsets', () => {
-    const global = new Global(new RecordingScheduler())
-    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
-    kick.play(...(parseAudioDSL('kick.play({1, r}, 1)').statements[0]!.args as never[]))
-    expect(
-      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
-        sliceNumber,
-        startTime,
-        duration,
-      })),
-    ).toEqual([
-      { sliceNumber: 1, startTime: 0, duration: 500 },
-      { sliceNumber: 1, startTime: 1000, duration: 1000 },
-    ])
+  it('keeps kick.play({1, r}, 1) identical to ({1, 0}, 1) for sounding audio events', () => {
+    expect(soundingAudioEvents('{1, r}, 1')).toEqual(soundingAudioEvents('{1, 0}, 1'))
   })
 
-  it('keeps kick.play([1, r], 1) at the pre-change audio onsets', () => {
-    const global = new Global(new RecordingScheduler())
-    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
-    kick.play(...(parseAudioDSL('kick.play([1, r], 1)').statements[0]!.args as never[]))
-    expect(
-      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
-        sliceNumber,
-        startTime,
-        duration,
-      })),
-    ).toEqual([
-      { sliceNumber: 1, startTime: 0, duration: 1000 },
-      { sliceNumber: 1, startTime: 1000, duration: 1000 },
-    ])
+  it('keeps kick.play([1, r], 1) identical to ([1, 0], 1) for sounding audio events', () => {
+    expect(soundingAudioEvents('[1, r], 1')).toEqual(soundingAudioEvents('[1, 0], 1'))
   })
 })
 
@@ -422,6 +460,11 @@ describe('#967 random-degree dispatch (statistical)', () => {
     expect(named.capture.ons.at(-1)?.note).toBe(79)
   })
 
+  it('r1^1.r(1) keeps ^1 sticky for the following 5', async () => {
+    const named = await playOnce('r1^1.r(1), 5', 'var one = mode(1)\nvar r1 = random.one')
+    expect(named.capture.ons.at(-1)?.note).toBe(79)
+  })
+
   it('random.two chooses both C and G', async () => {
     expectSubsetAndVariety(
       await sample('r1', 'var two = mode(1, 5)\nvar r1 = random.two'),
@@ -445,11 +488,18 @@ describe('#967 random-degree dispatch (statistical)', () => {
     expect(tonicCount).toBeLessThanOrEqual(169)
   }, 30000)
 
-  it('a two-octave lattice can choose offsets from 0 through 23 semitones', async () => {
-    expectSubsetAndVariety(
-      await sample('rw', 'var wide = mode(1, 7^1)\nvar rw = random.wide'),
-      [60, 83],
-    )
+  it('a two-octave lattice chooses endpoint and intermediate offsets from 0 through 23', async () => {
+    const rolls = [0, 0.25, 0.5, 0.999]
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => rolls.shift() ?? 0)
+    try {
+      const { capture } = await playOnce(
+        'rw*4',
+        'var wide = mode(1, 3, 5, 7^1)\nvar rw = random.wide',
+      )
+      expect(capture.ons.map(({ note }) => note)).toEqual([60, 64, 67, 83])
+    } finally {
+      random.mockRestore()
+    }
   }, 30000)
 
   it('layers group .oct() and per-event ^r on the selected random pitch', async () => {
@@ -463,9 +513,14 @@ describe('#967 random-degree dispatch (statistical)', () => {
   }, 30000)
 
   it('rerolls independently for each TimedEvent and loop iteration (`r*4`)', async () => {
-    const notes = await sample('r*4')
-    expect(notes).toHaveLength(N * 4)
-    expectSubsetAndVariety(notes, [60, 62, 64, 65, 67, 69, 71])
+    const { capture } = await playCycles('r*4', '', N)
+    const notesByCycle = Array.from({ length: N }, () => [] as number[])
+    for (const on of capture.ons) notesByCycle[Math.floor(on.time / 2500)]!.push(on.note)
+    expect(notesByCycle.every((notes) => notes.length === 4)).toBe(true)
+    for (const notes of notesByCycle) {
+      for (const note of notes) expect([60, 62, 64, 65, 67, 69, 71]).toContain(note)
+    }
+    expect(notesByCycle.some((notes) => new Set(notes).size > 1)).toBe(true)
   }, 30000)
 
   it('rr and r1.r(0.3) each produce both sounding and silent cycles', async () => {

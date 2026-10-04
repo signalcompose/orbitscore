@@ -230,7 +230,8 @@ const MIXER_BUS_STRING_DECL = /\bglobal\.(?:sum|aux)\s*\(\s*["']([^"']+)["']/g
  * the declaration still means the same thing. Pinning it to `mix.` rejected those scores.
  * (#940 review: a third copy of this pattern was about to be added with the general form.)
  */
-const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(sum|aux)\b/g
+const MIXER_BUS_VAR_DECL =
+  /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*(?!random\s*\.)[A-Za-z_$][\w$]*\.(sum|aux)\b/g
 
 /**
  * Every `var <name> = <mixer>.sum|aux` declaration in the document, with its kind.

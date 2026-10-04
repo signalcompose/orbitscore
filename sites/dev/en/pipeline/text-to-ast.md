@@ -27,7 +27,7 @@ The first edition of this chapter was written against the 2026-05-05 snapshot (0
 - **`collapseScopedRun()` was extracted into `parse-expression.ts`**. The rule that folds a pitch-scope chain onto a run of juxtaposed groups such as `(A)(B).root(X)` is shared by both the statement-level and the nested-level parse loops
 
 ```typescript
-// packages/engine/src/parser/parse-expression.ts:79-86
+// packages/engine/src/parser/parse-expression.ts:80-87
 export function collapseScopedRun(list: PlayElement[], runStart: number): void {
   const lastIdx = list.length - 1
   const last = list[lastIdx]

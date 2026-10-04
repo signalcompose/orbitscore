@@ -6,7 +6,7 @@
     "packages/engine/src/core/global/effect-slot.ts": 783,
     "packages/engine/src/core/sequence.ts": 1362,
     "packages/engine/src/interpreter/process-statement.ts": 520,
-    "packages/engine/src/parser/parse-expression.ts": 990,
+    "packages/engine/src/parser/parse-expression.ts": 987,
     "packages/engine/src/parser/parse-statement.ts": 648,
     "rust/crates/orbit-audio-daemon/src/outproc_effect.rs": 812,
     "rust/crates/orbit-audio-daemon/src/outproc_instrument.rs": 705,

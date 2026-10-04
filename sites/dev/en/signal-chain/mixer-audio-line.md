@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:509-548
+// packages/engine/src/core/sequence.ts:510-549
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -296,7 +296,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:626-647
+// packages/engine/src/core/sequence.ts:627-648
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -431,7 +431,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 The call site (`stageOutputElement()`) only consults it.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:449-466
+// packages/engine/src/core/sequence.ts:450-467
   private stageOutputElement(
     name: string,
     dest: OutputDest,
@@ -1280,7 +1280,7 @@ expanded the target to the explicit three values `none / master / bus`. Regardle
 order, only the newest destination derived from the score crosses the wire.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:971-1005
+// packages/engine/src/core/sequence.ts:972-1006
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()

@@ -174,8 +174,8 @@ running range（`^N`）と `.oct()` はこの範囲をオクターブ単位で�
 
 ### 3.10 audio シーケンス（K12）
 
-- 無音の slot のまま。timing で audio の TimedEvent を**作らない**（今の `full-random` と同じ。§2.1 の実測）。仮に作る実装を選ぶ場合も `sliceNumber` 0 なら鳴らない（F12）
-- `( )` 内の `r` で出ていた「unknown name」警告の代わりに、§5 W4 を 1 回出す（音は変えない・診断だけ）
+- 無音の slot のまま。timing はランダム度数を audio / note の区別なく **`sliceNumber: 0`（書かれた休符 `0` と同じ）の TimedEvent** にし、audio の出力は既存の「`sliceNumber > 0` だけ鳴らす」規則（F12）で鳴らさない。**audio か note かは `play()` の評価時ではなく出力（dispatch）の時点で決める** — `play()` 時点で判定すると、`play()` を `.midi()` / `.instrument()` より前に書いた note シーケンスで音が黙って消える（PR #973 の Opus 監査 I-3 で実測・2026-10-05 改訂）。`kick.play(1, r, 1)` は `kick.play(1, 0, 1)` と鳴り方が完全に同じ
+- `( )` 内の `r` で出ていた「unknown name」警告の代わりに、§5 W4 を出す。W4 は audio シーケンスが**実際に出力するとき**、パターンが変わるたびに 1 回（音は変えない・診断だけ）
 
 ### 3.11 シンボリック保持（§7-0）
 

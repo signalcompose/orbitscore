@@ -255,7 +255,7 @@ export type ModeBinding = {
 /** `var NAME = random.MODE_NAME` (#967): a symbolic random-source binding. */
 export type RandomBinding = {
   type: 'random_binding'
-  name: string
+  variableName: string
   source: string
 }
 
@@ -352,6 +352,8 @@ export type PlayStack = {
    * voice has this chance to sound, rolled per cycle at dispatch. Absent = no thinning.
    */
   random?: number
+  /** Internal marker: this stack came from `NAME.r(p)`, before the binding kind is known. */
+  referenceThin?: boolean
 }
 
 /**

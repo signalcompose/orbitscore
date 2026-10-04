@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:509-548
+// packages/engine/src/core/sequence.ts:510-549
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -286,7 +286,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:626-647
+// packages/engine/src/core/sequence.ts:627-648
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -417,7 +417,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 呼び出し側（`stageOutputElement()`）はこれを見るだけです。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:449-466
+// packages/engine/src/core/sequence.ts:450-467
   private stageOutputElement(
     name: string,
     dest: OutputDest,
@@ -1245,7 +1245,7 @@ PR-2（TS 側）は instrument の `SetSourceRouting` 発行を 1 箇所に集�
 wire を通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:971-1005
+// packages/engine/src/core/sequence.ts:972-1006
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()

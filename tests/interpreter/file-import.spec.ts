@@ -103,6 +103,31 @@ describe('file import — interpreter (IM.2-IM.6)', () => {
     expect(Object.keys(state.globals)).toEqual(['global'])
   })
 
+  it('imports a random source by name and resolves it in play()', async () => {
+    write('x.orbs', `var global = init GLOBAL\nvar two = mode(1, 5)\nvar r1 = random.two\n`)
+    const entry = write(
+      'main.orbs',
+      [
+        `import { r1 } from "./x.orbs"`,
+        'var global = init GLOBAL',
+        'var s = init global.seq',
+        's.play(r1)',
+      ].join('\n'),
+    )
+
+    await run(entry)
+
+    const sequence = (interpreter as any).state.sequences.get('s')
+    expect(sequence.getState().playPattern).toEqual([
+      expect.objectContaining({
+        type: 'random_degree',
+        lattice: [0, 7],
+        period: 12,
+        from: 'two',
+      }),
+    ])
+  })
+
   it('rejects an import name that the file does not declare (IM.1 contract check)', async () => {
     write('drums.orbs', `var global = init GLOBAL\nvar kick = init global.seq\n`)
     const entry = write('main.orbs', `import { nope } from "./drums.orbs"\n`)

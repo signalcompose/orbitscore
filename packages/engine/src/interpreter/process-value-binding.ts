@@ -64,8 +64,8 @@ export function processModeBinding(statement: ModeBinding, state: InterpreterSta
 
 /** Process `var NAME = random.MODE`: bind a copied random-source lattice. */
 export function processRandomBinding(statement: RandomBinding, state: InterpreterState): void {
-  requireGlobal(state, `random source "${statement.name}"`)?.defineRandom(
-    statement.name,
+  requireGlobal(state, `random source "${statement.variableName}"`)?.defineRandom(
+    statement.variableName,
     statement.source,
   )
 }

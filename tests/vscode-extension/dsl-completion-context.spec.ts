@@ -87,6 +87,15 @@ describe('source extraction', () => {
     expect(extractDeclaredBusNames(source, 'aux')).toEqual(['reverb', 'delay'])
   })
 
+  it('does not expose random.sum / random.aux / random.output as mixer nodes', () => {
+    const source = ['var r1 = random.sum', 'var r2 = random.aux', 'var r3 = random.output'].join(
+      '\n',
+    )
+    expect(extractDeclaredBusNames(source, 'sum')).toEqual([])
+    expect(extractDeclaredBusNames(source, 'aux')).toEqual([])
+    expect(extractDeclaredMixerNodeNames(source)).toEqual([])
+  })
+
   it('extracts declared sum, aux, and physical-output mixer node variables', () => {
     const source = [
       'var mix = init global.mixer',

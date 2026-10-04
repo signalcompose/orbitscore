@@ -17,6 +17,7 @@ import {
   containsRandomDegree,
   resolveRandomDegree,
   validateRandomDegree,
+  warnAudioRandomDegree,
 } from '../midi/random-degree'
 import { RootContext } from '../midi/types'
 import { MidiScheduler } from '../midi/midi-scheduler'
@@ -130,6 +131,7 @@ export class Sequence {
   private _instrumentSourceRoutingKey?: string
   private _instrumentSourceRoutingPromise?: Promise<void>
   private _instrumentDetuneWarned = false
+  private _audioRandomWarningPending = false
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
   private _vel = 96 // default velocity 1..127. spec §1
   private _hold = false // §5.3: auto common-tone tie between consecutive stacks
@@ -196,12 +198,11 @@ export class Sequence {
     const playPattern = this.stateManager.getPlayPattern()
     if (playPattern && playPattern.length > 0) {
       const globalState = this.global.getState()
-      let timedEvents = this.tempoManager.calculateEventTiming(
+      const timedEvents = this.tempoManager.calculateEventTiming(
         playPattern,
         globalState.tempo || 120,
         globalState.beat,
       )
-      if (!this.isNoteSequence()) timedEvents = timedEvents.filter((event) => !event.randomDegree)
       this.stateManager.setTimedEvents(timedEvents)
     }
   }
@@ -1225,20 +1226,17 @@ export class Sequence {
     for (const w of warnings) {
       console.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)
     }
-    if (!this.isNoteSequence() && containsRandomDegree(resolved)) {
-      console.warn('r は note シーケンスの音高の乱数です。audio シーケンスでは休符として扱います')
-    }
+    this._audioRandomWarningPending = containsRandomDegree(resolved)
 
     this.stateManager.setPlayPattern(resolved)
 
     // Calculate timing for the play pattern
     const globalState = this.global.getState()
-    let timedEvents = this.tempoManager.calculateEventTiming(
+    const timedEvents = this.tempoManager.calculateEventTiming(
       resolved,
       globalState.tempo || 120,
       globalState.beat,
     )
-    if (!this.isNoteSequence()) timedEvents = timedEvents.filter((event) => !event.randomDegree)
     this.stateManager.setTimedEvents(timedEvents)
 
     const patternStr = resolved
@@ -1819,6 +1817,7 @@ export class Sequence {
       return
     }
 
+    this._audioRandomWarningPending = warnAudioRandomDegree(this._audioRandomWarningPending)
     const gainState = this.gainManager.getGain()
     const panState = this.panManager.getPan()
 
@@ -1943,6 +1942,7 @@ export class Sequence {
       return
     }
 
+    this._audioRandomWarningPending = warnAudioRandomDegree(this._audioRandomWarningPending)
     const gainState = this.gainManager.getGain()
     const panState = this.panManager.getPan()
 

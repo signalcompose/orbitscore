@@ -56,6 +56,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - 見送り: `kind` 判定の共通述語化（差分の外の既存コードに広がる）
 - テスト 2639 → 2642 passed。baseline は `global.ts` 1103→1101 / `parse-expression.ts` 997→990 と**減少**
 
+**レビュー ラウンド 1 の修正**（Commit: `699a35fb`）— `/code:pr-review-team`（4 名: Critical / Important 0）と **Opus 監査（Important 3）**を並行投入。Important はすべて監査側が実測で発見:
+- 🔴 **I-3**: `play()` を `.midi()` / `.instrument()` より前に書くと乱数の音が黙って消え、誤った W4 が出た。audio / note を `play()` の評価時に判定していたため（段 2 の作りと /simplify の作りの両方に共通）。**方針を先に決めて一括適用**: 判定は出力（dispatch）の時点。timing はランダム度数を `sliceNumber: 0`（書かれた休符と同じ）の TimedEvent にし、audio は既存の「`sliceNumber > 0` だけ鳴らす」規則で構造的に鳴らさない。W4 は audio の出力経路（`isNoteSequence()` の早期 return の後ろ）でだけ出す。audio 回帰 4 件は「`0` を書いた場合と鳴り方が完全に同じ」へ強化
+- I-1: ファイル import の宣言名の列挙から `random_binding` が漏れていた（`RandomBinding` のフィールドを他の束縛と同じ `variableName` に揃えて再発を防ぐ）
+- I-2: chord 定義の中の `-1` がランダム声部まで消していた（内部表現の `degree: 1` に一致）
+- Minor: `r1^1.r(p)` のスティッキー喪失 / `[r*2, 1]` の内部エラー（main と同じパースエラーへ）/ エディタが `random.sum` をミキサーとして読む / chord・pattern 参照の末尾 `r` が黙って消える（E8 へ）/ テスト 2 件の判定と名乗りのずれ / 消し残しの doc コメント
+- テスト 2642 → 2651 passed。赤 → 緑を各修正で確認。設計文書 §3.10 を新方針に改訂
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`
