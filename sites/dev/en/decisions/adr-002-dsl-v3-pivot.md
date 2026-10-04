@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version-bearing passages** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. The main argument about the v0.1 → v3.0 pivot is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**. It was further brought up to the v4.2.0 release (PR [#941](https://github.com/signalcompose/orbitscore/pull/941) — #939 cursor-addressed plugin UI / #940 host-frontmost floating windows) on 2026-09-14 — **the extension version string only**. It was further brought up to the v4.2.1 release (PR [#962](https://github.com/signalcompose/orbitscore/pull/962) — #954, bundling the user site into the cold-installed `.vsix`) on 2026-09-18 — **the extension version string only**.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version-bearing passages** brought up to #883 (extension 4.0.0 / `DSL_VERSION` 2.0) on 2026-09-12. The main argument about the v0.1 → v3.0 pivot is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to the 4.1.0 release of #926 (PR [#928](https://github.com/signalcompose/orbitscore/pull/928)) on 2026-09-13 — **the extension version string only**. It was further brought up to the v4.2.0 release (PR [#941](https://github.com/signalcompose/orbitscore/pull/941) — #939 cursor-addressed plugin UI / #940 host-frontmost floating windows) on 2026-09-14 — **the extension version string only**. It was further brought up to the v4.2.1 release (PR [#962](https://github.com/signalcompose/orbitscore/pull/962) — #954, bundling the user site into the cold-installed `.vsix`) on 2026-09-18 — **the extension version string only**. On 2026-09-25 it was brought up to the #967 spec freeze (PR [#971](https://github.com/signalcompose/orbitscore/pull/971)) — **only by answering the open `randseed` item and re-anchoring a line reference under Sources**; every other section is still the reading as of the previous `verified-against`.
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
@@ -228,6 +228,19 @@ Event notation:
 - `1.5` → between C and C# (microtone, expressed via pitch bend)
 - `1r` → a random value in [C+0, C+0.999]
 
+> **What became of `1r`'s randomness** (added 2026-09-25, PR [#971](https://github.com/signalcompose/orbitscore/pull/971)):
+> the `randseed` question that used to sit under "Next Exploration Candidates" below was settled by
+> the spec follow-up in #971. **Randomness itself did carry over into v3.0 / the Pitch DSL** — it is
+> the Pitch DSL's `Xr` (per-element presence), `.r` (chord thinning) and `^r` (random octave), plus
+> audio's `gain(r)` / `pan(r)`. The property `1r` had in v1.0 of **picking the pitch itself at
+> random** did not carry over into v3.0, but it **came back** as #967's `r` / `rr` / `random.<mode var>`
+> (implemented in PR [#973](https://github.com/signalcompose/orbitscore/pull/973), shipped in extension 4.3.0)
+> (source of truth: `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` §6.2.1, decisions #80-#84).
+> `randseed` (a fixed seed) is **still deliberately absent**; recording one for exact-match
+> verification remains a future task (decisions #21 / #50,
+> `docs/specs-v2/SESSION_LOG_SPEC_v1.md` §5). Because `.orbslog` is a record of execution rather
+> than a recording of the result, randomness is re-rolled on replay as well.
+
 ---
 
 ## Comparison with the v3.0 (Audio) DSL
@@ -267,7 +280,6 @@ In v3.0, "which sound to play" is determined by the file name, and "at what timi
 
 - Excavating the decision record of the v2.0 pivot — confirm whether detailed discussion remains in PR or commit bodies
 - How Pitch DSL v1.1 (`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`) reinterpreted the v1.0 degree system — a mapping against the "deprecated" column of this ADR
-- Support status of `randseed` — whether the randomness control in v1.0 is carried over to v3.0 / the Pitch DSL
 - Implementation details of polymeter — whether the independent time base in `beat(N by D)` is equivalent to v1.0's `meter N/D independent`
 - Treatment of the v1.0 degree system in the paper — whether deprecated features are included as academic contributions in the paper
 
@@ -276,7 +288,7 @@ In v3.0, "which sound to play" is determined by the file name, and "at what timi
 ## Sources
 
 - `packages/engine/src/version.ts:15-18` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '2.0'` (a separate axis from the audio line v3.0)
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1983-2035` — §13 Versioning: change history of v0.1-v3.0 and v1.1 Pitch DSL, and Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:2309-2364` — §13 Versioning: change history of v0.1-v3.0 and v1.1 Pitch DSL, and Migration Notes
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:496-631` — §7 the v3.0 underscore prefix pattern specification
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:365-462` — §5 the unidirectional toggle specification
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — the v1.0 MIDI DSL specification archive (archived 2025-10-06)
