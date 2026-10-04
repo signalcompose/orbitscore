@@ -1,7 +1,7 @@
 # #967 — Pitch DSL の音高の乱数（`r` / `rr` / `random.<mode変数>`）設計
 
 > **Status**: 確定（2026-09-25）・**実装済み**（2026-09-26・拡張 4.3.0）。起案 = fresh Opus subagent（初版 → 改訂 r2）/ 審査 = main / 表面の決定 = owner。**§1 の決定は再議論しない。**
-> **位置づけ**: 拡張版（OrbitScore）への機能追加。版は 4.3.0（minor）の想定。本書と spec の更新は docs のみで、**実装は後続 PR**。
+> **位置づけ**: 拡張版（OrbitScore）への機能追加。**4.3.0（minor）で出荷**（仕様 = PR #971・実装 = PR #973・版の更新 = #975）。
 > **関連**: [`../specs-v2/PITCH_DSL_SPEC_v1.1.md`](../specs-v2/PITCH_DSL_SPEC_v1.1.md) §2.1 / §2.2 / §6.2 / [`../specs-v2/DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §12.4・§16（決定 #80〜#84）/ [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) P.12。
 > **別 issue に切り出した既存の穴**: `Xr(p)` 未実装 = [#968](https://github.com/signalcompose/orbitscore/issues/968) / `mode(0, …)` が NaN の格子になる = [#969](https://github.com/signalcompose/orbitscore/issues/969) / `seq.mode()` 未実装 = [#970](https://github.com/signalcompose/orbitscore/issues/970)。
 > **検証手段の決め方**: CLAUDE.md「テストの積み上げ規律」の現行版に従う（機能テスト → キャプチャ E2E が本体。変異検証は使わない）。
@@ -27,7 +27,7 @@ owner の原文:「普通に `play(1,2,r,4...)` みたいにピッチ情報の 1
 | K11 | 振り直しは既存の `Xr` / `^r` と同じく、TimedEvent 1 件ごと・ループ反復ごと。seed は持たない | 採用した提案（決定 #21 / #50） |
 | K12 | note シーケンスでは `play()` 直下の `r` も音高の乱数。audio シーケンスの意味は変えない（無音の slot のまま・警告だけ足す） | 採用した提案（運用規則 5） |
 | K13 | `r` / `rr` は音高の位置で予約（`var r =` / `var rr =` はエラー）。`r`+数字の名前（`r1`）は、後ろに `%` が続かない限り名前として読む | 採用した提案 |
-| K14 | 拡張版に追加する。版は minor（4.3.0 想定）。バージョンの bump は実装 PR で行う | owner |
+| K14 | 拡張版に追加する。版は minor（4.3.0）。バージョンの bump は別のリリース PR（#975）で行う | owner（版は 2026-10-05 に確定。SemVer の新機能 = minor） |
 
 棄却した案（決定ログ #80〜#84 と付録 A）: 候補リスト `r[…]`（初版の推奨）/ 範囲 `rC%N` / `( ).r` / 交替記号 `|` / `random.mode(…)` / `random.root(X).…` / 定義なしで動く組み込みの `random.dorian`。
 
@@ -268,7 +268,7 @@ running range（`^N`）と `.oct()` はこの範囲をオクターブ単位で�
 
 ## 7. 版と出荷
 
-- 拡張版（OrbitScore）に追加する（K14）。版は **4.3.0（minor）** の想定で、bump は実装 PR で行う
+- 拡張版（OrbitScore）に追加する（K14）。版は **4.3.0（minor）**。bump は別のリリース PR（#975）で行った
 - minor とする根拠: 既存の合法な譜面のうち挙動が変わるのは「`( )` 内の未定義の名前 `r` / `rr`（警告つきの休符）が音になる」と「`play()` 直下の `r`（note シーケンスの無音の slot）が音になる」だけ。repo 内の `.orbs` に該当は 0 件（`git ls-files '*.orbs' | xargs grep` で確認）。audio シーケンスの意味は変えない
 - 実装箇所（`packages/engine`）は、ネイティブ版の計画で層 2 に当たる（`docs/planning/NATIVE_MIGRATION_2026-09.md:172-173`）ので、ネイティブ版にもそのまま引き継がれる
 

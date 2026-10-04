@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 4.3.0 (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `975-release-4.3.0` / **Issue**: [#975](https://github.com/signalcompose/orbitscore/issues/975) / **Commit**: `dd884dca`
+
+凍結版（拡張版 OrbitScore）を **4.3.0** として更新する。中身は #967（音高の乱数 `r` / `rr` / `random.<mode変数>`・PR #971 仕様 / PR #973 実装）と #969（`mode(0, …)` をパースエラーに）。
+
+- **版の決定**: owner は当初「4.2.2」と指示したが、main が SemVer（`CHANGELOG.md` 冒頭で宣言）では後方互換の新機能 = minor であること・前例（4.2.0 = 機能追加 / 4.2.1 = 修正）・`r` / `rr` が予約語になる変化を番号で伝えられることを挙げて 4.3.0 を推奨し、owner が採用（2026-10-05）
+- 現在の版を名乗る箇所を 4.2.1 → 4.3.0: `packages/vscode-extension/package.json` / `CLAUDE.md` ×2 / `README.md` ×3 / `docs/core/INDEX.md` / core spec ×2 / dev サイト 3 章 × ja・en（前回 #961 と同じ範囲）
+- `CHANGELOG.md` に `[4.3.0]` 節と比較リンク
+- #967 の文書の「4.3.0 想定」を「4.3.0 で出荷」へ（設計 967 / 地図 §4.Q / NATIVE §12.8 / 決定ログ §16.3）
+- 🔴 検算は「古い番号が残っていないこと」で行った（memory の教訓）: 素の `4.2.1` は CHANGELOG の過去の版の記録 3 行だけ、「4.3.0 想定」は 0 件
+- リリースは main に入った後のドキュメント追従 PR を先に入れてから（owner 2026-10-05）。#963（4.2.1 の Note）→ #972（#971 の追従。adr-002 の「未実装」を「#973 で実装・4.3.0 で出荷」へ main が補正）→ #976（#973 の追従・本文の参照 98 か所）の順に、衝突を main が解いてマージした
+- #963 の規約（本文の版を送ったら `:9` の追従履歴 Note に 1 文）に従い、dev サイト 3 章 × ja・en の Note に v4.3.0 の 1 文を追記
 ### docs: follow PR #973 (random pitch) in the dev site citations (Oct 4, 2026)
 
 **Date**: 2026-10-04 / **ブランチ**: `claude/docs-sync-pr973` / **追従元**: PR [#973](https://github.com/signalcompose/orbitscore/pull/973)（merge commit `9c66585`）

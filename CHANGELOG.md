@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-10-05
+
+DSL の機能追加リリース。Pitch DSL で**音高そのものをランダムに選べる**ようになった。audio シーケンスの意味論・wire・出力は変更なし。
+
+### Added
+
+- **音高の乱数 `r` / `rr`** ([`#967`](https://github.com/signalcompose/orbitscore/issues/967) / [`#971`](https://github.com/signalcompose/orbitscore/pull/971) 仕様 / [`#973`](https://github.com/signalcompose/orbitscore/pull/973) 実装)
+  - 度数を書く位置に `r` を置くと、その音のスコープの音階から毎回 1 音を選ぶ（root スコープ = 長音階の 1〜7 / `.mode()` の中 = その格子の全長）。`rr` は選んだ音が約 50% で鳴る。`r^1` / `r^r` / `@v` / `@g` / `.r(p)` も付けられる
+  - 振り直しは既存の `Xr` / `^r` と同じく 1 音・1 サイクルごと。seed は持たない
+- **ランダム音源 `var X = random.<mode変数>`** — 自分で定義した mode（`var two = mode(1, 5)` など）の格子から選ぶ音源を変数に置ける。12 音の半音階も `mode(1, b2, 2, …)` で書ける。同じ音を重ねて書くと重みになる
+- 実機の gated E2E で、16 音すべてが候補の音（C4 / G4）に入り、かつ両方が出ることをキャプチャで確かめるテストを追加
+
+### Changed
+
+- 🔴 **`r` と `rr` は予約語になった**（`var r = …` / `var rr = …` はエラー）。`r1` のような名前は、後ろに `%` が続かない限り変数名として使える（`gain(r1%3)` の意味は不変）
+- audio シーケンス（サンプル再生）に書いた `r` は、書かれた休符 `0` と同じく鳴らない（警告を出す）
+
+### Fixed
+
+- `mode(0, …)` がエラーにならず、格子が NaN になっていた ([`#969`](https://github.com/signalcompose/orbitscore/issues/969)) — パースエラーになった
+
 ## [4.2.1] - 2026-09-18
 
 利用者に届く変化は **cold install した `.vsix` でドキュメントが読めるようになったこと** 1 点。DSL・wire・出力の意味論は変更なし。
@@ -186,7 +207,8 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
 - ローカル / オフライン閲覧手順を README に追記
 - README に学習サイト (web) セクションを追加
 
-[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.2.1...HEAD
+[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/signalcompose/orbitscore/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/signalcompose/orbitscore/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/signalcompose/orbitscore/compare/v4.1.0...v4.2.0
 [4.1.0]: https://github.com/signalcompose/orbitscore/compare/v4.0.1...v4.1.0
