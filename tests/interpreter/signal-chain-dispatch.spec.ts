@@ -909,6 +909,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'getChordVoices',
       'definePattern',
       'defineMode',
+      'defineRandom',
       'getBinding',
       // Audio resolution and mixer-runtime plumbing.
       'resolveAudioSpec',

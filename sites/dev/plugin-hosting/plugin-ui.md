@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:874-894
+// packages/engine/src/core/sequence.ts:843-863
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -379,7 +379,7 @@ export function allocatePluginUiWindowToken(): number {
 open が成功すると、TS はセッション簿記に 1 枚ぶんの記録を残します。キーは window token です。
 
 ```typescript
-// packages/engine/src/core/global.ts:65-71
+// packages/engine/src/core/global.ts:64-70
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -1165,7 +1165,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2475-2497
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

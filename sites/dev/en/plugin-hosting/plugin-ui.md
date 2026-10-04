@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:874-894
+// packages/engine/src/core/sequence.ts:843-863
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -386,7 +386,7 @@ of a token that is in use" loudly, so even a collision does not become a silent 
 On a successful open, TS records one entry in its session ledger. The key is the window token.
 
 ```typescript
-// packages/engine/src/core/global.ts:65-71
+// packages/engine/src/core/global.ts:64-70
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -1187,7 +1187,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2475-2497
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

@@ -17,6 +17,89 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat: implement random pitch r / rr / random.<mode> (#967) (Sep 26, 2026)
+
+**Date**: 2026-09-26 / **ブランチ**: `967-random-pitch-impl` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / #969
+
+設計 `docs/design/967-random-pitch-design.md` の実装。実装 = Codex（段ごとに発注）/ 監視と sandbox 外の検証 = main。
+
+**段 1: パーサ**（Commit: `dfaa9434`）
+- `r` / `rr` を `play()` 直下・`( )`・`{ }`・`[ ]` のどこでも同じ `random_degree` ノードとして読む（修飾子は既存の度数と同じ `parsePitchModifiers` を共有・`parser-utils.ts` へ移設）。`play()` の要素の位置だけで有効（`ExpressionParser` の `playElementContext`）なので `gain(r)` / `gain(r1%3)` / `pan(r0%10)` は不変
+- `r<数字>` は後ろに `%` が続く時だけ乱数値、それ以外は名前参照（K13）
+- `var X = random.<名前>` を `random_binding` 文として、ミキサー宣言の先読みより**前**で判定（今まで `random.sum` がミキサー宣言として受理されていた）
+- `var r` / `var rr` / `_r` / `random.mode(...)` はパースエラー。名前参照の `^r` `~` `@v` `@g` は記録のみ（評価は段 2）
+- #969: `mode(0, …)` をパースエラーに（今までは格子が NaN）
+- テスト: 2589 → 2604 passed（新規 `tests/parser/random-degree.spec.ts` 15 件・先に red を確認）。既存の期待値の変更は `m7^1` の `chord_ref` に `rangeSet: true` が付く 1 行のみ
+
+**段 2: 評価・timing・出力段**（Commit: `c07b85e5`）
+- `random_binding` を評価して名前空間に `kind: 'random'`（格子と period を定義時に写し取る）。E3 / E4 / E6
+- 名前参照の解決: ランダム音源は修飾子を引き継いだ格子つきのランダム度数へ（`r1^1` もスティッキー）。chord / pattern への `^r` `~` `@v` `@g` は E8。W2 / W3 / E5
+- chord 変数の中の `r`（`var c = [1, r, 5]`）もランダム声部として持ち運ぶ（設計文書に無かった点を main が補った・K1 に揃える）
+- voicing: `.close/.open/.shell/.rootless` は E7、`.drop/.invert` は許可。`.voicelead()` はランダム声部を計算から外す
+- timing はランダム度数を格子つきの TimedEvent にする。**audio シーケンスではイベントを作らない**（オンセット数・時刻は不変を回帰テストで固定）+ W4
+- 選択は出力段 Stage A（`midi/random-degree.ts`）で TimedEvent 1 件・ループ反復ごと。格子は 音源 → スコープの mode → Ionian の順
+- ファイルサイズのラチェットを増やさないため `midi-planning.ts` / `process-value-binding.ts` を切り出し、baseline は 3 件とも**減った**（sequence 1369→1362 / process-statement 554→520 / parse-expression 1000→997）
+- テスト: 2604 → 2639 passed（新規 `tests/midi/random-degree.spec.ts` 35 件。統計は N=20・重みは N=200 の二項 99.9% 区間。1 音の格子で「2 種以上」の判定が落ちるオラクル識別テストつき）
+
+**段 3: 実機 E2E・台帳・ドキュメント**（Commit: `91d9c2d0`）
+- `DslSyntaxId` に `random-pitch` / `random-binding` を追加し、台帳に `capture-pitch` で登録
+- gated E2E 3 本（共有セッション群の末尾）: `random.two` と `(r, …).mode(two)` で 16 音を鳴らし、オンセットを追う窓で**全音が C4 / G4 の ±2%** かつ**両方が出る**（集合一致なので常に同じ音を返す実装は落ちる）/ `random.nope` の E3
+- 実機の gated E2E 全件: **52 passed**（2026-10-04・915 秒）
+- ユーザー向けサイト（日英）の `voicing.md` / `methods.md` に `r` / `rr` / `random.<mode>`。仕様書の「🚧 未実装」表記を「実装済み（4.3.0）」へ。#969 はパースエラーと明記
+- dev サイトの引用: 行ずれ 26 ファイルを `--fix`、中身が変わった 4 組（日英 8 件）は今のコードに差し替え
+- 🔴 未解決の観測（2026-09-26）: 隔離した VS Code（1.139.1）でエンジンを起動すると約 10〜20 秒後にウィンドウが黙って閉じる症状が出た（出荷済み 4.2.1 でも再現・今回の変更とは無関係）。10-04 の再実行では起きず、原因は未確定
+
+**/simplify の修正**（Commit: `3f736d90`）— 4 観点（再利用・簡潔さ・効率・修正の深さ）のレビューを main が集約し Codex へ一括発注:
+- 段 1・2 のモジュール切り出しで落ちた説明コメント（doc 9・インライン 3）を `origin/main` の原文どおり復元。ラチェットはコメント専用行を数えないので、落とす必要はなかった
+- `emitRandomDegrees` を timing の再帰 6 か所へ位置引数で引き回すのをやめ、timing は常にイベントを作り、**`isNoteSequence()` を知る呼び出し元（`Sequence` の 2 か所・呼び出し元はこの 2 つだけと列挙済み）で audio のときだけ除く**。新しい分岐で引き回しを忘れて audio が鳴り出す事故を構造で防ぐ。`( )` / `{ }` / `[ ]` の audio 回帰テスト 3 件を修正前に測った値で固定
+- `parseSignedNumber` の二重実装を一本化 / 修飾子コピー 4 か所をヘルパーへ / `evaluateChord` の別名 export を import 別名へ / 出力段の `[...lattice]` 毎回コピーをやめる / テストの準備を共通化
+- 見送り: `kind` 判定の共通述語化（差分の外の既存コードに広がる）
+- テスト 2639 → 2642 passed。baseline は `global.ts` 1103→1101 / `parse-expression.ts` 997→990 と**減少**
+
+**レビュー ラウンド 1 の修正**（Commit: `699a35fb`）— `/code:pr-review-team`（4 名: Critical / Important 0）と **Opus 監査（Important 3）**を並行投入。Important はすべて監査側が実測で発見:
+- 🔴 **I-3**: `play()` を `.midi()` / `.instrument()` より前に書くと乱数の音が黙って消え、誤った W4 が出た。audio / note を `play()` の評価時に判定していたため（段 2 の作りと /simplify の作りの両方に共通）。**方針を先に決めて一括適用**: 判定は出力（dispatch）の時点。timing はランダム度数を `sliceNumber: 0`（書かれた休符と同じ）の TimedEvent にし、audio は既存の「`sliceNumber > 0` だけ鳴らす」規則で構造的に鳴らさない。W4 は audio の出力経路（`isNoteSequence()` の早期 return の後ろ）でだけ出す。audio 回帰 4 件は「`0` を書いた場合と鳴り方が完全に同じ」へ強化
+- I-1: ファイル import の宣言名の列挙から `random_binding` が漏れていた（`RandomBinding` のフィールドを他の束縛と同じ `variableName` に揃えて再発を防ぐ）
+- I-2: chord 定義の中の `-1` がランダム声部まで消していた（内部表現の `degree: 1` に一致）
+- Minor: `r1^1.r(p)` のスティッキー喪失 / `[r*2, 1]` の内部エラー（main と同じパースエラーへ）/ エディタが `random.sum` をミキサーとして読む / chord・pattern 参照の末尾 `r` が黙って消える（E8 へ）/ テスト 2 件の判定と名乗りのずれ / 消し残しの doc コメント
+- テスト 2642 → 2651 passed。赤 → 緑を各修正で確認。設計文書 §3.10 を新方針に改訂
+
+**レビュー ラウンド 2 の修正**（Commit: `39b96a3a`）— コードレビュー役 0 件 / bot なし / **Opus の fix 差分再監査が fix 起因の Important 1 件**:
+- R2-1: `[ ]` の声部の `r1^1.r(p)` が running range を書き換えていた（ラウンド 1 の M-1 修正の分岐が、stack の声部かどうかを知らなかった）。stack の声部では structural として解決
+- R2-2: 段 1 で stack の声部にも後置チェーンを通したため `[m7.drop(2), 5]` などが通っていた（main はパースエラー）。stack の声部の後置は `.r` / `.r(p)` だけにした。🔴 Codex の 1 回目は「名前が `r`+数字の形か」で受け付けを決めており、`var lead = random.dorian` の `[lead.r(1), 3]` がパースエラーになった（名前は利用者が自由に付ける・K3 / K13 違反）。2 回目で「パース時は名前を問わず受け付け、束縛の種類が分かる評価時に chord / pattern ならエラー」へ（E8 と同じ考え方）
+- テスト 2651 → 2659 passed
+
+### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
+
+**Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`
+
+Pitch DSL に「音高そのものをランダムに選ぶ」指定を加える仕様を確定した（docs のみ・実装は後続 PR、拡張 4.3.0 の想定）。
+起案 = fresh Opus subagent（初版は候補リスト `r[…]` を推奨）→ owner が表面を決定 → 改訂 r2 → main 審査 → owner の最終決定。
+
+**確定した表面**: 度数の位置に `r`（その音のスコープの格子から選ぶ。root = Ionian 1〜7 / mode = 格子全長）・`rr`（出現確率 0.5）・
+`var r1 = random.<mode変数>`（ユーザー定義の mode を定義時に写し取るランダム音源。`random.mode(...)` や組み込みの旋法ライブラリは入れない）。
+`^N` はスティッキー、振り直しは既存の `Xr` / `^r` と同じく発音ごと・サイクルごと・seed なし。audio シーケンスの意味は変えない。
+
+**変更したファイル**:
+- `docs/design/967-random-pitch-design.md`（新設）— 決定表・一次ソースの事実・意味論・診断・テスト計画・棄却案
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` — §2.1 / §2.2 / §3・§9.3（`seq.mode()` 未実装の明記）/ §6.1 / §6.2・§6.2.1（新設）/ §6.3
+- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` — §12.4 の位置の表に 2 行、§16 と決定 #80〜#84（#82 は #50「語彙を増やさない」の例外として `random` を記録）
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — P.12.1（spec 確定・未実装と明記）と実装状況の要約
+- `docs/specs-v2/SESSION_LOG_SPEC_v1.md` §5 / `docs/core/INDEX.md` の設計ノート表
+
+**起案の過程で直した既存の不整合**（文書側のみ）:
+- core spec P.12 の「`.r` は全声部を一緒に間引く」→ 実装どおり「声部ごとに独立」（`calculate-event-timing.ts:212-216`, `sequence.ts:1607`）
+- core spec の「`r0%10` (random walk)」→「center ± range の一様乱数・直前値を持たない」（`random-utils.ts:16-25`）
+- SESSION_LOG の「現行 v3.0 にランダム機能は存在しない」→ 現状に合わせて訂正
+
+**別 issue に切り出したもの**: `Xr(p)` 未実装で `5r(p)` が並置として読まれる（#968）/ `mode(0, …)` が NaN の格子になる（#969）/ `seq.mode()` 未実装（#970）。
+
+**レビュー反映**（Commit: `ff2d190c`）— docs のみなのでレビュー方法は advisor と相談し、main の設計文書通読 + fresh Opus 1 体の整合監査（記述の一致 / 根拠の実在 / 先取りの決定）とした:
+- 🔴 旋法ライブラリを「無い／持たない」と書いていたのは、確定済みの決定 #58（教会旋法はライブラリ var 群）を黙って上書きしていた。owner の「組み込み変数じゃなくて定義した mode を…」は `random.` に渡すものの話なので、「定義なしで動く組み込みの `random.dorian` は無い・#58 は変えない」に改めた
+- chord の名前参照への `@v` / `@g` をエラーに固定していたのは、open の #609（stack 全体への `@v`・owner 裁定済み・未実装）の先取り。#609 で決めると明記
+- `rr` と `r r` は「同じトークン列」ではない（`rr` は 1 識別子）。意味が同じと改めた / DDR #81 の「パターン変数と同じ値渡し」は誤り（写し取るのは chord だけ）
+- 同じ PR の編集でずれた設計文書の行番号 10 箇所を追従
+- 地図に居場所が無かったので `DEVELOPMENT_MAP.md` §4.Q を新設し、凍結後の拡張版に新機能を載せる **owner の例外**を `NATIVE_MIGRATION_2026-09.md` §12.8 に記録
+- 別件: issue 状態のスナップショット（09-08 生成）を更新すると、`DEVELOPMENT_MAP.md:1580`（閉じた #474 を「未実装」と書く行）がラチェットに掛かる。本 PR の範囲外なので更新はしていない
 ### docs: follow the v4.2.1 bump into the dev-site follow-up Notes (Sep 18, 2026)
 
 **Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr962` / **追従元**: PR [#962](https://github.com/signalcompose/orbitscore/pull/962)（merge `c90bb15`）

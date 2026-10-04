@@ -268,7 +268,7 @@ launch quantize (`global.quantize("bar")` が既定) が入ったことで、`se
 `startTime` を渡しているのは `Sequence.loop()` で、`nextQuantizedTime()` (グローバルの tempo と beat から計算) の結果です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2083-2091
+// packages/engine/src/core/sequence.ts:2062-2070
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)
@@ -334,7 +334,7 @@ BEAT_METER_SPECIFICATION.md では 2 つのフェーズが定義されていま�
 もし OrbitScore が polyrhythm を実現したいなら、「同じ barDuration の中に異なる数のイベントを詰め込む」必要があります。しかし `calculateEventTiming()` は、barDuration を等分してイベントを配置します。
 
 ```typescript
-// packages/engine/src/timing/calculation/calculate-event-timing.ts:104-105
+// packages/engine/src/timing/calculation/calculate-event-timing.ts:105-106
   // Calculate duration for each element at this level
   const elementDuration = barDuration / elements.length
 ```

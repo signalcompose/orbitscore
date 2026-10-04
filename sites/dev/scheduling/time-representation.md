@@ -216,7 +216,7 @@ export function convertToAbsoluteTiming(
 タイミング計算の中間結果は `TimedEvent` という型で表現されています。2026-05 時点では 4 フィールドだけの小さな型でしたが、Pitch DSL (v1.1) と live playhead (#390) の実装で optional フィールドが大きく増えました。時間表現に関わるのは先頭の 4 つと、末尾の `argPath` です。
 
 ```typescript
-// packages/engine/src/timing/calculation/types.ts:31-89 (MIDI 用の optional フィールド群を // ... で省略)
+// packages/engine/src/timing/calculation/types.ts:31-95 (MIDI 用の optional フィールド群を // ... で省略)
 export interface TimedEvent {
   sliceNumber: number // 0 for silence, 1-n for slice (audio); = degree as a fallback for pitched MIDI events
   startTime: number // Start time in milliseconds relative to bar start
@@ -238,7 +238,7 @@ export interface TimedEvent {
 `TimedEvent[]` を人間が読みやすい文字列に変換するヘルパー関数があります。
 
 ```typescript
-// packages/engine/src/timing/calculation/format-timing.ts:17-38
+// packages/engine/src/timing/calculation/format-timing.ts:17-42
 export function formatTiming(events: TimedEvent[], bpm: number = 120): string {
   const lines: string[] = []
   const beatDuration = 60000 / bpm // ms per beat
@@ -248,7 +248,11 @@ export function formatTiming(events: TimedEvent[], bpm: number = 120): string {
     const durationBeats = event.duration / beatDuration
     const indent = '  '.repeat(event.depth)
 
-    if (event.sliceNumber === 0) {
+    if (event.randomDegree) {
+      lines.push(
+        `${indent}[random degree] @ beat ${startBeat.toFixed(2)} for ${durationBeats.toFixed(2)} beats`,
+      )
+    } else if (event.sliceNumber === 0) {
       lines.push(
         `${indent}[silence] @ beat ${startBeat.toFixed(2)} for ${durationBeats.toFixed(2)} beats`,
       )

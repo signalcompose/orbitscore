@@ -192,10 +192,11 @@ function scanVarDeclarations(lines: readonly string[], pattern: RegExp, into: Se
 }
 
 const VAR_NODE_PATTERNS = {
-  sum: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.sum\b/,
-  aux: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.aux\b/,
+  sum: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*(?!random\s*\.)[A-Za-z_$][\w$]*\.sum\b/,
+  aux: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*(?!random\s*\.)[A-Za-z_$][\w$]*\.aux\b/,
   /** sum / aux に加えて `mix.output(3, 4)` の物理アウトノードも拾う。 */
-  mixerNode: /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(?:(?:sum|aux)\b|output\s*\()/,
+  mixerNode:
+    /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*(?!random\s*\.)[A-Za-z_$][\w$]*\.(?:(?:sum|aux)\b|output\s*\()/,
 } as const
 
 const GLOBAL_BUS_STRING_PATTERNS = {

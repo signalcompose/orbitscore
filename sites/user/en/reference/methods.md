@@ -312,6 +312,9 @@ Methods for MIDI sequences and related global settings. See [MIDI Output](/en/mi
 | `5r` | Element randomly sounds ~50% of cycles |
 | `5^r` | Random octave ±1 each cycle |
 | `[1,3,5].r` | Chord thinning (each voice ~50%) |
+| `r` | Picks one note of the note's scale at random each time |
+| `rr` | The note picked by `r` sounds ~50% of cycles |
+| `var r1 = random.two` | A random source picking from the defined mode `two` (`r1.r(p)` sets how often it sounds) |
 | `5@v110` | Absolute velocity per note |
 | `5@g30` | Gate percent per note (30 = staccato) |
 | `riff*3` | Repeat pattern 3 slots wide |

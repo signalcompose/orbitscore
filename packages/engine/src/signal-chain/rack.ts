@@ -233,7 +233,7 @@ export function classifyArrayBinding(
   let rackRefs = 0
   for (const ref of refs) {
     if (env.getRack(ref.name)) rackRefs += 1
-    else if (env.getBinding(ref.name)?.kind === 'chord') chordRefs += 1
+    else if (['chord', 'random'].includes(env.getBinding(ref.name)?.kind ?? '')) chordRefs += 1
     else
       throw new Error(
         `array identifier "${ref.name}" is neither a chord variable nor a rack variable.`,

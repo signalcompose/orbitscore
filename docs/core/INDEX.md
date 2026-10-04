@@ -91,6 +91,7 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 | [656-release-design.md](../design/656-release-design.md) | #659/#656/#385/#138 | 配布: ローカルリリース → 署名・公証 → cold-install smoke |
 | [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
 | [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
+| [967-random-pitch-design.md](../design/967-random-pitch-design.md) | #967/#968/#969/#970 | Pitch DSL の音高の乱数 `r` / `rr` / `random.<mode変数>`（拡張 4.3.0 で実装） |
 
 #### アーカイブ済み（`docs/archive/design/`）
 
