@@ -100,6 +100,36 @@ Pitch DSL に「音高そのものをランダムに選ぶ」指定を加える�
 - 同じ PR の編集でずれた設計文書の行番号 10 箇所を追従
 - 地図に居場所が無かったので `DEVELOPMENT_MAP.md` §4.Q を新設し、凍結後の拡張版に新機能を載せる **owner の例外**を `NATIVE_MIGRATION_2026-09.md` §12.8 に記録
 - 別件: issue 状態のスナップショット（09-08 生成）を更新すると、`DEVELOPMENT_MAP.md:1580`（閉じた #474 を「未実装」と書く行）がラチェットに掛かる。本 PR の範囲外なので更新はしていない
+### docs: follow the v4.2.1 bump into the dev-site follow-up Notes (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `claude/docs-sync-pr962` / **追従元**: PR [#962](https://github.com/signalcompose/orbitscore/pull/962)（merge `c90bb15`）
+
+#### 何が食い違っていたか
+
+#962 は dev サイト 6 章（3 章 × ja/en）の**本文の版表記**を 4.2.0 → 4.2.1 へ更新したが、
+同じファイルの `:9` にある**追従履歴 Note** は「v4.2.0 のリリースまで追従しました」のままだった。
+Note は**過去の記録**なので #962 が触らなかったのは方針として正しい（PR 本文「意図的に触らない」）が、
+**本文を動かした以上、その追従自体が記録されるべき 1 件**である。結果として、同一ファイル内で
+本文が 4.2.1・Note が「4.2.0 まで」と食い違って残っていた。
+
+この Note は版表記を前へ送るたびに 1 文を追記する運用になっている（#928 の 4.1.0・#941 の
+v4.2.0 がそれぞれ 1 文ずつ積まれている）。同じ規約どおり v4.2.1 の 1 文を追記した。
+
+#### 触っていないもの
+
+| | |
+|---|---|
+| frontmatter `verified-against` / `verified-at` | **動かさない**。`ca745e8` / 2026-09-12 のまま。版表記だけの追従では全章を再検証していないので、動かすと検証範囲を過大に主張することになる。#928 / #941 の版表記追従でも動かしていない（Note は 09-13 / 09-14 を記録しているのに frontmatter は 09-12 のまま）という既存の運用に合わせた |
+| 各章の読解本文 | 拡張は機能凍結（現 4.2.1）。editor 章は 4.2.0 時点のスナップショットとして扱う方針のため、Note 以外は触っていない |
+| `docs/specs-v2/` / `sites/user/` / `docs/user/` | 拡張の版を 1 箇所も名乗っていない（`git grep` で 0 件）ので追従不要 |
+
+#### 検証
+
+```
+npm run docs:check                          → 996 citations verified, 0 failed
+npm run docs:build -w @orbitscore/user-site → build complete（dead link 0）
+npm run docs:build -w @orbitscore/dev-site  → build complete（dead link 0）
+```
 
 ---
 
