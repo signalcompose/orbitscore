@@ -1629,9 +1629,9 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `docs/archive/design/628-plan-reset.md:57-120` — early detection ahead of the hardware gate (the pure unit for the gain constants)
 - `packages/engine/src/signal-chain/rack.ts:12-34,124-203,223-277` — `RackRecipe` types, three-category resolution, chord/rack classification, desugaring `effect()` arguments
 - `packages/engine/src/signal-chain/dispatch.ts:42-53` — diagnostic-only matching of the withdrawn method form (SC.10.9)
-- `packages/engine/src/parser/types.ts:144-159` — `ValueCall` / `ValueArray` AST
-- `packages/engine/src/interpreter/process-statement.ts:257-273,333-343` — interpreter branches for `effect()` / `var x = [...]`
-- `packages/engine/src/core/global.ts:352-366` — `defineRack` / `getRack` (value semantics)
+- `packages/engine/src/parser/types.ts:145-160` — `ValueCall` / `ValueArray` AST
+- `packages/engine/src/interpreter/process-statement.ts:260-276,333-343` — interpreter branches for `effect()` / `var x = [...]`
+- `packages/engine/src/core/global.ts:351-365` — `defineRack` / `getRack` (value semantics)
 - `packages/engine/src/core/global/effect-slot.ts:132-172,248-319,455-681` — `resolveEffectRack`, LCS, `applyRackBody`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:106-160` — the per-sequence manager's `effect()`
 - `packages/engine/src/core/global/plugin-effect-manager.ts:49-61` — the master manager's `effect()`

@@ -1498,7 +1498,7 @@ npm run test:e2e:cold-install
 - `packages/vscode-extension/package.json:421-428` — `orbitscore.mcpServer.port` 設定
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
-- `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
+- `packages/engine/src/core/sequence.ts:1350-1379` — note 経路の marker 積み込みとデデュープ（#654）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-154` — env contract・stale artifact ガード
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:566-1042` — `launchIsolatedOrbitStudio()`・describe のセットアップ・teardown
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1044-1970` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）

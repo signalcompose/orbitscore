@@ -641,7 +641,7 @@ OrbitScore's transport runs on the simple input model of "feed DSL text into std
 - `packages/engine/src/interpreter/interpreter-v2.ts:133-230` — `InterpreterV2.execute()`: the `skipTransportCommands` option
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: creating a single `globalInterpreter` instance and handing it to the REPL
 - `packages/engine/src/cli/repl-mode.ts:370-378` — the REPL's `interpreter.execute()` call (the options it passes)
-- `packages/engine/src/core/sequence.ts:1774-1799` — `Sequence.stop()`: clearing events and cancelling the loop timer
+- `packages/engine/src/core/sequence.ts:1751-1776` — `Sequence.stop()`: clearing events and cancelling the loop timer
 - `packages/vscode-extension/src/engine-process.ts:681-681` — the extension's stdin send
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Transport Commands" — the launch-quantize specification and that `global.start()` does not wait
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize

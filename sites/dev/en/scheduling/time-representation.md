@@ -229,7 +229,7 @@ export interface TimedEvent {
 
 Both `startTime` and `duration` are in ms. `sliceNumber` indicates "which audio slice to play," and `0` means a rest (for MIDI sequences it also serves as a fallback for the degree). `depth` is a debugging field for nested patterns (such as the nesting structure of `seq.play(1, [2, 3], 4)`).
 
-The omitted optional fields are `pitch` (the MIDI symbolic pitch), `scope` (the lexical scope of `.root()` / `.mode()` / `.oct()`), `tie` / `legato` / `voiceTie` (articulation), `random` / `randomOctave`, and `velocity` / `velocityDelta` / `articulation`; **none of them take part in time calculation**. According to the type comment, the rhythm-tree walk that decides `startTime` / `duration` is shared by audio and MIDI, and only the meaning of the value (slice number vs. degree) differs by domain.
+The omitted optional fields are `pitch` (the MIDI symbolic pitch), `scope` (the lexical scope of `.root()` / `.mode()` / `.oct()`), `tie` / `legato` / `voiceTie` (articulation), `random` / `randomOctave`, `randomDegree` (#967: an unresolved random degree — it carries the lattice and `period` symbolically and leaves the actual choice to the output stage), and `velocity` / `velocityDelta` / `articulation`; **none of them take part in time calculation**. According to the type comment, the rhythm-tree walk that decides `startTime` / `duration` is shared by audio and MIDI, and only the meaning of the value (slice number vs. degree) differs by domain.
 
 `argPath` is an observation-only field added by #390 (2026-07-07). It holds, as a dot-joined index such as `"2"` or `"1.0"`, which position in the `play()` argument tree the event came from, and is used only so that the backend can print a `[STEP]` marker to stdout on dispatch. As the type comment states, "Never read by timing / scheduling logic," so this too has no effect on time representation.
 
@@ -317,9 +317,9 @@ The core of the conversion is the two-line formula in `calculateBarDuration()`. 
 - `packages/engine/src/core/sequence/parameters/tempo-manager.ts:64-68` — `calculateBarDuration()`: bar duration formula
 - `packages/engine/src/core/sequence/parameters/tempo-manager.ts:73-105` — `calculatePatternDuration()` / `calculateEventTiming()`: application of the length modifier (including the #390 comment)
 - `packages/engine/src/core/global/quantize-manager.ts:36-54` — `quantizeDurationMs()`: the second copy of the bar-length formula (quantize grid)
-- `packages/engine/src/timing/calculation/types.ts:31-89` — the `TimedEvent` interface (`startTime`, `duration` in ms; MIDI optional fields and `argPath`)
+- `packages/engine/src/timing/calculation/types.ts:31-95` — the `TimedEvent` interface (`startTime`, `duration` in ms; MIDI optional fields and `argPath`)
 - `packages/engine/src/timing/calculation/convert-to-absolute-timing.ts:18-29` — `convertToAbsoluteTiming()`: offset calculation by `barNumber × barDuration`
-- `packages/engine/src/timing/calculation/format-timing.ts:17-38` — `formatTiming()`: ms → beat count inverse conversion (for debugging)
+- `packages/engine/src/timing/calculation/format-timing.ts:17-42` — `formatTiming()`: ms → beat count inverse conversion (for debugging)
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — the definition `"beat"` = `60_000 / tempo` ms
 - [BEAT_METER_SPECIFICATION.md](https://github.com/signalcompose/orbitscore/blob/main/docs/development/BEAT_METER_SPECIFICATION.md) — bar-length formula specification and future denominator restriction proposal
 - Issue [#390](https://github.com/signalcompose/orbitscore/issues/390) — live playhead (the reason `argPath` was added)

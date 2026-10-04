@@ -385,9 +385,9 @@ The simple design that "each sequence computes its own barDuration, advances its
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:84-104` — handling of the quantized start (`startTime` option)
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:145-155` — `armDelay()`: re-arm delay computed back from the absolute grid
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:157-218` — `scheduleNextIteration()`: setTimeout chain loop and dynamic recalculation of patternDuration
-- `packages/engine/src/core/sequence.ts:1747-1755` — `Sequence.loop()`: passing the result of `nextQuantizedTime()` as `startTime`
+- `packages/engine/src/core/sequence.ts:1724-1732` — `Sequence.loop()`: passing the result of `nextQuantizedTime()` as `startTime`
 - `packages/engine/src/core/global/quantize-manager.ts:56-73` — `nextQuantizedTime()`: computing the next boundary from the global tempo/beat
-- `packages/engine/src/timing/calculation/calculate-event-timing.ts:104-105` — even subdivision via `barDuration / elements.length`
+- `packages/engine/src/timing/calculation/calculate-event-timing.ts:105-106` — even subdivision via `barDuration / elements.length`
 - `packages/engine/src/core/global/types.ts:5-8` — the `Meter` interface
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — "behavior under polymeter" (the global bar boundary is the launch reference)
 - `docs/archive/WORK_LOG_2026-07.md` 6.198 — measurements for #389 (+0.19 ms/bar accumulation before the fix, mean|dev| 0.52 ms after)

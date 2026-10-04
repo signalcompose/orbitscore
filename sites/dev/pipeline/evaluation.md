@@ -19,7 +19,7 @@ status: draft
 - **`InterpreterState` に `mixers` / `sessionLog?` / `engineT0` / `currentSourceFile?` が加わり**、`audioEngine` の型が `SuperColliderPlayer` から契約面 `AudioEngineBackend` に変わった (`packages/engine/src/interpreter/types.ts:14-34`)。既定の実装は Rust daemon 経路の `RustEnginePlayer` です (cutover #108、[0-2](/orientation/architecture-overview) 参照)
 - **`execute()` のオプションが増え** (`documentDirectory` / `source` / `sourceFile` / `evalSource`)、`globalInit` より前に **file import を処理** し、`globalInit` の直後に **documentDirectory を Global に設定** するようになった (2026-07-17 の #456)
 - **`processGlobalInit()` / `processSequenceInit()` がミキサー名前空間との衝突を検査する** (#517 S1)
-- **`processStatement()` の case が 3 → 11 に増え**、`'sequence'` の解決順が「globals → sequences → mixer node」の 3 段になり、見つからないときは `console.error` ではなく **throw** するようになった
+- **`processStatement()` の case が 3 → 12 に増え** (#967 で `random_binding` が加わった)、`'sequence'` の解決順が「globals → sequences → mixer node」の 3 段になり、見つからないときは `console.error` ではなく **throw** するようになった
 - **`processGlobalStatement()` / `processSequenceStatement()` がチェーン処理を `applyMethodChain()` に集約し**、各ホップで `resolveChainDispatch()` が「DSL メソッドか / プラグイン呼び出しか / ミキサールーティングか」を判定するようになった (#517 S2-S3)
 - **`callMethod()` はメソッド未定義で throw する** (2026-05 版では `console.error` して `obj` を返していた)。`processArguments()` は名前付き引数 (`name: value`) を受けると段階を明示したエラーを投げます (SC.3.3)
 - `processTransportStatement()` は 507-550 行に移動しただけで内容は同じです
@@ -686,10 +686,10 @@ flowchart LR
 - `packages/engine/src/interpreter/types.ts:14-34` — `InterpreterState` インターフェース定義
 - `packages/engine/src/interpreter/process-initialization.ts:27-43` — `processGlobalInit()` のミキサー名前空間検査と Map 再利用ロジック
 - `packages/engine/src/interpreter/process-initialization.ts:62-104` — `processSequenceInit()` の再利用と _gainDb/_pan リセット
-- `packages/engine/src/interpreter/process-statement.ts:61-115` — `processStatement()` の switch と globals → sequences → mixer node の再ディスパッチ
-- `packages/engine/src/interpreter/process-statement.ts:117-167` — `applyMethodChain()` の設計コメントと Global の bare 呼び出しガード
-- `packages/engine/src/interpreter/process-statement.ts:394-446` — `processGlobalStatement()` / `processSequenceStatement()`
-- `packages/engine/src/interpreter/process-statement.ts:507-550` — `processTransportStatement()` と global.stop() 時のグループリセット
+- `packages/engine/src/interpreter/process-statement.ts:61-118` — `processStatement()` の switch と globals → sequences → mixer node の再ディスパッチ
+- `packages/engine/src/interpreter/process-statement.ts:120-170` — `applyMethodChain()` の設計コメントと Global の bare 呼び出しガード
+- `packages/engine/src/interpreter/process-statement.ts:341-393` — `processGlobalStatement()` / `processSequenceStatement()`
+- `packages/engine/src/interpreter/process-statement.ts:454-497` — `processTransportStatement()` と global.stop() 時のグループリセット
 - `packages/engine/src/interpreter/evaluate-method.ts:23-35` — `callMethod()` の `method.apply()` パターンと throw
 - `packages/engine/src/interpreter/evaluate-method.ts:58-107` — `processArguments()` の named_arg / beat / play 特殊ケース
 - `packages/engine/src/interpreter/process-file-import.ts` — `createImportContext()` / `processFileImports()` (#456)

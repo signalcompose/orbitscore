@@ -1508,7 +1508,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `packages/vscode-extension/package.json:421-428` — the `orbitscore.mcpServer.port` setting
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
-- `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)
+- `packages/engine/src/core/sequence.ts:1350-1379` — note-path marker enqueueing and dedup (#654)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-154` — env contract, stale-artifact guard
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:566-1042` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1044-1970` — the first test (launch, catalogue, capture, run_selection, onset verification)

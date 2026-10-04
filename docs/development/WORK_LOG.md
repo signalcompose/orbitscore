@@ -17,6 +17,32 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #973 (random pitch) in the dev site citations (Oct 4, 2026)
+
+**Date**: 2026-10-04 / **ブランチ**: `claude/docs-sync-pr973` / **追従元**: PR [#973](https://github.com/signalcompose/orbitscore/pull/973)（merge commit `9c66585`）
+
+PR #973 は `// FILE:START-END` 形式の引用ヘッダ（`docs:check` が検証する層）を再アンカーしたが、
+**散文と「Sources」節の `path:line` 参照は検証対象外**なので取り残されていた。その 98 箇所を再アンカーし、
+あわせて差分で数が変わった記述を直した。実装・テストの変更は無い。
+
+**再アンカー（98 箇所 / 22 ファイル・ja と en）**
+- 各参照について、BASE (`0bab20a`) の該当行と HEAD (`f54a8e0`) の再計算後の行が**同一内容**であることを機械的に照合してから書き換えた（先頭行・末尾行の一致を必須条件にし、一致しないものは触っていない）
+- この PR が触っていないファイルへの参照（`interpreter/types.ts` 等）は対象外
+
+**数・列挙の追従**
+- `Statement` union: 11 → 12 メンバー（`RandomBinding`）。mermaid の classDiagram と Sources 節も
+- `DSL_SYNTAX_SURFACE`: 13 → 15（`random-pitch` / `random-binding`）
+- `processStatement()` の case: +1（`random_binding`）
+- `parseVarDeclaration()` の判別トークンに `random.` を追加
+- `TimedEvent` の optional フィールド一覧に `randomDegree` を追加
+
+**新規に書いた記述（差分から読み取れる範囲のみ）**
+- `var X = random.<mode 変数>` の分岐がミキサー宣言の先読みより前に置かれていること（順序自体が仕様）
+- `PlayRandomDegree` が度数を持たず修飾子だけを運ぶこと
+
+🔴 frontmatter の `verified-against` / `verified-at` は**更新していない**。章全体を読み直したわけではなく、
+引用の再アンカーと差分に対応する記述の追従のみだからである（PR #973 自身も更新していない）。
+
 ### feat: implement random pitch r / rr / random.<mode> (#967) (Sep 26, 2026)
 
 **Date**: 2026-09-26 / **ブランチ**: `967-random-pitch-impl` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / #969

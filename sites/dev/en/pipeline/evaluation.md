@@ -19,7 +19,7 @@ The first edition of this chapter was written against the 2026-05-05 snapshot (0
 - **`InterpreterState` gained `mixers` / `sessionLog?` / `engineT0` / `currentSourceFile?`**, and the type of `audioEngine` changed from `SuperColliderPlayer` to the contract surface `AudioEngineBackend` (`packages/engine/src/interpreter/types.ts:14-34`). The default implementation is `RustEnginePlayer` on the Rust daemon path (cutover #108; see [0-2](/en/orientation/architecture-overview))
 - **`execute()` gained options** (`documentDirectory` / `source` / `sourceFile` / `evalSource`), now **processes file imports** before `globalInit`, and **sets documentDirectory on the Global** right after `globalInit` (#456 on 2026-07-17)
 - **`processGlobalInit()` / `processSequenceInit()` check for collisions with the mixer namespace** (#517 S1)
-- **The cases in `processStatement()` grew from 3 to 11**, resolution of `'sequence'` became a three-step "globals → sequences → mixer node," and a miss now **throws** instead of `console.error`
+- **The cases in `processStatement()` grew from 3 to 12** (#967 added `random_binding`), resolution of `'sequence'` became a three-step "globals → sequences → mixer node," and a miss now **throws** instead of `console.error`
 - **`processGlobalStatement()` / `processSequenceStatement()` centralized chain handling in `applyMethodChain()`**, where each hop lets `resolveChainDispatch()` decide "DSL method / plugin call / mixer routing" (#517 S2-S3)
 - **`callMethod()` throws when the method is undefined** (the 2026-05 edition did `console.error` and returned `obj`). `processArguments()` throws a stage-explicit error when it receives a named argument (`name: value`) (SC.3.3)
 - `processTransportStatement()` merely moved to lines 507-550; its content is the same
@@ -686,10 +686,10 @@ A `Map` keyed by variable name (string) (plus the mixer registry) is the substan
 - `packages/engine/src/interpreter/types.ts:14-34` — the `InterpreterState` interface definition
 - `packages/engine/src/interpreter/process-initialization.ts:27-43` — mixer-namespace check and Map reuse logic in `processGlobalInit()`
 - `packages/engine/src/interpreter/process-initialization.ts:62-104` — reuse and `_gainDb` / `_pan` reset in `processSequenceInit()`
-- `packages/engine/src/interpreter/process-statement.ts:61-115` — the switch in `processStatement()` and the globals → sequences → mixer node re-dispatch
-- `packages/engine/src/interpreter/process-statement.ts:117-167` — design comment of `applyMethodChain()` and the bare-invocation guard for Globals
-- `packages/engine/src/interpreter/process-statement.ts:394-446` — `processGlobalStatement()` / `processSequenceStatement()`
-- `packages/engine/src/interpreter/process-statement.ts:507-550` — `processTransportStatement()` and the group reset on `global.stop()`
+- `packages/engine/src/interpreter/process-statement.ts:61-118` — the switch in `processStatement()` and the globals → sequences → mixer node re-dispatch
+- `packages/engine/src/interpreter/process-statement.ts:120-170` — design comment of `applyMethodChain()` and the bare-invocation guard for Globals
+- `packages/engine/src/interpreter/process-statement.ts:341-393` — `processGlobalStatement()` / `processSequenceStatement()`
+- `packages/engine/src/interpreter/process-statement.ts:454-497` — `processTransportStatement()` and the group reset on `global.stop()`
 - `packages/engine/src/interpreter/evaluate-method.ts:23-35` — the `method.apply()` pattern and the throw in `callMethod()`
 - `packages/engine/src/interpreter/evaluate-method.ts:58-107` — the named_arg / beat / play special cases in `processArguments()`
 - `packages/engine/src/interpreter/process-file-import.ts` — `createImportContext()` / `processFileImports()` (#456)

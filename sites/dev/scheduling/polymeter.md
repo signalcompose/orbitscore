@@ -385,9 +385,9 @@ flowchart LR
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:84-104` — quantized start (`startTime` オプション) の扱い
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:145-155` — `armDelay()`: 絶対グリッドから逆算する再アーム delay
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:157-218` — `scheduleNextIteration()`: setTimeout チェーンによるループと patternDuration の動的再計算
-- `packages/engine/src/core/sequence.ts:1747-1755` — `Sequence.loop()`: `nextQuantizedTime()` の結果を `startTime` として渡す
+- `packages/engine/src/core/sequence.ts:1724-1732` — `Sequence.loop()`: `nextQuantizedTime()` の結果を `startTime` として渡す
 - `packages/engine/src/core/global/quantize-manager.ts:56-73` — `nextQuantizedTime()`: グローバル tempo/beat からの次の境界計算
-- `packages/engine/src/timing/calculation/calculate-event-timing.ts:104-105` — `barDuration / elements.length` による均等分割
+- `packages/engine/src/timing/calculation/calculate-event-timing.ts:105-106` — `barDuration / elements.length` による均等分割
 - `packages/engine/src/core/global/types.ts:5-8` — `Meter` interface
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — 「ポリメーター時の挙動」(グローバル小節境界が起動の基準)
 - `docs/archive/WORK_LOG_2026-07.md` 6.198 — #389 の実測 (fix 前 +0.19ms/小節の蓄積、fix 後 mean|dev| 0.52ms)

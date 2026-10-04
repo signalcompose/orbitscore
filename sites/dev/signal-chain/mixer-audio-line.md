@@ -251,7 +251,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
     if (resolved) return this.applyOutputElement(resolved, options, 'output')
 ```
 
-sum/aux 分岐で注目したいのは `applyOutputElement()`（`sequence.ts:485-495`）の中の
+sum/aux 分岐で注目したいのは `applyOutputElement()`（`sequence.ts:454-464`）の中の
 `this._insertBus ?? this.global.ensureSequenceInsertBus(name)` です。`seq.effect()` を
 宣言していない sequence でも、`output(sum)` を呼んだ瞬間に**plugin を載せない pass-through の
 insert bus** が確保されます。daemon にとって line の source は常に「seq bus」なので、bus が
@@ -463,7 +463,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 > 歴史的経路の記録として残していますが、現在の配線は上の `output()`/`send()` コード引用と
 > `docs/design/611-output-line-design.md` §3.3/§5 を参照してください。**
 
-`output()` / `send()` の末尾で呼ばれる `syncBusRouting()`（`sequence.ts:543-570`）は
+`output()` / `send()` の末尾で呼ばれる `syncBusRouting()`（`sequence.ts:512-539`）は
 fire-and-forget で、`this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends))`
 と **output + 全 send を毎回まとめて** `SetBusRouting` に載せます。差分ではなく全量を送るのは、
 再送が冪等になるようにするためです。失敗時は `_busRoutingStale` を立て、`DaemonProtocolError`
@@ -1733,10 +1733,10 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `packages/engine/src/core/global.ts:481-489` — `Global.sum()` / `Global.aux()`
 - `packages/engine/src/core/global.ts:601-613` — `Global.gain()` → `setGlobalGain`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:89-104` — `ensureBus()`（pass-through insert）
-- `packages/engine/src/core/sequence.ts:350-432` — `Sequence.output()` の 3 分岐
-- `packages/engine/src/core/sequence.ts:454-481` — `Sequence.send()`
-- `packages/engine/src/core/sequence.ts:522-570` — `pushBusRouting` / `syncBusRouting`
-- `packages/engine/src/core/sequence.ts:976-1043` — target 選択と `ensureInstrumentSourceRouting`（`SetSourceRouting` choke point）
+- `packages/engine/src/core/sequence.ts:319-401` — `Sequence.output()` の 3 分岐
+- `packages/engine/src/core/sequence.ts:423-450` — `Sequence.send()`
+- `packages/engine/src/core/sequence.ts:491-539` — `pushBusRouting` / `syncBusRouting`
+- `packages/engine/src/core/sequence.ts:945-1012` — target 選択と `ensureInstrumentSourceRouting`（`SetSourceRouting` choke point）
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain`（畳み込み除去・`-Infinity` 残置）
 - `packages/engine/src/audio/engine-backend.ts:45-46` — `setGlobalGain` 契約
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:949-969` — `setBusRouting`（intent-first キャッシュ）

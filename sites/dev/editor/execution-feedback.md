@@ -721,12 +721,12 @@ flowchart TD
 | `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:151-289` |
 | 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:207-240` |
 | `//#documentDirectory` メタ行 (import の基準ディレクトリ) | #456 | §6.266 (2026-07-17)、`engine-process.ts:653-658` |
-| `GLOBAL_ONCE_METHODS` に `linkAudio` を追加、LinkAudio 系の診断 6-8 | (LinkAudio #209 系) | `diagnostics-analysis.ts:44-58` / `:194-391` |
+| `GLOBAL_ONCE_METHODS` に `linkAudio` を追加、LinkAudio 系の診断 6-8 | (LinkAudio #209 系) | `diagnostics-analysis.ts:44-58` / `:194-392` |
 | 送信失敗時はフラッシュしない | — | `run-selection.ts:199-201` のコメント |
 | `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`agent-handlers.ts:80-109` / `engine-handlers.ts:248-256` |
 | 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`diagnostics-provider.ts:160-168` |
-| 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
-| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:349-352` / `:346-452`、`dsl-providers.ts:176-213` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
+| 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:71-74` / `:1557-1564`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
+| 診断 7 が LinkAudio 限定の Error から**全ファイル対象の `output-missing` (Warning) / `dry-not-routed` (Information) + quick fix** へ。`code` は MCP の `get_diagnostics` にも出る | #883 | `diagnostics-analysis.ts:350-353` / `:347-453`、`dsl-providers.ts:176-213` / `:3831-3842`（PR [#885](https://github.com/signalcompose/orbitscore/pull/885)） |
 
 ---
 
@@ -773,8 +773,8 @@ flowchart TD
 - `packages/vscode-extension/src/playhead.ts:39-54` — `[STEP]` 行の文法と `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
-- `packages/vscode-extension/src/diagnostics-analysis.ts:110-495` — 横断解析の関数群
-- `packages/vscode-extension/src/diagnostics-analysis.ts:349-495` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断
+- `packages/vscode-extension/src/diagnostics-analysis.ts:110-496` — 横断解析の関数群
+- `packages/vscode-extension/src/diagnostics-analysis.ts:350-496` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — audioPath ordering 診断の背景

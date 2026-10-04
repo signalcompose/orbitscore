@@ -1383,7 +1383,7 @@ LOOP(drums)
 - `packages/engine/src/core/global/effect-slot.ts:459-472` — `applyRackBody` (diff / rebuild and LCS)
 - `packages/engine/src/core/global/effect-slot.ts:639-641` — `beforeReplace` for dropped catalog elements
 - `packages/engine/src/core/global/effect-slot.ts:786-805` — registry handling on failure in `issueReplacement`
-- `packages/engine/src/core/global.ts:164-188` — hook wiring for the four effect paths
+- `packages/engine/src/core/global.ts:163-187` — hook wiring for the four effect paths
 - `packages/engine/src/core/global.ts:1337-1378` — `prepareInstrumentReplacement` (UI close → state save)
 - `packages/engine/src/core/global.ts:1380-1402` — `prepareEffectReplacement` (UI close only)
 - `packages/engine/src/core/global/effect-replace-notice.ts:1-24` — the single exit for "continuing" notices
