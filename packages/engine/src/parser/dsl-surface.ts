@@ -13,6 +13,8 @@ export type DslSyntaxId =
   | 'beat-by' // n by 4                           tokenizer.ts:21
   | 'play-nested' // play(1, (1,1), 1)
   | 'event-modifier' // 1@v+10 / ^2 / ~ / @g
+  | 'random-pitch' // bare r / rr
+  | 'random-binding' // var X = random.<mode variable>
   | 'tie' // _                                audio では無視・#665
   | 'underscore-method' // _gain(...) 等（適用形・spec §7）
   | 'chain-multiline' // 複数行にまたがるチェーン（spec §3 Multiline）
@@ -29,6 +31,8 @@ export const DSL_SYNTAX_SURFACE: readonly DslSyntaxId[] = [
   'beat-by',
   'play-nested',
   'event-modifier',
+  'random-pitch',
+  'random-binding',
   'tie',
   'underscore-method',
   'chain-multiline',

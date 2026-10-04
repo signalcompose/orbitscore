@@ -23,7 +23,11 @@ export function formatTiming(events: TimedEvent[], bpm: number = 120): string {
     const durationBeats = event.duration / beatDuration
     const indent = '  '.repeat(event.depth)
 
-    if (event.sliceNumber === 0) {
+    if (event.randomDegree) {
+      lines.push(
+        `${indent}[random degree] @ beat ${startBeat.toFixed(2)} for ${durationBeats.toFixed(2)} beats`,
+      )
+    } else if (event.sliceNumber === 0) {
       lines.push(
         `${indent}[silence] @ beat ${startBeat.toFixed(2)} for ${durationBeats.toFixed(2)} beats`,
       )

@@ -4,6 +4,7 @@
 
 import { PlayElement } from '../../parser/audio-parser'
 import { ScopeRoot, ScopeMode } from '../../parser/types'
+import { copyRandomDegreeProperties } from '../../midi/chord/random-degree'
 
 import { TimedEvent, TimedEventScope } from './types'
 
@@ -241,6 +242,26 @@ export function calculateEventTiming(
           ...(element.velocity !== undefined && { velocity: element.velocity }), // §10.3 `@v`
           ...(element.velocityDelta !== undefined && { velocityDelta: element.velocityDelta }),
           ...(element.articulation !== undefined && { articulation: element.articulation }), // `@g`
+        })
+      } else if (element.type === 'random_degree') {
+        // #967: retain the random source symbolically; selection belongs to output Stage A.
+        const copied = copyRandomDegreeProperties(element)
+        events.push({
+          sliceNumber: 0,
+          startTime: elementStartTime,
+          duration: elementDuration,
+          depth,
+          argPath: pathFor(i),
+          pitch: {
+            degree: 1,
+            alteration: 0,
+            octaveShift: element.octaveShift,
+            rangeSet: element.rangeSet,
+            detune: element.detune,
+          },
+          randomDegree: { ...copied.source, from: element.from ?? 'scope' },
+          ...(scope && { scope }),
+          ...copied.modifiers,
         })
       } else if (element.type === 'modified') {
         // Modified element (e.g., with .chop())

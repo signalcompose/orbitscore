@@ -3,8 +3,6 @@
  * Based on specification: docs/INSTRUCTION_ORBITSCORE_DSL.md
  */
 
-import { degreeToSemitone } from '../midi/degree-resolution'
-
 import {
   AudioToken,
   GlobalInit,
@@ -21,7 +19,12 @@ import {
   NamedArg,
   PlayElement,
 } from './types'
-import { ParserUtils } from './parser-utils'
+import {
+  assertRandomBindingName,
+  modeElementSemitone,
+  parseRandomBinding,
+  ParserUtils,
+} from './parser-utils'
 import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
 /**
@@ -30,15 +33,7 @@ import { ExpressionParser, collapseScopedRun } from './parse-expression'
  * tell `.drums` (mixer output routing) from `.TALReverb4()` (a plugin call).
  */
 const TRANSPORT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'loop', 'run', 'mute'])
-
-/** Semitone offset of one `mode(...)` element (a root-scope degree) from the tonic (§2.2). */
-function modeElementSemitone(el: PlayElement): number {
-  if (typeof el === 'number') return degreeToSemitone(el)
-  if (el && typeof el === 'object' && el.type === 'pitch') {
-    return degreeToSemitone(el.degree, el.alteration, el.octaveShift)
-  }
-  throw new Error('mode(...) elements must be degrees (e.g. mode(1, 2, b3, 4, 5, 6, b7))')
-}
+type VariableDeclaration = GlobalInit | SequenceInit | Statement
 
 /**
  * Statement parser for audio DSL
@@ -88,22 +83,15 @@ export class StatementParser {
    * Parse variable declaration
    */
   private parseVarDeclaration(): {
-    statement:
-      | GlobalInit
-      | SequenceInit
-      | ChordBinding
-      | PatternBinding
-      | ModeBinding
-      | MixerInit
-      | MixerNodeDecl
+    statement: VariableDeclaration
     newPos: number
   } {
-    const varResult = ParserUtils.expect(this.tokens, this.pos, 'VAR')
-    this.pos = varResult.newPos
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'VAR').newPos
     const varNameResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = varNameResult.newPos
-    const equalsResult = ParserUtils.expect(this.tokens, this.pos, 'EQUALS')
-    this.pos = equalsResult.newPos
+    const variableName = varNameResult.token.value
+    assertRandomBindingName(variableName)
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'EQUALS').newPos
 
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
@@ -135,6 +123,14 @@ export class StatementParser {
     // binding (§6.5). No existing var RHS starts with `(`, so this is unambiguous.
     if (rhs.type === 'LPAREN') {
       return this.parsePatternBinding(varNameResult.token.value)
+    }
+
+    // #967: this branch must precede mixer `<id>.output|sum|aux` lookahead so
+    // `random.sum` remains a random source rather than a mixer declaration.
+    if (rhs.type === 'IDENTIFIER' && rhs.value === 'random') {
+      const parsed = parseRandomBinding(this.tokens, this.pos, variableName)
+      this.pos = parsed.newPos
+      return parsed
     }
 
     // `var master = mix.output(1, 2)` / `var drums = mix.sum` / `var verb = mix.aux`
@@ -336,7 +332,7 @@ export class StatementParser {
     let runStart = 0
 
     for (;;) {
-      const argParser = new ExpressionParser(this.tokens, this.pos)
+      const argParser = new ExpressionParser(this.tokens, this.pos, true)
       const argResult = argParser.parseArgument()
       this.pos = argResult.newPos
       elements.push(argResult.value)
@@ -818,7 +814,11 @@ export class StatementParser {
             `${ParserUtils.current(this.tokens, this.pos).type}`,
         )
       }
-      const expressionParser = new ExpressionParser(this.tokens, this.pos)
+      const expressionParser = new ExpressionParser(
+        this.tokens,
+        this.pos,
+        valueAwareMethod === 'play',
+      )
       const argResult =
         (valueAwareMethod === 'effect' || valueAwareMethod === 'instrument') && args.length === 0
           ? expressionParser.parseValueExpression()

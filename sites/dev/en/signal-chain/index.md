@@ -271,7 +271,7 @@ as chord or rack (design doc §4 decision 13: `[m7]` and `[glue]` cannot be told
 syntactically).
 
 ```typescript
-// packages/engine/src/parser/types.ts:152-160
+// packages/engine/src/parser/types.ts:153-161
 /**
  * Context-neutral `[ ... ]` value. The interpreter classifies it as a chord or rack after
  * resolving identifier bindings; nested arrays remain arrays until that classification.
@@ -286,17 +286,13 @@ export type ValueArray = {
 The interpreter-side branch looks like this.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:351-361
-/** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
-function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
+// packages/engine/src/interpreter/process-value-binding.ts:40-46
+export function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
   if (!global) return
   const classified = classifyArrayBinding(statement.value, global)
-  if (classified.kind === 'chord') {
-    global.defineChord(statement.variableName, classified.voices)
-  } else {
-    global.defineRack(statement.variableName, classified.rack)
-  }
+  if (classified.kind === 'chord') global.defineChord(statement.variableName, classified.voices)
+  else global.defineRack(statement.variableName, classified.rack)
 }
 ```
 
@@ -322,7 +318,7 @@ A value classified as a rack goes to `Global.defineRack` and is stored via `stru
 enforced by the data layout.
 
 ```typescript
-// packages/engine/src/core/global.ts:357-371
+// packages/engine/src/core/global.ts:356-370
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
@@ -346,7 +342,7 @@ An `effect()` call is intercepted in `process-statement.ts`, its arguments are c
 recipe, and only then is the receiver's method invoked.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:281-284
+// packages/engine/src/interpreter/process-statement.ts:284-287
     if (method === 'effect') {
       if (!valueGlobal) throw new Error('effect() rack resolution requires an initialized global.')
       return callMethod(receiver, method, [effectArgumentsToRack(args, valueGlobal)])
@@ -1515,7 +1511,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5152-5159
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5219-5226
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

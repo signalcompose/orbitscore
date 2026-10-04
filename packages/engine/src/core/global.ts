@@ -3,16 +3,15 @@
  * Represents the global transport and configuration
  */
 
-import {
-  AudioEngine,
-  type PluginStateSaveTarget,
-  type PluginUiTarget,
-  type WireLineOp,
-} from '../audio/types'
+import type { AudioEngine, PluginStateSaveTarget, PluginUiTarget, WireLineOp } from '../audio/types'
 import { allocatePluginUiWindowToken } from '../audio/rust-engine/plugin-ui-window-token'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
-import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
+import { createRandomBinding } from '../midi/chord/random-binding'
+import {
+  boundChordVoices,
+  evaluateChordDefinition as evaluateChord,
+} from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 import { PluginNoteOutput } from '../midi/plugin-note-output'
 import type { RackRecipe } from '../signal-chain/rack'
@@ -320,9 +319,7 @@ export class Global {
    * already bound, apply `-N` removals / `^N`) and bind the resulting voice list.
    */
   defineChord(name: string, voices: StackElement[]): this {
-    const { voices: resolved, warnings } = evaluateChordDefinition(voices, (n) =>
-      this.getChordVoices(n),
-    )
+    const { voices: resolved, warnings } = evaluateChord(voices, this.getBinding.bind(this))
     for (const w of warnings) console.warn(`⚠️  chord ${name}: ${w}`)
     this.setChord(name, { kind: 'chord', voices: resolved })
     return this
@@ -330,8 +327,7 @@ export class Global {
 
   /** The voices of a bound chord, or undefined if the name is unbound / a pattern. */
   getChordVoices(name: string): ChordVoice[] | undefined {
-    const bound = this.chordRegistry.get(name)
-    return bound?.kind === 'chord' ? bound.voices : undefined
+    return boundChordVoices(this.chordRegistry.get(name))
   }
 
   /**
@@ -339,14 +335,17 @@ export class Global {
    * the chord namespace — a bare name reference dispatches on `kind` at resolution.
    */
   definePattern(name: string, elements: PlayElement[]): this {
-    this.setChord(name, { kind: 'pattern', elements })
-    return this
+    return this.setChord(name, { kind: 'pattern', elements })
   }
 
   /** §2.2: bind a user pitch lattice (mode) into the namespace, referenced by `.mode(name)`. */
   defineMode(name: string, lattice: number[], period: number): this {
-    this.setChord(name, { kind: 'mode', lattice, period })
-    return this
+    return this.setChord(name, { kind: 'mode', lattice, period })
+  }
+
+  /** #967: copy a mode lattice into a root-less random source at definition time. */
+  defineRandom(name: string, source: string): void {
+    this.setChord(name, createRandomBinding(source, this.chordRegistry.get(source)))
   }
 
   /** The bound value (chord or pattern) for a name, or undefined if unbound. */
@@ -371,12 +370,13 @@ export class Global {
   }
 
   /** Bind a chord value, warning on overwrite (§10-4: global binding + conflict warning). */
-  private setChord(name: string, value: BoundValue): void {
+  private setChord(name: string, value: BoundValue): this {
     if (this.chordRegistry.has(name) || this.rackRegistry.has(name)) {
       console.warn(`⚠️  chord namespace: "${name}" redefined (last-write-wins, §10-4).`)
     }
     this.rackRegistry.delete(name)
     this.chordRegistry.set(name, value)
+    return this
   }
 
   // Audio path and device management

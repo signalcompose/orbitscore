@@ -1,6 +1,6 @@
 # #967 — Pitch DSL の音高の乱数（`r` / `rr` / `random.<mode変数>`）設計
 
-> **Status**: 確定（2026-09-25）。起案 = fresh Opus subagent（初版 → 改訂 r2）/ 審査 = main / 表面の決定 = owner。**§1 の決定は再議論しない。**
+> **Status**: 確定（2026-09-25）・**実装済み**（2026-09-26・拡張 4.3.0）。起案 = fresh Opus subagent（初版 → 改訂 r2）/ 審査 = main / 表面の決定 = owner。**§1 の決定は再議論しない。**
 > **位置づけ**: 拡張版（OrbitScore）への機能追加。版は 4.3.0（minor）の想定。本書と spec の更新は docs のみで、**実装は後続 PR**。
 > **関連**: [`../specs-v2/PITCH_DSL_SPEC_v1.1.md`](../specs-v2/PITCH_DSL_SPEC_v1.1.md) §2.1 / §2.2 / §6.2 / [`../specs-v2/DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §12.4・§16（決定 #80〜#84）/ [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) P.12。
 > **別 issue に切り出した既存の穴**: `Xr(p)` 未実装 = [#968](https://github.com/signalcompose/orbitscore/issues/968) / `mode(0, …)` が NaN の格子になる = [#969](https://github.com/signalcompose/orbitscore/issues/969) / `seq.mode()` 未実装 = [#970](https://github.com/signalcompose/orbitscore/issues/970)。
@@ -96,7 +96,7 @@ mods           := ( '^' N | '^r' | '~' N | '@v…' | '@g…' | 'r' )*
 - **宣言の位置づけ**: `var X = mode(...)` と同じ「値を名前空間へ登録する文」。`init` 系ではない
 - **パーサ**: var の右辺の分岐に「`IDENTIFIER random` + `DOT` + `IDENTIFIER`」を足す。🔴 **ミキサー先読み（`parse-statement.ts:141-149`）より前**に置く（`random.sum` / `random.output` / `random.aux` の横取りを防ぐ）。これにより `random` という名前のミキサー（`var random = init global.mixer`）は作れなくなる（repo 内の `.orbs` に使用 0 件）
 - **定義時の評価**（K6）: `mode` 変数を引き、格子と period を写し取って `BoundValue` に `{ kind: 'random', lattice, period, from: '<mode変数名>' }` を登録する（`types.ts:34-37` に `kind` を 1 つ足す）。`from` は診断と将来の譜面出力のために残す
-- **定義時エラー**: 未定義の名前 / `chord` や `pattern` / 格子に NaN を含む（#969 が直るまでの防御）→ §5 E3〜E6
+- **定義時エラー**: 未定義の名前 / `chord` や `pattern` / 格子に NaN を含む（#969 で `mode(0, …)` はパースエラーになったが、防御として残す）→ §5 E3〜E6
 - **使う側の解決**: play() の評価時に、名前参照を `resolveName`（`resolve-chords.ts:92-135`）の `kind` 分岐で `kind: 'random'` として解決し、ランダム度数ノード（格子つき）に置き換える。以後はシンボリックなまま TimedEvent まで運ぶ（§7-0）
 
 ### 3.3 名前参照の修飾子（K8 の範囲の限定）
@@ -150,7 +150,7 @@ running range（`^N`）と `.oct()` はこの範囲をオクターブ単位で�
 
 ### 3.7 度数 0・休符
 
-- 格子に休符は入らない（#969 が直れば `mode(0, …)` はエラー）。したがって `r` / ランダム音源は**必ず音を出す**。鳴らない可能性があるのは `rr` / `.r` を付けた時だけ
+- 格子に休符は入らない（#969 で `mode(0, …)` はパースエラー）。したがって `r` / ランダム音源は**必ず音を出す**。鳴らない可能性があるのは `rr` / `.r` を付けた時だけ
 - 検証層（SESSION_LOG §5）: `r` / ランダム音源の由来は「発音の事実とタイミングは一致・値は不問」の**構造比較**。`rr` / `.r` 付きは発音の有無も乱数なので**除外**
 
 ### 3.8 和音の中
@@ -174,8 +174,8 @@ running range（`^N`）と `.oct()` はこの範囲をオクターブ単位で�
 
 ### 3.10 audio シーケンス（K12）
 
-- 無音の slot のまま。timing で audio の TimedEvent を**作らない**（今の `full-random` と同じ。§2.1 の実測）。仮に作る実装を選ぶ場合も `sliceNumber` 0 なら鳴らない（F12）
-- `( )` 内の `r` で出ていた「unknown name」警告の代わりに、§5 W4 を 1 回出す（音は変えない・診断だけ）
+- 無音の slot のまま。timing はランダム度数を audio / note の区別なく **`sliceNumber: 0`（書かれた休符 `0` と同じ）の TimedEvent** にし、audio の出力は既存の「`sliceNumber > 0` だけ鳴らす」規則（F12）で鳴らさない。**audio か note かは `play()` の評価時ではなく出力（dispatch）の時点で決める** — `play()` 時点で判定すると、`play()` を `.midi()` / `.instrument()` より前に書いた note シーケンスで音が黙って消える（PR #973 の Opus 監査 I-3 で実測・2026-10-05 改訂）。`kick.play(1, r, 1)` は `kick.play(1, 0, 1)` と鳴り方が完全に同じ
+- `( )` 内の `r` で出ていた「unknown name」警告の代わりに、§5 W4 を出す。W4 は audio シーケンスが**実際に出力するとき**、パターンが変わるたびに 1 回（音は変えない・診断だけ）
 
 ### 3.11 シンボリック保持（§7-0）
 
@@ -212,7 +212,7 @@ running range（`^N`）と `.oct()` はこの範囲をオクターブ単位で�
 | E3 | `random.foo` の `foo` が未定義 | 定義時エラー | `random.foo: mode "foo" が見つかりません。先に var foo = mode(1, 2, b3, …) を書いてください` |
 | E4 | `random.m7`（chord）/ `random.riff`（pattern） | 定義時エラー | `random.m7: "m7" は chord です。random. の後には mode 変数を書きます` |
 | E5 | `(…).mode(r1)`（ランダム音源をスコープに渡した） | 評価時エラー | `.mode(r1): "r1" はランダム音源です。スコープには mode 変数を渡してください（.mode(dorian)）` |
-| E6 | 格子に NaN を含む mode から音源を作った（#969 が直るまでの防御） | 定義時エラー | `random.z: mode "z" の格子が不正です（mode(...) に 0 は書けません）` |
+| E6 | 格子に NaN を含む mode から音源を作った（#969 の後も防御として残す） | 定義時エラー | `random.z: mode "z" の格子が不正です（mode(...) に 0 は書けません）` |
 | E7 | ランダム声部を含む `[ ]` への `.close()` / `.open()` / `.shell()` / `.rootless()` | 評価時エラー | `.shell() は r / ランダム音源の声部を含む和音には使えません（選ばれる度数が評価時に決まらないため）` |
 | E8 | chord / pattern の名前参照に `^r` / `~`（§3.3）。`@v` / `@g` は #609 が決めるまで同じくエラー | 評価時エラー | `"m7" は chord です。^r / ~ はランダム音源と度数にだけ付けられます` |
 | E9 | `_r`（ランダム声部への声部タイ） | パースエラー | `_ の声部タイは度数にだけ付けられます` |
