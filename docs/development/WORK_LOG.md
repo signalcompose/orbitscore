@@ -63,6 +63,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - Minor: `r1^1.r(p)` のスティッキー喪失 / `[r*2, 1]` の内部エラー（main と同じパースエラーへ）/ エディタが `random.sum` をミキサーとして読む / chord・pattern 参照の末尾 `r` が黙って消える（E8 へ）/ テスト 2 件の判定と名乗りのずれ / 消し残しの doc コメント
 - テスト 2642 → 2651 passed。赤 → 緑を各修正で確認。設計文書 §3.10 を新方針に改訂
 
+**レビュー ラウンド 2 の修正**（Commit: `39b96a3a`）— コードレビュー役 0 件 / bot なし / **Opus の fix 差分再監査が fix 起因の Important 1 件**:
+- R2-1: `[ ]` の声部の `r1^1.r(p)` が running range を書き換えていた（ラウンド 1 の M-1 修正の分岐が、stack の声部かどうかを知らなかった）。stack の声部では structural として解決
+- R2-2: 段 1 で stack の声部にも後置チェーンを通したため `[m7.drop(2), 5]` などが通っていた（main はパースエラー）。stack の声部の後置は `.r` / `.r(p)` だけにした。🔴 Codex の 1 回目は「名前が `r`+数字の形か」で受け付けを決めており、`var lead = random.dorian` の `[lead.r(1), 3]` がパースエラーになった（名前は利用者が自由に付ける・K3 / K13 違反）。2 回目で「パース時は名前を問わず受け付け、束縛の種類が分かる評価時に chord / pattern ならエラー」へ（E8 と同じ考え方）
+- テスト 2651 → 2659 passed
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`

@@ -811,7 +811,7 @@ export class ExpressionParser {
    * postfix is left untouched (so `global.key(C)` keeps its bare-string arg — only
    * play resolution treats a bare string as a name reference).
    */
-  parsePostfix(element: PlayElement | string, star = true): PostfixResult {
+  parsePostfix(element: PlayElement | string, star = true, stackVoice = false): PostfixResult {
     let el = element
     let changed = false
     for (;;) {
@@ -841,7 +841,7 @@ export class ExpressionParser {
           changed = true
           continue
         }
-        if (VOICING_OPS.has(method)) {
+        if (!stackVoice && VOICING_OPS.has(method)) {
           // §12: a voicing operator on a chord value / stack. A bare name lifts to a
           // chord_ref first (`m7.drop(2)`), like the scope-chain case below.
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
@@ -849,7 +849,7 @@ export class ExpressionParser {
           changed = true
           continue
         }
-        if (SCOPE_CHAIN_OPS.has(method)) {
+        if (!stackVoice && SCOPE_CHAIN_OPS.has(method)) {
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
           const scope = this.parseScopeChain()
           this.assertChainClosesRun()
@@ -1106,7 +1106,7 @@ export class ExpressionParser {
         ? this.parsePlayIdentifier(true)
         : { value: this.parseChordRef(), newPos: this.pos }
       this.pos = parsed.newPos
-      const post = this.parsePostfix(parsed.value, false)
+      const post = this.parsePostfix(parsed.value, false, true)
       this.pos = post.newPos
       const voice = post.value as PlayElement
       voices.push(

@@ -202,7 +202,7 @@ function evaluateStackVoices(
     } else {
       // A literal voice (number / PlayPitch) or a subtree voice ((5,3,2,1) etc.):
       // recurse so any name ref / repeat nested inside a subtree is also resolved.
-      result.push(resolveElement(voice as PlayElement, getBinding, warnings, visiting))
+      result.push(resolveElement(voice as PlayElement, getBinding, warnings, visiting, true))
     }
   }
   return result
@@ -382,6 +382,7 @@ function resolveElement(
   getBinding: BindingLookup,
   warnings: string[],
   visiting: Set<string>,
+  structural = false,
 ): PlayElement {
   if (!el || typeof el !== 'object') return el // bare degree / slice number
   switch (el.type) {
@@ -390,7 +391,13 @@ function resolveElement(
       if (el.referenceThin && sole && typeof sole === 'object' && sole.type === 'chord_ref') {
         const bound = getBinding(sole.name)
         if (bound?.kind === 'random') {
-          return randomBindingToElement({ ...sole, random: el.random }, bound)
+          return randomBindingToElement({ ...sole, random: el.random }, bound, structural)
+        }
+        if (structural && (bound?.kind === 'chord' || bound?.kind === 'pattern')) {
+          throw new Error(
+            `"${sole.name}" は ${bound.kind} です。[ ] の声部では .r を付けられません` +
+              '（和音全体の間引きは [ … ].r で書きます）',
+          )
         }
       }
       const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)

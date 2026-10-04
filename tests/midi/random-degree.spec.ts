@@ -465,6 +465,34 @@ describe('#967 random-degree dispatch (statistical)', () => {
     expect(named.capture.ons.at(-1)?.note).toBe(79)
   })
 
+  it('r1^1.r(1) in a stack keeps its ^1 structural for sibling and following notes', async () => {
+    const named = await playOnce('[r1^1.r(1), 3], 1', 'var one = mode(1)\nvar r1 = random.one')
+    expect(named.capture.ons.map(({ note }) => note)).toEqual([72, 64, 60])
+  })
+
+  it.each(['lead', 'r1'])(
+    '%s.r(1) resolves a named random source structurally inside a stack',
+    async (name) => {
+      const named = await playOnce(
+        `[${name}.r(1), 3]`,
+        `var two = mode(1)\nvar ${name} = random.two`,
+      )
+      expect(named.capture.ons.map(({ note }) => note)).toEqual([60, 64])
+    },
+  )
+
+  it.each(['chord', 'pattern'])('rejects .r on a %s-bound stack voice at evaluation', (kind) => {
+    const global = new Global(new RecordingScheduler())
+    if (kind === 'chord') global.importChords()
+    else global.definePattern('m7', [1, 2])
+    const seq = new Sequence(global, new RecordingScheduler()).setName('p')
+    expect(() =>
+      seq.play(...(parseAudioDSL('p.play([m7.r, 5])').statements[0]!.args as never[])),
+    ).toThrow(
+      `"m7" は ${kind} です。[ ] の声部では .r を付けられません（和音全体の間引きは [ … ].r で書きます）`,
+    )
+  })
+
   it('random.two chooses both C and G', async () => {
     expectSubsetAndVariety(
       await sample('r1', 'var two = mode(1, 5)\nvar r1 = random.two'),
