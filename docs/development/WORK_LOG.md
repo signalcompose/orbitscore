@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
+
+> **2026-10-05 追記（main がマージ前に補正）**: 見出しの「`random` 自体も名前として使えなくなった」は実装より強かった（予約語は `r` / `rr` だけで、`random` という変数名は作れる。書けなくなったのは `var X = random.<名前>` をミキサー派生として読ませることだけ）。正本と core spec の見出しを「`random` という名前のミキサーからは派生できなくなった」へ直した。
+
+**Date**: 2026-10-04 / **ブランチ**: `claude/docs-sync-pr977` / **追従元**: PR [#977](https://github.com/signalcompose/orbitscore/pull/977)（merge commit `5decc06`・head `eb96ae0`）
+
+リリース PR #977（拡張 4.2.1 → **4.3.0**）の追従。版表記は #977 自身が全箇所を更新済みで、
+残っていたのは **2 つ目のコミット `eb96ae0` が CHANGELOG にだけ書いた名前の衝突**だった。
+
+- `random` という名前がミキサー派生のベースに使えなくなったこと（`var random = init global.mixer` の後の
+  `var drums = random.sum` が書けない）を**仕様の正本へ**転記: `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` §6.2.1 の
+  宣言の項 / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` P.12.1 / 同 SC.2.1 の派生の例（読者が最初に当たる場所）
+- 推測で書かず実装で裏を取った: `packages/engine/src/parser/parse-statement.ts:127-134` で
+  `random` の分岐がミキサー派生の先読み（`<id>.output|sum|aux`）より**前**に置かれている
+- `sites/user/` `docs/user/` は触っていない。ミキサー変数からの派生（`var X = mix.sum`）を**一度も教えていない**ため
+  （`grep -rn 'init global.mixer\|mix\.sum\|mix\.aux' sites/user/ docs/user/` が 0 件）、読者が到達できない形についての
+  注記を足すと混乱するだけになる。`random.<mode>` 自体は `sites/user/midi/voicing.md:90` で既に説明済み（#976 で追従）
+- 版表記の検算: 素の `4.2.1` が残るのは CHANGELOG の過去の版の記録と dev サイトの `:9` の追従履歴 Note（いずれも過去の記録）だけ
+- #977 が落とした空行（新しい節の末尾と次の `###` 見出しの間）を復帰
+
 ### chore(release): bump the extension to 4.3.0 (Oct 5, 2026)
 
 **Date**: 2026-10-05 / **ブランチ**: `975-release-4.3.0` / **Issue**: [#975](https://github.com/signalcompose/orbitscore/issues/975) / **Commit**: `dd884dca`
@@ -31,6 +51,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - 🔴 検算は「古い番号が残っていないこと」で行った（memory の教訓）: 素の `4.2.1` は CHANGELOG の過去の版の記録 3 行だけ、「4.3.0 想定」は 0 件
 - リリースは main に入った後のドキュメント追従 PR を先に入れてから（owner 2026-10-05）。#963（4.2.1 の Note）→ #972（#971 の追従。adr-002 の「未実装」を「#973 で実装・4.3.0 で出荷」へ main が補正）→ #976（#973 の追従・本文の参照 98 か所）の順に、衝突を main が解いてマージした
 - #963 の規約（本文の版を送ったら `:9` の追従履歴 Note に 1 文）に従い、dev サイト 3 章 × ja・en の Note に v4.3.0 の 1 文を追記
+
 ### docs: follow PR #973 (random pitch) in the dev site citations (Oct 4, 2026)
 
 **Date**: 2026-10-04 / **ブランチ**: `claude/docs-sync-pr973` / **追従元**: PR [#973](https://github.com/signalcompose/orbitscore/pull/973)（merge commit `9c66585`）
