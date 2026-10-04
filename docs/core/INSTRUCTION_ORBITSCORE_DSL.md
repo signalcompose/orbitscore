@@ -1196,7 +1196,7 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
   over the scope's mode; the root always comes from the note's scope. Duplicates in the mode = weights.
 - `r` / `rr` are reserved at pitch positions (`var r` / `var rr` are errors); `r1` is a name unless `%`
   follows (`gain(r1%3)` is unchanged).
-- 🔴 **`random` itself is no longer available as a name** (shipped in 4.3.0 — CHANGELOG `[4.3.0]` Changed):
+- 🔴 **A mixer named `random` can no longer be derived from** (the variable name `random` itself is still allowed — only `r` / `rr` are reserved; shipped in 4.3.0 — CHANGELOG `[4.3.0]` Changed):
   `var NAME = random.<name>` always reads as a random-source declaration, so a mixer named `random`
   cannot be derived from: `var random = init global.mixer` followed by `var drums = random.sum` is read as
   a random source over a mode named `sum`, not as a mixer-bus derivation. The branch sits **before** the

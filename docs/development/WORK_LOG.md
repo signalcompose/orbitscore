@@ -19,6 +19,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
+> **2026-10-05 追記（main がマージ前に補正）**: 見出しの「`random` 自体も名前として使えなくなった」は実装より強かった（予約語は `r` / `rr` だけで、`random` という変数名は作れる。書けなくなったのは `var X = random.<名前>` をミキサー派生として読ませることだけ）。正本と core spec の見出しを「`random` という名前のミキサーからは派生できなくなった」へ直した。
+
 **Date**: 2026-10-04 / **ブランチ**: `claude/docs-sync-pr977` / **追従元**: PR [#977](https://github.com/signalcompose/orbitscore/pull/977)（merge commit `5decc06`・head `eb96ae0`）
 
 リリース PR #977（拡張 4.2.1 → **4.3.0**）の追従。版表記は #977 自身が全箇所を更新済みで、
