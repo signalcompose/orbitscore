@@ -90,6 +90,7 @@ import {
   relativeDelta,
   runScore,
   startEngineForRun,
+  type CaptureWindows,
   waitForEngineState,
 } from './helpers/run-score'
 import {
@@ -572,6 +573,74 @@ function analysisTailRms(
   expect(windows.length, `capture tail ${durationSec}s must contain RMS windows`).toBeGreaterThan(0)
   // 二乗平均の式は正本を 1 つに保つ（`run-score.ts:127-130` が drift しやすいと警告している式）。
   return quadraticMeanRms(windows)
+}
+
+/** MIDI-standard pitch formula used by every capture-frequency oracle in this file. */
+function midiFrequencyHz(midiNote: number): number {
+  return 440 * 2 ** ((midiNote - 69) / 12)
+}
+
+const RANDOM_PITCH_NOTE_COUNT = 16
+const RANDOM_PITCH_RMS_FLOOR = 0.01
+const RANDOM_PITCH_TOLERANCE = 0.02
+
+/**
+ * #967 の capture が「C4 / G4 だけ」と「両方出た」を同時に満たすことを検査する。
+ *
+ * 窓は壁時計の settle で決めず、`analyzeWavBuffer` が capture 上で検出した各 onset
+ * からの相対位置に置く。失敗時に実機再実行を消費せず調べられるよう、WAV と全推定値を添える。
+ */
+function expectRandomPitchCapture(captured: CaptureWindows, segment: string, label: string): void {
+  const onsets = captured.onsets(segment)
+  expect(
+    onsets.length,
+    `${label} must expose at least ${RANDOM_PITCH_NOTE_COUNT} detected onsets; ` +
+      `capture=${captured.capturePath} onsets=${JSON.stringify(onsets)}`,
+  ).toBeGreaterThanOrEqual(RANDOM_PITCH_NOTE_COUNT)
+
+  const capture = readCaptureForAnalysis(captured.capturePath)
+  const candidates = [
+    { name: 'C4', hz: midiFrequencyHz(60) },
+    { name: 'G4', hz: midiFrequencyHz(67) },
+  ] as const
+  const analysisWindows = captured.analysis.windows ?? []
+  const observations = onsets.slice(0, RANDOM_PITCH_NOTE_COUNT).map((onsetSec, index) => {
+    // 1 slot = 500 ms / gate = 225 ms. Attack 側 20 ms を外し、各 onset の定常部だけを測る。
+    const fromSec = onsetSec + 0.02
+    const toSec = onsetSec + 0.2
+    const rmsWindows = analysisWindows.filter(
+      (window) => window.startSec >= fromSec && window.startSec < toSec,
+    )
+    const rms = rmsWindows.length > 0 ? quadraticMeanRms(rmsWindows) : 0
+    const hz = estimateFundamentalHz(capture, { fromSec, toSec })
+    const nearest =
+      hz === undefined
+        ? undefined
+        : candidates.reduce((best, candidate) =>
+            Math.abs(hz - candidate.hz) < Math.abs(hz - best.hz) ? candidate : best,
+          )
+    return {
+      index,
+      onsetSec,
+      fromSec,
+      toSec,
+      rms,
+      hz,
+      nearest: nearest?.name,
+      relativeError:
+        hz === undefined || nearest === undefined ? undefined : relativeDelta(hz, nearest.hz),
+    }
+  })
+  const diagnostics = `${label}: capture=${captured.capturePath} windows=${JSON.stringify(observations)}`
+
+  for (const observation of observations) {
+    expect(observation.rms, diagnostics).toBeGreaterThanOrEqual(RANDOM_PITCH_RMS_FLOOR)
+    expect(observation.hz, diagnostics).toBeDefined()
+    expect(observation.relativeError, diagnostics).toBeLessThanOrEqual(RANDOM_PITCH_TOLERANCE)
+  }
+  expect(new Set(observations.map(({ nearest }) => nearest)), diagnostics).toEqual(
+    new Set(['C4', 'G4']),
+  )
 }
 
 /**
@@ -3314,7 +3383,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(restoredHz, 'Cycle B capture has no measurable steady fundamental').toBeDefined()
 
       // MIDI-standard pitch formula is the independent musical specification.
-      const midiFrequencyHz = (midiNote: number): number => 440 * 2 ** ((midiNote - 69) / 12)
       const expectedDefaultHz = midiFrequencyHz(60)
       const expectedShiftedHz = midiFrequencyHz(60 + 7)
       const shiftedMeasured = shiftedHz!
@@ -4077,7 +4145,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
         // Instrument leg: pitch, not level. Thresholds mirror the MCP-save
         // instrument test (±2% against the musical spec, ≤1% across restart).
-        const midiFrequencyHz = (midiNote: number): number => 440 * 2 ** ((midiNote - 69) / 12)
         const expectedDefaultHz = midiFrequencyHz(60)
         const expectedShiftedHz = midiFrequencyHz(60 + instrumentState.semitoneOffset)
         const defaultHz = lastSteadyFundamentalHz(defaultBuf)
@@ -6798,6 +6865,114 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }
         await session.client.call('stop_engine')
       }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  // ──────────────────────────────────
+  // #967 random pitch — shared real-app session
+  // ──────────────────────────────────
+
+  const randomPitchScore = (
+    receiver: string,
+    instrumentName: string,
+    playExpression: string,
+    prelude: readonly string[],
+  ): readonly string[] => [
+    'var global = init GLOBAL',
+    'global.key("C4")',
+    'global.tempo(30)',
+    'global.beat(4 by 4)',
+    ...prelude,
+    'global.start()',
+    `var ${receiver} = init global.seq`,
+    `${receiver}.instrument(${JSON.stringify(instrumentName)})`,
+    `${receiver}.output()`,
+    // 16 slots / 8 s = 500 ms per slot. gate(0.45) leaves a 225 ms steady tone for pitch
+    // analysis and >50% silence, so the shared onset detector keeps silence as its noise floor.
+    `${receiver}.gate(0.45)`,
+    `${receiver}.play(${playExpression})`,
+    `LOOP(${receiver})`,
+  ]
+
+  it.skipIf(!appAvailable)(
+    '#967 random binding emits both C4 and G4 across onset-tracked capture windows',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const receiver = 'randomBinding967'
+      const result = await runScore(
+        session,
+        {
+          slug: '967-random-binding',
+          lines: randomPitchScore(
+            receiver,
+            session.catalog.clapSynthName,
+            new Array(RANDOM_PITCH_NOTE_COUNT).fill('r1').join(', '),
+            ['var two = mode(1, 5)', 'var r1 = random.two'],
+          ),
+        },
+        async ({ captureSegment }) => {
+          await captureSegment('random-pitches', 10_000, 0)
+        },
+        { capture: true },
+      )
+      expect(result, '#967 random binding capture must be available').toBeDefined()
+      if (!result) throw new Error('#967 random binding capture was not produced')
+      expectRandomPitchCapture(result, 'random-pitches', '#967 random binding')
+      await expectNoNewErrors(session.client, errorsBefore, '#967 random binding')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#967 bare random pitch emits both C4 and G4 across onset-tracked capture windows',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const receiver = 'bareRandom967'
+      const randomGroup = `(${new Array(RANDOM_PITCH_NOTE_COUNT).fill('r').join(', ')}).mode(two)`
+      const result = await runScore(
+        session,
+        {
+          slug: '967-bare-random-pitch',
+          lines: randomPitchScore(receiver, session.catalog.clapSynthName, randomGroup, [
+            'var two = mode(1, 5)',
+          ]),
+        },
+        async ({ captureSegment }) => {
+          await captureSegment('random-pitches', 10_000, 0)
+        },
+        { capture: true },
+      )
+      expect(result, '#967 bare random pitch capture must be available').toBeDefined()
+      if (!result) throw new Error('#967 bare random pitch capture was not produced')
+      expectRandomPitchCapture(result, 'random-pitches', '#967 bare random pitch')
+      await expectNoNewErrors(session.client, errorsBefore, '#967 bare random pitch')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#967 E3 rejects random.nope through evaluate_orbitscore with the mode-source diagnostic',
+    async () => {
+      const session = requireOutputLineSession()
+      await runScore(
+        session,
+        {
+          slug: '967-random-binding-e3',
+          lines: ['var global = init GLOBAL', 'global.key("C4")', 'global.start()'],
+        },
+        async ({ session: activeSession }) => {
+          const result = await activeSession.client.call('evaluate_orbitscore', {
+            code: 'var r1 = random.nope',
+          })
+          expect(result.isError, result.text).toBe(true)
+          expect(result.text).toContain(
+            'random.nope: mode "nope" が見つかりません。先に var nope = mode(1, 2, b3, …) を書いてください',
+          )
+        },
+      )
     },
     TEST_TIMEOUT_MS,
   )

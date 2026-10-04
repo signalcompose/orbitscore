@@ -49,7 +49,7 @@ Voices are counted downward in the order they are written. For `[1, 3, 5, 7]`: p
 
 ## Randomness
 
-The DSL provides three kinds of randomness. All are **re-rolled each cycle** (they change on every loop pass).
+The DSL provides four kinds of randomness. All are **re-rolled each cycle** (they change on every loop pass).
 
 ### `Xr` — Randomly Sound a Note
 
@@ -69,6 +69,40 @@ piano.play([1, 3, 5, 7].r)   // each voice sounds on ~50% of cycles
 ```text
 piano.play(1, 3, 5^r, 8)    // degree 5 shifts randomly by -1, 0, or +1 octave each cycle (0 = no shift)
 ```
+
+### `r` — Pick the Pitch Itself at Random
+
+Put `r` where a degree goes, and one note of that note's scale is picked each time. Write `rr` and the picked note also sounds on only ~50% of cycles.
+
+```text
+lead.play(1, 2, r, 4)          // the third note is any degree 1-7 of the major scale
+lead.play(1, rr, 3, rr)        // the picked note sounds ~50% of the time
+lead.play(1, r^1, 5)           // r^1 picks from one octave up (and later notes move up too)
+```
+
+The range is the scale the note belongs to. Inside `.mode()`, it picks from that mode's notes.
+
+```text
+var dorian = mode(1, 2, b3, 4, 5, 6, b7)
+lead.play((1, r, r, r).mode(dorian))   // picks from the 7 Dorian notes
+```
+
+### `random.<mode>` — Pick from Your Own Set of Notes
+
+Pass a defined mode to `random.` to keep a "random source" in a variable. You can make several and switch between them.
+
+```text
+var two   = mode(1, 5)               // root and fifth only
+var chrom = mode(1, b2, 2, b3, 3, 4, #4, 5, b6, 6, b7, 7)   // all 12 notes
+var r1 = random.two
+var r2 = random.chrom
+bass.play(1, r1, r1, r2)
+bass.play(1, r1.r(0.3), 1, r1)       // .r(p) sets how often it sounds
+```
+
+- Writing the same note more than once makes it more likely (`mode(1, 1, 1, 5)` gives the root 3/4 and the fifth 1/4)
+- `random.` only takes a mode you defined first with `var X = mode(...)`
+- In audio sequences (sample playback), `r` is treated as a rest
 
 ::: info Reproducibility
 `.orbslog` (the session log) records execution, but randomness is re-rolled on playback (no fixed seed). In 2.0.0, the session log is off by default (opt-in: `ORBITSCORE_SESSION_LOG=1`).

@@ -7,6 +7,7 @@ import {
   analyzeLinkAudioMissingOutput,
   analyzeMissingOutput,
   analyzeOutputWithoutLinkAudio,
+  collectDerivedMixerBuses,
   missingOutputQuickFixEdit,
 } from '../../packages/vscode-extension/src/diagnostics-analysis'
 
@@ -248,6 +249,18 @@ describe('integration: getting started example', () => {
 })
 
 describe('analyzeOutputWithoutLinkAudio', () => {
+  it('does not classify random.sum / random.aux as mixer buses', () => {
+    const text = [
+      'var r1 = random.sum',
+      'var r2 = random.aux',
+      's.output("r1")',
+      's.output("r2")',
+    ].join('\n')
+
+    expect([...collectDerivedMixerBuses(text)]).toEqual([])
+    expect(analyzeOutputWithoutLinkAudio(text)).toHaveLength(2)
+  })
+
   it('returns no issues when global.linkAudio() is declared above seq.output()', () => {
     const text = [
       'global.linkAudio()',

@@ -65,6 +65,23 @@ describe('Phase 3 — [ ] stack parsing', () => {
       type: 'chord_ref',
       name: 'm7',
       octaveShift: 1,
+      rangeSet: true,
+    })
+  })
+
+  it.each(['m7.drop(2)', 'm7.root(2)'])(
+    'rejects unsupported stack-voice postfix `%s` like origin/main',
+    (voice) => {
+      expect(() => firstArg(`seq.play([${voice}, 5])`)).toThrow(/Expected RBRACKET but got DOT/)
+    },
+  )
+
+  it('accepts `.r` on any named stack voice for evaluation-time binding checks', () => {
+    expect(firstArg('seq.play([lead.r(1), 3])').voices[0]).toEqual({
+      type: 'stack',
+      voices: [{ type: 'chord_ref', name: 'lead', octaveShift: 0 }],
+      random: 1,
+      referenceThin: true,
     })
   })
 

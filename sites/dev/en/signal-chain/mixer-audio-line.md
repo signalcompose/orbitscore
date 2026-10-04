@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:541-580
+// packages/engine/src/core/sequence.ts:510-549
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -296,7 +296,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:658-679
+// packages/engine/src/core/sequence.ts:627-648
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -431,7 +431,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 The call site (`stageOutputElement()`) only consults it.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:481-498
+// packages/engine/src/core/sequence.ts:450-467
   private stageOutputElement(
     name: string,
     dest: OutputDest,
@@ -1280,7 +1280,7 @@ expanded the target to the explicit three values `none / master / bus`. Regardle
 order, only the newest destination derived from the score crosses the wire.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1003-1037
+// packages/engine/src/core/sequence.ts:972-1006
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()
@@ -1553,7 +1553,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2099-2136
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2168-2205
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1616,7 +1616,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2243-2268
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2312-2337
         [
           'var global = init GLOBAL',
           'global.key("C")',

@@ -243,7 +243,7 @@ export async function processSequenceInit(
 初期化が終わると、`statements` の各要素が `processStatement()` に渡されます。[I-1](/pipeline/text-to-ast) で「パーサーはすべての `<id>.method()` を `type: 'sequence'` として出力する」と説明しました。その判断をここで正しく解決するのが `processStatement()` の `'sequence'` ケースです。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:63-117
+// packages/engine/src/interpreter/process-statement.ts:63-120
 export async function processStatement(
   statement: Statement,
   state: InterpreterState,
@@ -284,6 +284,9 @@ export async function processStatement(
       break
     case 'mode_binding':
       processModeBinding(statement, state)
+      break
+    case 'random_binding':
+      processRandomBinding(statement, state)
       break
     case 'mixer_handle':
       await processMixerHandleStatement(statement, state)
@@ -338,7 +341,7 @@ flowchart TD
 `processGlobalStatement()` も `processSequenceStatement()` も、レシーバーを取り出したあとは `applyMethodChain()` に処理を委ねます。`processGlobalStatement()` を例に見ると:
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:412-429
+// packages/engine/src/interpreter/process-statement.ts:359-376
 export async function processGlobalStatement(
   statement: GlobalStatement,
   state: InterpreterState,
@@ -362,7 +365,7 @@ export async function processGlobalStatement(
 `applyMethodChain()` は「主メソッドを呼び、続けて `chain` の各要素を呼ぶ」というループを 1 箇所に集約したものです。レシーバーの種類 (Global / Sequence / バス参照 / ミキサーノード) に関わらず同じループを通るので、チェーンの意味論が 1 箇所で定義されます。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:119-143
+// packages/engine/src/interpreter/process-statement.ts:122-146
 /**
  * Apply a statement's main call and then its chained calls to `receiver`,
  * threading each call's return value into the next (methods return `this` to
@@ -393,7 +396,7 @@ async function applyMethodChain(
 各ホップでは `resolveChainDispatch()` が「この名前は DSL メソッドか、プラグイン呼び出しか、ミキサールーティングか」を判定します。ここで気をつけたいのは、パーサーが記録した `invocation` がこの段階で意味を持つことです。Global に対して括弧なしで DSL メソッドを書くと、次のガードが働きます。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:150-169
+// packages/engine/src/interpreter/process-statement.ts:153-172
     const dispatch = resolveChainDispatch(receiver, method, state, invocation)
     if (
       dispatch.kind === 'dsl-method' &&
@@ -560,7 +563,7 @@ export async function processArguments(methodName: string, args: any[]): Promise
 `RUN()`, `LOOP()`, `MUTE()` は `processTransportStatement()` が処理します。これらはトグルではなく、**単方向の上書き (unidirectional)** という設計が特徴です。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:525-568
+// packages/engine/src/interpreter/process-statement.ts:472-515
 export async function processTransportStatement(
   statement: TransportStatement,
   state: InterpreterState,

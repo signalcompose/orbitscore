@@ -13,6 +13,7 @@ import {
   PlayWithModifier,
   PlayModifier,
   PlayPitch,
+  PlayRandomDegree,
   PlayScoped,
   PlayStack,
   PlayLegato,
@@ -29,10 +30,18 @@ import {
   ValueExpression,
   ValueRef,
 } from './types'
-import { ParserUtils } from './parser-utils'
+import {
+  asStackVoice,
+  classifyPlayIdentifier,
+  isPitchModifierToken,
+  parseSignedNumber as parseSignedNumberAt,
+  parsePitchModifiers as parsePitchModifiersAt,
+  ParserUtils,
+} from './parser-utils'
 
 /** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
 const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
+type PostfixResult = { value: PlayElement | string; newPos: number; changed: boolean }
 
 /**
  * Pitch-scope chain methods on a group (§3): `.root()`/`.mode()`/`.oct()`/`.hold()`
@@ -84,7 +93,15 @@ export class ExpressionParser {
   private tokens: AudioToken[]
   private pos: number
 
-  constructor(tokens: AudioToken[], pos: number) {
+  constructor(
+    tokens: AudioToken[],
+    pos: number,
+    /**
+     * True only at a `play()` element position, where `r` / `rr` mean random degrees.
+     * Leaving this false there would silently parse `r` as a name reference.
+     */
+    private readonly playElementContext = false,
+  ) {
     this.tokens = tokens
     this.pos = pos
   }
@@ -112,6 +129,7 @@ export class ExpressionParser {
     }
 
     if (token.type === 'IDENTIFIER') {
+      if (this.playElementContext) return this.parsePlayIdentifier()
       return this.parseIdentifier()
     }
 
@@ -147,6 +165,10 @@ export class ExpressionParser {
       return { value: parsed.value, newPos: parsed.newPos }
     }
     if (token.type === 'IDENTIFIER') {
+      if (arrayElement && (token.value === 'r' || token.value === 'rr')) {
+        const parsed = this.parsePlayIdentifier(true)
+        return { value: parsed.value as ValueExpression, newPos: parsed.newPos }
+      }
       if (ParserUtils.peek(this.tokens, this.pos).type === 'LPAREN') {
         return this.parseValueCall()
       }
@@ -351,28 +373,14 @@ export class ExpressionParser {
 
   /** Read an optional +/- sign followed by a NUMBER and return the signed value. */
   private parseSignedNumber(): number {
-    let sign = 1
-    const t = ParserUtils.current(this.tokens, this.pos).type
-    if (t === 'PLUS') {
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-    } else if (t === 'MINUS') {
-      sign = -1
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-    }
-    const numResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
-    this.pos = numResult.newPos
-    return sign * ParserUtils.parseNumber(numResult.token)
+    const result = parseSignedNumberAt(this.tokens, this.pos)
+    this.pos = result.newPos
+    return result.value
   }
 
   /** True if the current token starts a pitch modifier: `^N`/`^r`, `~`, `@v`/`@g`, or `r`. */
   private nextIsPitchModifier(): boolean {
-    const cur = ParserUtils.current(this.tokens, this.pos)
-    return (
-      cur.type === 'CARET' ||
-      cur.type === 'TILDE' ||
-      cur.type === 'AT' ||
-      (cur.type === 'IDENTIFIER' && cur.value === 'r')
-    )
+    return isPitchModifierToken(ParserUtils.current(this.tokens, this.pos))
   }
 
   /**
@@ -387,91 +395,26 @@ export class ExpressionParser {
   private parsePitchModifiers(
     degree: number,
     alteration: number,
-  ): { value: PlayPitch; newPos: number } {
-    let octaveShift = 0
-    let rangeSet = false
-    let detune = 0
-    let random: number | undefined
-    let randomOctave = false
-    let velocity: number | undefined
-    let velocityDelta: number | undefined
-    let articulation: number | undefined
-    let parsed = true
-    while (parsed) {
-      parsed = false
-      const cur = ParserUtils.current(this.tokens, this.pos)
-      const t = cur.type
-      if (t === 'AT') {
-        // §10.3 expression (E5): `@v100` absolute velocity / `@v+20`/`@v-30` relative
-        // (accent) / `@g30` articulation as a gate PERCENT (30 = 0.30, 120 = 1.20).
-        // The lexer merges `v100`/`g30` into one identifier, so split letter + digits;
-        // integer args avoid a decimal point splitting the token.
-        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-        const sub = ParserUtils.current(this.tokens, this.pos)
-        const raw = sub.type === 'IDENTIFIER' ? String(sub.value) : ''
-        const kind = raw[0]
-        const rest = raw.slice(1)
-        if (kind !== 'v' && kind !== 'g') {
-          throw new Error(`expected @v (velocity) or @g (articulation), got @${raw || '?'}`)
-        }
-        if (rest !== '' && !/^\d+$/.test(rest)) {
-          throw new Error(`@${kind} expects an integer, e.g. @v100 or @g30 (got @${raw})`)
-        }
-        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-        if (kind === 'v') {
-          if (rest === '') {
-            // `@v` alone → a relative accent `@v+n` / `@v-n` (the sign split the identifier).
-            const next = ParserUtils.current(this.tokens, this.pos).type
-            if (next === 'PLUS' || next === 'MINUS') velocityDelta = this.parseSignedNumber()
-            else throw new Error('@v needs a value, e.g. @v100 or @v+20')
-          } else {
-            velocity = Math.max(1, Math.min(127, parseInt(rest, 10)))
-          }
-        } else {
-          if (rest === '') throw new Error('@g needs a gate percent, e.g. @g30 (= 0.30)')
-          articulation = parseInt(rest, 10) / 100 // percent → ratio (@g120 = 1.20 legato)
-        }
-        parsed = true
-      } else if (t === 'CARET') {
-        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-        // `^r` = a random octave (§12, #53); otherwise `^N` sets the sticky range (§2.4),
-        // rangeSet marking this note as a running-range set point for the walk.
-        const after = ParserUtils.current(this.tokens, this.pos)
-        if (after.type === 'IDENTIFIER' && after.value === 'r') {
-          this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-          randomOctave = true
-        } else {
-          octaveShift = this.parseSignedNumber()
-          rangeSet = true
-        }
-        parsed = true
-      } else if (t === 'TILDE') {
-        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-        detune = this.parseSignedNumber()
-        parsed = true
-      } else if (t === 'IDENTIFIER' && cur.value === 'r') {
-        // Trailing `r` = random presence (§12, #50/#52): default 50% chance to sound.
-        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-        random = 0.5
-        parsed = true
-      }
-    }
-    return {
-      value: {
-        type: 'pitch',
-        degree,
-        alteration,
-        octaveShift,
-        rangeSet,
-        detune,
-        ...(random !== undefined && { random }),
-        ...(randomOctave && { randomOctave: true }),
-        ...(velocity !== undefined && { velocity }),
-        ...(velocityDelta !== undefined && { velocityDelta }),
-        ...(articulation !== undefined && { articulation }),
-      },
-      newPos: this.pos,
-    }
+  ): { value: PlayPitch; newPos: number }
+  private parsePitchModifiers(
+    degree: null,
+    alteration: 0,
+    initialRandom?: number,
+  ): { value: PlayRandomDegree; newPos: number }
+  private parsePitchModifiers(
+    degree: number | null,
+    alteration: number,
+    initialRandom?: number,
+  ): { value: PlayPitch | PlayRandomDegree; newPos: number } {
+    const result =
+      degree === null
+        ? parsePitchModifiersAt(this.tokens, this.pos, {
+            type: 'random_degree',
+            initialRandom,
+          })
+        : parsePitchModifiersAt(this.tokens, this.pos, { type: 'pitch', degree, alteration })
+    this.pos = result.newPos
+    return result
   }
 
   /** Parse an accidental-prefixed pitch: ACCIDENTAL NUMBER [^...] [~...]. */
@@ -527,7 +470,10 @@ export class ExpressionParser {
     }
 
     // Check for random syntax: 'r', 'r0%20', 'r-6%3', etc.
-    if (ParserUtils.isRandomSyntax(value)) {
+    if (
+      ParserUtils.isRandomSyntax(value) &&
+      (value === 'r' || ParserUtils.current(this.tokens, this.pos).type === 'PERCENT')
+    ) {
       return this.parseRandomValue(value)
     }
 
@@ -537,6 +483,20 @@ export class ExpressionParser {
     }
 
     return { value, newPos: this.pos }
+  }
+
+  /** Parse an identifier specifically in a `play()` pitch-element position. */
+  private parsePlayIdentifier(forceReference = false): { value: any; newPos: number } {
+    const token = ParserUtils.current(this.tokens, this.pos)
+    const next = ParserUtils.peek(this.tokens, this.pos)
+    const kind = classifyPlayIdentifier(token, next, forceReference)
+    if (kind === 'value' || kind === 'random_value') return this.parseIdentifier()
+    const isRandomDegree = kind === 'random_degree' || kind === 'optional_random_degree'
+    if (isRandomDegree) {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return this.parsePitchModifiers(null, 0, kind === 'optional_random_degree' ? 0.5 : undefined)
+    }
+    return { value: this.parseChordRef(), newPos: this.pos }
   }
 
   /**
@@ -851,16 +811,12 @@ export class ExpressionParser {
    * postfix is left untouched (so `global.key(C)` keeps its bare-string arg — only
    * play resolution treats a bare string as a name reference).
    */
-  parsePostfix(element: PlayElement | string): {
-    value: PlayElement | string
-    newPos: number
-    changed: boolean
-  } {
+  parsePostfix(element: PlayElement | string, star = true, stackVoice = false): PostfixResult {
     let el = element
     let changed = false
     for (;;) {
       const t = ParserUtils.current(this.tokens, this.pos).type
-      if (t === 'ASTERISK') {
+      if (t === 'ASTERISK' && star) {
         if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
@@ -885,7 +841,7 @@ export class ExpressionParser {
           changed = true
           continue
         }
-        if (VOICING_OPS.has(method)) {
+        if (!stackVoice && VOICING_OPS.has(method)) {
           // §12: a voicing operator on a chord value / stack. A bare name lifts to a
           // chord_ref first (`m7.drop(2)`), like the scope-chain case below.
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
@@ -893,7 +849,7 @@ export class ExpressionParser {
           changed = true
           continue
         }
-        if (SCOPE_CHAIN_OPS.has(method)) {
+        if (!stackVoice && SCOPE_CHAIN_OPS.has(method)) {
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
           const scope = this.parseScopeChain()
           this.assertChainClosesRun()
@@ -929,7 +885,10 @@ export class ExpressionParser {
       return { ...target, random: p }
     }
     if (target && typeof target === 'object' && target.type === 'chord_ref') {
-      return { type: 'stack', voices: [target], random: p }
+      return { type: 'stack', voices: [target], random: p, referenceThin: true }
+    }
+    if (target && typeof target === 'object' && target.type === 'random_degree') {
+      return { ...target, random: p }
     }
     throw new Error('.r applies to a chord / `[ ]` stack, e.g. `[1,3,5,7].r` or `m7.r`')
   }
@@ -1119,15 +1078,18 @@ export class ExpressionParser {
       // not IDENTIFIER, for a leading `_`). Resolved-pitch-matched at dispatch.
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
       const after = ParserUtils.current(this.tokens, this.pos)
+      if (after.type === 'IDENTIFIER' && (after.value === 'r' || after.value === 'rr')) {
+        throw new Error('_ の声部タイは度数にだけ付けられます')
+      }
       if (after.type === 'ACCIDENTAL') {
         const pitchResult = this.parsePitch()
         this.pos = pitchResult.newPos
-        voices.push({ ...this.asStackVoice(pitchResult.value), tie: true })
+        voices.push({ ...asStackVoice(pitchResult.value), tie: true })
       } else if (after.type === 'NUMBER') {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         const modResult = this.parsePitchModifiers(ParserUtils.parseNumber(after), 0)
         this.pos = modResult.newPos
-        voices.push({ ...this.asStackVoice(modResult.value), tie: true })
+        voices.push({ ...asStackVoice(modResult.value), tie: true })
       } else {
         // a bare `_` voice (degenerate) — an event-tie marker
         voices.push({ type: 'tie' })
@@ -1140,11 +1102,22 @@ export class ExpressionParser {
     } else if (cur === 'MINUS') {
       voices.push(this.parseChordRemoval())
     } else if (cur === 'IDENTIFIER') {
-      voices.push(this.parseChordRef())
+      const parsed = this.playElementContext
+        ? this.parsePlayIdentifier(true)
+        : { value: this.parseChordRef(), newPos: this.pos }
+      this.pos = parsed.newPos
+      const post = this.parsePostfix(parsed.value, false, true)
+      this.pos = post.newPos
+      const voice = post.value as PlayElement
+      voices.push(
+        voice && typeof voice === 'object' && voice.type === 'random_degree'
+          ? asStackVoice(voice)
+          : voice,
+      )
     } else if (cur === 'ACCIDENTAL') {
       const pitchResult = this.parsePitch()
       this.pos = pitchResult.newPos
-      voices.push(this.asStackVoice(pitchResult.value))
+      voices.push(asStackVoice(pitchResult.value))
     } else if (cur === 'NUMBER') {
       const numResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = numResult.newPos
@@ -1152,22 +1125,13 @@ export class ExpressionParser {
       if (this.nextIsPitchModifier()) {
         const pitchResult = this.parsePitchModifiers(value, 0)
         this.pos = pitchResult.newPos
-        voices.push(this.asStackVoice(pitchResult.value))
+        voices.push(asStackVoice(pitchResult.value))
       } else {
         voices.push(value)
       }
     } else {
       throw new Error(`Unexpected token in stack [ ]: ${cur}`)
     }
-  }
-
-  /**
-   * Mark a PlayPitch as a stack voice: clear `rangeSet` so a voice `^N` is
-   * structural (§2.4 — stack-internal `^N` places the voice's octave but does NOT
-   * move the running range, unlike a melodic `^N`).
-   */
-  private asStackVoice(pitch: PlayPitch): PlayPitch {
-    return pitch.rangeSet ? { ...pitch, rangeSet: false } : pitch
   }
 
   /**
@@ -1178,11 +1142,24 @@ export class ExpressionParser {
   private parseChordRef(): PlayChordRef {
     const id = ParserUtils.advance(this.tokens, this.pos)
     this.pos = id.newPos
-    if (ParserUtils.current(this.tokens, this.pos).type === 'CARET') {
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-      return { type: 'chord_ref', name: id.token.value, octaveShift: this.parseSignedNumber() }
+    const modifierStart = this.pos
+    const parsed = this.parsePitchModifiers(null, 0)
+    const modifier = parsed.value
+    const detuneWasWritten = this.tokens
+      .slice(modifierStart, parsed.newPos)
+      .some((token) => token.type === 'TILDE')
+    return {
+      type: 'chord_ref',
+      name: id.token.value,
+      octaveShift: modifier.octaveShift,
+      ...(modifier.rangeSet && { rangeSet: true }),
+      ...(detuneWasWritten && { detune: modifier.detune }),
+      ...(modifier.random !== undefined && { random: modifier.random }),
+      ...(modifier.randomOctave && { randomOctave: true }),
+      ...(modifier.velocity !== undefined && { velocity: modifier.velocity }),
+      ...(modifier.velocityDelta !== undefined && { velocityDelta: modifier.velocityDelta }),
+      ...(modifier.articulation !== undefined && { articulation: modifier.articulation }),
     }
-    return { type: 'chord_ref', name: id.token.value, octaveShift: 0 }
   }
 
   /**
@@ -1285,7 +1262,9 @@ export class ExpressionParser {
     } else if (cur === 'IDENTIFIER') {
       // A bare chord-name element inside a group, e.g. (0, m7, 0).root(3) (§6/§9.1).
       // Resolved (spread to a one-slot stack) at evaluation against the namespace.
-      elements.push(this.parseChordRef())
+      elements.push(
+        this.playElementContext ? this.parsePlayIdentifier(true).value : this.parseChordRef(),
+      )
     } else if (cur === 'NUMBER') {
       const numResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = numResult.newPos

@@ -17,10 +17,16 @@
  *    resolved-pitch matching as context-dependent).
  *  - `^N` on a ref = a whole-chord structural octave shift on that ref's voices.
  */
-import { PlayElement, PlayChordRemoval, StackElement } from '../../parser/types'
+import { PlayElement, PlayChordRef, PlayChordRemoval, StackElement } from '../../parser/types'
 import { degreeToSemitone } from '../degree-resolution'
 
 import { ChordVoice, BoundValue } from './types'
+import {
+  assertRandomOnlyModifiers,
+  randomBindingToElement,
+  randomChordVoiceToElement,
+  randomElementToChordVoice,
+} from './random-degree'
 
 /** Chord-only lookup: a name → its chord voices, or undefined (used by chord definitions + stacks). */
 export type ChordLookup = (name: string) => ChordVoice[] | undefined
@@ -34,6 +40,11 @@ export interface ResolveResult {
   warnings: string[]
 }
 
+/** Chord-only view of a namespace entry, retained for Global's public lookup API. */
+export function boundChordVoices(bound: BoundValue | undefined): ChordVoice[] | undefined {
+  return bound?.kind === 'chord' ? bound.voices : undefined
+}
+
 /** Deep-clone a play element so repeated (`*n` / comp onset) copies are independent objects. */
 export function cloneElement(el: PlayElement): PlayElement {
   return el && typeof el === 'object' ? (structuredClone(el) as PlayElement) : el
@@ -41,11 +52,13 @@ export function cloneElement(el: PlayElement): PlayElement {
 
 /** A chord voice (degree + alteration + octave + detune) → a play element (bare degree when plain). */
 function voiceToElement(voice: {
+  kind?: 'random'
   degree: number
   alteration: number
   octaveShift: number
   detune: number
 }): PlayElement {
+  if (voice.kind === 'random') return randomChordVoiceToElement(voice as ChordVoice)
   if (voice.alteration === 0 && voice.octaveShift === 0 && voice.detune === 0) {
     return voice.degree
   }
@@ -74,7 +87,11 @@ function matchesRemoval(el: PlayElement, removal: PlayChordRemoval): boolean {
 
 /** Spread a chord's voices, folding a ref's `^N` into each voice (stack/chord context). */
 function spreadChordVoices(voices: ChordVoice[], octaveShift: number): PlayElement[] {
-  return voices.map((vc) => voiceToElement({ ...vc, octaveShift: vc.octaveShift + octaveShift }))
+  return voices.map((vc) =>
+    vc.kind === 'random'
+      ? randomChordVoiceToElement(vc, octaveShift)
+      : voiceToElement({ ...vc, octaveShift: vc.octaveShift + octaveShift }),
+  )
 }
 
 /**
@@ -90,12 +107,12 @@ function spreadChordVoices(voices: ChordVoice[], octaveShift: number): PlayEleme
  * is unaffected.
  */
 function resolveName(
-  name: string,
-  octaveShift: number,
+  ref: PlayChordRef,
   getBinding: BindingLookup,
   warnings: string[],
   visiting: Set<string>,
 ): PlayElement[] {
+  const { name, octaveShift } = ref
   const bound = getBinding(name)
   if (!bound) {
     // #255: an unbound standalone name is rendered as a REST (occupies its slot) rather
@@ -103,19 +120,26 @@ function resolveName(
     warnings.push(
       `unknown name "${name}" — neither a chord nor a pattern (§6/§6.5); rendered as a rest. Did you \`import chords\` / \`var ${name} = …\`?`,
     )
+    if (/^(?:r\d+r|r{3,})$/.test(name)) {
+      warnings.push('出現確率は `r1.r` / `r1.r(0.3)` と書きます')
+    }
     return [0]
   }
   if (bound.kind === 'chord') {
+    assertRandomOnlyModifiers(ref, 'chord')
     return [{ type: 'stack', voices: spreadChordVoices(bound.voices, octaveShift) }]
   }
   if (bound.kind === 'mode') {
     // §2.2: a mode is a scope applied via `.mode(name)`, not a playable value.
     warnings.push(
-      `"${name}" is a mode — apply it with \`(...).mode(${name})\`, not as a value (§2.2).`,
+      `"${name}" is a mode — apply it with \`(...).mode(${name})\`; ` +
+        `ランダムな音なら \`var r1 = random.${name}\` (§2.2).`,
     )
     return [0]
   }
+  if (bound.kind === 'random') return [randomBindingToElement(ref, bound)]
   // pattern: a horizontal/tree value — splice its (recursively resolved) elements.
+  assertRandomOnlyModifiers(ref, 'pattern')
   if (visiting.has(name)) {
     warnings.push(
       `circular pattern reference "${name}" — expansion stopped (§6.5). A pattern must not refer to itself.`,
@@ -151,13 +175,19 @@ function evaluateStackVoices(
     if (voice && typeof voice === 'object' && voice.type === 'chord_ref') {
       const bound = getBinding(voice.name)
       if (bound?.kind === 'chord') {
+        assertRandomOnlyModifiers(voice, 'chord')
         result.push(...spreadChordVoices(bound.voices, voice.octaveShift))
+      } else if (bound?.kind === 'random') {
+        result.push(randomBindingToElement(voice, bound, true))
       } else if (!bound) {
         warnings.push(
           `unknown name "${voice.name}" in a [ ] stack — left empty (§6). Did you \`import chords\` / \`var ${voice.name} = chord(…)\`?`,
         )
       } else {
-        warnings.push(`"${voice.name}" in a [ ] stack is a pattern, not a chord (§6) — left empty.`)
+        if (bound.kind === 'pattern') assertRandomOnlyModifiers(voice, 'pattern')
+        warnings.push(
+          `"${voice.name}" in a [ ] stack is a ${bound.kind}, not a chord (§6) — left empty.`,
+        )
       }
     } else if (voice && typeof voice === 'object' && voice.type === 'chord_removal') {
       const before = result.length
@@ -172,7 +202,7 @@ function evaluateStackVoices(
     } else {
       // A literal voice (number / PlayPitch) or a subtree voice ((5,3,2,1) etc.):
       // recurse so any name ref / repeat nested inside a subtree is also resolved.
-      result.push(resolveElement(voice as PlayElement, getBinding, warnings, visiting))
+      result.push(resolveElement(voice as PlayElement, getBinding, warnings, visiting, true))
     }
   }
   return result
@@ -197,6 +227,9 @@ function voiceToWork(v: StackElement): VoicingWork | null {
       orig: v,
     }
   }
+  if (v && typeof v === 'object' && v.type === 'random_degree') {
+    return { ...randomElementToChordVoice(v), orig: v }
+  }
   return null
 }
 
@@ -206,6 +239,12 @@ function voiceToWork(v: StackElement): VoicingWork | null {
  * (`@v`/`@g`/`Xr`/`^r`) — are preserved. A bare-degree voice round-trips via voiceToElement.
  */
 function workToElement(w: VoicingWork): PlayElement {
+  if (w.kind === 'random') {
+    const original = w.orig as Extract<PlayElement, { type: 'random_degree' }>
+    return w.octaveShift === original.octaveShift
+      ? original
+      : { ...original, octaveShift: w.octaveShift, rangeSet: false }
+  }
   if (w.orig && typeof w.orig === 'object' && w.orig.type === 'pitch') {
     return w.octaveShift === w.orig.octaveShift ? w.orig : { ...w.orig, octaveShift: w.octaveShift }
   }
@@ -276,6 +315,15 @@ function applyVoicing(
   const n = works.length
   if (n === 0) return stack
 
+  if (
+    works.some((work) => work.kind === 'random') &&
+    (op === 'close' || op === 'open' || op === 'shell' || op === 'rootless')
+  ) {
+    throw new Error(
+      `.${op}() は r / ランダム音源の声部を含む和音には使えません（選ばれる度数が評価時に決まらないため）`,
+    )
+  }
+
   let out: VoicingWork[] = works
   switch (op) {
     case 'drop':
@@ -334,10 +382,24 @@ function resolveElement(
   getBinding: BindingLookup,
   warnings: string[],
   visiting: Set<string>,
+  structural = false,
 ): PlayElement {
   if (!el || typeof el !== 'object') return el // bare degree / slice number
   switch (el.type) {
     case 'stack': {
+      const sole = el.voices.length === 1 ? el.voices[0] : undefined
+      if (el.referenceThin && sole && typeof sole === 'object' && sole.type === 'chord_ref') {
+        const bound = getBinding(sole.name)
+        if (bound?.kind === 'random') {
+          return randomBindingToElement({ ...sole, random: el.random }, bound, structural)
+        }
+        if (structural && (bound?.kind === 'chord' || bound?.kind === 'pattern')) {
+          throw new Error(
+            `"${sole.name}" は ${bound.kind} です。[ ] の声部では .r を付けられません` +
+              '（和音全体の間引きは [ … ].r で書きます）',
+          )
+        }
+      }
       const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)
       return {
         type: 'stack',
@@ -400,13 +462,20 @@ function resolveElements(
   for (const el of els) {
     if (typeof el === 'string') {
       // A bare name (top-level play arg, e.g. `play(riff, fill)`).
-      out.push(...resolveName(el, 0, getBinding, warnings, visiting))
+      out.push(
+        ...resolveName(
+          { type: 'chord_ref', name: el, octaveShift: 0 },
+          getBinding,
+          warnings,
+          visiting,
+        ),
+      )
     } else if (el && typeof el === 'object' && el.type === 'repeat') {
       // §6.5: `x*n` — n juxtaposed copies of the resolved element (1→N inner ok).
       const inner = resolveElements([el.element], getBinding, warnings, visiting)
       for (let i = 0; i < el.count; i++) for (const e of inner) out.push(cloneElement(e))
     } else if (el && typeof el === 'object' && el.type === 'chord_ref') {
-      out.push(...resolveName(el.name, el.octaveShift, getBinding, warnings, visiting))
+      out.push(...resolveName(el, getBinding, warnings, visiting))
     } else {
       out.push(resolveElement(el, getBinding, warnings, visiting))
     }
@@ -442,7 +511,7 @@ export interface ChordDefinitionResult {
  */
 export function evaluateChordDefinition(
   voices: StackElement[],
-  getChord: ChordLookup,
+  getBinding: BindingLookup,
 ): ChordDefinitionResult {
   const result: ChordVoice[] = []
   const warnings: string[] = []
@@ -450,7 +519,12 @@ export function evaluateChordDefinition(
     if (typeof voice === 'number') {
       result.push({ degree: voice, alteration: 0, octaveShift: 0, detune: 0 })
     } else if (voice && typeof voice === 'object' && voice.type === 'chord_ref') {
-      const spread = getChord(voice.name)
+      const bound = getBinding(voice.name)
+      if (bound?.kind === 'random') {
+        result.push(randomElementToChordVoice(randomBindingToElement(voice, bound, true)))
+        continue
+      }
+      const spread = bound?.kind === 'chord' ? bound.voices : undefined
       if (!spread) {
         warnings.push(`unknown chord "${voice.name}" in chord definition — skipped (§6).`)
         continue
@@ -461,7 +535,11 @@ export function evaluateChordDefinition(
     } else if (voice && typeof voice === 'object' && voice.type === 'chord_removal') {
       const before = result.length
       for (let i = result.length - 1; i >= 0; i--) {
-        if (result[i]!.degree === voice.degree && result[i]!.alteration === voice.alteration) {
+        if (
+          result[i]!.kind !== 'random' &&
+          result[i]!.degree === voice.degree &&
+          result[i]!.alteration === voice.alteration
+        ) {
           result.splice(i, 1)
         }
       }
@@ -477,6 +555,8 @@ export function evaluateChordDefinition(
         octaveShift: voice.octaveShift,
         detune: voice.detune,
       })
+    } else if (voice && typeof voice === 'object' && voice.type === 'random_degree') {
+      result.push(randomElementToChordVoice(voice))
     } else {
       warnings.push('a chord definition must be a flat degree stack (§6) — voice skipped.')
     }

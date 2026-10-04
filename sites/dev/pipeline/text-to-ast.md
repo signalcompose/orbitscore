@@ -27,7 +27,7 @@ DSL のテキストが実際に実行されるまでの最初の関門が「パ�
 - **`collapseScopedRun()` が `parse-expression.ts` に切り出された**。`(A)(B).root(X)` のような並置グループに pitch scope チェーンを畳み込む規則を、statement レベルと nested レベルの両方のループが共有します
 
 ```typescript
-// packages/engine/src/parser/parse-expression.ts:71-78
+// packages/engine/src/parser/parse-expression.ts:80-87
 export function collapseScopedRun(list: PlayElement[], runStart: number): void {
   const lastIdx = list.length - 1
   const last = list[lastIdx]
@@ -56,7 +56,7 @@ flowchart LR
 入口になるのは `parseAudioDSL()` 関数で、この 2 段階を順に呼び出すだけのシンプルな作りになっています。
 
 ```typescript
-// packages/engine/src/parser/audio-parser.ts:121-126
+// packages/engine/src/parser/audio-parser.ts:123-128
 export function parseAudioDSL(source: string): AudioIR {
   const tokenizer = new AudioTokenizer(source)
   const tokens = tokenizer.tokenize()
@@ -275,7 +275,7 @@ classDiagram
 `Statement` union の全メンバーは次のとおりです。
 
 ```typescript
-// packages/engine/src/parser/types.ts:72-83
+// packages/engine/src/parser/types.ts:72-84
 export type Statement =
   | GlobalStatement
   | SequenceStatement
@@ -283,6 +283,7 @@ export type Statement =
   | ChordBinding
   | PatternBinding
   | ModeBinding
+  | RandomBinding
   | ImportStatement
   | FileImportStatement
   | MixerHandleStatement
@@ -297,7 +298,7 @@ export type Statement =
 `parse()` の処理は、トークン列を先頭から読みながら `StatementParser` を繰り返し呼び出し、戻ってきた statement を `globalInit` / `sequenceInits` / `fileImports` / `statements` の適切なフィールドに振り分けることです。ひとつだけ規則の検査が入っていて、**file import はファイル先頭領域 (最初の非 import 文より前) にしか置けない** (IM.1) という不変条件をここで守っています。
 
 ```typescript
-// packages/engine/src/parser/audio-parser.ts:88-109
+// packages/engine/src/parser/audio-parser.ts:90-111
       if (stmtResult.statement) {
         // Handle different statement types
         if (stmtResult.statement.type === 'global_init') {
@@ -327,7 +328,7 @@ export type Statement =
 では、`StatementParser.parseStatement()` の中を見てみましょう。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:58-85
+// packages/engine/src/parser/parse-statement.ts:53-80
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
@@ -363,7 +364,7 @@ export type Statement =
 `VAR` の先、`parseVarDeclaration()` は右辺の先頭トークンを見て宣言の種類を決めます。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:108-111
+// packages/engine/src/parser/parse-statement.ts:96-99
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
     //   `init ...` → global / sequence initializer (below).
@@ -377,7 +378,7 @@ export type Statement =
 面白いのは、`<識別子>.メソッド(引数)` という形の文を解析したとき、**パーサーは常に `type: 'sequence'` を返す** という設計です。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:615-623
+// packages/engine/src/parser/parse-statement.ts:611-619
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.
@@ -394,7 +395,7 @@ export type Statement =
 同じ理由で、statement には「括弧付きで呼ばれたか」を表す `invocation` が付きます。`seq.drums` (ミキサーへの出力ルーティング) と `seq.TALReverb4()` (プラグイン呼び出し) を、パーサーは形の違いとして記録するだけで、意味の解決は interpreter に委ねます。
 
 ```typescript
-// packages/engine/src/parser/types.ts:262-269
+// packages/engine/src/parser/types.ts:271-278
 export type SequenceStatement = {
   type: 'sequence'
   target: string
@@ -410,7 +411,7 @@ export type SequenceStatement = {
 パースに失敗したとき、どこで問題が起きたかをユーザーに伝えるのが `ParserUtils.expect()` の役割です。
 
 ```typescript
-// packages/engine/src/parser/parser-utils.ts:45-57
+// packages/engine/src/parser/parser-utils.ts:68-80
   static expect(
     tokens: AudioToken[],
     pos: number,

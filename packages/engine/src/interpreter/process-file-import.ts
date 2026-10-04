@@ -60,6 +60,7 @@ export function declaredNames(ir: AudioIR): Set<string> {
       st.type === 'pattern_binding' ||
       st.type === 'chord_binding' ||
       st.type === 'mode_binding' ||
+      st.type === 'random_binding' ||
       st.type === 'mixer_init' ||
       st.type === 'mixer_node_decl'
     ) {

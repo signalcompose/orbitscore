@@ -232,9 +232,9 @@ Event notation:
 > the `randseed` question that used to sit under "Next Exploration Candidates" below was settled by
 > the spec follow-up in #971. **Randomness itself did carry over into v3.0 / the Pitch DSL** — it is
 > the Pitch DSL's `Xr` (per-element presence), `.r` (chord thinning) and `^r` (random octave), plus
-> audio's `gain(r)` / `pan(r)`. What did **not** carry over is the property `1r` had in v1.0 of
-> **picking the pitch itself at random**. Choosing a degree at random — `r` / `rr` /
-> `random.<mode var>` — is #967, and as of 2026-09-25 its **spec is fixed but it is not implemented**
+> audio's `gain(r)` / `pan(r)`. The property `1r` had in v1.0 of **picking the pitch itself at
+> random** did not carry over into v3.0, but it **came back** as #967's `r` / `rr` / `random.<mode var>`
+> (implemented in PR [#973](https://github.com/signalcompose/orbitscore/pull/973), shipped in extension 4.3.0)
 > (source of truth: `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` §6.2.1, decisions #80-#84).
 > `randseed` (a fixed seed) is **still deliberately absent**; recording one for exact-match
 > verification remains a future task (decisions #21 / #50,
