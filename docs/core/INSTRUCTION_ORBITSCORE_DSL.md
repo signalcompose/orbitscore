@@ -1196,6 +1196,12 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
   over the scope's mode; the root always comes from the note's scope. Duplicates in the mode = weights.
 - `r` / `rr` are reserved at pitch positions (`var r` / `var rr` are errors); `r1` is a name unless `%`
   follows (`gain(r1%3)` is unchanged).
+- 🔴 **`random` itself is no longer available as a name** (shipped in 4.3.0 — CHANGELOG `[4.3.0]` Changed):
+  `var NAME = random.<name>` always reads as a random-source declaration, so a mixer named `random`
+  cannot be derived from: `var random = init global.mixer` followed by `var drums = random.sum` is read as
+  a random source over a mode named `sum`, not as a mixer-bus derivation. The branch sits **before** the
+  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:127-134`); the parse shape is
+  pinned in `tests/parser/random-degree.spec.ts:82-88`. See SC.2.1 for the mixer side.
 - Chords: `.drop()` / `.invert()` are allowed on a stack with a random voice; `.close()` / `.open()` /
   `.shell()` / `.rootless()` are errors; `.voicelead()` leaves random voices out.
 - Audio sequences keep today's meaning (a top-level `r` is a silent slot) and get a warning.
@@ -1817,6 +1823,8 @@ var master = mix.output(1, 2)      // 物理アウト 1-2（SC.2.1）
 var cue    = mix.output(3, 4)      // 物理アウト 3-4
 var drums  = mix.sum
 var verb   = mix.aux
+// 🔴 派生のベースに `random` という名前は使えない（4.3.0）: `var random = init global.mixer` の後の
+//    `var drums = random.sum` は、常にランダム音源 `random.<mode変数>` として読まれる（P.12.1）
 
 kick.effect(["Comp"]).output(verb, thru: true, db: -12).output(drums)
 //                     ^ Comp 後の音を verb へ -12 dB で送り、先へも流す   ^ drums で終端

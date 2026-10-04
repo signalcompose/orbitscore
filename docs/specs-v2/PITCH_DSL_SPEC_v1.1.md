@@ -311,6 +311,7 @@ piano.play([1, r, 5])              // 和音の 1 声部だけを選ぶ
 
 - **値域**: bare `r` はその音のスコープの格子から一様に選ぶ。root スコープ = Ionian の 1〜7(変化記号・9/11/13 は含まない)、mode スコープ = 格子の全長。短調・他の音階は `.mode()` で書く。ランダム音源 `random.X` は X の格子から選び、**スコープの mode より優先**する。root は常にその音のスコープから取る(音源は root を持たない)。
 - **宣言**: `var NAME = random.<mode変数>` のみ。`<mode変数>` はユーザーが `var X = mode(...)` で定義したもの(定義なしで動く組み込みの `random.dorian` は無い。§2.2 の旋法ライブラリが入れば、その var も同じく渡せる)。**定義時に格子を写し取る**(後で X を定義し直しても NAME は変わらない。chord 変数と同じ値渡し)。未定義・chord・pattern を渡すと定義時エラー。`var r` / `var rr` は予約でエラー。`r`+数字の名前(`r1`)は、後ろに `%` が続かない限り名前として読む(`gain(r1%3)` は従来どおり乱数値)。
+  🔴 **`random` 自体も名前として使えなくなった**(4.3.0 で出荷・CHANGELOG `[4.3.0]` Changed): `var NAME = random.<名前>` は常にランダム音源の宣言として読むので、`random` と名付けたミキサーからの派生(`var random = init global.mixer` の後の `var drums = random.sum` など)は書けない。`var drums = random.sum` は `sum` という名前の mode を探すランダム音源として読まれる(ミキサーバスの派生にはならない)。実装ではこの分岐がミキサー派生の先読みより**前**に置かれており(`packages/engine/src/parser/parse-statement.ts:127-134`)、読まれ方は `tests/parser/random-degree.spec.ts:82-88` で固定されている。ミキサー側の記述は core spec SC.2.1。
 - **どこでも同じ**: `play()` 直下・`( )` / `{ }` 内・`[ ]` の声部のいずれでも同じ度数として読む。
 - **修飾子**: `^N` は `r^1` でも `r1^1` でも**スティッキー**(§2.4、通常の度数と同じ)で、`r` はその時点の running range の中で選ぶ。`^r` / `~` / `@v` / `@g` / `.r` / `.r(p)` も付く。chord 変数・パターン変数の名前参照の意味は変えない(`m7^+1` は従来どおり構造的シフト。chord / pattern に `^r` / `~` を付けると評価時エラー。`@v` / `@g` は [#609](https://github.com/signalcompose/orbitscore/issues/609) で決める — それまではエラー)。
 - **出現確率**: `rr` = `r` に `Xr` の `r`(0.5)。変数は `r1.r` / `r1.r(p)`(`r1r` は 1 つの識別子になるので使えない)。
