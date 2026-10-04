@@ -24,4 +24,17 @@ export interface CoverageEntry {
  * PR-E4 は既存 E2E を増やさずラチェットだけを置くため、台帳は空から開始する。
  * 新しい行は A-4 で実在シナリオに、A-5 で smoke baseline に照合される。
  */
-export const DSL_COVERAGE_LEDGER: readonly CoverageEntry[] = []
+export const DSL_COVERAGE_LEDGER: readonly CoverageEntry[] = [
+  {
+    surface: 'random-pitch',
+    scenario: '#967 bare random pitch emits both C4 and G4',
+    observation: 'capture-pitch',
+    specSection: 'P.12.1',
+  },
+  {
+    surface: 'random-binding',
+    scenario: '#967 random binding emits both C4 and G4',
+    observation: 'capture-pitch',
+    specSection: 'P.12.1',
+  },
+]

@@ -73,11 +73,12 @@ The 4/4 sequence loops 5 bars and the 5/4 sequence loops 4 bars; after 20 second
 The core of polymeter lies in the mechanism that **a `Sequence` can override and set its own `Meter`**. The implementation is in the `calculateEventTiming()` method of `core/sequence/parameters/tempo-manager.ts`.
 
 ```typescript
-// packages/engine/src/core/sequence/parameters/tempo-manager.ts:86-105
+// packages/engine/src/core/sequence/parameters/tempo-manager.ts:86-106
   calculateEventTiming(
     elements: PlayElement[],
     globalTempo: number,
     globalBeat: Meter,
+    emitRandomDegrees = true,
   ): TimedEvent[] {
     const tempo = this._tempo || globalTempo
     const meter = this._beat || globalBeat
@@ -92,7 +93,7 @@ The core of polymeter lies in the mechanism that **a `Sequence` can override and
     // #390 live playhead: each event carries its full argPath ("1.0" for
     // nested slots) — tagged inside the timing walk itself (see
     // calculateEventTiming's argPathPrefix). Observational only.
-    return calculateEventTiming(elements, effectiveBarDuration)
+    return calculateEventTiming(elements, effectiveBarDuration, 0, 0, [], '', emitRandomDegrees)
   }
 ```
 
@@ -268,7 +269,7 @@ With launch quantize (`global.quantize("bar")` is the default), the **start time
 It is `Sequence.loop()` that passes `startTime`, the result of `nextQuantizedTime()` (computed from the global tempo and beat).
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2083-2091
+// packages/engine/src/core/sequence.ts:2063-2071
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)
@@ -334,7 +335,7 @@ Let's reaffirm the implementation difference from polyrhythm here.
 If OrbitScore wanted to realize polyrhythm, it would need to "pack different numbers of events into the same barDuration." But `calculateEventTiming()` divides barDuration evenly to place events.
 
 ```typescript
-// packages/engine/src/timing/calculation/calculate-event-timing.ts:104-105
+// packages/engine/src/timing/calculation/calculate-event-timing.ts:105-106
   // Calculate duration for each element at this level
   const elementDuration = barDuration / elements.length
 ```

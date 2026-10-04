@@ -27,7 +27,7 @@ The first edition of this chapter was written against the 2026-05-05 snapshot (0
 - **`collapseScopedRun()` was extracted into `parse-expression.ts`**. The rule that folds a pitch-scope chain onto a run of juxtaposed groups such as `(A)(B).root(X)` is shared by both the statement-level and the nested-level parse loops
 
 ```typescript
-// packages/engine/src/parser/parse-expression.ts:71-78
+// packages/engine/src/parser/parse-expression.ts:78-85
 export function collapseScopedRun(list: PlayElement[], runStart: number): void {
   const lastIdx = list.length - 1
   const last = list[lastIdx]
@@ -56,7 +56,7 @@ flowchart LR
 The entry point is the `parseAudioDSL()` function, a simple piece of code that just calls these two stages in order.
 
 ```typescript
-// packages/engine/src/parser/audio-parser.ts:121-126
+// packages/engine/src/parser/audio-parser.ts:123-128
 export function parseAudioDSL(source: string): AudioIR {
   const tokenizer = new AudioTokenizer(source)
   const tokens = tokenizer.tokenize()
@@ -275,7 +275,7 @@ classDiagram
 The full member list of the `Statement` union is as follows.
 
 ```typescript
-// packages/engine/src/parser/types.ts:72-83
+// packages/engine/src/parser/types.ts:72-84
 export type Statement =
   | GlobalStatement
   | SequenceStatement
@@ -283,6 +283,7 @@ export type Statement =
   | ChordBinding
   | PatternBinding
   | ModeBinding
+  | RandomBinding
   | ImportStatement
   | FileImportStatement
   | MixerHandleStatement
@@ -297,7 +298,7 @@ The `AudioParser` class itself is marked `@deprecated` and described as "a thin 
 The processing of `parse()` is to read the token sequence from the start, repeatedly call `StatementParser`, and dispatch the returned statement to the appropriate field among `globalInit` / `sequenceInits` / `fileImports` / `statements`. Exactly one rule check is built in: it upholds the invariant that **file imports may only appear in the head region of the file (before the first non-import statement)** (IM.1).
 
 ```typescript
-// packages/engine/src/parser/audio-parser.ts:88-109
+// packages/engine/src/parser/audio-parser.ts:90-111
       if (stmtResult.statement) {
         // Handle different statement types
         if (stmtResult.statement.type === 'global_init') {
@@ -327,7 +328,7 @@ The processing of `parse()` is to read the token sequence from the start, repeat
 Now let's look inside `StatementParser.parseStatement()`.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:58-85
+// packages/engine/src/parser/parse-statement.ts:53-80
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
@@ -363,7 +364,7 @@ Dispatch happens by the kind of the leading token. `VAR` means a variable declar
 Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking at the first token of the right-hand side.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:108-111
+// packages/engine/src/parser/parse-statement.ts:96-99
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
     //   `init ...` → global / sequence initializer (below).
@@ -377,7 +378,7 @@ Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking
 What is interesting is that when parsing a statement of the form `<identifier>.method(args)`, **the parser always returns `type: 'sequence'`**.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:615-623
+// packages/engine/src/parser/parse-statement.ts:611-619
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.
@@ -394,7 +395,7 @@ As the comment in the code explains, at parse time there is no way to determine 
 For the same reason, a statement carries an `invocation` field recording "was it called with parentheses." The parser records `seq.drums` (an output routing to the mixer) and `seq.TALReverb4()` (a plugin call) only as a difference in shape, leaving the resolution of meaning to the interpreter.
 
 ```typescript
-// packages/engine/src/parser/types.ts:262-269
+// packages/engine/src/parser/types.ts:271-278
 export type SequenceStatement = {
   type: 'sequence'
   target: string
@@ -410,7 +411,7 @@ export type SequenceStatement = {
 The role of `ParserUtils.expect()` is to tell the user where the problem occurred when parsing fails.
 
 ```typescript
-// packages/engine/src/parser/parser-utils.ts:45-57
+// packages/engine/src/parser/parser-utils.ts:68-80
   static expect(
     tokens: AudioToken[],
     pos: number,

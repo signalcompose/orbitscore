@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:874-894
+// packages/engine/src/core/sequence.ts:842-862
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -80,7 +80,7 @@ form enumerates every matching catalog element in the registered chain and calls
 open for each one.
 
 ```typescript
-// packages/engine/src/core/global.ts:1142-1152
+// packages/engine/src/core/global.ts:1144-1154
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -103,7 +103,7 @@ perfectly legitimate action would turn red every time (the host-side error PH.2c
 through `openPluginUiIdempotent`, which succeeds as a no-op when the UI is already open.
 
 ```typescript
-// packages/engine/src/core/global.ts:1179-1187
+// packages/engine/src/core/global.ts:1181-1189
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -350,7 +350,7 @@ is fixed as the save target** and is never re-resolved for later close / save.
 When sending to the daemon, a window title and a **window token** are attached.
 
 ```typescript
-// packages/engine/src/core/global.ts:1257-1263
+// packages/engine/src/core/global.ts:1259-1265
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -386,7 +386,7 @@ of a token that is in use" loudly, so even a collision does not become a silent 
 On a successful open, TS records one entry in its session ledger. The key is the window token.
 
 ```typescript
-// packages/engine/src/core/global.ts:65-71
+// packages/engine/src/core/global.ts:66-72
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -1187,7 +1187,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2475-2497
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

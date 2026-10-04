@@ -261,7 +261,7 @@ export function resolveRackValue(value: ValueExpression, env: RackBindingEnviron
 行います（設計書 §4 決定 13: `[m7]` と `[glue]` は構文で区別できないため）。
 
 ```typescript
-// packages/engine/src/parser/types.ts:152-160
+// packages/engine/src/parser/types.ts:153-161
 /**
  * Context-neutral `[ ... ]` value. The interpreter classifies it as a chord or rack after
  * resolving identifier bindings; nested arrays remain arrays until that classification.
@@ -276,17 +276,13 @@ export type ValueArray = {
 interpreter 側の分岐は次のとおりです。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:351-361
-/** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
-function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
+// packages/engine/src/interpreter/process-value-binding.ts:28-34
+export function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
   if (!global) return
   const classified = classifyArrayBinding(statement.value, global)
-  if (classified.kind === 'chord') {
-    global.defineChord(statement.variableName, classified.voices)
-  } else {
-    global.defineRack(statement.variableName, classified.rack)
-  }
+  if (classified.kind === 'chord') global.defineChord(statement.variableName, classified.voices)
+  else global.defineRack(statement.variableName, classified.rack)
 }
 ```
 
@@ -311,7 +307,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 データの配置で守られています。
 
 ```typescript
-// packages/engine/src/core/global.ts:357-371
+// packages/engine/src/core/global.ts:358-372
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
@@ -335,7 +331,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 レシーバのメソッドに渡されます。
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:281-284
+// packages/engine/src/interpreter/process-statement.ts:284-287
     if (method === 'effect') {
       if (!valueGlobal) throw new Error('effect() rack resolution requires an initialized global.')
       return callMethod(receiver, method, [effectArgumentsToRack(args, valueGlobal)])
@@ -1481,7 +1477,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5152-5159
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5219-5226
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

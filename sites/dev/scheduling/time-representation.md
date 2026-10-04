@@ -216,7 +216,7 @@ export function convertToAbsoluteTiming(
 タイミング計算の中間結果は `TimedEvent` という型で表現されています。2026-05 時点では 4 フィールドだけの小さな型でしたが、Pitch DSL (v1.1) と live playhead (#390) の実装で optional フィールドが大きく増えました。時間表現に関わるのは先頭の 4 つと、末尾の `argPath` です。
 
 ```typescript
-// packages/engine/src/timing/calculation/types.ts:31-89 (MIDI 用の optional フィールド群を // ... で省略)
+// packages/engine/src/timing/calculation/types.ts:31-95 (MIDI 用の optional フィールド群を // ... で省略)
 export interface TimedEvent {
   sliceNumber: number // 0 for silence, 1-n for slice (audio); = degree as a fallback for pitched MIDI events
   startTime: number // Start time in milliseconds relative to bar start

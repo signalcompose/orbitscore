@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:874-894
+// packages/engine/src/core/sequence.ts:842-862
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -77,7 +77,7 @@ aux("verb").ui("ValhallaRoom")
 名前形は登記チェーンから一致する catalog 要素を全列挙し、1 件ずつ冪等 open を呼びます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1142-1152
+// packages/engine/src/core/global.ts:1144-1154
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -100,7 +100,7 @@ aux("verb").ui("ValhallaRoom")
 `openPluginUiIdempotent` を通り、既に開いていれば no-op で成功します。
 
 ```typescript
-// packages/engine/src/core/global.ts:1179-1187
+// packages/engine/src/core/global.ts:1181-1189
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -343,7 +343,7 @@ identity を保存対象として確定**させ、以降の close / 保存では
 daemon へ送る際には、ウィンドウタイトルと **window token** を添えます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1257-1263
+// packages/engine/src/core/global.ts:1259-1265
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -379,7 +379,7 @@ export function allocatePluginUiWindowToken(): number {
 open が成功すると、TS はセッション簿記に 1 枚ぶんの記録を残します。キーは window token です。
 
 ```typescript
-// packages/engine/src/core/global.ts:65-71
+// packages/engine/src/core/global.ts:66-72
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -1165,7 +1165,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2475-2497
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

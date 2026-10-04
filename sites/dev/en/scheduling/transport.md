@@ -52,7 +52,7 @@ flowchart LR
 When `global.start()` is called from the DSL, the following call chain begins. First, `Global.start()`.
 
 ```typescript
-// packages/engine/src/core/global.ts:667-690
+// packages/engine/src/core/global.ts:669-692
   // Transport control
   start(): this {
     // §L1: only open a NEW session on an actual stopped→running transition —
@@ -156,7 +156,7 @@ Note that `TransportClock.startTime` and `RustEnginePlayer.startTime` call `Date
 `global.stop()` cascades in the reverse direction. This too has grown by the session log and the auto-snapshot.
 
 ```typescript
-// packages/engine/src/core/global.ts:701-731 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
+// packages/engine/src/core/global.ts:703-733 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
   stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
@@ -363,7 +363,7 @@ When `skipTransportCommands: true` is passed, statements with `statement.type ==
 An element of transport that did not exist in the 2026-05 version is **launch quantize**. `global.quantize()` has `"bar"` as its default and makes the start of `LOOP()` and the swap of `play()` during LOOP wait until the next boundary.
 
 ```typescript
-// packages/engine/src/core/global.ts:568-586
+// packages/engine/src/core/global.ts:570-588
   /**
    * Set the global launch-quantize value.
    *
@@ -420,7 +420,7 @@ In OrbitScore, "playback position" is held as **the transport's start time**. In
 `Global` has functions that convert elapsed ms into `"bar:beat"` (added for the §L1 session log).
 
 ```typescript
-// packages/engine/src/core/global.ts:739-742
+// packages/engine/src/core/global.ts:741-744
   getTransportPosition(): string | null {
     if (!this.transportClock.running) return null
     return this.msToBarBeat(Date.now() - this.transportClock.startTime)
@@ -428,7 +428,7 @@ In OrbitScore, "playback position" is held as **the transport's start time**. In
 ```
 
 ```typescript
-// packages/engine/src/core/global.ts:775-780
+// packages/engine/src/core/global.ts:777-782
     const { tempo, beat } = params
     const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
     const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
@@ -476,7 +476,7 @@ stateDiagram-v2
 `loop()` remains deprecated; the recommended way is to control sequence loops individually with `seq.loop()` / `LOOP()`.
 
 ```typescript
-// packages/engine/src/core/global.ts:692-699
+// packages/engine/src/core/global.ts:694-701
   /**
    * @deprecated Not needed. Use LOOP(seq) for sequences instead.
    */
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2110-2138
+// packages/engine/src/core/sequence.ts:2090-2118
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

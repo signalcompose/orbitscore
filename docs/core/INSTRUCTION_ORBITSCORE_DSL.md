@@ -1176,10 +1176,10 @@ m7.open() / m7.close() // open / close position; .shell() = R+3+7; .rootless() =
 - ⚠️ **`Xr(p)` is not implemented**: `5r(0.3)` parses as `5r` juxtaposed with a `( )` group `(0.3)`
   ([#968](https://github.com/signalcompose/orbitscore/issues/968)). Use `.r(p)` on a stack.
 
-#### P.12.1 Random degree `r` / `rr` and random sources `random.<mode>` (#967) — 🚧 spec fixed, NOT implemented yet
+#### P.12.1 Random degree `r` / `rr` and random sources `random.<mode>` (#967) — implemented (4.3.0)
 
 正本: PITCH_DSL_SPEC §6.2.1 / 設計: [`docs/design/967-random-pitch-design.md`](../design/967-random-pitch-design.md) /
-決定 #80〜#84（DESIGN_DISCUSSION_RECORD §16）。実装は後続 PR（拡張 4.3.0 の想定）。**現行ビルドではまだ動かない。**
+決定 #80〜#84（DESIGN_DISCUSSION_RECORD §16）。拡張 4.3.0 で実装（PR は #967 の実装 PR）。
 
 ```js
 var dorian = mode(1, 2, b3, 4, 5, 6, b7)  // a user-defined mode (random. takes a defined mode var)
@@ -2170,8 +2170,8 @@ Epic #224 phases 1/2/3/R/4:
 - **Repetition + pattern variables** (Phase R): `*n`, `var NAME = <pattern>`
 - **Ties / legato / hold** (Phase 4): `_` event tie, `_n` voice tie, `{ }` legato, `.hold()`
 - **Voicing + randomness** (E2 / §12): `.drop(n...)`/`.invert(n)`/`.open()`/`.close()`/`.shell()`/
-  `.rootless()`; `Xr`/`.r`/`^r` random (see P.12). 🚧 Random degree `r` / `rr` / `random.<mode>` (#967):
-  spec fixed, not implemented (P.12.1)
+  `.rootless()`; `Xr`/`.r`/`^r` random (see P.12). Random degree `r` / `rr` / `random.<mode>` (#967):
+  implemented in 4.3.0 (P.12.1)
 - **Key-center register** (E3 / #253): `global.key("D4")` base octave (see P.1)
 - **Section variables** (E4 / #254): comma-separated multi-bar bindings (see P.9)
 - **Per-note expression** (E5 / §10.3): `@v` velocity (absolute / relative) + `@g` articulation (see P.11)
@@ -2323,7 +2323,7 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
   - Phase R: `*n` repetition + pattern variables
   - Phase 4: `_` / `_n` ties, `{ }` legato, `.hold()`
   - Harmony/voicing (§12): bare `[ ]` chord literal, `.drop/.invert/.open/.close/.shell/.rootless`, `Xr`/`.r`/`^r` random
-  - 🚧 #967 random degree `r` / `rr` / `random.<mode>`: spec fixed (P.12.1), not implemented
+  - #967 random degree `r` / `rr` / `random.<mode>` (P.12.1) — implemented in 4.3.0
   - Per-note expression (E5 / §10.3): `@v` velocity + `@g` articulation — **implemented in 2.0.0** (see Completed list above and P.11)
 
 - v3.0 (2025-01-09): **Underscore Prefix Pattern** + **Unidirectional Toggle (片記号方式)**

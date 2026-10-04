@@ -52,7 +52,7 @@ flowchart LR
 `global.start()` を DSL で呼ぶと、次の呼び出し連鎖が始まります。まず `Global.start()` です。
 
 ```typescript
-// packages/engine/src/core/global.ts:667-690
+// packages/engine/src/core/global.ts:669-692
   // Transport control
   start(): this {
     // §L1: only open a NEW session on an actual stopped→running transition —
@@ -156,7 +156,7 @@ export class TransportClock {
 `global.stop()` は逆方向に連鎖します。こちらも session log と自動スナップショットのぶん太っています。
 
 ```typescript
-// packages/engine/src/core/global.ts:701-731 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
+// packages/engine/src/core/global.ts:703-733 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
   stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
@@ -363,7 +363,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 2026-05 版に無かった transport の要素が **launch quantize** です。`global.quantize()` は `"bar"` を既定値として持ち、`LOOP()` の起動と LOOP 中の `play()` 差し替えを次の境界まで待たせます。
 
 ```typescript
-// packages/engine/src/core/global.ts:568-586
+// packages/engine/src/core/global.ts:570-588
   /**
    * Set the global launch-quantize value.
    *
@@ -420,7 +420,7 @@ export function nextQuantizedTime(
 `Global` は経過 ms を `"bar:beat"` に変換する関数を持っています (§L1 の session log 用に追加)。
 
 ```typescript
-// packages/engine/src/core/global.ts:739-742
+// packages/engine/src/core/global.ts:741-744
   getTransportPosition(): string | null {
     if (!this.transportClock.running) return null
     return this.msToBarBeat(Date.now() - this.transportClock.startTime)
@@ -428,7 +428,7 @@ export function nextQuantizedTime(
 ```
 
 ```typescript
-// packages/engine/src/core/global.ts:775-780
+// packages/engine/src/core/global.ts:777-782
     const { tempo, beat } = params
     const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
     const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
@@ -476,7 +476,7 @@ stateDiagram-v2
 `loop()` は deprecated のままで、シーケンスのループは `seq.loop()` / `LOOP()` で個別に制御するのが推奨です。
 
 ```typescript
-// packages/engine/src/core/global.ts:692-699
+// packages/engine/src/core/global.ts:694-701
   /**
    * @deprecated Not needed. Use LOOP(seq) for sequences instead.
    */
@@ -502,7 +502,7 @@ stateDiagram-v2
 `clearRunTimer()` が先に走るようになっています。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2110-2138
+// packages/engine/src/core/sequence.ts:2090-2118
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

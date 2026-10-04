@@ -41,6 +41,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - ファイルサイズのラチェットを増やさないため `midi-planning.ts` / `process-value-binding.ts` を切り出し、baseline は 3 件とも**減った**（sequence 1369→1362 / process-statement 554→520 / parse-expression 1000→997）
 - テスト: 2604 → 2639 passed（新規 `tests/midi/random-degree.spec.ts` 35 件。統計は N=20・重みは N=200 の二項 99.9% 区間。1 音の格子で「2 種以上」の判定が落ちるオラクル識別テストつき）
 
+**段 3: 実機 E2E・台帳・ドキュメント**（Commit: `91d9c2d0`）
+- `DslSyntaxId` に `random-pitch` / `random-binding` を追加し、台帳に `capture-pitch` で登録
+- gated E2E 3 本（共有セッション群の末尾）: `random.two` と `(r, …).mode(two)` で 16 音を鳴らし、オンセットを追う窓で**全音が C4 / G4 の ±2%** かつ**両方が出る**（集合一致なので常に同じ音を返す実装は落ちる）/ `random.nope` の E3
+- 実機の gated E2E 全件: **52 passed**（2026-10-04・915 秒）
+- ユーザー向けサイト（日英）の `voicing.md` / `methods.md` に `r` / `rr` / `random.<mode>`。仕様書の「🚧 未実装」表記を「実装済み（4.3.0）」へ。#969 はパースエラーと明記
+- dev サイトの引用: 行ずれ 26 ファイルを `--fix`、中身が変わった 4 組（日英 8 件）は今のコードに差し替え
+- 🔴 未解決の観測（2026-09-26）: 隔離した VS Code（1.139.1）でエンジンを起動すると約 10〜20 秒後にウィンドウが黙って閉じる症状が出た（出荷済み 4.2.1 でも再現・今回の変更とは無関係）。10-04 の再実行では起きず、原因は未確定
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`

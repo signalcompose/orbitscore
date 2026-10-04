@@ -216,7 +216,7 @@ It just adds `barOffset = barNumber × barDuration` to each event's `startTime`.
 The intermediate result of the timing calculation is represented by a type called `TimedEvent`. As of 2026-05 it was a small type with only four fields, but the Pitch DSL (v1.1) and live playhead (#390) implementations added many optional fields. The ones relevant to time representation are the first four and `argPath` at the end.
 
 ```typescript
-// packages/engine/src/timing/calculation/types.ts:31-89 (MIDI 用の optional フィールド群を // ... で省略)
+// packages/engine/src/timing/calculation/types.ts:31-95 (MIDI 用の optional フィールド群を // ... で省略)
 export interface TimedEvent {
   sliceNumber: number // 0 for silence, 1-n for slice (audio); = degree as a fallback for pitched MIDI events
   startTime: number // Start time in milliseconds relative to bar start

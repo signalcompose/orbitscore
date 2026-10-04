@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:541-580
+// packages/engine/src/core/sequence.ts:509-548
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -286,7 +286,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:658-679
+// packages/engine/src/core/sequence.ts:626-647
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -417,7 +417,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 呼び出し側（`stageOutputElement()`）はこれを見るだけです。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:481-498
+// packages/engine/src/core/sequence.ts:449-466
   private stageOutputElement(
     name: string,
     dest: OutputDest,
@@ -1245,7 +1245,7 @@ PR-2（TS 側）は instrument の `SetSourceRouting` 発行を 1 箇所に集�
 wire を通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1003-1037
+// packages/engine/src/core/sequence.ts:971-1005
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()
@@ -1312,7 +1312,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 修正後の `Global.gain()` は dB を線形 amplitude に変換して `setGlobalGain` に渡します。
 
 ```typescript
-// packages/engine/src/core/global.ts:614-626
+// packages/engine/src/core/global.ts:616-628
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
     if (typeof result === 'number') {
@@ -1507,7 +1507,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2099-2136
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2168-2205
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1559,7 +1559,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2243-2268
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2312-2337
         [
           'var global = init GLOBAL',
           'global.key("C")',
