@@ -276,7 +276,7 @@ export type ValueArray = {
 interpreter 側の分岐は次のとおりです。
 
 ```typescript
-// packages/engine/src/interpreter/process-value-binding.ts:28-34
+// packages/engine/src/interpreter/process-value-binding.ts:40-46
 export function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
   if (!global) return
@@ -307,7 +307,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 データの配置で守られています。
 
 ```typescript
-// packages/engine/src/core/global.ts:358-372
+// packages/engine/src/core/global.ts:356-370
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {

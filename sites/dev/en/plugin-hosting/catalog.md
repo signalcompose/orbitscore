@@ -1064,7 +1064,7 @@ dry (never silence) plus forget-and-ensure — which is why the three effect man
 `failurePolicy: 'forget-and-ensure'`.
 
 ```typescript
-// packages/engine/src/core/global.ts:170-194
+// packages/engine/src/core/global.ts:168-192
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -1185,7 +1185,7 @@ disappearing insert. The state save itself is performed atomically by the daemon
 `save_dropped` in `ApplyEffectChain`, so unlike the instrument side TS does not call save.
 
 ```typescript
-// packages/engine/src/core/global.ts:1395-1417
+// packages/engine/src/core/global.ts:1393-1415
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
     const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)

@@ -34,6 +34,7 @@ import {
   asStackVoice,
   classifyPlayIdentifier,
   isPitchModifierToken,
+  parseSignedNumber as parseSignedNumberAt,
   parsePitchModifiers as parsePitchModifiersAt,
   ParserUtils,
 } from './parser-utils'
@@ -94,6 +95,10 @@ export class ExpressionParser {
   constructor(
     tokens: AudioToken[],
     pos: number,
+    /**
+     * True only at a `play()` element position, where `r` / `rr` mean random degrees.
+     * Leaving this false there would silently parse `r` as a name reference.
+     */
     private readonly playElementContext = false,
   ) {
     this.tokens = tokens
@@ -367,17 +372,9 @@ export class ExpressionParser {
 
   /** Read an optional +/- sign followed by a NUMBER and return the signed value. */
   private parseSignedNumber(): number {
-    let sign = 1
-    const t = ParserUtils.current(this.tokens, this.pos).type
-    if (t === 'PLUS') {
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-    } else if (t === 'MINUS') {
-      sign = -1
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-    }
-    const numResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
-    this.pos = numResult.newPos
-    return sign * ParserUtils.parseNumber(numResult.token)
+    const result = parseSignedNumberAt(this.tokens, this.pos)
+    this.pos = result.newPos
+    return result.value
   }
 
   /** True if the current token starts a pitch modifier: `^N`/`^r`, `~`, `@v`/`@g`, or `r`. */

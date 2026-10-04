@@ -49,6 +49,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - dev サイトの引用: 行ずれ 26 ファイルを `--fix`、中身が変わった 4 組（日英 8 件）は今のコードに差し替え
 - 🔴 未解決の観測（2026-09-26）: 隔離した VS Code（1.139.1）でエンジンを起動すると約 10〜20 秒後にウィンドウが黙って閉じる症状が出た（出荷済み 4.2.1 でも再現・今回の変更とは無関係）。10-04 の再実行では起きず、原因は未確定
 
+**/simplify の修正**（Commit: `3f736d90`）— 4 観点（再利用・簡潔さ・効率・修正の深さ）のレビューを main が集約し Codex へ一括発注:
+- 段 1・2 のモジュール切り出しで落ちた説明コメント（doc 9・インライン 3）を `origin/main` の原文どおり復元。ラチェットはコメント専用行を数えないので、落とす必要はなかった
+- `emitRandomDegrees` を timing の再帰 6 か所へ位置引数で引き回すのをやめ、timing は常にイベントを作り、**`isNoteSequence()` を知る呼び出し元（`Sequence` の 2 か所・呼び出し元はこの 2 つだけと列挙済み）で audio のときだけ除く**。新しい分岐で引き回しを忘れて audio が鳴り出す事故を構造で防ぐ。`( )` / `{ }` / `[ ]` の audio 回帰テスト 3 件を修正前に測った値で固定
+- `parseSignedNumber` の二重実装を一本化 / 修飾子コピー 4 か所をヘルパーへ / `evaluateChord` の別名 export を import 別名へ / 出力段の `[...lattice]` 毎回コピーをやめる / テストの準備を共通化
+- 見送り: `kind` 判定の共通述語化（差分の外の既存コードに広がる）
+- テスト 2639 → 2642 passed。baseline は `global.ts` 1103→1101 / `parse-expression.ts` 997→990 と**減少**
+
 ### docs: specify random pitch selection r / rr / random.<mode> for the Pitch DSL (#967) (Sep 25, 2026)
 
 **Date**: 2026-09-25 / **ブランチ**: `967-random-pitch-spec` / **Issue**: [#967](https://github.com/signalcompose/orbitscore/issues/967) / **Commit**: `4d8723ea`

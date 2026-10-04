@@ -1312,7 +1312,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 修正後の `Global.gain()` は dB を線形 amplitude に変換して `setGlobalGain` に渡します。
 
 ```typescript
-// packages/engine/src/core/global.ts:616-628
+// packages/engine/src/core/global.ts:614-626
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
     if (typeof result === 'number') {

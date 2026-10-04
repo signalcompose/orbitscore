@@ -286,7 +286,7 @@ export type ValueArray = {
 The interpreter-side branch looks like this.
 
 ```typescript
-// packages/engine/src/interpreter/process-value-binding.ts:28-34
+// packages/engine/src/interpreter/process-value-binding.ts:40-46
 export function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
   if (!global) return
@@ -318,7 +318,7 @@ A value classified as a rack goes to `Global.defineRack` and is stored via `stru
 enforced by the data layout.
 
 ```typescript
-// packages/engine/src/core/global.ts:358-372
+// packages/engine/src/core/global.ts:356-370
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {

@@ -1347,7 +1347,7 @@ side had had `set_global_gain` (with a gain ramp) from the start, and **TS had n
 The fixed `Global.gain()` converts dB to linear amplitude and passes it to `setGlobalGain`.
 
 ```typescript
-// packages/engine/src/core/global.ts:616-628
+// packages/engine/src/core/global.ts:614-626
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
     if (typeof result === 'number') {

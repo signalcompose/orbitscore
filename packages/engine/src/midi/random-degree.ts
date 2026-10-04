@@ -9,13 +9,14 @@ function latticeFor(event: TimedEvent, context: RootContext): readonly number[] 
 }
 
 /** Eager validation without consuming randomness: scope resolution + lattice integrity only. */
-export function validateRandomDegree(event: TimedEvent, context: RootContext): void {
+export function validateRandomDegree(event: TimedEvent, context: RootContext): readonly number[] {
   const lattice = latticeFor(event, context)
   if (lattice.length === 0 || lattice.some((value) => !Number.isFinite(value))) {
     throw new Error(
       `random degree (${event.randomDegree?.from ?? 'scope'}): pitch lattice is empty or invalid`,
     )
   }
+  return lattice
 }
 
 /** #967 output Stage A: choose one lattice index per TimedEvent / loop iteration, then resolve. */
@@ -28,12 +29,11 @@ export function resolveRandomDegree(
   if (!event.randomDegree) {
     return resolveDegree({ ...written, octaveShift: effectiveOctave }, context)
   }
-  validateRandomDegree(event, context)
-  const lattice = latticeFor(event, context)
+  const lattice = validateRandomDegree(event, context)
   const degree = Math.floor(Math.random() * lattice.length) + 1
   const randomContext: RootContext = {
     ...context,
-    modeLattice: [...lattice],
+    modeLattice: lattice,
     modePeriod: event.randomDegree.period ?? context.modePeriod ?? 12,
   }
   return resolveDegree({ ...written, degree, octaveShift: effectiveOctave }, randomContext)

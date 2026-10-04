@@ -80,7 +80,7 @@ form enumerates every matching catalog element in the registered chain and calls
 open for each one.
 
 ```typescript
-// packages/engine/src/core/global.ts:1144-1154
+// packages/engine/src/core/global.ts:1142-1152
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -103,7 +103,7 @@ perfectly legitimate action would turn red every time (the host-side error PH.2c
 through `openPluginUiIdempotent`, which succeeds as a no-op when the UI is already open.
 
 ```typescript
-// packages/engine/src/core/global.ts:1181-1189
+// packages/engine/src/core/global.ts:1179-1187
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -350,7 +350,7 @@ is fixed as the save target** and is never re-resolved for later close / save.
 When sending to the daemon, a window title and a **window token** are attached.
 
 ```typescript
-// packages/engine/src/core/global.ts:1259-1265
+// packages/engine/src/core/global.ts:1257-1263
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -386,7 +386,7 @@ of a token that is in use" loudly, so even a collision does not become a silent 
 On a successful open, TS records one entry in its session ledger. The key is the window token.
 
 ```typescript
-// packages/engine/src/core/global.ts:66-72
+// packages/engine/src/core/global.ts:64-70
 type PluginUiSession = {
   window: number
   receiverId: string

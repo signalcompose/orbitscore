@@ -547,4 +547,3 @@ export function evaluateChordDefinition(
 }
 
 /** Short internal alias used by the size-constrained Global facade. */
-export const evaluateChord = evaluateChordDefinition

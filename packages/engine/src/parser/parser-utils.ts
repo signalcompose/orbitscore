@@ -148,7 +148,10 @@ export class ParserUtils {
 type PitchBase = { type: 'pitch'; degree: number; alteration: number }
 type RandomDegreeBase = { type: 'random_degree'; initialRandom?: number }
 
-function parseSignedNumber(tokens: AudioToken[], start: number): { value: number; newPos: number } {
+export function parseSignedNumber(
+  tokens: AudioToken[],
+  start: number,
+): { value: number; newPos: number } {
   let pos = start
   let sign = 1
   const type = ParserUtils.current(tokens, pos).type
@@ -161,6 +164,16 @@ function parseSignedNumber(tokens: AudioToken[], start: number): { value: number
   return { value: sign * ParserUtils.parseNumber(number.token), newPos: number.newPos }
 }
 
+/**
+ * Parse optional `^` (pitch range set-point), `~` (detune), `@v`/`@g` (expression, §10.3),
+ * and `r`/`^r` (random, §12) modifiers onto a degree, producing a PlayPitch. Modifiers are
+ * optional and order-independent. `^N` is STICKY (§2.4): it records `octaveShift` AND sets
+ * `rangeSet`, marking this note as a running-range set point — the value propagates to
+ * subsequent degrees in the play() (threaded at dispatch) until another `^M`/`^0` overrides
+ * it. The parser only records the per-note annotation; the running range is applied at
+ * scheduling, not here.
+ * A random-degree base produces a PlayRandomDegree with the same modifiers.
+ */
 export function parsePitchModifiers(
   tokens: AudioToken[],
   pos: number,
@@ -189,6 +202,10 @@ export function parsePitchModifiers(
   for (;;) {
     const current = ParserUtils.current(tokens, pos)
     if (current.type === 'AT') {
+      // §10.3 expression (E5): `@v100` absolute velocity / `@v+20`/`@v-30` relative
+      // (accent) / `@g30` articulation as a gate PERCENT (30 = 0.30, 120 = 1.20).
+      // The lexer merges `v100`/`g30` into one identifier, so split letter + digits;
+      // integer args avoid a decimal point splitting the token.
       pos = ParserUtils.advance(tokens, pos).newPos
       const sub = ParserUtils.current(tokens, pos)
       const raw = sub.type === 'IDENTIFIER' ? String(sub.value) : ''
@@ -219,6 +236,8 @@ export function parsePitchModifiers(
     }
     if (current.type === 'CARET') {
       pos = ParserUtils.advance(tokens, pos).newPos
+      // `^r` = a random octave (§12, #53); otherwise `^N` sets the sticky range (§2.4),
+      // rangeSet marking this note as a running-range set point for the walk.
       const after = ParserUtils.current(tokens, pos)
       if (after.type === 'IDENTIFIER' && after.value === 'r') {
         pos = ParserUtils.advance(tokens, pos).newPos
@@ -238,6 +257,7 @@ export function parsePitchModifiers(
       continue
     }
     if (current.type === 'IDENTIFIER' && current.value === 'r') {
+      // Trailing `r` = random presence (§12, #50/#52): default 50% chance to sound.
       pos = ParserUtils.advance(tokens, pos).newPos
       random = 0.5
       continue
@@ -290,12 +310,7 @@ export function classifyPlayIdentifier(
   }
   if (token.value === 'r') return 'random_degree'
   if (token.value === 'rr') return 'optional_random_degree'
-  const startsModifier =
-    next.type === 'CARET' ||
-    next.type === 'TILDE' ||
-    next.type === 'AT' ||
-    (next.type === 'IDENTIFIER' && next.value === 'r')
-  return forceReference || ParserUtils.isRandomSyntax(token.value) || startsModifier
+  return forceReference || ParserUtils.isRandomSyntax(token.value) || isPitchModifierToken(next)
     ? 'reference'
     : 'value'
 }

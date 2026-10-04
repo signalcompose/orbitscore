@@ -196,12 +196,12 @@ export class Sequence {
     const playPattern = this.stateManager.getPlayPattern()
     if (playPattern && playPattern.length > 0) {
       const globalState = this.global.getState()
-      const timedEvents = this.tempoManager.calculateEventTiming(
+      let timedEvents = this.tempoManager.calculateEventTiming(
         playPattern,
         globalState.tempo || 120,
         globalState.beat,
-        this.isNoteSequence(),
       )
+      if (!this.isNoteSequence()) timedEvents = timedEvents.filter((event) => !event.randomDegree)
       this.stateManager.setTimedEvents(timedEvents)
     }
   }
@@ -1233,13 +1233,12 @@ export class Sequence {
 
     // Calculate timing for the play pattern
     const globalState = this.global.getState()
-    const timedEvents = this.tempoManager.calculateEventTiming(
+    let timedEvents = this.tempoManager.calculateEventTiming(
       resolved,
       globalState.tempo || 120,
       globalState.beat,
-      this.isNoteSequence(),
     )
-
+    if (!this.isNoteSequence()) timedEvents = timedEvents.filter((event) => !event.randomDegree)
     this.stateManager.setTimedEvents(timedEvents)
 
     const patternStr = resolved

@@ -73,12 +73,11 @@ $$
 polymeter の核心は、`Sequence` が**自分専用の `Meter` を上書き設定できる**という仕組みにあります。実装は `core/sequence/parameters/tempo-manager.ts` の `calculateEventTiming()` メソッドです。
 
 ```typescript
-// packages/engine/src/core/sequence/parameters/tempo-manager.ts:86-106
+// packages/engine/src/core/sequence/parameters/tempo-manager.ts:86-105
   calculateEventTiming(
     elements: PlayElement[],
     globalTempo: number,
     globalBeat: Meter,
-    emitRandomDegrees = true,
   ): TimedEvent[] {
     const tempo = this._tempo || globalTempo
     const meter = this._beat || globalBeat
@@ -93,7 +92,7 @@ polymeter の核心は、`Sequence` が**自分専用の `Meter` を上書き設
     // #390 live playhead: each event carries its full argPath ("1.0" for
     // nested slots) — tagged inside the timing walk itself (see
     // calculateEventTiming's argPathPrefix). Observational only.
-    return calculateEventTiming(elements, effectiveBarDuration, 0, 0, [], '', emitRandomDegrees)
+    return calculateEventTiming(elements, effectiveBarDuration)
   }
 ```
 
@@ -269,7 +268,7 @@ launch quantize (`global.quantize("bar")` が既定) が入ったことで、`se
 `startTime` を渡しているのは `Sequence.loop()` で、`nextQuantizedTime()` (グローバルの tempo と beat から計算) の結果です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2063-2071
+// packages/engine/src/core/sequence.ts:2062-2070
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

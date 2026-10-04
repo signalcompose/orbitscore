@@ -3,17 +3,15 @@
  * Represents the global transport and configuration
  */
 
-import {
-  AudioEngine,
-  type PluginStateSaveTarget,
-  type PluginUiTarget,
-  type WireLineOp,
-} from '../audio/types'
+import type { AudioEngine, PluginStateSaveTarget, PluginUiTarget, WireLineOp } from '../audio/types'
 import { allocatePluginUiWindowToken } from '../audio/rust-engine/plugin-ui-window-token'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { createRandomBinding } from '../midi/chord/random-binding'
-import { boundChordVoices, evaluateChord } from '../midi/chord/resolve-chords'
+import {
+  boundChordVoices,
+  evaluateChordDefinition as evaluateChord,
+} from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 import { PluginNoteOutput } from '../midi/plugin-note-output'
 import type { RackRecipe } from '../signal-chain/rack'

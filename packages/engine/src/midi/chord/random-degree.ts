@@ -3,6 +3,48 @@ import type { PlayChordRef, PlayRandomDegree } from '../../parser/types'
 import type { BoundValue, ChordVoice } from './types'
 
 type RandomBinding = Extract<BoundValue, { kind: 'random' }>
+type RandomDegreeProperties = {
+  lattice?: readonly number[]
+  period?: number
+  from?: string
+  random?: number
+  randomOctave?: boolean
+  velocity?: number
+  velocityDelta?: number
+  articulation?: number
+}
+
+type CopiedRandomDegreeProperties = {
+  source: {
+    lattice?: number[]
+    period?: number
+    from?: string
+  }
+  modifiers: Pick<
+    RandomDegreeProperties,
+    'random' | 'randomOctave' | 'velocity' | 'velocityDelta' | 'articulation'
+  >
+}
+
+/** Copy the optional source lattice and note modifiers carried by a random degree. */
+export function copyRandomDegreeProperties(
+  source: RandomDegreeProperties,
+): CopiedRandomDegreeProperties {
+  return {
+    source: {
+      ...(source.lattice !== undefined && { lattice: [...source.lattice] }),
+      ...(source.period !== undefined && { period: source.period }),
+      ...(source.from !== undefined && { from: source.from }),
+    },
+    modifiers: {
+      ...(source.random !== undefined && { random: source.random }),
+      ...(source.randomOctave && { randomOctave: true }),
+      ...(source.velocity !== undefined && { velocity: source.velocity }),
+      ...(source.velocityDelta !== undefined && { velocityDelta: source.velocityDelta }),
+      ...(source.articulation !== undefined && { articulation: source.articulation }),
+    },
+  }
+}
 
 /** Modifiers whose meaning is deliberately unavailable on chord/pattern references (#967 E8). */
 export function assertRandomOnlyModifiers(ref: PlayChordRef, kind: 'chord' | 'pattern'): void {
@@ -25,24 +67,21 @@ export function randomBindingToElement(
   bound: RandomBinding,
   structural = false,
 ): PlayRandomDegree {
+  const source = copyRandomDegreeProperties(bound)
+  const modifiers = copyRandomDegreeProperties(ref)
   return {
     type: 'random_degree',
     octaveShift: ref.octaveShift,
     rangeSet: structural ? false : !!ref.rangeSet,
     detune: ref.detune ?? 0,
-    lattice: [...bound.lattice],
-    period: bound.period,
-    from: bound.from,
-    ...(ref.random !== undefined && { random: ref.random }),
-    ...(ref.randomOctave && { randomOctave: true }),
-    ...(ref.velocity !== undefined && { velocity: ref.velocity }),
-    ...(ref.velocityDelta !== undefined && { velocityDelta: ref.velocityDelta }),
-    ...(ref.articulation !== undefined && { articulation: ref.articulation }),
+    ...source.source,
+    ...modifiers.modifiers,
   }
 }
 
 /** Preserve a random voice inside a stored chord value. */
 export function randomElementToChordVoice(element: PlayRandomDegree): ChordVoice {
+  const copied = copyRandomDegreeProperties(element)
   return {
     kind: 'random',
     degree: 1,
@@ -50,31 +89,20 @@ export function randomElementToChordVoice(element: PlayRandomDegree): ChordVoice
     octaveShift: element.octaveShift,
     rangeSet: false,
     detune: element.detune,
-    ...(element.lattice && { lattice: [...element.lattice] }),
-    ...(element.period !== undefined && { period: element.period }),
-    ...(element.from !== undefined && { from: element.from }),
-    ...(element.random !== undefined && { random: element.random }),
-    ...(element.randomOctave && { randomOctave: true }),
-    ...(element.velocity !== undefined && { velocity: element.velocity }),
-    ...(element.velocityDelta !== undefined && { velocityDelta: element.velocityDelta }),
-    ...(element.articulation !== undefined && { articulation: element.articulation }),
+    ...copied.source,
+    ...copied.modifiers,
   }
 }
 
 /** Rehydrate a stored chord random voice without choosing its pitch. */
 export function randomChordVoiceToElement(voice: ChordVoice, octaveShift = 0): PlayRandomDegree {
+  const copied = copyRandomDegreeProperties(voice)
   return {
     type: 'random_degree',
     octaveShift: voice.octaveShift + octaveShift,
     rangeSet: false,
     detune: voice.detune,
-    ...(voice.lattice && { lattice: [...voice.lattice] }),
-    ...(voice.period !== undefined && { period: voice.period }),
-    ...(voice.from !== undefined && { from: voice.from }),
-    ...(voice.random !== undefined && { random: voice.random }),
-    ...(voice.randomOctave && { randomOctave: true }),
-    ...(voice.velocity !== undefined && { velocity: voice.velocity }),
-    ...(voice.velocityDelta !== undefined && { velocityDelta: voice.velocityDelta }),
-    ...(voice.articulation !== undefined && { articulation: voice.articulation }),
+    ...copied.source,
+    ...copied.modifiers,
   }
 }

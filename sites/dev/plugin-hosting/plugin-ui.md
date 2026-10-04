@@ -77,7 +77,7 @@ aux("verb").ui("ValhallaRoom")
 名前形は登記チェーンから一致する catalog 要素を全列挙し、1 件ずつ冪等 open を呼びます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1144-1154
+// packages/engine/src/core/global.ts:1142-1152
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -100,7 +100,7 @@ aux("verb").ui("ValhallaRoom")
 `openPluginUiIdempotent` を通り、既に開いていれば no-op で成功します。
 
 ```typescript
-// packages/engine/src/core/global.ts:1181-1189
+// packages/engine/src/core/global.ts:1179-1187
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -343,7 +343,7 @@ identity を保存対象として確定**させ、以降の close / 保存では
 daemon へ送る際には、ウィンドウタイトルと **window token** を添えます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1259-1265
+// packages/engine/src/core/global.ts:1257-1263
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -379,7 +379,7 @@ export function allocatePluginUiWindowToken(): number {
 open が成功すると、TS はセッション簿記に 1 枚ぶんの記録を残します。キーは window token です。
 
 ```typescript
-// packages/engine/src/core/global.ts:66-72
+// packages/engine/src/core/global.ts:64-70
 type PluginUiSession = {
   window: number
   receiverId: string

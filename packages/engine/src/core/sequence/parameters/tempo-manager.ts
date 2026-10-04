@@ -87,7 +87,6 @@ export class TempoManager {
     elements: PlayElement[],
     globalTempo: number,
     globalBeat: Meter,
-    emitRandomDegrees = true,
   ): TimedEvent[] {
     const tempo = this._tempo || globalTempo
     const meter = this._beat || globalBeat
@@ -102,6 +101,6 @@ export class TempoManager {
     // #390 live playhead: each event carries its full argPath ("1.0" for
     // nested slots) — tagged inside the timing walk itself (see
     // calculateEventTiming's argPathPrefix). Observational only.
-    return calculateEventTiming(elements, effectiveBarDuration, 0, 0, [], '', emitRandomDegrees)
+    return calculateEventTiming(elements, effectiveBarDuration)
   }
 }

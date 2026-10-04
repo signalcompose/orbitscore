@@ -71,23 +71,32 @@ async function evaluate(source: string, global = new Global(new RecordingSchedul
   return global
 }
 
-async function playOnce(
+async function preparePlayback(
   src: string,
   prelude = '',
   configure?: (global: Global, seq: Sequence) => void,
-): Promise<{ capture: Capture; seq: Sequence }> {
+  startGlobal = false,
+) {
   vi.setSystemTime(T0)
   const scheduler = mockScheduler()
   const capture: Capture = { ons: [], offs: new Map(), bends: [] }
   const global = new Global(scheduler, new MidiManager(() => recordingOutput(capture)))
   global.key('C')
   if (prelude) await evaluate(prelude, global)
-  global.start()
-  const seq = new Sequence(global, scheduler)
-  seq.setName('piano')
+  if (startGlobal) global.start()
+  const seq = new Sequence(global, scheduler).setName('piano')
   seq.midi('iac', 1).octave(4)
   configure?.(global, seq)
   seq.play(...(parseAudioDSL(`p.play(${src})`).statements[0]!.args as never[]))
+  return { scheduler, capture, seq }
+}
+
+async function playOnce(
+  src: string,
+  prelude = '',
+  configure?: (global: Global, seq: Sequence) => void,
+): Promise<{ capture: Capture; seq: Sequence }> {
+  const { capture, seq } = await preparePlayback(src, prelude, configure, true)
   await seq.run()
   await vi.advanceTimersByTimeAsync(2200)
   return { capture, seq }
@@ -98,15 +107,7 @@ async function sample(src: string, prelude = '', count = N): Promise<number[]> {
 }
 
 async function playCycles(src: string, prelude: string, count: number) {
-  vi.setSystemTime(T0)
-  const scheduler = mockScheduler()
-  const capture: Capture = { ons: [], offs: new Map(), bends: [] }
-  const global = new Global(scheduler, new MidiManager(() => recordingOutput(capture)))
-  global.key('C')
-  if (prelude) await evaluate(prelude, global)
-  const seq = new Sequence(global, scheduler).setName('piano')
-  seq.midi('iac', 1).octave(4)
-  seq.play(...(parseAudioDSL(`p.play(${src})`).statements[0]!.args as never[]))
+  const { scheduler, capture, seq } = await preparePlayback(src, prelude)
   for (let i = 0; i < count; i++) await seq.scheduleEvents(scheduler, i, i * 2500)
   await vi.advanceTimersByTimeAsync(count * 2500 + 2200)
   return { capture, seq }
@@ -333,6 +334,54 @@ describe('#967 timing and audio regression', () => {
         .join('\n')
         .match(/audio シーケンスでは休符/g),
     ).toHaveLength(1)
+  })
+
+  it('keeps kick.play((1, r), 1) at the pre-change audio onsets', () => {
+    const global = new Global(new RecordingScheduler())
+    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
+    kick.play(...(parseAudioDSL('kick.play((1, r), 1)').statements[0]!.args as never[]))
+    expect(
+      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
+        sliceNumber,
+        startTime,
+        duration,
+      })),
+    ).toEqual([
+      { sliceNumber: 1, startTime: 0, duration: 500 },
+      { sliceNumber: 1, startTime: 1000, duration: 1000 },
+    ])
+  })
+
+  it('keeps kick.play({1, r}, 1) at the pre-change audio onsets', () => {
+    const global = new Global(new RecordingScheduler())
+    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
+    kick.play(...(parseAudioDSL('kick.play({1, r}, 1)').statements[0]!.args as never[]))
+    expect(
+      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
+        sliceNumber,
+        startTime,
+        duration,
+      })),
+    ).toEqual([
+      { sliceNumber: 1, startTime: 0, duration: 500 },
+      { sliceNumber: 1, startTime: 1000, duration: 1000 },
+    ])
+  })
+
+  it('keeps kick.play([1, r], 1) at the pre-change audio onsets', () => {
+    const global = new Global(new RecordingScheduler())
+    const kick = new Sequence(global, new RecordingScheduler()).setName('kick')
+    kick.play(...(parseAudioDSL('kick.play([1, r], 1)').statements[0]!.args as never[]))
+    expect(
+      kick.getState().timedEvents!.map(({ sliceNumber, startTime, duration }) => ({
+        sliceNumber,
+        startTime,
+        duration,
+      })),
+    ).toEqual([
+      { sliceNumber: 1, startTime: 0, duration: 1000 },
+      { sliceNumber: 1, startTime: 1000, duration: 1000 },
+    ])
   })
 })
 

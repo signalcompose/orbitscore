@@ -1042,7 +1042,7 @@ dry 縮退（無音にはならない）+ forget-and-ensure — だから TS 側
 `failurePolicy: 'forget-and-ensure'` を渡します。
 
 ```typescript
-// packages/engine/src/core/global.ts:170-194
+// packages/engine/src/core/global.ts:168-192
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -1159,7 +1159,7 @@ effect 側の `beforeReplace` は `prepareEffectReplacement` で、役目は消�
 行うので、instrument 側と違って TS で保存は呼びません。
 
 ```typescript
-// packages/engine/src/core/global.ts:1395-1417
+// packages/engine/src/core/global.ts:1393-1415
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
     const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)

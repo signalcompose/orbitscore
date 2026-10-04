@@ -4,6 +4,7 @@
 
 import { PlayElement } from '../../parser/audio-parser'
 import { ScopeRoot, ScopeMode } from '../../parser/types'
+import { copyRandomDegreeProperties } from '../../midi/chord/random-degree'
 
 import { TimedEvent, TimedEventScope } from './types'
 
@@ -93,7 +94,6 @@ export function calculateEventTiming(
   depth: number = 0,
   scopeStack: ScopeFrame[] = [],
   argPathPrefix: string = '',
-  emitRandomDegrees: boolean = true,
 ): TimedEvent[] {
   const events: TimedEvent[] = []
 
@@ -133,7 +133,6 @@ export function calculateEventTiming(
         depth + 1,
         scopeStack,
         pathFor(i),
-        emitRandomDegrees,
       )
       events.push(...nestedEvents)
     } else if (element && typeof element === 'object') {
@@ -146,7 +145,6 @@ export function calculateEventTiming(
           depth + 1,
           scopeStack,
           pathFor(i),
-          emitRandomDegrees,
         )
         events.push(...nestedEvents)
       } else if (element.type === 'scoped') {
@@ -168,7 +166,6 @@ export function calculateEventTiming(
           depth + 1,
           [...scopeStack, frame],
           pathFor(i),
-          emitRandomDegrees,
         )
         events.push(...nestedEvents)
       } else if (element.type === 'stack') {
@@ -200,7 +197,6 @@ export function calculateEventTiming(
             depth + 1,
             scopeStack,
             pathFor(i),
-            emitRandomDegrees,
           )
           // #390: a stack is ONE visual unit for the playhead — every voice
           // (and any subdividing voice subtree) reports the stack's own slot
@@ -249,8 +245,7 @@ export function calculateEventTiming(
         })
       } else if (element.type === 'random_degree') {
         // #967: retain the random source symbolically; selection belongs to output Stage A.
-        // Audio sequences pass emitRandomDegrees=false and keep this as an empty rhythm slot.
-        if (!emitRandomDegrees) continue
+        const copied = copyRandomDegreeProperties(element)
         events.push({
           sliceNumber: 1,
           startTime: elementStartTime,
@@ -264,17 +259,9 @@ export function calculateEventTiming(
             rangeSet: element.rangeSet,
             detune: element.detune,
           },
-          randomDegree: {
-            ...(element.lattice && { lattice: [...element.lattice] }),
-            ...(element.period !== undefined && { period: element.period }),
-            from: element.from ?? 'scope',
-          },
+          randomDegree: { ...copied.source, from: element.from ?? 'scope' },
           ...(scope && { scope }),
-          ...(element.random !== undefined && { random: element.random }),
-          ...(element.randomOctave && { randomOctave: true }),
-          ...(element.velocity !== undefined && { velocity: element.velocity }),
-          ...(element.velocityDelta !== undefined && { velocityDelta: element.velocityDelta }),
-          ...(element.articulation !== undefined && { articulation: element.articulation }),
+          ...copied.modifiers,
         })
       } else if (element.type === 'modified') {
         // Modified element (e.g., with .chop())
@@ -297,7 +284,6 @@ export function calculateEventTiming(
             depth + 1,
             scopeStack,
             pathFor(i),
-            emitRandomDegrees,
           )
           events.push(...nestedEvents)
         }
@@ -325,7 +311,6 @@ export function calculateEventTiming(
           depth + 1,
           scopeStack,
           pathFor(i),
-          emitRandomDegrees,
         )
         if (nestedEvents.length > 0) {
           let tailStart = nestedEvents[0].startTime

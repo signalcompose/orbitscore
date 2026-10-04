@@ -27,7 +27,7 @@ DSL のテキストが実際に実行されるまでの最初の関門が「パ�
 - **`collapseScopedRun()` が `parse-expression.ts` に切り出された**。`(A)(B).root(X)` のような並置グループに pitch scope チェーンを畳み込む規則を、statement レベルと nested レベルの両方のループが共有します
 
 ```typescript
-// packages/engine/src/parser/parse-expression.ts:78-85
+// packages/engine/src/parser/parse-expression.ts:79-86
 export function collapseScopedRun(list: PlayElement[], runStart: number): void {
   const lastIdx = list.length - 1
   const last = list[lastIdx]
