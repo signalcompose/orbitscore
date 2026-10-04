@@ -640,7 +640,7 @@ OrbitScore の transport は「DSL テキストを stdin に送り込む」と�
 - `packages/engine/src/interpreter/interpreter-v2.ts:133-230` — `InterpreterV2.execute()`: `skipTransportCommands` オプション
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: 単一 `globalInterpreter` インスタンスの生成と REPL への引き渡し
 - `packages/engine/src/cli/repl-mode.ts:370-378` — REPL の `interpreter.execute()` 呼び出し (渡しているオプション)
-- `packages/engine/src/core/sequence.ts:1774-1799` — `Sequence.stop()`: イベントクリアとループタイマーのキャンセル
+- `packages/engine/src/core/sequence.ts:1751-1776` — `Sequence.stop()`: イベントクリアとループタイマーのキャンセル
 - `packages/vscode-extension/src/engine-process.ts:681-681` — extension の stdin 送信
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Transport Commands" — launch quantize の仕様と `global.start()` が待たないこと
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize

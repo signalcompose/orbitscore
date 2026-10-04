@@ -1351,7 +1351,7 @@ LOOP(drums)
 - `packages/engine/src/core/global/effect-slot.ts:459-472` — `applyRackBody`（diff / rebuild と LCS）
 - `packages/engine/src/core/global/effect-slot.ts:639-641` — drop される catalog 要素への `beforeReplace`
 - `packages/engine/src/core/global/effect-slot.ts:786-805` — `issueReplacement` の失敗時台帳処理
-- `packages/engine/src/core/global.ts:164-188` — effect 4 経路の hook 配線
+- `packages/engine/src/core/global.ts:163-187` — effect 4 経路の hook 配線
 - `packages/engine/src/core/global.ts:1337-1378` — `prepareInstrumentReplacement`（UI close → state 保存）
 - `packages/engine/src/core/global.ts:1380-1402` — `prepareEffectReplacement`（UI close のみ）
 - `packages/engine/src/core/global/effect-replace-notice.ts:1-24` — 「続行する通知」の唯一の出口

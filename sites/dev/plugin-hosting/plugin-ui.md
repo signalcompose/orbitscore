@@ -1352,8 +1352,8 @@ CLAP を使う必要があります。
 
 ## Sources
 
-- `packages/engine/src/core/sequence.ts:674-694` — `Sequence.ui()`（無引数 = instrument・名前形・数値拒否）
-- `packages/engine/src/core/global.ts:60-66` — `PluginUiSession`（window token キー・`indexAtOpen` は表示専用）
+- `packages/engine/src/core/sequence.ts:643-663` — `Sequence.ui()`（無引数 = instrument・名前形・数値拒否）
+- `packages/engine/src/core/global.ts:59-65` — `PluginUiSession`（window token キー・`indexAtOpen` は表示専用）
 - `packages/engine/src/core/global.ts:1129-1139` — `openPluginUisByName`（一致 catalog 要素の全列挙）
 - `packages/engine/src/core/global.ts:1166-1174` — `openPluginUiIdempotent`（DSL 面の冪等 open）
 - `packages/engine/src/core/global.ts:1244-1250` — `openPluginUi` のウィンドウタイトル規約と token 送出

@@ -18,12 +18,14 @@ DSL のテキストが実際に実行されるまでの最初の関門が「パ�
 
 - **トークンの種類が 19 → 32 に増加**: pitch DSL 用の `ACCIDENTAL` / `CARET` / `TILDE` / `AT` / `PLUS`、スタック用の `LBRACKET` / `RBRACKET`、レガート用の `LBRACE` / `RBRACE`、タイ用の `UNDERSCORE`、`import` 用の `IMPORT` / `ASTERISK`、名前付き引数用の `COLON` (`packages/engine/src/parser/types.ts:7-39`)。初版が「18 種類」と書いていたのは数え間違いで、当時の列挙も 19 個ありました
 - **`KEYWORDS` に `import` が加わった** (`packages/engine/src/parser/tokenizer.ts:17-28`)。さらに #668 PR-E4 で private static から public static (`ReadonlySet<string>`) になり、照合用の view が module から export された (`tokenizer.ts:288-289`)
-- **`dsl-surface.ts` が加わった** (#668 PR-E4、`packages/engine/src/parser/dsl-surface.ts:1-35`)。メソッド呼び出しの形をしていない構文表面 13 個を id で列挙する正本で、パーサの実行には使わず E2E ラチェットの照合先になる
+- **`dsl-surface.ts` が加わった** (#668 PR-E4、`packages/engine/src/parser/dsl-surface.ts:1-39`)。メソッド呼び出しの形をしていない構文表面 15 個を id で列挙する正本で、パーサの実行には使わず E2E ラチェットの照合先になる
 - **`AudioIR` に `fileImports?` が加わった** (2026-07-17 の #456、`types.ts:49-59`)。`import { kick } from "./drums.orbs"` を statements とは別バケットで持ち、interpreter が `globalInit` より前に処理します
-- **`Statement` union が 3 → 11 メンバーに増えた** (`types.ts:72-83`)。`ChordBinding` / `PatternBinding` / `ModeBinding` (pitch DSL の `var m7 = [...]` 等)、`ImportStatement` / `FileImportStatement`、`MixerHandleStatement` / `MixerInit` / `MixerNodeDecl` (Signal Chain DSL、#517 S1)
-- **`parseStatement()` に `IMPORT` の分岐が加わり**、`parseVarDeclaration()` は右辺の先頭トークン (`[`、`(`、`mode(`、`<id>.output|sum|aux`) で宣言の種類を判別するようになった (`parse-statement.ts:58-85`, `108-149`)
-- **`AudioParser.parse()` が IM.1 の「import はファイル先頭領域のみ」を検査する** (`audio-parser.ts:74-109`)
-- **`GlobalStatement` / `SequenceStatement` / `MethodChain` に `invocation?: 'bare' | 'call'`** が加わり、`.drums` (括弧なし) と `.TALReverb4()` (括弧あり) を interpreter が区別できるようになった (`types.ts:252-274`)
+- **`Statement` union が 3 → 12 メンバーに増えた** (`types.ts:72-84`)。`ChordBinding` / `PatternBinding` / `ModeBinding` (pitch DSL の `var m7 = [...]` 等)、`RandomBinding` (#967 の `var r1 = random.dorian`)、`ImportStatement` / `FileImportStatement`、`MixerHandleStatement` / `MixerInit` / `MixerNodeDecl` (Signal Chain DSL、#517 S1)
+- **`parseStatement()` に `IMPORT` の分岐が加わり**、`parseVarDeclaration()` は右辺の先頭トークン (`[`、`(`、`mode(`、`random.`、`<id>.output|sum|aux`) で宣言の種類を判別するようになった (`parse-statement.ts:53-80`, `96-145`)
+- **`var X = random.<mode 変数>` の分岐は、ミキサー宣言 (`<id>.output|sum|aux`) の先読みより前に置かれている** (#967、`parse-statement.ts:128-130`)。順序が逆だと `random.sum` が「`sum` ミキサーの宣言」として読まれてしまうため、**この 2 分岐の順序自体が仕様**になっています
+- **`PlayElement` / `ValueExpression` に `PlayRandomDegree` が加わった** (#967、`packages/engine/src/parser/types.ts:508-527`)。度数を持たないまま `octaveShift` / `detune` / `@v` / `@g` などの修飾だけを運ぶ要素で、どの音を選ぶかはパーサーでは決めません
+- **`AudioParser.parse()` が IM.1 の「import はファイル先頭領域のみ」を検査する** (`audio-parser.ts:76-111`)
+- **`GlobalStatement` / `SequenceStatement` / `MethodChain` に `invocation?: 'bare' | 'call'`** が加わり、`.drums` (括弧なし) と `.TALReverb4()` (括弧あり) を interpreter が区別できるようになった (`types.ts:261-283`)
 - **`collapseScopedRun()` が `parse-expression.ts` に切り出された**。`(A)(B).root(X)` のような並置グループに pitch scope チェーンを畳み込む規則を、statement レベルと nested レベルの両方のループが共有します
 
 ```typescript
@@ -263,7 +265,7 @@ classDiagram
   class Statement {
     <<union>>
     GlobalStatement | SequenceStatement | TransportStatement
-    ChordBinding | PatternBinding | ModeBinding
+    ChordBinding | PatternBinding | ModeBinding | RandomBinding
     ImportStatement | FileImportStatement
     MixerHandleStatement | MixerInit | MixerNodeDecl
   }
@@ -458,8 +460,8 @@ export type SequenceStatement = {
 - `AudioTokenizer` の記号系トークン (`ACCIDENTAL` / `CARET` / `TILDE` / `AT` / `UNDERSCORE`) の読み取り規則 — `b` が識別子と accidental のどちらになるかの判定 (`tokenizer.ts:162-170`)
 - 数値リテラルの読み取り (`readNumber()`) と `-Infinity` / `-inf` の特殊ケース処理
 - `parseVarDeclaration()` の全分岐 — `init GLOBAL` / `init global.seq` / `init global.mixer` / `[ ... ]` / `( ... )` / `mode(...)` / `mix.output|sum|aux`
-- `parseImport()` の 3 形式 (`import chords` / `import { a, b } from` / `import * from`) と IM.1 の検査 (`parse-statement.ts:253-320`)
-- `ValueArray` / `ValueCall` / `ValueRef` — 「chord か rack か」をパーサーが決めず interpreter に委ねる context-neutral な `[ ... ]` (`types.ts:136-174`)
+- `parseImport()` の 3 形式 (`import chords` / `import { a, b } from` / `import * from`) と IM.1 の検査 (`parse-statement.ts:249-316`)
+- `ValueArray` / `ValueCall` / `ValueRef` — 「chord か rack か」をパーサーが決めず interpreter に委ねる context-neutral な `[ ... ]` (`types.ts:137-176`)
 - `parseMethodChain()` によるメソッドチェーン (`.audio(...).chop(...)` など) と `invocation` の付与
 - `ExpressionParser` の引数解析 — `beat(n by m)`、乱数 `r` / `rN%M`、名前付き引数 `name: value` (SC.3)
 - `collapseScopedRun()` が 3 箇所 (statement / nested / pattern binding) から呼ばれる理由と、pitch scope の畳み込み規則 (§3)
@@ -470,21 +472,21 @@ export type SequenceStatement = {
 - `packages/engine/src/parser/types.ts:7-39` — `AudioTokenType` 全 32 種の定義
 - `packages/engine/src/parser/types.ts:41-46` — `AudioToken` (位置情報付きトークン)
 - `packages/engine/src/parser/types.ts:49-59` — `AudioIR` (`fileImports` 含む)
-- `packages/engine/src/parser/types.ts:72-83` — `Statement` union 型定義 (11 メンバー)
-- `packages/engine/src/parser/types.ts:136-174` — `ValueRef` / `ValueCall` / `ValueArray` / `ValueExpression`
-- `packages/engine/src/parser/types.ts:203-219` — `ImportStatement` / `FileImportStatement`
-- `packages/engine/src/parser/types.ts:252-274` — `GlobalStatement` / `SequenceStatement` / `MethodChain` と `invocation`
+- `packages/engine/src/parser/types.ts:72-84` — `Statement` union 型定義 (12 メンバー)
+- `packages/engine/src/parser/types.ts:137-176` — `ValueRef` / `ValueCall` / `ValueArray` / `ValueExpression`
+- `packages/engine/src/parser/types.ts:205-221` — `ImportStatement` / `FileImportStatement`
+- `packages/engine/src/parser/types.ts:261-283` — `GlobalStatement` / `SequenceStatement` / `MethodChain` と `invocation`
 - `packages/engine/src/parser/tokenizer.ts:11-32` — `AudioTokenizer` クラスと `KEYWORDS` Set
 - `packages/engine/src/parser/tokenizer.ts:288-289` — 照合用に export された `KEYWORDS` view (#668 PR-E4)
-- `packages/engine/src/parser/dsl-surface.ts:1-35` — `DslSyntaxId` / `DSL_SYNTAX_SURFACE` (#668 PR-E4)
+- `packages/engine/src/parser/dsl-surface.ts:1-39` — `DslSyntaxId` / `DSL_SYNTAX_SURFACE` (#668 PR-E4)
 - `packages/engine/src/parser/tokenizer.ts:135-170` — `tokenize()` メインループ冒頭と accidental の判定
-- `packages/engine/src/parser/audio-parser.ts:68-115` — `AudioParser.parse()` のループ・振り分け・IM.1 検査
-- `packages/engine/src/parser/audio-parser.ts:121-126` — `parseAudioDSL()` エントリ関数
-- `packages/engine/src/parser/parse-statement.ts:58-85` — `parseStatement()` ディスパッチ
-- `packages/engine/src/parser/parse-statement.ts:90-149` — `parseVarDeclaration()` の右辺判別
-- `packages/engine/src/parser/parse-statement.ts:253-320` — `parseImport()` / `parseFileImport()` / `parseImportFromPath()`
-- `packages/engine/src/parser/parse-statement.ts:610-618` — 常に `type: 'sequence'` を返す設計とその理由コメント
-- `packages/engine/src/parser/parse-expression.ts:62-78` — `collapseScopedRun()`
-- `packages/engine/src/parser/parser-utils.ts:45-57` — `expect()` によるエラー位置報告
+- `packages/engine/src/parser/audio-parser.ts:70-117` — `AudioParser.parse()` のループ・振り分け・IM.1 検査
+- `packages/engine/src/parser/audio-parser.ts:123-128` — `parseAudioDSL()` エントリ関数
+- `packages/engine/src/parser/parse-statement.ts:53-80` — `parseStatement()` ディスパッチ
+- `packages/engine/src/parser/parse-statement.ts:85-145` — `parseVarDeclaration()` の右辺判別
+- `packages/engine/src/parser/parse-statement.ts:249-316` — `parseImport()` / `parseFileImport()` / `parseImportFromPath()`
+- `packages/engine/src/parser/parse-statement.ts:606-614` — 常に `type: 'sequence'` を返す設計とその理由コメント
+- `packages/engine/src/parser/parse-expression.ts:71-87` — `collapseScopedRun()`
+- `packages/engine/src/parser/parser-utils.ts:68-80` — `expect()` によるエラー位置報告
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §IM.1-IM.6 — import 宣言の仕様
 - `docs/archive/WORK_LOG_2026-07.md` §6.265 (file import parser + interpreter #456, 2026-07-17)、§6.291 (Signal Chain ミキサー宣言 #517 S1, 2026-07-26)

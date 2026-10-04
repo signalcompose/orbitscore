@@ -722,12 +722,12 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 | Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:151-289` |
 | Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:207-240` |
 | The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `engine-process.ts:653-658` |
-| `linkAudio` added to `GLOBAL_ONCE_METHODS`, LinkAudio diagnostics 6-8 | (LinkAudio #209 family) | `diagnostics-analysis.ts:44-58` / `:194-391` |
+| `linkAudio` added to `GLOBAL_ONCE_METHODS`, LinkAudio diagnostics 6-8 | (LinkAudio #209 family) | `diagnostics-analysis.ts:44-58` / `:194-392` |
 | No flash when sending fails | — | the comment at `run-selection.ts:199-201` |
 | Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `agent-handlers.ts:80-109` / `engine-handlers.ts:248-256` |
 | Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `diagnostics-provider.ts:160-168` |
-| The runtime counterpart of diagnostics 6-8 became a **silent skip plus a log line** instead of a throw (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587` (PR [#737](https://github.com/signalcompose/orbitscore/pull/737)) |
-| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:349-352` / `:346-452`, `dsl-providers.ts:176-213` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
+| The runtime counterpart of diagnostics 6-8 became a **silent skip plus a log line** instead of a throw (`DispatchTarget` tagged union) | #645 | `sequence.ts:71-74` / `:1557-1564` (PR [#737](https://github.com/signalcompose/orbitscore/pull/737)) |
+| Diagnostic 7 went from a LinkAudio-only Error to a **whole-file `output-missing` (Warning) / `dry-not-routed` (Information) with a quick fix**; the `code` also reaches MCP `get_diagnostics` | #883 | `diagnostics-analysis.ts:350-353` / `:347-453`, `dsl-providers.ts:176-213` / `:3831-3842` (PR [#885](https://github.com/signalcompose/orbitscore/pull/885)) |
 
 ---
 
@@ -774,8 +774,8 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/playhead.ts:39-54` — the `[STEP]` line grammar and `parseStepLine()`
 - `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
-- `packages/vscode-extension/src/diagnostics-analysis.ts:110-495` — the cross-line analysis functions
-- `packages/vscode-extension/src/diagnostics-analysis.ts:349-495` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics
+- `packages/vscode-extension/src/diagnostics-analysis.ts:110-496` — the cross-line analysis functions
+- `packages/vscode-extension/src/diagnostics-analysis.ts:350-496` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
 - `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — background of the audioPath ordering diagnostic

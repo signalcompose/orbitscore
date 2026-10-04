@@ -257,7 +257,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
     if (resolved) return this.applyOutputElement(resolved, options, 'output')
 ```
 
-In the sum/aux branch, look at `applyOutputElement()` (`sequence.ts:485-495`)'s
+In the sum/aux branch, look at `applyOutputElement()` (`sequence.ts:454-464`)'s
 `this._insertBus ?? this.global.ensureSequenceInsertBus(name)`. Even a sequence that never
 declared `seq.effect()` gets a **pass-through insert bus with no plugin loaded** the moment it
 calls `output(sum)`. To the daemon the source of a line is always a "seq bus", so without one
@@ -475,7 +475,7 @@ core spec MX.1) **does not hand over on a plain master exit alone**. The handove
 > path** — for the current wiring, see the `output()`/`send()` citations above and
 > `docs/design/611-output-line-design.md` §3.3/§5.
 
-`syncBusRouting()` (`sequence.ts:543-570`), called at the end of `output()` / `send()`, is
+`syncBusRouting()` (`sequence.ts:512-539`), called at the end of `output()` / `send()`, is
 fire-and-forget and puts **the output plus all sends together every time** on `SetBusRouting`, as
 `this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends))`. Sending
 the full state rather than a diff keeps re-sends idempotent. On failure it raises
@@ -1794,10 +1794,10 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `packages/engine/src/core/global.ts:481-489` — `Global.sum()` / `Global.aux()`
 - `packages/engine/src/core/global.ts:601-613` — `Global.gain()` → `setGlobalGain`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:89-104` — `ensureBus()` (pass-through insert)
-- `packages/engine/src/core/sequence.ts:350-432` — the three branches of `Sequence.output()`
-- `packages/engine/src/core/sequence.ts:454-481` — `Sequence.send()`
-- `packages/engine/src/core/sequence.ts:522-570` — `pushBusRouting` / `syncBusRouting`
-- `packages/engine/src/core/sequence.ts:976-1043` — target selection and `ensureInstrumentSourceRouting` (`SetSourceRouting` choke point)
+- `packages/engine/src/core/sequence.ts:319-401` — the three branches of `Sequence.output()`
+- `packages/engine/src/core/sequence.ts:423-450` — `Sequence.send()`
+- `packages/engine/src/core/sequence.ts:491-539` — `pushBusRouting` / `syncBusRouting`
+- `packages/engine/src/core/sequence.ts:945-1012` — target selection and `ensureInstrumentSourceRouting` (`SetSourceRouting` choke point)
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain` (folding removed, `-Infinity` kept)
 - `packages/engine/src/audio/engine-backend.ts:45-46` — `setGlobalGain` contract
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:949-969` — `setBusRouting` (intent-first cache)

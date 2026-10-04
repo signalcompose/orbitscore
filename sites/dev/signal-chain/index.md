@@ -1591,9 +1591,9 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `docs/archive/design/628-plan-reset.md:57-120` — 実機ゲートの前倒し検出（ゲイン定数の純 unit）
 - `packages/engine/src/signal-chain/rack.ts:12-34,124-203,223-277` — `RackRecipe` 型・3 カテゴリ解決・chord/rack 分類・`effect()` 引数の脱糖
 - `packages/engine/src/signal-chain/dispatch.ts:42-53` — 撤回されたメソッド形の診断専用照合（SC.10.9）
-- `packages/engine/src/parser/types.ts:144-159` — `ValueCall` / `ValueArray` AST
-- `packages/engine/src/interpreter/process-statement.ts:257-273,333-343` — `effect()` / `var x = [...]` の interpreter 分岐
-- `packages/engine/src/core/global.ts:352-366` — `defineRack` / `getRack`（値意味論）
+- `packages/engine/src/parser/types.ts:145-160` — `ValueCall` / `ValueArray` AST
+- `packages/engine/src/interpreter/process-statement.ts:260-276,333-343` — `effect()` / `var x = [...]` の interpreter 分岐
+- `packages/engine/src/core/global.ts:351-365` — `defineRack` / `getRack`（値意味論）
 - `packages/engine/src/core/global/effect-slot.ts:132-172,248-319,455-681` — `resolveEffectRack`・LCS・`applyRackBody`
 - `packages/engine/src/core/global/sequence-effect-manager.ts:106-160` — per-seq manager の `effect()`
 - `packages/engine/src/core/global/plugin-effect-manager.ts:49-61` — master manager の `effect()`

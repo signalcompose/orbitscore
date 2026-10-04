@@ -229,7 +229,7 @@ export interface TimedEvent {
 
 `startTime` と `duration` はどちらも ms です。`sliceNumber` は「何番目のオーディオスライスを再生するか」を指し、`0` は休符を意味します (MIDI シーケンスでは度数のフォールバックとしても使われます)。`depth` はネストしたパターン (`seq.play(1, [2, 3], 4)` のような入れ子構造) のデバッグ用フィールドです。
 
-省略した optional フィールドは `pitch` (MIDI の symbolic pitch)、`scope` (`.root()` / `.mode()` / `.oct()` のレキシカルスコープ)、`tie` / `legato` / `voiceTie` (アーティキュレーション)、`random` / `randomOctave`、`velocity` / `velocityDelta` / `articulation` で、いずれも**時間計算には関与しません**。`startTime` / `duration` を決めるリズム木の走査は audio / MIDI で共通で、値の意味 (slice 番号か度数か) だけがドメインで変わる、というのが型コメントの説明です。
+省略した optional フィールドは `pitch` (MIDI の symbolic pitch)、`scope` (`.root()` / `.mode()` / `.oct()` のレキシカルスコープ)、`tie` / `legato` / `voiceTie` (アーティキュレーション)、`random` / `randomOctave`、`randomDegree` (#967: 未解決のランダム度数。格子と `period` をシンボリックに運び、実際の選択は出力段に残す)、`velocity` / `velocityDelta` / `articulation` で、いずれも**時間計算には関与しません**。`startTime` / `duration` を決めるリズム木の走査は audio / MIDI で共通で、値の意味 (slice 番号か度数か) だけがドメインで変わる、というのが型コメントの説明です。
 
 `argPath` は #390 (2026-07-07) で追加された観測専用フィールドです。`play()` の引数木のどの位置から来たイベントかを `"2"` や `"1.0"` のようなドット結合インデックスで持ち、バックエンドが dispatch 時に `[STEP]` マーカーを stdout に出すためだけに使われます。型コメントに「Never read by timing / scheduling logic」と明記されているとおり、これも時間表現には影響しません。
 
@@ -317,9 +317,9 @@ flowchart TB
 - `packages/engine/src/core/sequence/parameters/tempo-manager.ts:64-68` — `calculateBarDuration()`: bar duration の計算式
 - `packages/engine/src/core/sequence/parameters/tempo-manager.ts:73-105` — `calculatePatternDuration()` / `calculateEventTiming()`: length 修飾子の適用 (#390 のコメント込み)
 - `packages/engine/src/core/global/quantize-manager.ts:36-54` — `quantizeDurationMs()`: 小節長の式の二重化先 (quantize グリッド)
-- `packages/engine/src/timing/calculation/types.ts:31-89` — `TimedEvent` interface (`startTime`, `duration` が ms、MIDI 用 optional フィールドと `argPath`)
+- `packages/engine/src/timing/calculation/types.ts:31-95` — `TimedEvent` interface (`startTime`, `duration` が ms、MIDI 用 optional フィールドと `argPath`)
 - `packages/engine/src/timing/calculation/convert-to-absolute-timing.ts:18-29` — `convertToAbsoluteTiming()`: barNumber × barDuration でオフセット計算
-- `packages/engine/src/timing/calculation/format-timing.ts:17-38` — `formatTiming()`: ms → 拍数の逆変換 (デバッグ用)
+- `packages/engine/src/timing/calculation/format-timing.ts:17-42` — `formatTiming()`: ms → 拍数の逆変換 (デバッグ用)
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — `"beat"` = `60_000 / tempo` ms の定義
 - [BEAT_METER_SPECIFICATION.md](https://github.com/signalcompose/orbitscore/blob/main/docs/development/BEAT_METER_SPECIFICATION.md) — 小節長計算式の仕様と将来の分母制約案
 - Issue [#390](https://github.com/signalcompose/orbitscore/issues/390) — live playhead (`argPath` の追加理由)

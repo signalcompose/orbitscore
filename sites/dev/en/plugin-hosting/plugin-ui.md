@@ -1379,8 +1379,8 @@ must be CLAP.
 
 ## Sources
 
-- `packages/engine/src/core/sequence.ts:674-694` — `Sequence.ui()` (no argument = instrument, name form, numeric rejection)
-- `packages/engine/src/core/global.ts:60-66` — `PluginUiSession` (keyed by window token; `indexAtOpen` is display-only)
+- `packages/engine/src/core/sequence.ts:643-663` — `Sequence.ui()` (no argument = instrument, name form, numeric rejection)
+- `packages/engine/src/core/global.ts:59-65` — `PluginUiSession` (keyed by window token; `indexAtOpen` is display-only)
 - `packages/engine/src/core/global.ts:1129-1139` — `openPluginUisByName` (enumerating every matching catalog element)
 - `packages/engine/src/core/global.ts:1166-1174` — `openPluginUiIdempotent` (the DSL-surface idempotent open)
 - `packages/engine/src/core/global.ts:1244-1250` — the window-title convention and token emission in `openPluginUi`
