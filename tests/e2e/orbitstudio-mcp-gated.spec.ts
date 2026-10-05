@@ -3032,6 +3032,112 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #964: the non-debug stdout filter dropped every `🎚️ <seq>: play=… (next cycle)` line whose
+  // pattern carried an object element — play() prints those as JSON, and the filter dropped any
+  // line containing `"type"`. The engine had stored the new pattern; only get_log said otherwise,
+  // so an agent checking its own run_selection concluded nested patterns were not evaluated.
+  // Plain start_engine (no debug) on purpose: debug mode bypasses the filter entirely.
+  it.skipIf(!appAvailable)(
+    'shows a nested play() update in get_log after run_selection (#964)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!workAudioDir) throw new Error('main gated phase did not initialize audio fixture state')
+      const activeClient = client
+      const dslPath = path.join(tmpRoot, 'nested-play-update-964.orbs')
+      const nestedPlayLine = 'hat964.play((1, 0), (1, 0, 1, 0), (1, 0), (0, 0, 1, 0))'
+      const dslLines = [
+        'var global = init GLOBAL',
+        'global.tempo(120)',
+        `global.audioPath(${JSON.stringify(path.relative(path.dirname(dslPath), workAudioDir))})`,
+        'var hat964 = init global.seq',
+        'hat964.audio("kick.wav").chop(1)',
+        'hat964.output()',
+        'hat964.play(1, 0, 1, 1)',
+        'global.start()',
+        'LOOP(hat964)',
+        nestedPlayLine,
+      ]
+      // 1-based line numbers derived from the script so edits cannot silently
+      // desynchronize the run_selection ranges below.
+      const loopLine = dslLines.indexOf('LOOP(hat964)') + 1
+      const nestedLine = dslLines.indexOf(nestedPlayLine) + 1
+      expect(loopLine).toBeGreaterThan(0)
+      expect(nestedLine).toBe(loopLine + 1)
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+
+      const readLog = async (): Promise<string> =>
+        (await activeClient.call('get_log', { lines: 500 })).text
+      const runLines = async (startLine: number, endLine: number): Promise<void> => {
+        const selected = await activeClient.call('set_selection', {
+          start_line: startLine,
+          start_char: 1,
+          end_line: endLine,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+      }
+
+      const start = await activeClient.call('start_engine')
+      expect(start.isError, start.text).toBe(false)
+      try {
+        await waitForEngine(true, 15_000, '#964 engine running')
+        const opened = await activeClient.call('open_file', { path: dslPath })
+        expect(opened.isError, opened.text).toBe(false)
+
+        // The update is only logged as "(next cycle)" while the sequence loops.
+        const beforeLoop = await readLog()
+        await runLines(1, loopLine)
+        await waitUntil(
+          async () =>
+            newLogLines(beforeLoop, await readLog()).some((line) => line.includes('🔄 hat964')),
+          { intervalMs: 200, timeoutMs: 15_000, label: '#964 hat964 loop started' },
+        )
+
+        const beforeUpdate = await readLog()
+        await runLines(nestedLine, nestedLine)
+        let playUpdates: readonly string[] = []
+        let updateLogTail = ''
+        try {
+          await waitUntil(
+            async () => {
+              const log = await readLog()
+              updateLogTail = log.slice(-2500)
+              playUpdates = newLogLines(beforeUpdate, log).filter((line) =>
+                line.includes('🎚️ hat964: play='),
+              )
+              return playUpdates.length > 0
+            },
+            { intervalMs: 200, timeoutMs: 15_000, label: '#964 nested play() update in get_log' },
+          )
+        } catch (error) {
+          throw new Error(`${String(error)}\n--- log tail ---\n${updateLogTail}`)
+        }
+        expect(playUpdates, 'one run_selection of the nested play() logs one update').toHaveLength(
+          1,
+        )
+        expect(playUpdates[0]).toContain('(next cycle)')
+        expect(
+          newErrorLines(beforeUpdate, await readLog()),
+          '#964 nested play() update must add no ERROR lines',
+        ).toEqual([])
+      } finally {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stop = await activeClient.call('stop_engine')
+        expect(stop.isError, stop.text).toBe(false)
+        await waitForEngine(false, 15_000, '#964 engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
   // #654: the live playhead (#390) was wired only into the audio backend, so
   // `instrument()` sequences never moved the highlight — in the 840 piece only
   // the one `audio()` layer stepped while six Kontakt layers sat frozen.

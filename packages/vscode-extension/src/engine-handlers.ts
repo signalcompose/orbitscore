@@ -68,7 +68,13 @@ export function shouldFilterLine(line: string): boolean {
   }
 
   // Keep important messages
-  if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
+  //
+  // 🎚️ (U+1F39A) = parameter-update feedback (`🎚️ <seq>: play=… (next cycle)` etc.).
+  // It must be kept BEFORE the substring filters below: play() prints object
+  // elements as JSON (`{"type":"nested",…}` for `(0, 1)`, `{"type":"tie"}` for `_`,
+  // a pitch object for `1@v+10` / `b3`), so `"type"` dropped exactly the updates an
+  // agent checks through get_log (#964). `🎛️` is U+1F39B — a different character.
+  if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️') || line.includes('🎚️')) {
     return false
   }
 
