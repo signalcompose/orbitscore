@@ -10,7 +10,22 @@
  * （理由は `mcp-tools-editor.ts` の `registerDocsTools` の doc）。
  */
 import { errorResult, type McpServerLike, toToolResult, z } from './mcp-sdk'
-import type { OrbitScoreToolHandlers } from './mcp-types'
+import type { EvaluateResult, OrbitScoreToolHandlers } from './mcp-types'
+
+/**
+ * #966: name the base directory the evaluation used, so an agent sees a wrong base
+ * immediately instead of as a distant `[SAMPLE_NOT_FOUND]`. The text still starts with
+ * `ok` / `error:` as before; `documentDirectory` absent (code never sent) adds nothing.
+ */
+export function evaluateToolResult(result: EvaluateResult): ReturnType<typeof toToolResult> {
+  const base =
+    result.documentDirectory === undefined
+      ? ''
+      : ` (documentDirectory: ${result.documentDirectory ?? 'none'})`
+  return result.ok
+    ? toToolResult({ ok: true, message: `ok${base}` })
+    : toToolResult({ ok: false, error: `${result.error}${base}` })
+}
 
 export function registerEngineTools(server: McpServerLike, handlers: OrbitScoreToolHandlers): void {
   server.registerTool(
@@ -23,12 +38,27 @@ export function registerEngineTools(server: McpServerLike, handlers: OrbitScoreT
         'first (via the Start Engine command). Waits for the engine to finish evaluating ' +
         'the submitted code and reports the result: ok only when the engine raised no parse ' +
         'or runtime diagnostics. A failure lists the diagnostics, so you do NOT need to poll ' +
-        'get_log to find out whether your score was accepted.',
-      inputSchema: { code: z.string().describe('OrbitScore source to evaluate') },
+        'get_log to find out whether your score was accepted. Relative paths (import, ' +
+        'audio(), plugin state files) resolve against the directory of document_path if ' +
+        'given, else the active OrbitScore editor, else the first workspace folder; the ' +
+        'result names the directory that was used. Pass document_path when the code belongs ' +
+        'to a file that may not be the active editor (e.g. while a person is performing in ' +
+        'another tab) — it avoids switching their editor with open_file.',
+      inputSchema: {
+        code: z.string().describe('OrbitScore source to evaluate'),
+        document_path: z
+          .string()
+          .describe(
+            'The .orbs file this code belongs to (absolute or workspace-relative). Its ' +
+              'directory becomes the base for relative paths. Must be an existing file.',
+          )
+          .optional(),
+      },
     },
     async (args) => {
       const code = typeof args.code === 'string' ? args.code : ''
-      return toToolResult(await handlers.evaluate(code))
+      const documentPath = typeof args.document_path === 'string' ? args.document_path : undefined
+      return evaluateToolResult(await handlers.evaluate(code, { documentPath }))
     },
   )
 

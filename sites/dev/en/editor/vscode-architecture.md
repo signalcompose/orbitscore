@@ -214,7 +214,7 @@ The last two are written like this.
         port: mcpPort,
         version: packageJson.version,
         handlers: {
-          evaluate: (code) => evaluateForAgent(code),
+          evaluate: (code, options) => evaluateForAgent(code, options),
           startEngine: (options) => startEngineForAgent(options),
           stopEngine: () => stopEngineForAgent(),
           getEngineState: () => getEngineStateForAgent(),
@@ -736,7 +736,7 @@ Of those five, `setupStderrHandler` is the one that copies the engine's stderr i
 A small helper therefore sits in between, reassembling the chunk stream into lines.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:371-383
+// packages/vscode-extension/src/engine-handlers.ts:377-389
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -757,7 +757,7 @@ There are three things to read here. The first is carrying `partial` over: a nai
 `setupStderrHandler` itself is now just `push` / `flush` wired up inside `logHandlerFailure` containment.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:407-419
+// packages/vscode-extension/src/engine-handlers.ts:413-425
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -780,7 +780,7 @@ Incidentally, there are **four** routes from "chunk stream" to "lines" across th
 The third of them, `setupStdoutHandler`, became a caller of `createLinePrefixer` on 2026-09-08 in [#811](https://github.com/signalcompose/orbitscore/pull/811) (bundle O-wire). Until then it split each chunk with `output.split('\n')` and fed the pieces straight into the four branches for `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"`, so **when a bridge JSON envelope was cut at a chunk boundary, both fragments were lost**: the first half matched none of the prefixes, and the second half did not start with `{`, so it matched none of them either.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:228-235
+// packages/vscode-extension/src/engine-handlers.ts:234-241
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
@@ -796,7 +796,7 @@ The detail worth noticing is that `bridgeLines` is created **inside the handler*
 The other device is `StringDecoder`.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:265-268
+// packages/vscode-extension/src/engine-handlers.ts:271-274
   // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
   // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
   // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
@@ -806,7 +806,7 @@ The other device is `StringDecoder`.
 `data.toString()` interprets a chunk as UTF-8 on its own, so a multi-byte character straddling a chunk boundary **turns into `U+FFFD` right there**. Rejoining the lines afterwards cannot bring the character back. `StringDecoder` carries an incomplete byte sequence over to the next chunk, which guards the step before. As the comment states, the replacement covers **only the bridge dispatch path**: the `output` / `lines` handed to logging and the playhead still come from `data.toString()` as before. That is the line drawn to leave the existing calling convention and timing untouched, and it also records that the same hazard on stderr is out of scope for this change.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:283-284
+// packages/vscode-extension/src/engine-handlers.ts:289-290
       const bridgeOutput = bridgeDecoder.write(data)
       if (bridgeOutput) bridgeLines.push(bridgeOutput)
 ```
@@ -814,7 +814,7 @@ The other device is `StringDecoder`.
 And, as on the stderr side, everything is flushed on `end`. `bridgeDecoder.end()` comes first because the decoder's pending bytes have to be turned back into characters before they reach the prefixer; otherwise the last line would be emitted already mangled.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:327-335
+// packages/vscode-extension/src/engine-handlers.ts:333-341
   process.stdout?.on('end', () => {
     try {
       const bridgeRemainder = bridgeDecoder.end()
@@ -885,7 +885,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:286-322 (effects の中身を一部省略)
+// packages/vscode-extension/src/engine-handlers.ts:292-328 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,

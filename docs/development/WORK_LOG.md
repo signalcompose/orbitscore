@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): resolve evaluate_orbitscore paths against the .orbs directory (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#966](https://github.com/signalcompose/orbitscore/issues/966)
+
+`evaluate_orbitscore` は基準ディレクトリ（`//#documentDirectory`）に常に最初のワークスペースフォルダを送っていたため、
+`.orbs` がサブフォルダにあると import・`audio()`・plugin state の相対パスが `run_selection` とずれていた。
+方針は owner と議論して決めた（記録: [#966 のコメント](https://github.com/signalcompose/orbitscore/issues/966#issuecomment-6005747794)）。
+
+- **仕様を先に更新**: core spec IM.6 に順序を追記 — 引数 `document_path` → アクティブな OrbitScore エディタ → 最初のワークスペースフォルダ → 基準なし。
+  使った基準を結果に含める
+- `document_path` を入れた理由: 前面のタブはエージェントから指定できず、`open_file` で変えると人の画面を奪う。
+  人の演奏と並行してエージェントが書き換える使い方（FuruFuruFruits / WCTM のハーネス）で競合しないようにするため。
+  「人の操作を検知して待つ」案は、この問題の代わりにならないとして採らなかった（理由は上の Issue コメント）
+- 実装: 決め方を純関数 `packages/vscode-extension/src/evaluate-document-directory.ts` に切り出し、`evaluateForAgent` から使う。
+  存在しない `document_path` は黙って dirname を取らずエラー（engine へ何も送らない）。未保存（untitled）のエディタは基準にしない
+- MCP: `evaluate_orbitscore` に任意の `document_path` を追加。結果の文言は従来どおり `ok` / `error:` で始まり、
+  末尾に `(documentDirectory: <path>|none)` を付ける（コードを送らなかった失敗には付けない）
+- テスト: `tests/vscode-extension/evaluate-document-directory.spec.ts`（決め方 9 件 + `evaluateForAgent` の配線 3 件。
+  配線の 3 件は旧実装に戻すと red を確認）、`tests/vscode-extension/mcp-server.spec.ts`（スキーマ・引数の受け渡し・結果の文言）
+- gated E2E: サブフォルダの `.orbs` から `import` を `evaluate_orbitscore` で評価し、前面のエディタ基準・ルートの失敗・
+  `document_path` 優先（タブが切り替わらないこと）を確認するテストを追加。#630（import の実機確認 0 件）の初の実機カバーにもなる。
+  🔴 **この環境では未実行**（ゲート未設定で skip のみ確認）
+- dev サイト: `pipeline/selective-execution.md` の散文（ja / en）を新しい挙動に更新。引用の行ずれ（#964 分を含む 58 件）を
+  `check-citations.mjs --fix` と手作業（中身が変わった 4 箇所 × ja / en）で直し、`docs:check` 0 failed
+
 ### fix(extension): keep play() update lines that carry object elements in the log (Oct 5, 2026)
 
 **Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#964](https://github.com/signalcompose/orbitscore/issues/964)

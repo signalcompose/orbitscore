@@ -42,8 +42,8 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
   const record = (name: string, args: unknown[]) => calls.push({ name, args })
 
   const defaults: OrbitScoreToolHandlers = {
-    evaluate: (code) => {
-      record('evaluate', [code])
+    evaluate: (code, options) => {
+      record('evaluate', [code, options])
       return { ok: true }
     },
     startEngine: (options) => {
@@ -546,7 +546,63 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
 
     const call = calls.find((c) => c.name === 'evaluate')
     expect(call?.args[0]).toBe(code)
+    expect(call?.args[1]).toEqual({ documentPath: undefined })
   })
+
+  // #966: document_path は任意の引数として handler へそのまま渡り、結果には
+  // 実際に使った基準ディレクトリが載る（誤った基準を遠い SAMPLE_NOT_FOUND ではなく
+  // その場で気づけるように）。
+  it('evaluate_orbitscore: document_path is optional and passed through to the handler', async () => {
+    const { handlers, calls } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const list = (await client.toolsList()).json as JsonRpcOk<{
+      tools: Array<{ name: string; inputSchema?: Record<string, unknown> }>
+    }>
+    const schema = list.result.tools.find((t) => t.name === 'evaluate_orbitscore')!.inputSchema as {
+      required?: string[]
+      properties?: Record<string, { type?: string }>
+    }
+    expect(schema.properties?.document_path?.type).toBe('string')
+    expect(schema.required ?? []).not.toContain('document_path')
+
+    await client.toolsCall('evaluate_orbitscore', {
+      code: 'global.tempo(120)',
+      document_path: 'piece/piece.orbs',
+    })
+    const call = calls.find((c) => c.name === 'evaluate')
+    expect(call?.args).toEqual(['global.tempo(120)', { documentPath: 'piece/piece.orbs' }])
+  })
+
+  it.each([
+    [{ ok: true, documentDirectory: '/ws/piece' }, false, 'ok (documentDirectory: /ws/piece)'],
+    [{ ok: true, documentDirectory: null }, false, 'ok (documentDirectory: none)'],
+    [
+      { ok: false, error: 'evaluation failed: [runtime] x', documentDirectory: '/ws/piece' },
+      true,
+      'error: evaluation failed: [runtime] x (documentDirectory: /ws/piece)',
+    ],
+    [
+      { ok: false, error: 'engine is not running — start the engine first' },
+      true,
+      'error: engine is not running — start the engine first',
+    ],
+  ] as const)(
+    'evaluate_orbitscore names the base directory it used: %j',
+    async (result, isError, text) => {
+      const { handlers } = createStubHandlers({ evaluate: () => result })
+      handle = await startTestServer(handlers)
+      const client = new McpTestClient(handle.port)
+      await client.connect()
+
+      const res = await client.toolsCall('evaluate_orbitscore', { code: 'x' })
+      const body = res.json as JsonRpcOk<ToolCallResult>
+      expect(Boolean(body.result.isError)).toBe(isError)
+      expect(body.result.content[0]?.text).toBe(text)
+    },
+  )
 
   it('keeps the compatible sequence field and passes a prefixed receiver through unchanged', async () => {
     const saved = {

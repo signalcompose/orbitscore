@@ -3138,6 +3138,90 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #966: evaluate_orbitscore always sent the first workspace folder as the base directory,
+  // so a file import written relative to a .orbs in a SUBFOLDER resolved against the
+  // workspace root — while run_selection on the same code worked. Now the base is
+  // document_path → active OrbitScore editor → workspace folder (core spec IM.6), and the
+  // result names the base it used. This also gives file import (#630) its first real-app
+  // coverage through evaluate_orbitscore.
+  it.skipIf(!appAvailable)(
+    'resolves a file import from evaluate_orbitscore against the .orbs directory (#966)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      // The workspace folder is tmpRoot, so a subfolder is exactly the #966 layout.
+      const subDir = path.join(tmpRoot, 'sub966')
+      fs.mkdirSync(subDir, { recursive: true })
+      const libPath = path.join(subDir, 'lib966.orbs')
+      const entryPath = path.join(subDir, 'entry966.orbs')
+      const rootPath = path.join(tmpRoot, 'root966.orbs')
+      fs.writeFileSync(libPath, 'var global = init GLOBAL\nvar lib966 = init global.seq\n')
+      const entryCode = [
+        'import { lib966 } from "./lib966.orbs"',
+        'var global = init GLOBAL',
+        'lib966.play(1, 0)',
+      ].join('\n')
+      fs.writeFileSync(entryPath, entryCode + '\n')
+      fs.writeFileSync(rootPath, 'var global = init GLOBAL\n')
+
+      const usedBase = (text: string): string | undefined => {
+        const match = /\(documentDirectory: (.+)\)$/.exec(text)
+        return match ? fs.realpathSync(match[1]) : undefined
+      }
+      const realSubDir = fs.realpathSync(subDir)
+      const realRoot = fs.realpathSync(tmpRoot)
+
+      const start = await activeClient.call('start_engine')
+      expect(start.isError, start.text).toBe(false)
+      try {
+        await waitForEngine(true, 15_000, '#966 engine running')
+
+        // 2. The active OrbitScore editor (in the subfolder) is the base.
+        const openedEntry = await activeClient.call('open_file', { path: entryPath })
+        expect(openedEntry.isError, openedEntry.text).toBe(false)
+        const viaEditor = await activeClient.call('evaluate_orbitscore', { code: entryCode })
+        expect(viaEditor.isError, viaEditor.text).toBe(false)
+        expect(usedBase(viaEditor.text), viaEditor.text).toBe(realSubDir)
+
+        // With a root-level file in front, the same code resolves against the root and
+        // the import is not found — the failure names the base, so it is diagnosable.
+        const openedRoot = await activeClient.call('open_file', { path: rootPath })
+        expect(openedRoot.isError, openedRoot.text).toBe(false)
+        const viaRootEditor = await activeClient.call('evaluate_orbitscore', { code: entryCode })
+        expect(viaRootEditor.isError, viaRootEditor.text).toBe(true)
+        expect(usedBase(viaRootEditor.text), viaRootEditor.text).toBe(realRoot)
+
+        // 1. document_path wins over whatever tab is in front — no open_file needed.
+        const beforeExplicit = (await activeClient.call('get_log', { lines: 500 })).text
+        const viaPath = await activeClient.call('evaluate_orbitscore', {
+          code: entryCode,
+          document_path: entryPath,
+        })
+        expect(viaPath.isError, viaPath.text).toBe(false)
+        expect(usedBase(viaPath.text), viaPath.text).toBe(realSubDir)
+        const editorState = JSON.parse((await activeClient.call('get_editor_state')).text) as {
+          path: string | null
+        }
+        expect(
+          editorState.path?.endsWith('root966.orbs'),
+          'document_path must not switch tabs',
+        ).toBe(true)
+        expect(
+          newErrorLines(beforeExplicit, (await activeClient.call('get_log', { lines: 500 })).text),
+          '#966 evaluation with document_path must add no ERROR lines',
+        ).toEqual([])
+      } finally {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stop = await activeClient.call('stop_engine')
+        expect(stop.isError, stop.text).toBe(false)
+        await waitForEngine(false, 15_000, '#966 engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
   // #654: the live playhead (#390) was wired only into the audio backend, so
   // `instrument()` sequences never moved the highlight — in the 840 piece only
   // the one `audio()` layer stepped while six Kontakt layers sat frozen.

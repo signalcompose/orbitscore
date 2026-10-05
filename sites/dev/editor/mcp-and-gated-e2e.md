@@ -199,7 +199,7 @@ export function buildMcpServerUrl(port: number): string {
 `get_diagnostics` の 1 件はこの形です。`code` は #883 で足された optional フィールドで、`vscode.Diagnostic.code` が文字列か数値のときだけ載ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:98-104
+// packages/vscode-extension/src/mcp-types.ts:107-113
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -218,7 +218,7 @@ export interface DiagnosticEntry {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:16-33
+// packages/vscode-extension/src/mcp-tools-engine.ts:31-63
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -229,12 +229,27 @@ export interface DiagnosticEntry {
         'first (via the Start Engine command). Waits for the engine to finish evaluating ' +
         'the submitted code and reports the result: ok only when the engine raised no parse ' +
         'or runtime diagnostics. A failure lists the diagnostics, so you do NOT need to poll ' +
-        'get_log to find out whether your score was accepted.',
-      inputSchema: { code: z.string().describe('OrbitScore source to evaluate') },
+        'get_log to find out whether your score was accepted. Relative paths (import, ' +
+        'audio(), plugin state files) resolve against the directory of document_path if ' +
+        'given, else the active OrbitScore editor, else the first workspace folder; the ' +
+        'result names the directory that was used. Pass document_path when the code belongs ' +
+        'to a file that may not be the active editor (e.g. while a person is performing in ' +
+        'another tab) — it avoids switching their editor with open_file.',
+      inputSchema: {
+        code: z.string().describe('OrbitScore source to evaluate'),
+        document_path: z
+          .string()
+          .describe(
+            'The .orbs file this code belongs to (absolute or workspace-relative). Its ' +
+              'directory becomes the base for relative paths. Must be an existing file.',
+          )
+          .optional(),
+      },
     },
     async (args) => {
       const code = typeof args.code === 'string' ? args.code : ''
-      return toToolResult(await handlers.evaluate(code))
+      const documentPath = typeof args.document_path === 'string' ? args.document_path : undefined
+      return evaluateToolResult(await handlers.evaluate(code, { documentPath }))
     },
   )
 ```
@@ -242,8 +257,11 @@ export interface DiagnosticEntry {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:72-75
-async function evaluateForAgent(code: string): Promise<EvaluateResult> {
+// packages/vscode-extension/src/agent-handlers.ts:74-80
+async function evaluateForAgent(
+  code: string,
+  options?: { documentPath?: string },
+): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
@@ -267,7 +285,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:248-256
+// packages/vscode-extension/src/engine-handlers.ts:254-262
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -294,7 +312,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 `{"engineState"` の分岐が `{"evalMark"` の隣にあるのは偶然ではありません。#661 で `get_engine_state` は「拡張のプロセスが生きているか」だけを答えるツールから、**daemon が実際にどのデバイスへ音を出しているか**を答えるツールになりました。返り値の型がそのまま変化を語っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:27-34
+// packages/vscode-extension/src/mcp-types.ts:36-43
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -334,7 +352,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:202-213
+// packages/vscode-extension/src/agent-handlers.ts:226-237
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -691,7 +709,7 @@ async function killHarnessInstances(): Promise<void> {
 `killHarnessInstances()` は teardown 専用の関数ではありません。`launchIsolatedOrbitStudio()` が **冒頭で** これを呼ぶので、自前のアプリを立てるテストは「走り出した瞬間に、そのとき生きているハーネス由来の VS Code をすべて落とす」という副作用を持ちます。gated spec の大半は `describe` のセットアップが 1 回だけ起動した**共有セッション**に相乗りしているので、自前アプリのテストをその並びの途中に置くと、後ろに残った共有セッションのテストは接続先を失います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:6980-6983
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7170-7173
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -1391,7 +1409,7 @@ export function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3055-3066
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3245-3256
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1407,13 +1425,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3074-3075
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3264-3265
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3131-3133
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3321-3323
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

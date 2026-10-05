@@ -245,7 +245,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 
 `flashLines()` でエディタの実行行をフラッシュ (点滅) させます。MCP の `run_selection` 経由で画面外の行が実行される場合に備えて、flash の前に `revealRange` で範囲を表示域に入れます。
 
-MCP の `evaluate_orbitscore` も同じ `writeCodeToEngine()` を呼びますが、`documentDir` には (アクティブエディタが無いので) ワークスペースの先頭フォルダを渡します (extension.ts:3040-3047)。
+MCP の `evaluate_orbitscore` も同じ `writeCodeToEngine()` を呼びます。`documentDir` は、引数 `document_path` のファイルのディレクトリ → アクティブな OrbitScore エディタのディレクトリ → ワークスペースの先頭フォルダ、の順で決まり、使った基準は結果に返ります (#966・core spec IM.6・`packages/vscode-extension/src/evaluate-document-directory.ts`)。以前は常にワークスペースの先頭フォルダを渡していたため、`.orbs` がサブフォルダにあると import や `audio()` の相対パスが `run_selection` とずれていました。
 
 ## エンジン側: REPL の FIFO キューとバッファ
 
