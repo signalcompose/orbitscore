@@ -7143,6 +7143,39 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #974: a chord definition could not even parse `r1.r(p)` (or `~` / `@v` / `^r` on a name)
+  // while the same voice worked in play(). A one-voice chord variable keeps the score's
+  // pitch oracle unchanged: every slot must be C4 or G4, and both must appear.
+  it.skipIf(!appAvailable)(
+    '#974 a chord variable holding r1.r(1) emits both C4 and G4 across onset-tracked capture windows',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const receiver = 'chordRandom974'
+      const result = await runScore(
+        session,
+        {
+          slug: '974-chord-random-voice',
+          lines: randomPitchScore(
+            receiver,
+            session.catalog.clapSynthName,
+            new Array(RANDOM_PITCH_NOTE_COUNT).fill('c974').join(', '),
+            ['var two = mode(1, 5)', 'var r1 = random.two', 'var c974 = [r1.r(1)]'],
+          ),
+        },
+        async ({ captureSegment }) => {
+          await captureSegment('random-pitches', 10_000, 0)
+        },
+        { capture: true },
+      )
+      expect(result, '#974 chord random voice capture must be available').toBeDefined()
+      if (!result) throw new Error('#974 chord random voice capture was not produced')
+      expectRandomPitchCapture(result, 'random-pitches', '#974 chord random voice')
+      await expectNoNewErrors(session.client, errorsBefore, '#974 chord random voice')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
   it.skipIf(!appAvailable)(
     '#967 E3 rejects random.nope through evaluate_orbitscore with the mode-source diagnostic',
     async () => {

@@ -709,7 +709,7 @@ async function killHarnessInstances(): Promise<void> {
 `killHarnessInstances()` は teardown 専用の関数ではありません。`launchIsolatedOrbitStudio()` が **冒頭で** これを呼ぶので、自前のアプリを立てるテストは「走り出した瞬間に、そのとき生きているハーネス由来の VS Code をすべて落とす」という副作用を持ちます。gated spec の大半は `describe` のセットアップが 1 回だけ起動した**共有セッション**に相乗りしているので、自前アプリのテストをその並びの途中に置くと、後ろに残った共有セッションのテストは接続先を失います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:7170-7173
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7203-7206
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /

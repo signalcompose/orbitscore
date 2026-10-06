@@ -709,7 +709,7 @@ The pattern must never be widened to an app or process name, it says in more tha
 `killHarnessInstances()` is not only a teardown helper. `launchIsolatedOrbitStudio()` calls it **as its first step**, so any test that launches its own app carries a side effect: the moment it starts running, every harness-owned VS Code instance alive at that point is taken down. Most of the gated spec rides on the **shared session** that the `describe` setup launched once, so putting a self-launching test in the middle of that run leaves the shared-session tests behind it with nothing to connect to.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:7170-7173
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7203-7206
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /

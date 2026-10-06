@@ -38,53 +38,15 @@ import {
   parsePitchModifiers as parsePitchModifiersAt,
   ParserUtils,
 } from './parser-utils'
+import {
+  SCOPE_CHAIN_OPS,
+  VOICING_ARITY,
+  VOICING_OPS,
+  collapseScopedRun,
+  type ScopeChain,
+} from './play-postfix-ops'
 
-/** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
-const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
 type PostfixResult = { value: PlayElement | string; newPos: number; changed: boolean }
-
-/**
- * Pitch-scope chain methods on a group (§3): `.root()`/`.mode()`/`.oct()`/`.hold()`
- * and `.voicelead()`/`.vl()` (§6.3 auto voice-leading, C1). All build a PlayScoped node.
- */
-const SCOPE_CHAIN_OPS = new Set(['root', 'mode', 'oct', 'hold', 'voicelead', 'vl'])
-
-/** The accumulated pitch-scope chain on a group (§3): the result of {@link ExpressionParser.parseScopeChain}. */
-type ScopeChain = {
-  root?: ScopeRoot
-  mode?: ScopeMode
-  oct?: number
-  hold?: boolean
-  voicelead?: boolean
-}
-
-/** Per-op `[min, max]` argument arity (§12.3): drop ≥1, invert exactly 1, the rest 0. */
-const VOICING_ARITY: Record<string, [number, number]> = {
-  drop: [1, Infinity],
-  invert: [1, 1],
-  open: [0, 0],
-  close: [0, 0],
-  shell: [0, 0],
-  rootless: [0, 0],
-}
-
-/**
- * If the last element of `list` is a scope chain (PlayScoped) and there are
- * preceding sibling groups since `runStart`, collapse the juxtaposition run
- * into its `groups`, so `(A)(B).root(X)` shares one scope (§3). No-op otherwise
- * — a no-chain run stays as separate siblings. Shared by the nested-level
- * (ExpressionParser) and statement-level (StatementParser) parse loops; both
- * call it AFTER pushing the just-parsed element, so the run rule lives in one
- * place (the pre-/post-push arithmetic is otherwise an easy source of drift).
- */
-export function collapseScopedRun(list: PlayElement[], runStart: number): void {
-  const lastIdx = list.length - 1
-  const last = list[lastIdx]
-  if (last && typeof last === 'object' && last.type === 'scoped' && runStart < lastIdx) {
-    const preceding = list.splice(runStart, lastIdx - runStart)
-    last.groups = [...preceding, ...last.groups]
-  }
-}
 
 /**
  * Expression parser for audio DSL
@@ -156,7 +118,10 @@ export class ExpressionParser {
   }
 
   /** Parse a generic value expression used by rack arrays and rack-aware method arguments. */
-  parseValueExpression(arrayElement = false): { value: ValueExpression; newPos: number } {
+  parseValueExpression(
+    arrayElement = false,
+    stackVoiceNames = false,
+  ): { value: ValueExpression; newPos: number } {
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const token = ParserUtils.current(this.tokens, this.pos)
     if (token.type === 'LBRACKET') return this.parseValueArray()
@@ -165,6 +130,15 @@ export class ExpressionParser {
       return { value: parsed.value, newPos: parsed.newPos }
     }
     if (token.type === 'IDENTIFIER') {
+      if (
+        arrayElement &&
+        stackVoiceNames &&
+        ParserUtils.peek(this.tokens, this.pos).type !== 'LPAREN' &&
+        !ParserUtils.isBooleanLiteral(token.value)
+      ) {
+        const voice = this.parseStackNameVoice(true)
+        return { value: voice as ValueExpression, newPos: this.pos }
+      }
       if (arrayElement && (token.value === 'r' || token.value === 'rr')) {
         const parsed = this.parsePlayIdentifier(true)
         return { value: parsed.value as ValueExpression, newPos: parsed.newPos }
@@ -197,8 +171,32 @@ export class ExpressionParser {
     return { value: parsed.value as ValueExpression, newPos: parsed.newPos }
   }
 
-  /** Parse the context-neutral array used by bindings/effect()/instrument(). */
-  parseValueArray(): { value: ValueArray; newPos: number } {
+  /**
+   * A name voice inside `[ ]` — a reference (or `r` / `rr`) with its modifiers
+   * (`^N` / `^r` / `~` / `@v` / `@g`) and the `.r` / `.r(p)` postfix (§6 / §12).
+   * Shared by play() stacks and chord definitions so both read a name voice the same
+   * way (#974); `playIdentifier` resolves `r` / `rr` as random degrees.
+   */
+  private parseStackNameVoice(playIdentifier: boolean): PlayElement {
+    const parsed = playIdentifier
+      ? this.parsePlayIdentifier(true)
+      : { value: this.parseChordRef(), newPos: this.pos }
+    this.pos = parsed.newPos
+    const post = this.parsePostfix(parsed.value, false, true)
+    this.pos = post.newPos
+    const voice = post.value as PlayElement
+    return voice && typeof voice === 'object' && voice.type === 'random_degree'
+      ? asStackVoice(voice)
+      : voice
+  }
+
+  /**
+   * Parse the context-neutral array used by bindings/effect()/instrument().
+   * `stackVoiceNames` (chord definitions, `var X = [ … ]`): a name element is read as a
+   * `[ ]` voice in play() is, modifiers and `.r(p)` included (§6.2.1「どこでも同じ」・#974).
+   * Off for rack arrays, whose names are never pitch voices.
+   */
+  parseValueArray(stackVoiceNames = false): { value: ValueArray; newPos: number } {
     this.pos = ParserUtils.expect(this.tokens, this.pos, 'LBRACKET').newPos
     const elements: ValueExpression[] = []
     while (
@@ -207,7 +205,7 @@ export class ExpressionParser {
     ) {
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'RBRACKET') break
-      const parsed = this.parseValueExpression(true)
+      const parsed = this.parseValueExpression(true, stackVoiceNames)
       this.pos = parsed.newPos
       elements.push(parsed.value)
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
@@ -1102,18 +1100,7 @@ export class ExpressionParser {
     } else if (cur === 'MINUS') {
       voices.push(this.parseChordRemoval())
     } else if (cur === 'IDENTIFIER') {
-      const parsed = this.playElementContext
-        ? this.parsePlayIdentifier(true)
-        : { value: this.parseChordRef(), newPos: this.pos }
-      this.pos = parsed.newPos
-      const post = this.parsePostfix(parsed.value, false, true)
-      this.pos = post.newPos
-      const voice = post.value as PlayElement
-      voices.push(
-        voice && typeof voice === 'object' && voice.type === 'random_degree'
-          ? asStackVoice(voice)
-          : voice,
-      )
+      voices.push(this.parseStackNameVoice(this.playElementContext))
     } else if (cur === 'ACCIDENTAL') {
       const pitchResult = this.parsePitch()
       this.pos = pitchResult.newPos

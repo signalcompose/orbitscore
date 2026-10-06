@@ -302,7 +302,7 @@ binding, and mixing chord variables and rack variables in one array is an explic
 (`rack.ts:231-249`).
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:223-230
+// packages/engine/src/signal-chain/rack.ts:228-235
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
@@ -350,7 +350,7 @@ recipe, and only then is the receiver's method invoked.
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:252-277
+// packages/engine/src/signal-chain/rack.ts:257-282
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,

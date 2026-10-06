@@ -1192,6 +1192,10 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
 
 - `r` works the same at the top of `play()`, inside `( )` / `{ }`, and as a `[ ]` voice. Re-rolled per
   event per cycle like `Xr` / `^r`; no seed. `^N` is sticky for both `r^1` and `r1^1`.
+- A chord definition `var c = [ … ]` reads its voices the same way, name modifiers included
+  (`r1.r(0.5)` / `r1~0.5` / `r1@v100` / `r1^r`; `.r` or a random-only modifier on a chord / pattern
+  is an evaluation error, as in `play()`). Through 4.3.0 these were parse errors only inside a
+  definition (#974).
 - `random.<mode var>` only (no `random.mode(...)`; the mode var must be defined). The source's lattice wins
   over the scope's mode; the root always comes from the note's scope. Duplicates in the mode = weights.
 - `r` / `rr` are reserved at pitch positions (`var r` / `var rr` are errors); `r1` is a name unless `%`

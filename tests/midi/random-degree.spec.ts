@@ -493,6 +493,58 @@ describe('#967 random-degree dispatch (statistical)', () => {
     )
   })
 
+  // #974: a chord definition used to drop `NAME.r(p)` with a "flat degree stack" warning,
+  // while the same voice written in play() sounded. Both paths now share one rule.
+  it('a chord variable keeps a r1.r(p) voice with its probability (#974)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const global = await evaluate(
+      'var two = mode(1, 5)\nvar r1 = random.two\nvar c = [r1.r(0.5), 3]',
+    )
+    expect(global.getChordVoices('c')).toEqual([
+      expect.objectContaining({ kind: 'random', random: 0.5, lattice: [0, 7], from: 'two' }),
+      expect.objectContaining({ degree: 3, alteration: 0 }),
+    ])
+    expect(warn.mock.calls.flat().join('\n')).not.toMatch(/voice skipped/)
+  })
+
+  it('a chord variable with r1.r(1) sounds the same as the stack written in play() (#974)', async () => {
+    const prelude = 'var two = mode(1)\nvar r1 = random.two'
+    const direct = await playOnce('[r1.r(1), 3]', prelude)
+    const viaChord = await playOnce('c', `${prelude}\nvar c = [r1.r(1), 3]`)
+    expect(direct.capture.ons.map(({ note }) => note)).toEqual([60, 64])
+    expect(viaChord.capture.ons.map(({ note }) => note)).toEqual([60, 64])
+  })
+
+  it('a chord definition reads every random-source modifier a play() stack voice reads (#974)', async () => {
+    const global = await evaluate(
+      'var two = mode(1, 5)\nvar r1 = random.two\nvar c = [r1~0.5@v100, r1^r, r.r(0.25), 3]',
+    )
+    expect(global.getChordVoices('c')).toEqual([
+      expect.objectContaining({ kind: 'random', from: 'two', detune: 0.5, velocity: 100 }),
+      expect.objectContaining({ kind: 'random', from: 'two', randomOctave: true }),
+      expect.objectContaining({ kind: 'random', random: 0.25 }),
+      expect.objectContaining({ degree: 3 }),
+    ])
+  })
+
+  it('rejects random-only modifiers on a chord ref inside a chord definition, as play() does (#974)', async () => {
+    for (const voice of ['m7~0.5', 'm7^r', 'm7@v100']) {
+      await expect(evaluate(`var m7 = [1, 3, 5, 7]\nvar c = [${voice}, 9]`)).rejects.toThrow(
+        /"m7" は chord です。r \/ \^r \/ ~ \/ @v \/ @g はランダム音源と度数にだけ付けられます/,
+      )
+    }
+  })
+
+  it.each(['chord', 'pattern'])(
+    'rejects .r on a %s-bound voice inside a chord definition, as play() does (#974)',
+    async (kind) => {
+      const prelude = kind === 'chord' ? 'var m7 = [1, 3, 5, 7]' : 'var m7 = (1, 2)'
+      await expect(evaluate(`${prelude}\nvar c = [m7.r, 9]`)).rejects.toThrow(
+        `"m7" は ${kind} です。[ ] の声部では .r を付けられません（和音全体の間引きは [ … ].r で書きます）`,
+      )
+    },
+  )
+
   it('random.two chooses both C and G', async () => {
     expectSubsetAndVariety(
       await sample('r1', 'var two = mode(1, 5)\nvar r1 = random.two'),
