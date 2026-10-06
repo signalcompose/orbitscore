@@ -3,6 +3,8 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { gitLsFiles } from './file-size-targets'
+
 /**
  * root で skip するテストの件数のラチェット（#684・設計 668 §13「併せて」）。
  *
@@ -14,28 +16,23 @@ import { describe, expect, it } from 'vitest'
  */
 const BASELINE = 3
 const CALL = 'skipWhenDacIsBypassed('
-const testsRoot = path.resolve(__dirname, '..')
-
-function specFiles(dir: string): string[] {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : specFiles(full)
-    return entry.name.endsWith('.spec.ts') ? [full] : []
-  })
-}
+const repoRoot = path.resolve(__dirname, '../..')
 
 describe('root-skip ratchet (#684)', () => {
   it(`calls skipWhenDacIsBypassed() at most ${BASELINE} times across tests/`, () => {
-    const sites = specFiles(testsRoot).flatMap((file) =>
-      fs
-        .readFileSync(file, 'utf8')
-        .split('\n')
-        .map((line, i) => ({ line, at: `${path.relative(testsRoot, file)}:${i + 1}` }))
-        .filter(({ line }) => line.includes(CALL) && !line.trim().startsWith('*'))
-        .map(({ at }) => at),
-    )
+    // 走査対象は隣のラチェットと同じく git の index（`file-size-targets.ts`）。
     // このファイル自身は CALL を文字列定数として持つだけで、呼び出していない。
-    const calls = sites.filter((at) => !at.startsWith('repo/privileges-skip-ratchet.spec.ts'))
+    const calls = gitLsFiles(repoRoot, ':(glob)tests/**/*.spec.ts')
+      .filter((file) => file !== 'tests/repo/privileges-skip-ratchet.spec.ts')
+      .flatMap((file) => {
+        const source = fs.readFileSync(path.join(repoRoot, file), 'utf8')
+        if (!source.includes(CALL)) return []
+        return source
+          .split('\n')
+          .map((line, i) => ({ line, at: `${file}:${i + 1}` }))
+          .filter(({ line }) => line.includes(CALL) && !line.trim().startsWith('*'))
+          .map(({ at }) => at)
+      })
     expect(
       calls.length,
       `skipWhenDacIsBypassed() call sites grew beyond ${BASELINE}: ${calls.join(', ')}`,

@@ -170,6 +170,17 @@ function resolveCall(call: ValueCall, env: RackBindingEnvironment): RackRecipe {
   }
 }
 
+function hasNoteModifiers(ref: PlayChordRef): boolean {
+  return (
+    ref.detune !== undefined ||
+    ref.random !== undefined ||
+    ref.randomOctave !== undefined ||
+    ref.velocity !== undefined ||
+    ref.velocityDelta !== undefined ||
+    ref.articulation !== undefined
+  )
+}
+
 export function resolveRackValue(value: ValueExpression, env: RackBindingEnvironment): RackRecipe {
   if (typeof value === 'string') {
     return [{ kind: 'catalog', spec: value, enabled: true }]
@@ -177,6 +188,13 @@ export function resolveRackValue(value: ValueExpression, env: RackBindingEnviron
   if (isValueRef(value)) {
     if (value.octaveShift !== 0) {
       throw new Error(`rack variable "${value.name}" cannot use a chord octave shift (^N).`)
+    }
+    // `var X = [ … ]` parses names as pitch voices (#974) before the binding is known to be
+    // a rack, so a rack ref can arrive carrying note modifiers. Reject them, never drop them.
+    if (value.type === 'chord_ref' && hasNoteModifiers(value)) {
+      throw new Error(
+        `rack variable "${value.name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`,
+      )
     }
     const rack = env.getRack(value.name)
     if (rack) return cloneRack(rack)

@@ -212,7 +212,7 @@ function resolveStandardCall(call: ValueCall): StandardRackRecipe {
 配列の要素は `resolveRackValue` が再帰的に平坦化します。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:173-203
+// packages/engine/src/signal-chain/rack.ts:184-221
 export function resolveRackValue(value: ValueExpression, env: RackBindingEnvironment): RackRecipe {
   if (typeof value === 'string') {
     return [{ kind: 'catalog', spec: value, enabled: true }]
@@ -220,6 +220,13 @@ export function resolveRackValue(value: ValueExpression, env: RackBindingEnviron
   if (isValueRef(value)) {
     if (value.octaveShift !== 0) {
       throw new Error(`rack variable "${value.name}" cannot use a chord octave shift (^N).`)
+    }
+    // `var X = [ … ]` parses names as pitch voices (#974) before the binding is known to be
+    // a rack, so a rack ref can arrive carrying note modifiers. Reject them, never drop them.
+    if (value.type === 'chord_ref' && hasNoteModifiers(value)) {
+      throw new Error(
+        `rack variable "${value.name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`,
+      )
     }
     const rack = env.getRack(value.name)
     if (rack) return cloneRack(rack)
@@ -291,7 +298,7 @@ export function processArrayBinding(statement: ChordBinding, state: InterpreterS
 1 つの配列に混ざっていれば明示エラーにします（`rack.ts:231-249`）。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:228-235
+// packages/engine/src/signal-chain/rack.ts:246-253
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
@@ -339,7 +346,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:257-282
+// packages/engine/src/signal-chain/rack.ts:275-300
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,
@@ -1477,7 +1484,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5409-5416
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5408-5415
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

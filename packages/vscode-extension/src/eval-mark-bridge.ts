@@ -22,7 +22,7 @@
  * 別途「塞いでいる行」を名指しして報告する。
  */
 
-import { CorrelatedLineBridge } from './correlated-line-bridge'
+import { CorrelatedLineBridge, type WriteLine } from './correlated-line-bridge'
 
 export interface EvalDiagnostic {
   kind: 'parse' | 'runtime'
@@ -77,19 +77,15 @@ export class EvalMarkBridge extends CorrelatedLineBridge<EvalMarkResult> {
     })
   }
 
-  send(
-    writeLine: (line: string, onError: (error: Error) => void) => boolean | void,
-    requestId: string,
-    timeoutMs = 120_000,
-  ): Promise<EvalMarkResult> {
-    return this.request(
-      writeLine,
+  send(writeLine: WriteLine, requestId: string, timeoutMs = 120_000): Promise<EvalMarkResult> {
+    return this.request(writeLine, {
       requestId,
-      { requestId },
-      undefined,
+      payload: { requestId },
+      context: undefined,
       timeoutMs,
-      `timed out waiting for engine response to //#evalMark — the evaluation queue may ` +
+      timeoutError:
+        `timed out waiting for engine response to //#evalMark — the evaluation queue may ` +
         `be blocked (see the log for the blocking line)`,
-    )
+    })
   }
 }

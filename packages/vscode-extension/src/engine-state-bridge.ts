@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 
-import { CorrelatedLineBridge } from './correlated-line-bridge'
+import { CorrelatedLineBridge, type WriteLine } from './correlated-line-bridge'
 import type { EngineState } from './mcp-server'
 
 export type EngineStatusBridgeResult =
@@ -50,19 +50,15 @@ export class EngineStateBridge extends CorrelatedLineBridge<EngineStatusBridgeRe
     })
   }
 
-  send(
-    writeLine: (line: string, onError: (error: Error) => void) => boolean | void,
-    timeoutMs = 10_000,
-  ): Promise<EngineStatusBridgeResult> {
+  send(writeLine: WriteLine, timeoutMs = 10_000): Promise<EngineStatusBridgeResult> {
     const requestId = randomUUID()
-    return this.request(
-      writeLine,
+    return this.request(writeLine, {
       requestId,
-      { requestId },
-      undefined,
+      payload: { requestId },
+      context: undefined,
       timeoutMs,
-      'timed out waiting for engine response to //#getEngineState',
-    )
+      timeoutError: 'timed out waiting for engine response to //#getEngineState',
+    })
   }
 }
 

@@ -54,6 +54,8 @@ type PostfixResult = { value: PlayElement | string; newPos: number; changed: boo
 export class ExpressionParser {
   private tokens: AudioToken[]
   private pos: number
+  /** Set by `parseValueArray(true)`: name elements of `var X = [ … ]` read as stack voices. */
+  private stackVoiceNames = false
 
   constructor(
     tokens: AudioToken[],
@@ -118,10 +120,7 @@ export class ExpressionParser {
   }
 
   /** Parse a generic value expression used by rack arrays and rack-aware method arguments. */
-  parseValueExpression(
-    arrayElement = false,
-    stackVoiceNames = false,
-  ): { value: ValueExpression; newPos: number } {
+  parseValueExpression(arrayElement = false): { value: ValueExpression; newPos: number } {
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const token = ParserUtils.current(this.tokens, this.pos)
     if (token.type === 'LBRACKET') return this.parseValueArray()
@@ -131,8 +130,7 @@ export class ExpressionParser {
     }
     if (token.type === 'IDENTIFIER') {
       if (
-        arrayElement &&
-        stackVoiceNames &&
+        this.stackVoiceNames &&
         ParserUtils.peek(this.tokens, this.pos).type !== 'LPAREN' &&
         !ParserUtils.isBooleanLiteral(token.value)
       ) {
@@ -192,11 +190,14 @@ export class ExpressionParser {
 
   /**
    * Parse the context-neutral array used by bindings/effect()/instrument().
-   * `stackVoiceNames` (chord definitions, `var X = [ … ]`): a name element is read as a
-   * `[ ]` voice in play() is, modifiers and `.r(p)` included (§6.2.1「どこでも同じ」・#974).
-   * Off for rack arrays, whose names are never pitch voices.
+   * `stackVoiceNames` (a `var X = [ … ]` binding): from here on — nested arrays included —
+   * a name element is read as a `[ ]` voice in play() is, modifiers and `.r(p)` included
+   * (§6.2.1「どこでも同じ」・#974). Whether the binding is a chord or a rack is decided at
+   * runtime (`classifyArrayBinding`), so a rack binding gets the same superset and its
+   * resolver rejects the voice modifiers. Off for effect() / instrument() arguments.
    */
   parseValueArray(stackVoiceNames = false): { value: ValueArray; newPos: number } {
+    if (stackVoiceNames) this.stackVoiceNames = true
     this.pos = ParserUtils.expect(this.tokens, this.pos, 'LBRACKET').newPos
     const elements: ValueExpression[] = []
     while (
@@ -205,7 +206,7 @@ export class ExpressionParser {
     ) {
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'RBRACKET') break
-      const parsed = this.parseValueExpression(true, stackVoiceNames)
+      const parsed = this.parseValueExpression(true)
       this.pos = parsed.newPos
       elements.push(parsed.value)
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)

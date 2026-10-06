@@ -185,6 +185,18 @@ describe('#628 generic array parsing and three-category rack resolution', () => 
     expect(applyEffectChain).toHaveBeenCalledTimes(0)
   })
 
+  // #974: `var X = [ … ]` now parses names as pitch voices before the binding is known to be
+  // a rack, so note modifiers can reach a rack ref. They must be rejected, not dropped.
+  it.each(['eq~0.5', 'eq@v+3', 'eq^r', 'eq@g30'])(
+    'rejects note modifiers on a rack variable inside a rack array (%s)',
+    (element) => {
+      const racks = { eq: [{ kind: 'catalog', spec: 'EQ', enabled: true }] }
+      expect(() => classifyArrayBinding(value(`[${element}]`), env({ racks }))).toThrow(
+        'rack variable "eq" cannot take note modifiers',
+      )
+    },
+  )
+
   it('flattens nested serial arrays and resolves rack variables by copied value', () => {
     const rackRecipe = [{ kind: 'catalog' as const, spec: '/A.clap', enabled: true }]
     expect(

@@ -877,14 +877,8 @@ export class DaemonClient extends EventEmitter {
         stderrChunks.push(text)
         return
       }
-      // 起動後は蓄積せず、行単位で engine のログへ転送する。INFO/DEBUG/TRACE の
-      // tracing 行まで stderr に流すと拡張側で `ERROR:` として記録されるため
-      // （isDaemonNonErrorTracingLine の docstring 参照）、level で振り分ける。
-      //
-      // 🔴 部分行をバッファする: chunk 境界は行境界と一致しない。素朴に split すると
-      // 行の後半が独立した「行」になり、level トークンを持たないので **成功行の続きが
-      // ERROR として記録される**（#618 の E2E をカタログ経路へ寄せた際、行数が増えて
-      // 境界がずれたことで実際に発生した）。改行が来るまで持ち越す。
+      // 起動後は蓄積せず、行に組み直して level で振り分け、engine のログへ転送する
+      // （部分行の持ち越し・level の判定・終端の flush の理由は daemon-stderr-lines.ts）。
       routeStderrLine.push(text)
     }
     child.stderr?.on('data', onStderrData)

@@ -1123,7 +1123,7 @@ struct UiEventHubCore {
 待っている要求の `action` との突き合わせだけです。
 
 ```typescript
-// packages/vscode-extension/src/correlated-line-bridge.ts:75-84
+// packages/vscode-extension/src/correlated-line-bridge.ts:83-92
       const fail = (error: Error): void => this.fail(requestId, error.message)
       try {
         const written = writeLine(`${this.spec.metaCommand} ${JSON.stringify(payload)}\n`, fail)
@@ -1139,7 +1139,7 @@ struct UiEventHubCore {
 `engine-handlers.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:250-254
+// packages/vscode-extension/src/engine-handlers.ts:262-266
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1169,7 +1169,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2545-2567
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

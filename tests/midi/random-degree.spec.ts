@@ -527,6 +527,15 @@ describe('#967 random-degree dispatch (statistical)', () => {
     ])
   })
 
+  it('reads name modifiers in a nested [ ] of a chord definition too (#974)', () => {
+    const statement = parseAudioDSL('var c = [[r1~0.5, 3], 5]').statements[0] as any
+    expect(statement.voices[0].elements[0]).toMatchObject({
+      type: 'chord_ref',
+      name: 'r1',
+      detune: 0.5,
+    })
+  })
+
   it('rejects random-only modifiers on a chord ref inside a chord definition, as play() does (#974)', async () => {
     for (const voice of ['m7~0.5', 'm7^r', 'm7@v100']) {
       await expect(evaluate(`var m7 = [1, 3, 5, 7]\nvar c = [${voice}, 9]`)).rejects.toThrow(

@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor: apply the /simplify findings on this branch (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **対象**: `19910c1...HEAD` のコード差分（#964 / #966 / #684 / #974 / #777 / #757）
+
+`/simplify`（再利用・簡素化・効率・修正の深さの 4 観点を並行）の指摘を集約して直した。
+
+- **#974 の続き（修正の深さ）**: `stackVoiceNames` を引数で 2 段渡していたため、入れ子の `[ ]`（`var c = [[r1~0.5, 3], 5]`）では
+  パースエラーのままだった。`ExpressionParser` の状態に移し、入れ子でも同じ読み方にした（引数の二重化も解消）。
+  あわせて、`var X = [ … ]` はラックか和音かが実行時に決まるので、**ラック参照に付いた音符の修飾子を黙って捨てずにエラー**にした（`rack.ts` の `resolveRackValue`）。テスト 5 件
+- **stdout の行バッファを 1 本に**: bridge 振り分けとログ転写が同じ文字列を別々の `createLinePrefixer` で二重に分割していた。
+  1 本の `stdoutLines` のコールバックでログ行も集め、`transcribeLog` で書く（書く時機と、不正な封筒の警告より後に書く順序は不変）
+- `CorrelatedLineBridge.request()` の位置引数 6 個をオプションオブジェクトに、`WriteLine` 型を共有
+- テスト: `extension-wiring.spec.ts` の stdout 転写テスト 5 件の共通準備を `stdoutHarness()` に。
+  gated E2E は `get_log` の窓を `LOG_WINDOW_LINES` で読む `readEngineLog()`（`tests/e2e/helpers/engine-log.ts`）を新設して新規テストで使用。
+  root-skip のラチェットは隣のラチェットと同じ `git ls-files`（`file-size-targets.ts` の `gitLsFiles` を export）で列挙し、呼び出しの無いファイルは分割しない
+- 細部: `tests/helpers/privileges.ts` の未使用 export を非公開に、`EvaluateResult` の `documentDirectory` を交差型で 1 回だけ宣言、
+  `daemon-client.ts` の `daemon-stderr-lines.ts` と重複するコメントを 1 行の参照に
+- `parse-expression.ts` の baseline を 982 → 980 に下げた。dev サイトの引用・散文（ja / en）を更新
+- **見送った指摘**:
+  - `engine-handlers.ts` の SC 時代の部分一致フィルタの削除（#964 本文の案 A）: 拡張は凍結中で、実機 gated の ERROR 件数を確かめられないため。別 Issue 候補
+  - 既存 gated テスト 2 本の `runDslLines` と新規 `runLines` の共通化、`start_engine`〜`stop_engine` の `withEngine` 化: 実機で回せない既存テストに手を入れることになるため
+  - 音声エンジンを mock したインタプリタ起動の共通化（既存 6 か所）、偽プロセスの stdin 記録の共通化: 差分の外に広がるため
+  - `run-selection.ts` と `evaluate-document-directory.ts` の基準の共通化: 見た目だけの整理で、未保存エディタの扱いが変わる
+  - `document_path` の `fs.statSync` を非同期に: 1 回あたり約 10 µs で、決定関数の同期の形を崩すほどの価値がない
+  - 改行の無い長い行で `createLinePrefixer` が分割を繰り返す件: 既存の部品の性質で、今回の差分では悪化していない（バッファを 1 本にしたので回数は減った）
+- 確認: `npm test` 2699 passed / 88 skipped / 0 failed（root）・lint・`docs:check` 0 failed
+
 ### refactor(extension): one request-correlation skeleton for the four requestId bridges (Oct 6, 2026)
 
 **Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#757](https://github.com/signalcompose/orbitscore/issues/757)

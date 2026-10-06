@@ -432,7 +432,7 @@ The reason for dropping it is "**undo at your own exit what you added yourself**
 The general rule "do not hand host-derived variables to third parties" is deliberately *not* the justification. If it were, `VSCODE_*` and the other `ELECTRON_*` vars riding on the extension host's env would have to be dropped as well, and this function does not go that far.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:922-936
+// packages/engine/src/audio/rust-engine/daemon-client.ts:916-930
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
