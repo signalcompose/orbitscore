@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(vst3): save the controller state alongside the component state (#982) (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/beautiful-cori-xy9bfk`（セッション指定のブランチ。命名規則 `<issue>-*` から外れる）/ **Issue**: [#982](https://github.com/signalcompose/orbitscore/issues/982)（Epic [#980](https://github.com/signalcompose/orbitscore/issues/980) 束 2）
+
+VST3 の state 保存が `IComponent::getState` だけで、controller 側の state を保存していなかった。
+
+- **refactor（振る舞い不変）**: `.vstpreset` の解析を `orbit-vst3-host/src/host/setup.rs` から新しい crate
+  `rust/crates/orbit-vst3-preset` へ移した。`orbit-vst3-host` は crate 全体が `#![cfg(target_os = "macos")]` で、
+  CI（ubuntu）では空 lib になり解析のテストが 1 本も走っていなかった。移した先は依存ゼロの純関数 crate なので
+  `cargo test --workspace` で走る。`orbit-vst3-host` 側は `parse_vstpreset` を `Vst3HostError::State` へ写す
+  薄いラッパにした。エラー文言（`malformed .vstpreset: …`）は移動前と同じで、それを固定するテストを足した。
+  解析のテスト 4 本は `lib.rs` の `mod tests` から新 crate へそのまま移した
+
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
 > **2026-10-05 追記（main がマージ前に補正）**: 見出しの「`random` 自体も名前として使えなくなった」は実装より強かった（予約語は `r` / `rr` だけで、`random` という変数名は作れる。書けなくなったのは `var X = random.<名前>` をミキサー派生として読ませることだけ）。正本と core spec の見出しを「`random` という名前のミキサーからは派生できなくなった」へ直した。

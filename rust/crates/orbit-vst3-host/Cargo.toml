@@ -24,6 +24,8 @@ vst3 = "0.3"
 orbit-child-ui = { path = "../orbit-child-ui" }
 # #625: 正常系通知の level トークン規約を 1 箇所へ集約するため（循環なし）。
 orbit-child-runtime = { path = "../orbit-child-runtime" }
+# #982: `.vstpreset` の読み書きは全プラットフォームでテストできる純関数 crate に置いた。
+orbit-vst3-preset = { path = "../orbit-vst3-preset" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation-sys = "0.8"

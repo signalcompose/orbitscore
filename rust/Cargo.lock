@@ -1165,6 +1165,7 @@ dependencies = [
  "orbit-child-runtime",
  "orbit-child-ui",
  "orbit-vst3-gain-oracle",
+ "orbit-vst3-preset",
  "orbit-vst3-synth-oracle",
  "vst3",
 ]
@@ -1179,6 +1180,10 @@ dependencies = [
  "orbit-vst3-host",
  "orbit-vst3-synth-oracle",
 ]
+
+[[package]]
+name = "orbit-vst3-preset"
+version = "0.0.1"
 
 [[package]]
 name = "orbit-vst3-synth-oracle"
