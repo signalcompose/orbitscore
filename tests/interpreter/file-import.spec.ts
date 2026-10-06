@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import { InterpreterV2 } from '../../packages/engine/src/interpreter/interpreter-v2'
+import { skipWhenDacIsBypassed } from '../helpers/privileges'
 
 describe('file import — parser (IM.1)', () => {
   it('parses names and path into the fileImports bucket', () => {
@@ -207,7 +208,8 @@ describe('file import — interpreter (IM.2-IM.6)', () => {
     await expect(interpreter.execute(ir)).rejects.toThrow('cannot resolve the base directory')
   })
 
-  it('reports a permission failure as its errno, not as "file not found"', async () => {
+  it('reports a permission failure as its errno, not as "file not found"', async (context) => {
+    skipWhenDacIsBypassed(context)
     write('locked.orbs', `var global = init GLOBAL\n`)
     fs.chmodSync(path.join(dir, 'locked.orbs'), 0o000)
     const entry = write('main.orbs', `import { global } from "./locked.orbs"\n`)

@@ -255,7 +255,7 @@ export async function activate(context: vscode.ExtensionContext) {
         port: mcpPort,
         version: packageJson.version,
         handlers: {
-          evaluate: (code) => evaluateForAgent(code),
+          evaluate: (code, options) => evaluateForAgent(code, options),
           startEngine: (options) => startEngineForAgent(options),
           stopEngine: () => stopEngineForAgent(),
           getEngineState: () => getEngineStateForAgent(),

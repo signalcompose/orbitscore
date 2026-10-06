@@ -291,7 +291,7 @@ export function processArrayBinding(statement: ChordBinding, state: InterpreterS
 1 つの配列に混ざっていれば明示エラーにします（`rack.ts:231-249`）。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:223-230
+// packages/engine/src/signal-chain/rack.ts:228-235
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
@@ -339,7 +339,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:252-277
+// packages/engine/src/signal-chain/rack.ts:257-282
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,
@@ -1477,7 +1477,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5219-5226
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5409-5416
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

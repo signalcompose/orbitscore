@@ -245,7 +245,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 
 `flashLines()` flashes the executed lines in the editor. In case an off-screen line is executed through the MCP `run_selection` tool, `revealRange` brings the range into the viewport before flashing.
 
-The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`, but passes the first workspace folder as `documentDir` (since there is no active editor) (extension.ts:3040-3047).
+The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`. Its `documentDir` is the directory of the `document_path` argument, else the active OrbitScore editor's directory, else the first workspace folder, and the base it used is returned in the result (#966, core spec IM.6, `packages/vscode-extension/src/evaluate-document-directory.ts`). It used to always pass the first workspace folder, so with a `.orbs` in a subfolder, relative paths in `import` and `audio()` resolved differently from `run_selection`.
 
 ## On the Engine Side: the REPL's FIFO Queue and Buffer
 

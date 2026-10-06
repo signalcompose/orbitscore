@@ -175,7 +175,7 @@ On the line `_kick.play(`, `parenBalance = 1`. On `1, 0, 1, 0,` there is no chan
 When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:308-310
+// packages/vscode-extension/src/engine-handlers.ts:314-316
           } else {
             outputChannel?.append(output)
           }
@@ -340,7 +340,7 @@ For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stack
 A human user notices errors via the editor's red squiggles and the Output Channel, but an LLM going through MCP receives only the `ok` of `evaluate_orbitscore`. And the `true` of `writeCodeToEngine()` only means "it reached stdin." #614 added a mechanism that sends `//#evalMark {"requestId":...}` right after the code, and when the engine reaches it in FIFO order, returns the diagnostics accumulated during the preceding evaluation as JSON.
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:91-100
+// packages/vscode-extension/src/agent-handlers.ts:114-123
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -350,13 +350,13 @@ A human user notices errors via the editor's red squiggles and the Output Channe
       }
     })
   }, randomUUID())
-  if (result.ok) return { ok: true }
+  if (result.ok) return { ok: true, documentDirectory }
 ```
 
 The reception on the stdout side is placed as an **independent branch** in `setupStdoutHandler()`. The comment records that at first it was piggybacked on the `{"pluginUi"` branch and never dispatched; all unit tests were green and only the real-device E2E caught it.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:248-256
+// packages/vscode-extension/src/engine-handlers.ts:254-262
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も

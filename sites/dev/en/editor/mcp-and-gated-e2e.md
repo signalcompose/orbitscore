@@ -199,7 +199,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 One entry from `get_diagnostics` has this shape. `code` is the optional field #883 added; it is present only when `vscode.Diagnostic.code` is a string or a number.
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:98-104
+// packages/vscode-extension/src/mcp-types.ts:107-113
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -218,7 +218,7 @@ What this buys is that **an agent can branch on an identifier instead of on word
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:16-33
+// packages/vscode-extension/src/mcp-tools-engine.ts:31-63
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -229,12 +229,27 @@ This is the part of the chapter to read most carefully. The tool description mak
         'first (via the Start Engine command). Waits for the engine to finish evaluating ' +
         'the submitted code and reports the result: ok only when the engine raised no parse ' +
         'or runtime diagnostics. A failure lists the diagnostics, so you do NOT need to poll ' +
-        'get_log to find out whether your score was accepted.',
-      inputSchema: { code: z.string().describe('OrbitScore source to evaluate') },
+        'get_log to find out whether your score was accepted. Relative paths (import, ' +
+        'audio(), plugin state files) resolve against the directory of document_path if ' +
+        'given, else the active OrbitScore editor, else the first workspace folder; the ' +
+        'result names the directory that was used. Pass document_path when the code belongs ' +
+        'to a file that may not be the active editor (e.g. while a person is performing in ' +
+        'another tab) — it avoids switching their editor with open_file.',
+      inputSchema: {
+        code: z.string().describe('OrbitScore source to evaluate'),
+        document_path: z
+          .string()
+          .describe(
+            'The .orbs file this code belongs to (absolute or workspace-relative). Its ' +
+              'directory becomes the base for relative paths. Must be an existing file.',
+          )
+          .optional(),
+      },
     },
     async (args) => {
       const code = typeof args.code === 'string' ? args.code : ''
-      return toToolResult(await handlers.evaluate(code))
+      const documentPath = typeof args.document_path === 'string' ? args.document_path : undefined
+      return evaluateToolResult(await handlers.evaluate(code, { documentPath }))
     },
   )
 ```
@@ -242,8 +257,11 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:72-75
-async function evaluateForAgent(code: string): Promise<EvaluateResult> {
+// packages/vscode-extension/src/agent-handlers.ts:74-80
+async function evaluateForAgent(
+  code: string,
+  options?: { documentPath?: string },
+): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
@@ -267,7 +285,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:248-256
+// packages/vscode-extension/src/engine-handlers.ts:254-262
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -294,7 +312,7 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:27-34
+// packages/vscode-extension/src/mcp-types.ts:36-43
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -334,7 +352,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:202-213
+// packages/vscode-extension/src/agent-handlers.ts:226-237
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -691,7 +709,7 @@ The pattern must never be widened to an app or process name, it says in more tha
 `killHarnessInstances()` is not only a teardown helper. `launchIsolatedOrbitStudio()` calls it **as its first step**, so any test that launches its own app carries a side effect: the moment it starts running, every harness-owned VS Code instance alive at that point is taken down. Most of the gated spec rides on the **shared session** that the `describe` setup launched once, so putting a self-launching test in the middle of that run leaves the shared-session tests behind it with nothing to connect to.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:6980-6983
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7203-7206
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -1401,7 +1419,7 @@ export function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3055-3066
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3245-3256
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1417,13 +1435,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3074-3075
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3264-3265
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3131-3133
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3321-3323
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

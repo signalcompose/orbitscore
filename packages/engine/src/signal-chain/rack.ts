@@ -208,7 +208,12 @@ function containsRackSyntax(value: ValueExpression): boolean {
 
 function chordElement(value: ValueExpression): StackElement {
   if (isValueRef(value)) {
-    return { type: 'chord_ref', name: value.name, octaveShift: value.octaveShift }
+    // Keep a chord_ref's modifiers (`~` / `^r` / `@v` / `@g`): the chord evaluator either
+    // carries them onto a random voice or rejects them on a chord (#974). Rebuilding the
+    // ref from name + octaveShift alone silently dropped them.
+    return value.type === 'chord_ref'
+      ? { ...value }
+      : { type: 'chord_ref', name: value.name, octaveShift: value.octaveShift }
   }
   if (isValueArray(value)) {
     return {

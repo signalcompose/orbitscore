@@ -18,8 +18,17 @@ import type { WavAnalysis } from './wav-analysis'
  * いまは engine の評価結果まで待ち、診断があれば `ok: false` にする。
  */
 export type EvaluateResult =
-  | { ok: true }
-  | { ok: false; error: string; diagnostics?: Array<{ kind: string; message: string }> }
+  | { ok: true; documentDirectory?: string | null }
+  | {
+      ok: false
+      error: string
+      diagnostics?: Array<{ kind: string; message: string }>
+      /**
+       * #966: the base directory this evaluation used (import / audio() / plugin state).
+       * `null` = none could be determined; absent = the code was never sent.
+       */
+      documentDirectory?: string | null
+    }
 
 /** Result of a lifecycle command (start/stop engine). */
 export type CommandResult = { ok: true; message?: string } | { ok: false; error: string }
@@ -174,7 +183,10 @@ export interface RegisterMcpServerInput {
  * handlers can be re-hosted later by the WCTM pi harness (spec §3/§4.2).
  */
 export interface OrbitScoreToolHandlers {
-  evaluate(code: string): Promise<EvaluateResult> | EvaluateResult
+  evaluate(
+    code: string,
+    options?: { documentPath?: string },
+  ): Promise<EvaluateResult> | EvaluateResult
   startEngine(options?: {
     captureWav?: string
     debug?: boolean

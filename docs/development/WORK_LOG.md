@@ -17,6 +17,101 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(pitch-dsl): read name modifiers in chord definitions the same way as play() (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#974](https://github.com/signalcompose/orbitscore/issues/974)
+
+- 🔴 **Issue の前提が実態と違った**: 「chord 定義の中の `NAME.r(p)` は警告で声部が落ちる」とあったが、DSL からは
+  評価器のその分岐に届かず、**パースエラー**（`Expected comma or closing bracket but got DOT`）になっていた。
+  調べると、chord 定義の `[ ]` では名前に付く修飾子 `.r` / `.r(p)` / `~` / `@v` / `^r` と `r.r(p)` がすべてパースエラーで、
+  `play()` の `[ ]` ではすべて読める（実測の表は Issue への報告に記載）。PITCH_DSL_SPEC §6.2.1「どこでも同じ」に反する
+- owner 裁定（2026-10-06）: **案 A** = chord 定義でも `play()` と同じ読み方にする
+- パーサー: chord 定義（`parseChordBinding`）の配列だけ、名前の要素を `play()` の `[ ]` の声部と同じ処理
+  （`parseStackNameVoice`。`parseStackElement` から切り出して共有）で読む。effect() / instrument() のラック配列は従来どおり
+- 評価: `NAME.r(p)` の判定（ランダム音源ならランダム声部・chord / pattern への `.r` はエラー）を `resolveReferenceThin` に切り出し、
+  `play()` と chord 定義で共有。chord / pattern の参照に付いたランダム専用の修飾子（`~` / `^r` / `@v` / `@g`）も、定義の中で
+  `play()` と同じくエラーにした
+- 🔴 もう 1 つの穴: `signal-chain/rack.ts` の `chordElement` が chord_ref を「名前と `^N`」だけで作り直しており、修飾子が**黙って落ちていた**
+  （パーサーを直しただけでは `r1~0.5` の detune が消える）。参照をそのまま渡すようにした
+- ファイルサイズのラチェット: `parse-expression.ts` が baseline 987 を超えたので、状態を持たない後置語彙
+  （`VOICING_OPS` / `SCOPE_CHAIN_OPS` / `VOICING_ARITY` / `ScopeChain` / `collapseScopedRun`）を `parser/play-postfix-ops.ts` へ移した。
+  baseline は 982 に**下げた**。dev サイトの `collapseScopedRun` の引用（ja / en）を新しい場所へ
+- 仕様: PITCH_DSL_SPEC §6.2.1 と core spec P.12.1 に「chord 定義の声部も同じ」を追記
+- テスト: `tests/midi/random-degree.spec.ts` に 6 件（確率つきランダム声部の保持・`play()` と同じ音・全修飾子・chord / pattern の拒否）。
+  ソースの修正を戻すと 6 件とも red を確認
+- gated E2E: 1 声の chord 変数 `[r1.r(1)]` を 16 回鳴らし、C4 / G4 だけ・両方が出ることをキャプチャで確認するテストを追加。
+  🔴 **この環境では未実行**
+
+### test: skip the three DAC-dependent cases when running as root (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#684](https://github.com/signalcompose/orbitscore/issues/684)
+
+`chmod 0o000` で「読めないファイル」を作って EACCES を期待するテスト 3 件が、root では DAC を迂回して読めてしまうため
+必ず落ちていた（root のクラウド環境では pre-commit hook が常に通らない）。設計 668 §13（PR-E11）のとおり直した。
+
+- `tests/helpers/privileges.ts` を新設（`RUNNING_AS_ROOT` / `skipWhenDacIsBypassed(context)`）。
+  設計の `it.skipIf` ではなく `context.skip(条件, 理由)` を使い、**skip の理由がレポーターに出る**ようにした（#684 の受け入れ基準）
+- 対象 3 件: `tests/interpreter/file-import.spec.ts`（import の EACCES 分類）・`tests/vscode-extension/mcp-server-docs.spec.ts` 2 件
+- 設計の「併せて」: 呼び出し箇所のラチェット `tests/repo/privileges-skip-ratchet.spec.ts`（3 件から増えたら red。基準を 2 にすると red になることを確認）
+- 実測: root で 3 件が `[root bypasses DAC: chmod 0o000 stays readable (#684)]` 付きで skip。
+  `setpriv --reuid=65534` の非 root 実行では 3 件とも走って緑。root での `npm test` 全体: 2680 passed / 87 skipped / 0 failed
+
+### fix(extension): resolve evaluate_orbitscore paths against the .orbs directory (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#966](https://github.com/signalcompose/orbitscore/issues/966)
+
+`evaluate_orbitscore` は基準ディレクトリ（`//#documentDirectory`）に常に最初のワークスペースフォルダを送っていたため、
+`.orbs` がサブフォルダにあると import・`audio()`・plugin state の相対パスが `run_selection` とずれていた。
+方針は owner と議論して決めた（記録: [#966 のコメント](https://github.com/signalcompose/orbitscore/issues/966#issuecomment-6005747794)）。
+
+- **仕様を先に更新**: core spec IM.6 に順序を追記 — 引数 `document_path` → アクティブな OrbitScore エディタ → 最初のワークスペースフォルダ → 基準なし。
+  使った基準を結果に含める
+- `document_path` を入れた理由: 前面のタブはエージェントから指定できず、`open_file` で変えると人の画面を奪う。
+  人の演奏と並行してエージェントが書き換える使い方（FuruFuruFruits / WCTM のハーネス）で競合しないようにするため。
+  「人の操作を検知して待つ」案は、この問題の代わりにならないとして採らなかった（理由は上の Issue コメント）
+- 実装: 決め方を純関数 `packages/vscode-extension/src/evaluate-document-directory.ts` に切り出し、`evaluateForAgent` から使う。
+  存在しない `document_path` は黙って dirname を取らずエラー（engine へ何も送らない）。未保存（untitled）のエディタは基準にしない
+- MCP: `evaluate_orbitscore` に任意の `document_path` を追加。結果の文言は従来どおり `ok` / `error:` で始まり、
+  末尾に `(documentDirectory: <path>|none)` を付ける（コードを送らなかった失敗には付けない）
+- テスト: `tests/vscode-extension/evaluate-document-directory.spec.ts`（決め方 9 件 + `evaluateForAgent` の配線 3 件。
+  配線の 3 件は旧実装に戻すと red を確認）、`tests/vscode-extension/mcp-server.spec.ts`（スキーマ・引数の受け渡し・結果の文言）
+- gated E2E: サブフォルダの `.orbs` から `import` を `evaluate_orbitscore` で評価し、前面のエディタ基準・ルートの失敗・
+  `document_path` 優先（タブが切り替わらないこと）を確認するテストを追加。#630（import の実機確認 0 件）の初の実機カバーにもなる。
+  🔴 **この環境では未実行**（ゲート未設定で skip のみ確認）
+- dev サイト: `pipeline/selective-execution.md` の散文（ja / en）を新しい挙動に更新。引用の行ずれ（#964 分を含む 58 件）を
+  `check-citations.mjs --fix` と手作業（中身が変わった 4 箇所 × ja / en）で直し、`docs:check` 0 failed
+
+### fix(extension): keep play() update lines that carry object elements in the log (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#964](https://github.com/signalcompose/orbitscore/issues/964)
+
+ループ中に `play()` を差し替えたときの `🎚️ <seq>: play=… (next cycle)` 行が、パターンに
+オブジェクトになる要素（入れ子 `(0, 1)`・タイ `_`・`1@v+10`・臨時記号 `b3`）を含むと
+出力チャネル（= MCP の `get_log`）から消えていた。
+
+- **原因**: `play()` はそれらの要素を JSON で行に書き出す（`packages/engine/src/core/sequence.ts` の `play()` 末尾）。
+  非 debug 起動の `shouldFilterLine()`（`packages/vscode-extension/src/engine-handlers.ts`）は、
+  SC 時代の OSC ダンプを隠すための部分一致で `"type"` を含む行を一律に落としており、
+  残す一覧（`ERROR` / `⚠️` / `🎛️`）に `🎚️` が無かった（`🎛️` は U+1F39B で別の文字）
+- **修正**: 残す一覧に `🎚️`（U+1F39A）を足した。残す判定は落とす判定より前にあるので、
+  パラメータ更新の行は中身に関係なく残る。#964 のコメント（2026-10-05・WCTM からの報告）の案をそのまま採った
+- **採らなかった案**（Issue 本文の A〜C・どれにするかは owner 未決）: A（SC 時代の条件群の削除）/ B（OSC ダンプの形への限定）は、
+  daemon から転送される行（`"/` を含むパスや `channels` を含むデバイス情報）の扱いも変わり、
+  `get_log` の固定 500 行窓に入る行の量が変わるので、実機 gated で確かめられないこの環境では入れなかった。
+  C（ログを DSL 表記で出す）は `PlayElement` の全形について表記を決める必要があり、別作業とした
+- **テスト**: `tests/vscode-extension/play-update-log-filter.spec.ts` を追加。行を手で書かず、
+  実際のインタプリタ（mock の audio エンジン）にループ中の `play()` 差し替えを評価させて採った行を
+  `shouldFilterLine()` に通す。修正を戻すと平らなパターン（対照）以外の 4 件が red・修正後は 6 件すべて緑（実測）
+- **gated E2E**: `tests/e2e/orbitstudio-mcp-gated.spec.ts` に
+  「入れ子の `play()` を `run_selection` → `get_log` に `🎚️ hat964: play=` が 1 行出る」を追加。
+  🔴 **この環境（Linux・VS Code / 音声デバイス無し）では実行していない**。ゲート未設定で skip されることだけ確認した
+- 4 形のうち `1@v+10` / `b3` は note シーケンス向けの形だが、テストでは audio シーケンスで評価して行を採った
+  （note シーケンスは実 MIDI ポート / プラグインを要する。更新行は `seamlessParameterUpdate('play', …)` が出すもので、シーケンスの種類に依らない）
+- 残る穴（未着手）: ログ転写は stdout の chunk ごとに `split('\n')` しており行を持ち越さない（`createLinePrefixer` の注記の経路 3・4）。
+  長い `play=` 行が chunk 境界で割れると、`🎚️` を含まない後半は従来どおり部分一致で落ちうる（コードを読んでの推測・実測なし）
+- この環境は root で動くため、`npm test` は #684 の権限テスト 3 件（`file-import.spec.ts` 1 件・`mcp-server-docs.spec.ts` 2 件）が落ちる。
+  本変更を stash した状態でも同じ 3 件が落ちることを確認した（本変更とは無関係）
+
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
 > **2026-10-05 追記（main がマージ前に補正）**: 見出しの「`random` 自体も名前として使えなくなった」は実装より強かった（予約語は `r` / `rr` だけで、`random` という変数名は作れる。書けなくなったのは `var X = random.<名前>` をミキサー派生として読ませることだけ）。正本と core spec の見出しを「`random` という名前のミキサーからは派生できなくなった」へ直した。

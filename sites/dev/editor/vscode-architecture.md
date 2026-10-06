@@ -214,7 +214,7 @@ export async function activate(context: vscode.ExtensionContext) {
         port: mcpPort,
         version: packageJson.version,
         handlers: {
-          evaluate: (code) => evaluateForAgent(code),
+          evaluate: (code, options) => evaluateForAgent(code, options),
           startEngine: (options) => startEngineForAgent(options),
           stopEngine: () => stopEngineForAgent(),
           getEngineState: () => getEngineStateForAgent(),
@@ -736,7 +736,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 そこで chunk 列を行へ組み直す小さなヘルパが挟まっています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:371-383
+// packages/vscode-extension/src/engine-handlers.ts:377-389
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -757,7 +757,7 @@ export function createLinePrefixer(emit: (line: string) => void): {
 `setupStderrHandler` 側は、この `push` / `flush` を `logHandlerFailure` で包んで繋ぐだけになりました。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:407-419
+// packages/vscode-extension/src/engine-handlers.ts:413-425
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -780,7 +780,7 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 3 つ目の `setupStdoutHandler` は、2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (束 O-wire) で `createLinePrefixer` を使う側に回りました。それまでは chunk を `output.split('\n')` して、その場で `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"` の 4 分岐へ流していたので、**bridge の JSON 封筒が chunk 境界で割れると両方の断片が失われました**。前半は prefix チェーンのどれにも一致せず、後半は `{` で始まらないので、やはりどれにも一致しないからです。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:228-235
+// packages/vscode-extension/src/engine-handlers.ts:234-241
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
@@ -796,7 +796,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 もう 1 つの仕掛けが `StringDecoder` です。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:265-268
+// packages/vscode-extension/src/engine-handlers.ts:271-274
   // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
   // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
   // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
@@ -806,7 +806,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 `data.toString()` は chunk を単独で UTF-8 として解釈するので、マルチバイト文字が chunk をまたぐと **その場で `U+FFFD` に化けます**。行を繋ぎ直しても文字が壊れたあとでは戻りません。`StringDecoder` は不完全なバイト列を次の chunk まで持ち越すので、その手前で守れます。コメントが明言しているとおり、この置き換えは **bridge dispatch の経路だけ**で、ログと playhead へ渡す `output` / `lines` は従来どおり `data.toString()` のままです。既存の呼び出し規約とタイミングを変えないための線引きで、stderr 側の同じ危険はこの変更の対象外だとも書かれています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:283-284
+// packages/vscode-extension/src/engine-handlers.ts:289-290
       const bridgeOutput = bridgeDecoder.write(data)
       if (bridgeOutput) bridgeLines.push(bridgeOutput)
 ```
@@ -814,7 +814,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 そして stderr 側と同じく、`end` で必ず吐き出します。`bridgeDecoder.end()` が先に来るのは、decoder が抱えている未完のバイト列を文字へ戻してから prefixer へ渡さないと、最後の 1 行が化けたまま emit されるからです。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:327-335
+// packages/vscode-extension/src/engine-handlers.ts:333-341
   process.stdout?.on('end', () => {
     try {
       const bridgeRemainder = bridgeDecoder.end()
@@ -885,7 +885,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:286-322 (effects の中身を一部省略)
+// packages/vscode-extension/src/engine-handlers.ts:292-328 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
