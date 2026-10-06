@@ -736,7 +736,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 そこで chunk 列を行へ組み直す小さなヘルパが挟まっています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:377-389
+// packages/vscode-extension/src/engine-handlers.ts:376-388
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -757,7 +757,7 @@ export function createLinePrefixer(emit: (line: string) => void): {
 `setupStderrHandler` 側は、この `push` / `flush` を `logHandlerFailure` で包んで繋ぐだけになりました。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:413-425
+// packages/vscode-extension/src/engine-handlers.ts:412-424
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)

@@ -360,17 +360,16 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  * 🔴 **「chunk → 行」の経路は合計 4 つある**。この関数だけを直して全部揃ったと思わないこと:
  *
  * 1. ここ `createLinePrefixer` — engine stderr を行へ戻す（#756）。
- * 2. `packages/engine/src/audio/rust-engine/daemon-client.ts` の
- *    `createDaemonStderrLineRouter` — daemon stderr の同型実装（#777）。拡張パッケージは
- *    `@orbitscore/engine` に依存しないので今は共有できない。
+ * 2. `packages/engine/src/audio/rust-engine/daemon-stderr-lines.ts` の
+ *    `createDaemonStderrLineRouter` — daemon stderr の同型実装。#777 で同じ `{ push, flush }` の
+ *    形になった。拡張パッケージは `@orbitscore/engine` に依存しないので今は共有できない。
  * 3. 同ファイルの `setupStdoutHandler` — bridge dispatch だけをこの関数で行へ戻す（#773）。
  *    生 chunk とその `output.split('\n')` は従来どおり即座に `applyEngineStdoutChunk` へ渡し、
  *    ログ転写と playhead / `//#selectAudioDevice` 処理の呼び出し規約は変えない。
  * 4. `activate()` 冒頭の output-channel ring proxy — `append` を `value.split('\n')` して
  *    `get_log` 用 ring へ写す。これは現時点で issue 未追跡である。
  *
- * **改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる**。特に daemon 側には
- * `flush()` が無く、panic が改行なしで終わると最後の 1 行を落とす（#777）。
+ * **改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる**。
  *
  * 空行は emit しない。`ERROR: ` だけの行を作ると `countErrors` が**水増し**される。
  */
