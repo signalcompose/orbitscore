@@ -17,6 +17,62 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(extension): one request-correlation skeleton for the four requestId bridges (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#757](https://github.com/signalcompose/orbitscore/issues/757)
+
+requestId 相関・timeout・書き込み失敗・drain・重複拒否を持つクラスが 5 本、ほぼ一字一句同じ形で複製されていた。
+
+- `packages/vscode-extension/src/correlated-line-bridge.ts` に骨格 `CorrelatedLineBridge<TResult, TContext>` を新設。
+  `EvalMarkBridge` / `PluginUiBridge` / `PluginStateBridge` / `EngineStateBridge` はこれを継承し、
+  メタコマンド名・結果行の parse・失敗の形・（plugin UI だけ）待っている要求の `action` との突き合わせを注入する。4 ファイルで 285 行減・89 行増
+- **`DeviceSwitchBridge` は載せない**（Issue の「抽出時に判断」）: requestId を持たず送った順で相関する FIFO で、
+  相関の仕組みが違うものを 1 つに畳むと、どちらの規則で相関しているかが型から読めなくなる
+- 動作の差: `EngineStateBridge` に重複 requestId の拒否が入った（Issue が指摘していたずれ。requestId は `randomUUID()` なので実際には起きない）。
+  `EvalMarkBridge` に `pendingCount` が増えた。それ以外の公開 API・文言は不変
+- 🔴 **動作不変の確認**: 5 本のブリッジの spec を含む `tests/vscode-extension/` を**1 行も変えずに** 654 件全件緑。
+  骨格への変異 5 種（重複チェック無効・`accept` 無視・待ち手なしで false・drain で pending を残す・write の false 無視）は、
+  いずれも既存の spec が red にした
+- dev サイト `plugin-hosting/plugin-ui.md`（ja / en）の引用を骨格へ付け替え、散文に #757 の構成を追記
+- 動作を変える修正（#777・ログの行単位化）とはコミットを分けた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1 の検算の機会を残すため）
+
+### fix(extension): frame the non-debug log and the get_log ring by lines, not chunks (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **関連**: [#964](https://github.com/signalcompose/orbitscore/issues/964) の残り・設計 668 §13.5.2（束 E-router の「ring proxy」）
+
+「chunk → 行」4 経路のうち、残っていた 2 つ（stdout のログ転写・`get_log` 用リングへの写し取り）を行単位にした。
+
+- **ログ転写**（`setupStdoutHandler`・非 debug）: chunk ごとに `split` して `shouldFilterLine()` に通していたため、
+  chunk 境界で割れた行の後半が独立に filter されていた。`🎚️ … play={"type":…}` の行が `"type"` の手前で割れると、
+  `🎚️` の無い後半が `"type"` で落ちる（#964 の修正で残した穴）。bridge と同じ `StringDecoder` + `createLinePrefixer` を通し、
+  残す行は chunk ごとに 1 回の `append` で書く。stdout の `end` で持ち越しを flush。UTF-8 の文字が chunk をまたいでも化けない
+- **ring proxy**: `activate()` の monkey-patch を `log-ring.ts` の `tapOutputIntoLogRing()` に切り出し、`append` の改行の来ていない末尾を
+  持ち越すようにした。`appendLine` は持ち越しと合わせて 1 行（チャネルに見えている行とリングの行を一致させる）。debug 起動の生 chunk も 1 行 = 1 エントリになる
+- playhead（`[STEP]`）と `//#selectAudioDevice` は従来どおり生 chunk のまま（呼び出し規約を変えない）
+- 🔴 **#773 のテストが固定していた「ログ転写は chunk 単位のまま」を変えた**。その PR の範囲を絞るための固定で、製品の要件ではない。
+  新しい期待（割れた行は改行が来たときに 1 行で書く）に書き換えた
+- テスト: `extension-wiring.spec.ts` に 4 件（割れた行・#964 の `"type"` の後半・UTF-8 の分割・`end` の flush）、`log-ring.spec.ts` に 3 件。
+  修正を戻すと 7 件とも red を確認
+- 🔴 `get_log` に入る行の形が変わる（割れた行が 1 行になる）ので、**実機 gated E2E 全件で確認が必要**（設計 668 の PR-E12 の注記と同じ）。この環境では未実行
+- dev サイト（`editor/vscode-architecture.md`・`editor/mcp-and-gated-e2e.md`・ja / en）の引用と散文を更新
+
+### fix(engine): flush the daemon's last stderr line when the stream ends (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#777](https://github.com/signalcompose/orbitscore/issues/777)
+
+`createDaemonStderrLineRouter` は改行の無い残りを持ち越すだけで吐き出す経路が無く、daemon が panic / SIGSEGV で
+改行なしに死ぬと**クラッシュ経路の最後の 1 行**が落ちていた。
+
+- owner 裁定（2026-10-06）: 計画では「#757 に着手する時点で #777 と畳む」（`IMPLEMENTATION_PLAN_2026-09.md` §2.5）。
+  どちらも実機確認なしにはマージしないので、#757 と同じブランチでまとめて行う。動作を変える修正（本件）と
+  変えないリファクタ（#757）はコミットを分ける
+- 戻り値を拡張側の双子 `createLinePrefixer`（#756）と同じ `{ push, flush }` にし、`child.stderr` の `end` で `flush()` する
+- `flush()` も level で振り分ける（panic の行は ERROR 側）。空白だけの残りは出さない（ERROR の水増し防止）。二重 flush は何も出さない
+- ファイルサイズのラチェット: `daemon-client.ts` が baseline 804 を超えたので、状態を持たない行処理
+  （`ANSI_ESCAPE_RE` / `isDaemonNonErrorTracingLine` / `createDaemonStderrLineRouter`）を `daemon-stderr-lines.ts` へ移し、baseline を 784 に下げた
+- テスト: `tests/audio/rust-engine/daemon-client.spec.ts` に 2 件。`flush()` を空にする変異で red を確認
+- 「chunk → 行」の 4 経路のうち daemon stderr はこれで flush を持つ。共有部品への一本化はパッケージ依存の判断が要るので範囲外のまま
+
 ### fix(pitch-dsl): read name modifiers in chord definitions the same way as play() (Oct 6, 2026)
 
 **Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#974](https://github.com/signalcompose/orbitscore/issues/974)

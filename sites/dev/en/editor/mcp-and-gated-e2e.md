@@ -101,7 +101,7 @@ export function handleStepLine(step: StepEvent): void {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
+// packages/vscode-extension/src/extension.ts:231-242
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -285,7 +285,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:254-262
+// packages/vscode-extension/src/engine-handlers.ts:255-263
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -328,7 +328,7 @@ export interface EngineState {
 What to watch here is that **all three fields are optional**. When the daemon's state cannot be read, the tool does not throw — it returns whatever it does know.
 
 ```typescript
-// packages/vscode-extension/src/engine-state-bridge.ts:123-138
+// packages/vscode-extension/src/engine-state-bridge.ts:79-94
 export async function resolveEngineState(
   base: Pick<EngineState, 'running' | 'liveCoding'>,
   fetchStatus: () => Promise<EngineStatusBridgeResult>,
@@ -373,7 +373,7 @@ So `statusError` does not necessarily mean "the daemon is broken" — it can equ
 
 ## `get_log` and the ring buffer
 
-The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` to push the same lines into a ring buffer.
+The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` (`tapOutputIntoLogRing()` in `log-ring.ts`) to push the same lines into a ring buffer. Even when `append` is called mid-line, the tail that has not reached a newline is carried over, so one line in the channel is one line in the ring (since 2026-10; it used to split per call).
 
 ```typescript
 // packages/vscode-extension/src/extension-state.ts:60-69
@@ -390,19 +390,28 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:108-119
+// packages/vscode-extension/src/log-ring.ts:58-78
+export function tapOutputIntoLogRing(
+  channel: { append(value: string): void; appendLine(value: string): void },
+  push: (line: string) => void,
+): void {
+  let partial = ''
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
-    pushLogRing(value)
+    push(partial + value)
+    partial = ''
     rawAppendLine(value)
   }
   const rawAppend = channel.append.bind(channel)
   channel.append = (value: string) => {
-    for (const line of value.split('\n')) {
-      if (line) pushLogRing(line)
+    const lines = (partial + value).split('\n')
+    partial = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line) push(line)
     }
     rawAppend(value)
   }
+}
 ```
 
 In other words, what `get_log` returns is "the same content that appeared in the OrbitScore channel of the Output panel". The engine's stdout does not go in as-is; the lines that pass `shouldFilterLine()` do (this is why `[STEP]` is invisible in normal mode — more on that later).
@@ -1517,7 +1526,7 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()` (#614)
 - `packages/vscode-extension/src/agent-handlers.ts:483-499` — `getLogForAgent()` / `analyzeAudioForAgent()`
-- `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — the `//#evalMark` requestId correlation bridge
+- `packages/vscode-extension/src/eval-mark-bridge.ts:1-95` — the `//#evalMark` requestId correlation bridge
 - `packages/vscode-extension/src/log-ring.ts:1-45` — `selectLogLines()` (#567)
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout line classification and application (`isCurrent` partitioning)
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()` (spawn-only options)

@@ -222,7 +222,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:247-252
+// packages/vscode-extension/src/extension.ts:237-242
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -376,7 +376,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `DaemonClient.start()` proceeds in the order "spawn → read the ready line from stdout → connect the WebSocket → receive the handshake."
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:319-357 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:254-292 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -400,7 +400,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:909-922
+// packages/engine/src/audio/rust-engine/daemon-client.ts:844-857
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -420,7 +420,7 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
 `env: daemonEnv(process.env)` is the stopping point mentioned earlier. `daemonEnv()` is a pure function that drops only `ELECTRON_RUN_AS_NODE` and passes everything else through (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:75-78
+// packages/engine/src/audio/rust-engine/daemon-client.ts:76-79
 export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source
   return rest
@@ -432,7 +432,7 @@ The reason for dropping it is "**undo at your own exit what you added yourself**
 The general rule "do not hand host-derived variables to third parties" is deliberately *not* the justification. If it were, `VSCODE_*` and the other `ELECTRON_*` vars riding on the extension host's env would have to be dropped as well, and this function does not go that far.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:986-1000
+// packages/engine/src/audio/rust-engine/daemon-client.ts:922-936
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -457,7 +457,7 @@ The daemon-side code that writes this ready line (`run()` in `main.rs`) and the 
 The search order for the daemon binary is in `resolveDaemonBinaryPath()`: explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:246-282 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:181-217 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []

@@ -175,7 +175,7 @@ On the line `_kick.play(`, `parenBalance = 1`. On `1, 0, 1, 0,` there is no chan
 When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:314-316
+// packages/vscode-extension/src/engine-handlers.ts:325-327
           } else {
             outputChannel?.append(output)
           }
@@ -356,7 +356,7 @@ A human user notices errors via the editor's red squiggles and the Output Channe
 The reception on the stdout side is placed as an **independent branch** in `setupStdoutHandler()`. The comment records that at first it was piggybacked on the `{"pluginUi"` branch and never dispatched; all unit tests were green and only the real-device E2E caught it.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:254-262
+// packages/vscode-extension/src/engine-handlers.ts:255-263
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も

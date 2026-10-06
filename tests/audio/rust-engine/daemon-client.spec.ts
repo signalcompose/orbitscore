@@ -16,11 +16,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn-fixture'
 import {
   DaemonClient,
-  createDaemonStderrLineRouter,
   daemonEnv,
-  isDaemonNonErrorTracingLine,
   resolveDaemonBinaryPath,
 } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
+import {
+  createDaemonStderrLineRouter,
+  isDaemonNonErrorTracingLine,
+} from '../../../packages/engine/src/audio/rust-engine/daemon-stderr-lines'
 import {
   DaemonConnectionError,
   DaemonNotFoundError,
@@ -1021,8 +1023,8 @@ describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () =
       (line) => nonError.push(line),
       (line) => error.push(line),
     )
-    for (const chunk of chunks) router(chunk)
-    return { nonError, error }
+    for (const chunk of chunks) router.push(chunk)
+    return { nonError, error, router }
   }
 
   // 🔴 実測（#618 の E2E をカタログ経路へ寄せた際）: 行がチャンク境界で割れると、
@@ -1041,6 +1043,29 @@ describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () =
   it('改行が来るまで emit しない（未完の行を早出ししない）', () => {
     const { nonError, error } = route(['INFO [orbit-clap-instrument-child] partial'])
     expect(nonError).toEqual([])
+    expect(error).toEqual([])
+  })
+
+  // 🔴 #777: daemon が panic で死ぬと最後の診断は改行なしで切れる。stderr の終端で
+  // flush しないと、クラッシュ経路の最後の 1 行が構造的に落ちる。
+  it('🔴 flush() で改行の無い最後の行を level で振り分けて吐き出す（#777）', () => {
+    const { nonError, error, router } = route([
+      'INFO [orbit-audio-daemon] ok\n',
+      "thread 'main' panicked at src/engine.rs:42",
+    ])
+    expect(error).toEqual([])
+    router.flush()
+    expect(nonError).toEqual(['INFO [orbit-audio-daemon] ok'])
+    expect(error).toEqual(["thread 'main' panicked at src/engine.rs:42"])
+    // 2 回目の flush は何も出さない（同じ行を二重に記録しない）。
+    router.flush()
+    expect(error).toHaveLength(1)
+  })
+
+  it('flush() は空白だけの残りを出さない（ERROR を水増ししない）', () => {
+    const { nonError, error, router } = route(['INFO [orbit-audio-daemon] ok\n', '   '])
+    router.flush()
+    expect(nonError).toEqual(['INFO [orbit-audio-daemon] ok'])
     expect(error).toEqual([])
   })
 

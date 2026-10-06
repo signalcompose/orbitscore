@@ -696,7 +696,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:573-580
+// packages/engine/src/audio/rust-engine/daemon-client.ts:508-515
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',

@@ -398,7 +398,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:655-668
+// packages/engine/src/audio/rust-engine/daemon-client.ts:590-603
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -1117,17 +1117,21 @@ struct UiEventHubCore {
 相関 `requestId`・`expectedName` を 1 つの JSON で運ぶため）。
 
 拡張側の `PluginUiBridge` は、engine プロセスの stdin にメタ行を書き、stdout に返ってくる
-`{"pluginUi": ...}` 行を `requestId` で相関させます。
+`{"pluginUi": ...}` 行を `requestId` で相関させます。書き込み・相関・timeout・drain の骨格は
+#757 で他の 3 本（eval mark / plugin state / engine state）と共通の `CorrelatedLineBridge` に
+まとめられ、`PluginUiBridge` が注入するのはメタコマンド名・結果行の parse・失敗の形と、
+待っている要求の `action` との突き合わせだけです。
 
 ```typescript
-// packages/vscode-extension/src/plugin-ui-bridge.ts:90-98
-      const fail = (error: Error): void => this.fail(input.requestId, error.message)
+// packages/vscode-extension/src/correlated-line-bridge.ts:75-84
+      const fail = (error: Error): void => this.fail(requestId, error.message)
       try {
-        const written = writeLine(`//#pluginUi ${JSON.stringify(input)}\n`, fail)
-        if (written === false)
-          this.fail(input.requestId, 'failed to write //#pluginUi to engine stdin')
+        const written = writeLine(`${this.spec.metaCommand} ${JSON.stringify(payload)}\n`, fail)
+        if (written === false) {
+          this.fail(requestId, `failed to write ${this.spec.metaCommand} to engine stdin`)
+        }
       } catch (error) {
-        this.fail(input.requestId, error instanceof Error ? error.message : String(error))
+        this.fail(requestId, error instanceof Error ? error.message : String(error))
       }
     })
 ```
@@ -1135,7 +1139,7 @@ struct UiEventHubCore {
 `engine-handlers.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:249-253
+// packages/vscode-extension/src/engine-handlers.ts:250-254
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {

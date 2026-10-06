@@ -222,7 +222,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:247-252
+// packages/vscode-extension/src/extension.ts:237-242
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -376,7 +376,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `DaemonClient.start()` は「spawn → stdout の ready line を読む → WebSocket 接続 → handshake 受信」の順に進みます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:319-357 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:254-292 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -400,7 +400,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 daemon は engine から見ると **child process** です。ただし通信は stdin/stdout ではなく WebSocket で、stdout は起動時の ready line (port 番号を含む 1 行 JSON) を受け取るためだけに使います。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:909-922
+// packages/engine/src/audio/rust-engine/daemon-client.ts:844-857
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -420,7 +420,7 @@ daemon は engine から見ると **child process** です。ただし通信は 
 `env: daemonEnv(process.env)` が、先ほど触れた「出口」です。`daemonEnv()` は `ELECTRON_RUN_AS_NODE` だけを落として残りをそのまま渡す純関数です（#878・PR [#889](https://github.com/signalcompose/orbitscore/pull/889)）。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:75-78
+// packages/engine/src/audio/rust-engine/daemon-client.ts:76-79
 export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source
   return rest
@@ -432,7 +432,7 @@ export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 逆に「ホスト由来の変数を第三者へ渡さない」という一般則は根拠にしていません。それを根拠にするなら拡張ホストの env に乗っている `VSCODE_*` や他の `ELECTRON_*` も落とす必要があり、この関数はそこまではやらないからです。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:986-1000
+// packages/engine/src/audio/rust-engine/daemon-client.ts:922-936
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -457,7 +457,7 @@ daemon 側でこの ready line を書くコード (`main.rs` の `run()`) と、
 daemon バイナリの探索順は `resolveDaemonBinaryPath()` にあり、explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle の順です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:246-282 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:181-217 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []

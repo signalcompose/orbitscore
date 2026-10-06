@@ -361,7 +361,10 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       }
     })
 
-    it('keeps non-debug log transcription immediate and unchanged for split chunks', () => {
+    // #773 は「ログ転写は chunk 単位のまま」を固定していた（その PR の範囲を絞るため）。
+    // 束 E-router の残り（設計 668 §13.5.2）でログ転写も行単位にした: chunk 境界で割れた
+    // 行は、改行が来たときに 1 行として書かれる。
+    it('writes a non-debug log line split across chunks once, as one line', () => {
       const { proc, fireStdoutData } = fakeChildProcess()
       const appended: string[] = []
       ext.__setEngineProcessForTest(proc)
@@ -374,11 +377,68 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       ext.setupStdoutHandler(proc, false)
       fireStdoutData('visible partial')
 
-      expect(appended).toEqual(['visible partial\n'])
+      expect(appended).toEqual([])
 
       fireStdoutData(' rest\n\nvisible complete\n')
 
-      expect(appended).toEqual(['visible partial\n', ' rest\nvisible complete\n'])
+      expect(appended).toEqual(['visible partial rest\nvisible complete\n'])
+    })
+
+    // #964 の残り: `🎚️` を残す判定は行の先頭側にしか無い。chunk 境界で割れると、`"type"` を
+    // 含む後半だけが独立に filter され、行の後ろ半分が消えていた。
+    it('keeps the JSON tail of a 🎚️ play() update that arrives in the next chunk (#964)', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => appended.push(value),
+      })
+      const line = '🎚️ hat: play={"type":"nested","elements":[0,1]} 1 0 (next cycle)'
+      const splitAt = line.indexOf('{"type"')
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData(line.slice(0, splitAt))
+      fireStdoutData(line.slice(splitAt) + '\n')
+
+      expect(appended).toEqual([line + '\n'])
+    })
+
+    it('decodes a UTF-8 character split across chunks in the non-debug log', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => appended.push(value),
+      })
+      const bytes = Buffer.from('⚠️ split warning\n')
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData(bytes.subarray(0, 2))
+      fireStdoutData(bytes.subarray(2))
+
+      expect(appended).toEqual(['⚠️ split warning\n'])
+    })
+
+    it('flushes a final non-debug log line without a newline when stdout ends', () => {
+      const { proc, fireStdoutData, fireStdoutEnd } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => appended.push(value),
+      })
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData('⚠️ last words')
+      expect(appended).toEqual([])
+      fireStdoutEnd()
+
+      expect(appended).toEqual(['⚠️ last words\n'])
     })
 
     it('keeps debug log transcription immediate and byte-for-byte identical, including blank lines', () => {
