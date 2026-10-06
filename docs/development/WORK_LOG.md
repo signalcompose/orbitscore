@@ -29,6 +29,15 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
   `cargo test --workspace` で走る。`orbit-vst3-host` 側は `parse_vstpreset` を `Vst3HostError::State` へ写す
   薄いラッパにした。エラー文言（`malformed .vstpreset: …`）は移動前と同じで、それを固定するテストを足した。
   解析のテスト 4 本は `lib.rs` の `mod tests` から新 crate へそのまま移した
+- **docs（仕様を先に改訂・CLAUDE.md 運用規則 6）**: `docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md` の
+  CAP.2 が VST3 の `CAP-STATE-GET` を `IComponent::getState` だけと定義していたので、`IEditController::getState`
+  を加え、保存形式の規定を **CAP.2a** として新設した（`.vstpreset` container・`Cont` を付けない 3 条件・
+  旧形式の raw も読める・SDK との差）。根拠は VST3 SDK の一次ソースを取得して確認した
+  （`vstpresetfile.cpp` の `savePreset` / `loadPreset`、`funknown.cpp` の `FUID::toString`、
+  `fplatform.h` の `COM_COMPATIBLE`、`vstsinglecomponenteffect.h` の `getState` → `getEditorState` の別名化）。
+  一次ソース表に 3 行追加。core spec PH.1 と PROJECT_FILE_SPEC PRJ.7 に 1 文ずつ追従
+  - CAP 仕様の末尾は「改訂は owner 承認を要する」。owner は #982 の着手を指示したが、
+    **仕様の文面そのものは owner の確認を経ていない**ので PR で確認を求める
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 

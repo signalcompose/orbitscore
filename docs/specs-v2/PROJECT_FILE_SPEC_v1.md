@@ -299,7 +299,8 @@ AU の原文は *"Hosts saving documents should use this property"*（`fullState
 規格の preset で」という切り分けの、規格2つ分の裏付けになる。
 
 VST3 には同等の区別が無いため、コンテキスト付き API は**あれば使う任意の改善**として扱い、
-無い場合は `clap_plugin_state` / `IComponent::getState` にフォールバックする
+無い場合は `clap_plugin_state` / `IComponent::getState`（VST3 は `IEditController::getState` も併せて取る・
+[CAP.2a](PLUGIN_CAPABILITY_ABSTRACTION_v1.md)）にフォールバックする
 （形式で挙動を変えないため、フォールバック側を基準の意味論とする）。
 
 ## PRJ.8 LLM 対称の MCP 面

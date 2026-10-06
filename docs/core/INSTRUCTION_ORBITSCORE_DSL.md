@@ -1288,7 +1288,8 @@ keys.instrument("Kontakt 8.vst3", "keys.vstpreset")  // 保存済み state で�
 - **state 復元（#540 P2・VST3 のみ）**: 第2/第3引数に **`.vstpreset` / `.state`** で終わる
   パスを渡すと、保存済みプラグイン state を child 起動時に復元して音色を選択する
   （`.vstpreset` は他 DAW で書き出した Steinberg 標準 container・raw な component state
-  chunk も可）。引数の判別は**拡張子ヒューリスティック** — `.vstpreset`/`.state` で終われば
+  chunk も可。OrbitScore 自身が保存する state ファイルは `.vstpreset` container で、
+  controller state も含む — PLUGIN_CAPABILITY_ABSTRACTION CAP.2a・#982）。引数の判別は**拡張子ヒューリスティック** — `.vstpreset`/`.state` で終われば
   state、さもなくば pluginId（3引数形 `instrument(path, pluginId, statePath)` は明示指定）。
   相対パスは **document directory 基準**で解決する（音源検索パスは使わない — state は
   プロジェクトの資産で、暗黙検索による別プロジェクト同名 state の誤読を避ける）。
