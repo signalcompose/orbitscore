@@ -194,7 +194,7 @@ The two env vars added here enter the engine process. The process tree continues
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:681-682
+// packages/vscode-extension/src/engine-process.ts:691-692
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -432,7 +432,7 @@ The reason for dropping it is "**undo at your own exit what you added yourself**
 The general rule "do not hand host-derived variables to third parties" is deliberately *not* the justification. If it were, `VSCODE_*` and the other `ELECTRON_*` vars riding on the extension host's env would have to be dropped as well, and this function does not go that far.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:922-936
+// packages/engine/src/audio/rust-engine/daemon-client.ts:913-927
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる

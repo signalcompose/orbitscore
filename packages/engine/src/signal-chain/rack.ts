@@ -1,7 +1,9 @@
+import { hasNoteModifiers } from '../midi/chord/random-degree'
 import type { BoundValue } from '../midi/chord/types'
 import type {
   NamedArg,
   PlayChordRef,
+  PlayStack,
   StackElement,
   ValueArray,
   ValueCall,
@@ -178,6 +180,13 @@ export function resolveRackValue(value: ValueExpression, env: RackBindingEnviron
     if (value.octaveShift !== 0) {
       throw new Error(`rack variable "${value.name}" cannot use a chord octave shift (^N).`)
     }
+    // `var X = [ … ]` parses names as pitch voices (#974) before the binding is known to be
+    // a rack, so a rack ref can arrive carrying note modifiers. Reject them, never drop them.
+    if (value.type === 'chord_ref' && hasNoteModifiers(value)) {
+      throw new Error(
+        `rack variable "${value.name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`,
+      )
+    }
     const rack = env.getRack(value.name)
     if (rack) return cloneRack(rack)
     if (env.getBinding(value.name)?.kind === 'chord') {
@@ -225,6 +234,16 @@ function chordElement(value: ValueExpression): StackElement {
   return value as StackElement
 }
 
+function referenceThinName(value: ValueExpression): string | undefined {
+  // A ValueArray element can be a play element the parser produced for a chord binding.
+  const stack = value as unknown as Partial<PlayStack>
+  if (stack?.type !== 'stack' || !stack.referenceThin || stack.voices?.length !== 1) {
+    return undefined
+  }
+  const sole = stack.voices[0]
+  return sole && typeof sole === 'object' && sole.type === 'chord_ref' ? sole.name : undefined
+}
+
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
@@ -232,6 +251,18 @@ export function classifyArrayBinding(
 ): { kind: 'chord'; voices: StackElement[] } | { kind: 'rack'; rack: RackRecipe } {
   if (value.elements.some(containsRackSyntax) || value.elements.length === 0) {
     return { kind: 'rack', rack: resolveRackValue(value, env) }
+  }
+  // `NAME.r` / `NAME.r(p)` parses as a one-voice stack (#974). Classify its name like a bare
+  // ref, so a rack or unknown name fails here instead of passing as a chord voice.
+  for (const element of value.elements) {
+    const name = referenceThinName(element)
+    if (name === undefined) continue
+    if (env.getRack(name)) {
+      throw new Error(`rack variable "${name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`)
+    }
+    if (!env.getBinding(name)) {
+      throw new Error(`array identifier "${name}" is neither a chord variable nor a rack variable.`)
+    }
   }
   const refs = value.elements.filter(isValueRef)
   let chordRefs = 0

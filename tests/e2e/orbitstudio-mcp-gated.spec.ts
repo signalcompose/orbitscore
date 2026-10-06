@@ -62,6 +62,7 @@ import {
   expectLogMarkerAtLeast,
   expectNoNewErrors,
   newErrorLines,
+  readEngineLog,
 } from './helpers/engine-log'
 import {
   BYTES_PER_SAMPLE,
@@ -3071,8 +3072,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(nestedLine).toBe(loopLine + 1)
       fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
 
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
       const runLines = async (startLine: number, endLine: number): Promise<void> => {
         const selected = await activeClient.call('set_selection', {
           start_line: startLine,
@@ -3194,7 +3194,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(usedBase(viaRootEditor.text), viaRootEditor.text).toBe(realRoot)
 
         // 1. document_path wins over whatever tab is in front — no open_file needed.
-        const beforeExplicit = (await activeClient.call('get_log', { lines: 500 })).text
+        const beforeExplicit = await readEngineLog(activeClient)
         const viaPath = await activeClient.call('evaluate_orbitscore', {
           code: entryCode,
           document_path: entryPath,
@@ -3209,7 +3209,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'document_path must not switch tabs',
         ).toBe(true)
         expect(
-          newErrorLines(beforeExplicit, (await activeClient.call('get_log', { lines: 500 })).text),
+          newErrorLines(beforeExplicit, await readEngineLog(activeClient)),
           '#966 evaluation with document_path must add no ERROR lines',
         ).toEqual([])
       } finally {
@@ -5300,8 +5300,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const aStatePath = path.resolve(root, aStateRelativePath)
       const bStatePath = path.resolve(root, bStateRelativePath)
       const countMarker = (log: string, marker: string): number => log.split(marker).length - 1
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
       const assertCurrentPid = async (expectedPid: number, label: string): Promise<void> => {
         const pids = rackChildPidsFromLog(await readLog())
         expect(pids[pids.length - 1], `${label}: rack child PID must stay unchanged`).toBe(
@@ -5809,8 +5808,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const activeClient = client
       const catalog = requireCatalogFixtures()
       const { stages } = RACK_CHAIN_GAIN_EXPECTATIONS
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
 
       await startR28Engine(activeClient, '#628 R28 master engine')
 

@@ -1144,7 +1144,7 @@ the other three (eval mark / plugin state / engine state); `PluginUiBridge` inje
 command, the result-line parser, the failure shape, and the check against the pending `action`.
 
 ```typescript
-// packages/vscode-extension/src/correlated-line-bridge.ts:75-84
+// packages/vscode-extension/src/correlated-line-bridge.ts:83-92
       const fail = (error: Error): void => this.fail(requestId, error.message)
       try {
         const written = writeLine(`${this.spec.metaCommand} ${JSON.stringify(payload)}\n`, fail)
@@ -1160,7 +1160,7 @@ command, the result-line parser, the failure shape, and the check against the pe
 The stdout router in `engine-handlers.ts` picks up this result line by the `{"pluginUi"` prefix. Since #773 ([#811](https://github.com/signalcompose/orbitscore/pull/811)) these four branches live inside the callback of `createLinePrefixer`, so **a line split at a chunk boundary is no longer lost** (see [IV-1](/en/editor/vscode-architecture#the-stdout-bridge-envelopes-are-reassembled-into-lines-too-773)).
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:250-254
+// packages/vscode-extension/src/engine-handlers.ts:262-266
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1191,7 +1191,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2545-2567
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

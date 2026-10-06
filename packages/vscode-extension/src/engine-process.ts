@@ -513,8 +513,9 @@ export function stopEngine(): boolean {
  * the MCP `evaluate_orbitscore` tool so both go through the exact same path.
  *
  * setDir injection lets audioPath() / audio() resolve relative paths against the
- * `.orbs` file's directory (or, for the agent, the workspace root) rather than
- * the engine process's cwd:
+ * `.orbs` file's directory rather than the engine process's cwd (for the agent:
+ * `document_path` → active OrbitScore editor → first workspace folder, core spec IM.6
+ * / `evaluate-document-directory.ts`):
  * - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
  *   right after it (and remember that global is now initialized).
  * - Otherwise, if global has already been initialized in this engine session,
@@ -650,13 +651,22 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
     return false
   }
   let codeToSend = rawCode
+  // The base travels in a one-line meta line and a DSL string literal: a line break would
+  // split the meta line, so such a directory is not sent (with a visible reason).
+  if (documentDir && /[\r\n]/.test(documentDir)) {
+    outputChannel?.appendLine(
+      `⚠️ the document directory contains a line break and was not sent to the engine: ${JSON.stringify(documentDir)}`,
+    )
+    documentDir = undefined
+  }
   if (documentDir) {
     // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
     // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
     // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
     // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
     codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+    // The DSL tokenizer reads `\x` as `x`, so escaping `\` and `"` round-trips any path.
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/[\\"]/g, '\\$&')}")`
     const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
     if (globalInitMatch) {
       const insertPos = globalInitMatch.index! + globalInitMatch[0].length

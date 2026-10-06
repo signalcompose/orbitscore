@@ -42,7 +42,7 @@ import {
   DaemonQuitError,
   DaemonStartupError,
 } from './errors'
-import { createDaemonStderrLineRouter } from './daemon-stderr-lines'
+import { createDaemonStderrLineRouter, unterminatedTail } from './daemon-stderr-lines'
 import { validateRenderScore, type RenderScore } from './render-score'
 import {
   CommandFrame,
@@ -877,21 +877,12 @@ export class DaemonClient extends EventEmitter {
         stderrChunks.push(text)
         return
       }
-      // 起動後は蓄積せず、行単位で engine のログへ転送する。INFO/DEBUG/TRACE の
-      // tracing 行まで stderr に流すと拡張側で `ERROR:` として記録されるため
-      // （isDaemonNonErrorTracingLine の docstring 参照）、level で振り分ける。
-      //
-      // 🔴 部分行をバッファする: chunk 境界は行境界と一致しない。素朴に split すると
-      // 行の後半が独立した「行」になり、level トークンを持たないので **成功行の続きが
-      // ERROR として記録される**（#618 の E2E をカタログ経路へ寄せた際、行数が増えて
-      // 境界がずれたことで実際に発生した）。改行が来るまで持ち越す。
+      // 起動後は蓄積せず、行に組み直して level で振り分け、engine のログへ転送する
+      // （部分行の持ち越し・level の判定・終端の flush の理由は daemon-stderr-lines.ts）。
       routeStderrLine.push(text)
     }
     child.stderr?.on('data', onStderrData)
     child.stderr?.on('end', () => routeStderrLine.flush())
-    const detachStderr = (): void => {
-      collecting = false
-    }
 
     const reader = createInterface({ input: child.stdout! })
     const port = await new Promise<number>((resolve, reject) => {
@@ -904,7 +895,7 @@ export class DaemonClient extends EventEmitter {
         settled = true
         clearTimeout(to)
         reader.close()
-        detachStderr()
+        collecting = false // stop collecting startup diagnostics; route lines from here on
         fn()
       }
       const to = setTimeout(() => {
@@ -959,6 +950,9 @@ export class DaemonClient extends EventEmitter {
             // 予期せぬ stdout 出力は event で通知して debug に残す。
             this.emit('unexpected-stdout', skippedLines)
           }
+          // 起動中に貯めた stderr が行の途中で終わっていたら、その頭をルータへ渡し、
+          // 起動後に届く残りと 1 行に戻す（unterminatedTail の doc）。
+          routeStderrLine.push(unterminatedTail(stderrChunks.join('')))
           resolve(parsed.port)
         })
       })

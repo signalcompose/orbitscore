@@ -13,7 +13,9 @@ import * as path from 'path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import { evaluateForAgent } from '../../packages/vscode-extension/src/agent-handlers'
+import { writeCodeToEngine } from '../../packages/vscode-extension/src/engine-process'
 import { EvalMarkBridge } from '../../packages/vscode-extension/src/eval-mark-bridge'
 import { resolveEvaluateDocumentDirectory } from '../../packages/vscode-extension/src/evaluate-document-directory'
 import {
@@ -72,6 +74,13 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
     expect(result.ok).toBe(false)
   })
 
+  it('1. 改行を含む document_path はエラー（メタ行が割れる）', () => {
+    const file = '/ws/odd\nname/piece.orbs'
+    expect(
+      resolveEvaluateDocumentDirectory({ documentPath: file, isFile: existing(file) }),
+    ).toEqual({ ok: false, error: 'document_path must not contain a line break' })
+  })
+
   it('1. 空の document_path はエラー（省略とは区別する）', () => {
     const result = resolveEvaluateDocumentDirectory({
       documentPath: '  ',
@@ -107,7 +116,7 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
     ).toEqual({ ok: true, documentDirectory: WORKSPACE })
   })
 
-  it('4. どれも無ければ基準なし（null）', () => {
+  it('4. どれも無ければ送らない（null）', () => {
     expect(resolveEvaluateDocumentDirectory({ isFile: existing() })).toEqual({
       ok: true,
       documentDirectory: null,
@@ -192,5 +201,29 @@ describe('evaluateForAgent の配線 (#966)', () => {
 
     expect(result.ok).toBe(false)
     expect(written).toEqual([])
+  })
+
+  it('a directory with a line break is not sent at all (it would split the meta line)', () => {
+    writeCodeToEngine('global.tempo(120)', '/ws/odd\nname')
+
+    expect(written).toHaveLength(1)
+    expect(written[0]).not.toContain('documentDirectory')
+    expect(written[0]).not.toContain('setDocumentDirectory')
+  })
+
+  // /code-review: `"` in the directory used to end the injected DSL string early.
+  it('a directory name with a double quote round-trips through the injected DSL', async () => {
+    const piece = path.join(tmpRoot, 'my "set"', 'piece.orbs')
+    fs.mkdirSync(path.dirname(piece), { recursive: true })
+    fs.writeFileSync(piece, '')
+
+    await evaluateForAgent('var global = init GLOBAL', { documentPath: piece })
+
+    const sent = written.find((line) => line.includes('setDocumentDirectory')) ?? ''
+    expect(sentDirectory()).toBe(path.dirname(piece))
+    const injected = parseAudioDSL(sent).statements.find(
+      (statement) => (statement as { method?: string }).method === 'setDocumentDirectory',
+    ) as { args: unknown[] } | undefined
+    expect(injected?.args).toEqual([path.dirname(piece)])
   })
 })

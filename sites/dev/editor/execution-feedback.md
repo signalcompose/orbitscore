@@ -175,7 +175,7 @@ _kick.play(
 `getLineSubject()` が `null` を返した場合は、スタンドアロンコマンド (`LOOP`, `RUN`, `MUTE` 等) と判断します。この場合も同じ `parenBalance` ロジックで複数行を追いかけますが、ファイル全体を走査するのではなく**カーソル行から下方向のみ**に範囲を拡張します:
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:325-327
+// packages/vscode-extension/src/engine-handlers.ts:324-326
           } else {
             outputChannel?.append(output)
           }
@@ -188,7 +188,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
+// packages/vscode-extension/src/engine-process.ts:646-652
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -356,7 +356,7 @@ export function handleStepLine(step: StepEvent): void {
 stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** として置かれています。コメントが、最初は `{"pluginUi"` 分岐に相乗りさせて一度も dispatch されず、ユニットテストは全部緑で実機 E2E だけが捕まえた、と記録しています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:255-263
+// packages/vscode-extension/src/engine-handlers.ts:267-275
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も

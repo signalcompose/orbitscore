@@ -11,8 +11,8 @@ import type { TestContext } from 'vitest'
  * 🔴 呼び出し箇所は `tests/repo/privileges-skip-ratchet.spec.ts` がラチェットしている。
  * root で未検証のテストが黙って増えないように。
  */
-export const RUNNING_AS_ROOT: boolean = process.getuid?.() === 0
-export const SKIP_AS_ROOT_REASON = 'root bypasses DAC: chmod 0o000 stays readable (#684)'
+const RUNNING_AS_ROOT: boolean = process.getuid?.() === 0
+const SKIP_AS_ROOT_REASON = 'root bypasses DAC: chmod 0o000 stays readable (#684)'
 
 export function skipWhenDacIsBypassed(context: Pick<TestContext, 'skip'>): void {
   context.skip(RUNNING_AS_ROOT, SKIP_AS_ROOT_REASON)

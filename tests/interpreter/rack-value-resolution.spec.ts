@@ -185,6 +185,45 @@ describe('#628 generic array parsing and three-category rack resolution', () => 
     expect(applyEffectChain).toHaveBeenCalledTimes(0)
   })
 
+  // /code-review: `NAME.r` parses as a one-voice stack, which used to slip past the
+  // chord/rack classification (a rack became a chord binding with only a warning).
+  it('classifies the name inside NAME.r like a bare ref (rack → error, unknown → error)', () => {
+    const racks = { fx1: [{ kind: 'catalog', spec: 'EQ', enabled: true }] }
+    expect(() => classifyArrayBinding(value('[fx1.r]'), env({ racks }))).toThrow(
+      'rack variable "fx1" cannot take note modifiers',
+    )
+    expect(() => classifyArrayBinding(value('[typo.r(0.5), 3]'), env())).toThrow(
+      'array identifier "typo" is neither a chord variable nor a rack variable.',
+    )
+    expect(classifyArrayBinding(value('[m7.r, 3]'), env({ chords: ['m7'] })).kind).toBe('chord')
+  })
+
+  // /code-review: the voice-name mode of `var X = [ … ]` must not leak into call arguments
+  // inside the array — `Reverb` stays a value_ref so the "did you mean Reverb(...)" hint works.
+  it('keeps call arguments inside a var array as plain value refs', () => {
+    const array = value('[layer(Reverb), chain(eq)]')
+    expect((array.elements[0] as ValueCall).args[0]).toMatchObject({
+      type: 'value_ref',
+      name: 'Reverb',
+    })
+    expect((array.elements[1] as ValueCall).args[0]).toMatchObject({
+      type: 'value_ref',
+      name: 'eq',
+    })
+  })
+
+  // #974: `var X = [ … ]` now parses names as pitch voices before the binding is known to be
+  // a rack, so note modifiers can reach a rack ref. They must be rejected, not dropped.
+  it.each(['eq~0.5', 'eq@v+3', 'eq^r', 'eq@g30'])(
+    'rejects note modifiers on a rack variable inside a rack array (%s)',
+    (element) => {
+      const racks = { eq: [{ kind: 'catalog', spec: 'EQ', enabled: true }] }
+      expect(() => classifyArrayBinding(value(`[${element}]`), env({ racks }))).toThrow(
+        'rack variable "eq" cannot take note modifiers',
+      )
+    },
+  )
+
   it('flattens nested serial arrays and resolves rack variables by copied value', () => {
     const rackRecipe = [{ kind: 'catalog' as const, spec: '/A.clap', enabled: true }]
     expect(

@@ -36,10 +36,14 @@ export function countErrors(log: string): number {
   return countLogMarker(log, /ERROR:/g)
 }
 
+/** `get_log` の固定窓（`LOG_WINDOW_LINES`）を 1 回読む。 */
+export async function readEngineLog(client: McpClient): Promise<string> {
+  return (await client.call('get_log', { lines: LOG_WINDOW_LINES })).text
+}
+
 /** 現在の ERROR 件数のスナップショット。差分で語るための起点（`errorsBefore` の一般化）。 */
 export async function errorBaseline(client: McpClient): Promise<number> {
-  const log = (await client.call('get_log', { lines: LOG_WINDOW_LINES })).text
-  return countErrors(log)
+  return countErrors(await readEngineLog(client))
 }
 
 /**

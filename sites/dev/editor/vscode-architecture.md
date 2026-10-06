@@ -172,7 +172,7 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
 ```
 
-面白いのは Output Channel の `appendLine` / `append` を **monkey-patch** している箇所です（`tapOutputIntoLogRing()`、`log-ring.ts`）。拡張には中央のログ sink が無いので、MCP の `get_log` ツール (#388) が読めるように、Output Channel に流れる行をリングバッファ (`outputLogRing`、上限は `log-ring.ts` の `OUTPUT_LOG_RING_MAX = 1000`) にも積んでいます。`append` は行の途中で区切られて呼ばれうるので、改行の来ていない末尾は次の呼び出しまで持ち越し、チャネルに見えている 1 行をリングでも 1 行にします（以前は呼び出しごとに `split` していたため、割れた 1 行がリングでは 2 行になっていました）。
+面白いのは Output Channel の `appendLine` / `append` を **monkey-patch** している箇所です（`tapOutputIntoLogRing()`、`log-ring.ts`）。拡張には中央のログ sink が無いので、MCP の `get_log` ツール (#388) が読めるように、Output Channel に流れる行をリングバッファ (`outputLogRing`、上限は `log-ring.ts` の `OUTPUT_LOG_RING_MAX = 1000`) にも積んでいます。`append` は行の途中で区切られて呼ばれうるので、改行の来ていない末尾は次の呼び出しまで持ち越し、チャネルに見えている 1 行をリングでも 1 行にします（以前は呼び出しごとに `split` していたため、割れた 1 行がリングでは 2 行になっていました）。持ち越しの途中で `appendLine` が来たら、持ち越しは独立した 1 行として先に出します。
 
 `activate()` の残りは大きく 5 つの仕事です:
 
@@ -725,7 +725,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 そこで chunk 列を行へ組み直す小さなヘルパが挟まっています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:392-404
+// packages/vscode-extension/src/engine-handlers.ts:387-399
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -746,7 +746,7 @@ export function createLinePrefixer(emit: (line: string) => void): {
 `setupStderrHandler` 側は、この `push` / `flush` を `logHandlerFailure` で包んで繋ぐだけになりました。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:428-440
+// packages/vscode-extension/src/engine-handlers.ts:423-435
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -769,65 +769,61 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 3 つ目の `setupStdoutHandler` は、2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (束 O-wire) で `createLinePrefixer` を使う側に回りました。それまでは chunk を `output.split('\n')` して、その場で `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"` の 4 分岐へ流していたので、**bridge の JSON 封筒が chunk 境界で割れると両方の断片が失われました**。前半は prefix チェーンのどれにも一致せず、後半は `{` で始まらないので、やはりどれにも一致しないからです。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:234-242
+// packages/vscode-extension/src/engine-handlers.ts:234-254
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
-  // partial line to the current process. Bridge dispatch and the non-debug log
-  // are buffered; applyEngineStdoutChunk (playhead / //#selectAudioDevice) still
+  // partial line to the current process. One buffer feeds bridge dispatch and the
+  // non-debug log; applyEngineStdoutChunk (playhead / //#selectAudioDevice) still
   // receives each raw chunk immediately below.
-  const bridgeLines = createLinePrefixer((rawLine) => {
-    const trimmedLine = rawLine.trim()
-    const isCurrent = engineProcess === process
-```
-
-読みどころは、`bridgeLines` が **ハンドラの中で作られている**ことです。モジュールレベルに置くと、`stopEngine()` → `startEngine()` の間に古いプロセスが残した半端な行が、新しいプロセスの buffer に混ざります。stale ガードが `engineProcess === process` の同一性で判定できるのは、buffer がプロセスごとに独立しているからです。
-
-もう 1 つの仕掛けが `StringDecoder` です。
-
-```typescript
-// packages/vscode-extension/src/engine-handlers.ts:272-288
-  // Decode the line-buffered paths (bridge dispatch and the non-debug log) across Buffer
-  // boundaries. The playhead / `//#selectAudioDevice` path keeps its historical per-chunk
-  // `data.toString()` timing and values. stderr has the same UTF-8 boundary hazard but remains
-  // out of scope for this change.
-  const bridgeDecoder = new StringDecoder('utf8')
-  // The non-debug log is line-buffered too: filtering a chunk-split half-line on its own could
-  // drop the half that lacks the line's marker (a `🎚️ … play={"type":…}` update cut before
-  // `"type"` lost its tail — #964). Kept lines are written once per chunk.
+  //
+  // The log is line-framed too: filtering a chunk-split half-line on its own could
+  // drop the half that lacks the line's marker (a `🎚️ … play={"type":…}` update cut
+  // before `"type"` lost its tail — #964). Kept lines are written once per chunk, by
+  // transcribeLog, after any malformed-envelope warning from the same chunk.
   const keptLogLines: string[] = []
-  const logLines = createLinePrefixer((line) => {
-    if (!shouldFilterLine(line)) keptLogLines.push(line)
-  })
   const writeKeptLog = (): void => {
     if (keptLogLines.length === 0) return
     outputChannel?.append(keptLogLines.join('\n') + '\n')
     keptLogLines.length = 0
   }
+  const stdoutLines = createLinePrefixer((rawLine) => {
+    if (!debugMode && !shouldFilterLine(rawLine)) keptLogLines.push(rawLine)
+    const trimmedLine = rawLine.trim()
+    const isCurrent = engineProcess === process
+```
+
+読みどころは、`stdoutLines` が **ハンドラの中で作られている**ことです。モジュールレベルに置くと、`stopEngine()` → `startEngine()` の間に古いプロセスが残した半端な行が、新しいプロセスの buffer に混ざります。stale ガードが `engineProcess === process` の同一性で判定できるのは、buffer がプロセスごとに独立しているからです。
+
+もう 1 つの仕掛けが `StringDecoder` です。
+
+```typescript
+// packages/vscode-extension/src/engine-handlers.ts:284-288
+  // Decode the line-buffered path (bridge dispatch and the non-debug log) across Buffer
+  // boundaries. The playhead / `//#selectAudioDevice` path keeps its historical per-chunk
+  // `data.toString()` timing and values. stderr has the same UTF-8 boundary hazard but remains
+  // out of scope for this change.
+  const stdoutDecoder = new StringDecoder('utf8')
 ```
 
 `data.toString()` は chunk を単独で UTF-8 として解釈するので、マルチバイト文字が chunk をまたぐと **その場で `U+FFFD` に化けます**。行を繋ぎ直しても文字が壊れたあとでは戻りません。`StringDecoder` は不完全なバイト列を次の chunk まで持ち越すので、その手前で守れます。当初（#773）この置き換えは bridge dispatch の経路だけでしたが、2026-10 に**非 debug のログ転写**も同じ decoder と `createLinePrefixer` を通るようになりました。きっかけは #964 で、`🎚️` を残す判定は行の先頭側にしか無いため、chunk 境界で割れると `"type"` を含む後半だけが独立に filter され、行の後ろ半分が消えていました。playhead と `//#selectAudioDevice` へ渡す `output` / `lines` は従来どおり `data.toString()` のままで、stderr 側の同じ危険はこの変更の対象外です。
 
 ```typescript
 // packages/vscode-extension/src/engine-handlers.ts:303-304
-      const decoded = bridgeDecoder.write(data)
-      if (decoded) bridgeLines.push(decoded)
+      const decoded = stdoutDecoder.write(data)
+      if (decoded) stdoutLines.push(decoded)
 ```
 
-そして stderr 側と同じく、`end` で必ず吐き出します（非 debug ならログ側の持ち越しも）。`bridgeDecoder.end()` が先に来るのは、decoder が抱えている未完のバイト列を文字へ戻してから prefixer へ渡さないと、最後の 1 行が化けたまま emit されるからです。
+そして stderr 側と同じく、`end` で必ず吐き出します（bridge 振り分けとログ転写は同じ 1 本のバッファなので、flush も 1 回です）。`stdoutDecoder.end()` が先に来るのは、decoder が抱えている未完のバイト列を文字へ戻してから prefixer へ渡さないと、最後の 1 行が化けたまま emit されるからです。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:344-357
+// packages/vscode-extension/src/engine-handlers.ts:343-352
   process.stdout?.on('end', () => {
     try {
-      const remainder = bridgeDecoder.end()
-      if (remainder) bridgeLines.push(remainder)
-      bridgeLines.flush()
-      if (!debugMode) {
-        if (remainder) logLines.push(remainder)
-        logLines.flush()
-        writeKeptLog()
-      }
+      const remainder = stdoutDecoder.end()
+      if (remainder) stdoutLines.push(remainder)
+      stdoutLines.flush()
+      writeKeptLog()
     } catch (err) {
       logHandlerFailure('setupStdoutHandler', err)
     }
@@ -850,7 +846,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
+// packages/vscode-extension/src/engine-process.ts:646-652
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -893,7 +889,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:306-339 (effects の中身を一部省略)
+// packages/vscode-extension/src/engine-handlers.ts:306-338 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -911,7 +907,6 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
           // diagnostic must see stale output too (#527 review Important #1). Non-debug output
           // goes through this handler's own line buffer (never shared with another process).
           if (!debugMode) {
-            if (decoded) logLines.push(decoded)
             writeKeptLog()
           } else {
             outputChannel?.append(output)

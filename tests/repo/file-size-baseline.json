@@ -1,12 +1,12 @@
 {
   "files": {
-    "packages/engine/src/audio/rust-engine/daemon-client.ts": 784,
+    "packages/engine/src/audio/rust-engine/daemon-client.ts": 782,
     "packages/engine/src/audio/rust-engine/rust-engine-player.ts": 1224,
     "packages/engine/src/core/global.ts": 1101,
     "packages/engine/src/core/global/effect-slot.ts": 783,
     "packages/engine/src/core/sequence.ts": 1362,
     "packages/engine/src/interpreter/process-statement.ts": 520,
-    "packages/engine/src/parser/parse-expression.ts": 982,
+    "packages/engine/src/parser/parse-expression.ts": 977,
     "packages/engine/src/parser/parse-statement.ts": 648,
     "rust/crates/orbit-audio-daemon/src/outproc_effect.rs": 812,
     "rust/crates/orbit-audio-daemon/src/outproc_instrument.rs": 705,
