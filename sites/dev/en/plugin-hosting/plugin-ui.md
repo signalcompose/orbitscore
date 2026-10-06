@@ -1138,17 +1138,21 @@ receiver names with spaces or symbols, the correlating `requestId`, and `expecte
 object).
 
 The extension-side `PluginUiBridge` writes the meta line to the engine process's stdin and
-correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`.
+correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`. In #757 the
+write / correlation / timeout / drain skeleton was folded into `CorrelatedLineBridge`, shared with
+the other three (eval mark / plugin state / engine state); `PluginUiBridge` injects only the meta
+command, the result-line parser, the failure shape, and the check against the pending `action`.
 
 ```typescript
-// packages/vscode-extension/src/plugin-ui-bridge.ts:90-98
-      const fail = (error: Error): void => this.fail(input.requestId, error.message)
+// packages/vscode-extension/src/correlated-line-bridge.ts:75-84
+      const fail = (error: Error): void => this.fail(requestId, error.message)
       try {
-        const written = writeLine(`//#pluginUi ${JSON.stringify(input)}\n`, fail)
-        if (written === false)
-          this.fail(input.requestId, 'failed to write //#pluginUi to engine stdin')
+        const written = writeLine(`${this.spec.metaCommand} ${JSON.stringify(payload)}\n`, fail)
+        if (written === false) {
+          this.fail(requestId, `failed to write ${this.spec.metaCommand} to engine stdin`)
+        }
       } catch (error) {
-        this.fail(input.requestId, error instanceof Error ? error.message : String(error))
+        this.fail(requestId, error instanceof Error ? error.message : String(error))
       }
     })
 ```

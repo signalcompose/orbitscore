@@ -22,6 +22,8 @@
  * 別途「塞いでいる行」を名指しして報告する。
  */
 
+import { CorrelatedLineBridge } from './correlated-line-bridge'
+
 export interface EvalDiagnostic {
   kind: 'parse' | 'runtime'
   message: string
@@ -30,11 +32,6 @@ export interface EvalDiagnostic {
 export type EvalMarkResult =
   | { requestId: string; ok: true; diagnostics: EvalDiagnostic[] }
   | { requestId: string; ok: false; diagnostics: EvalDiagnostic[]; error?: string }
-
-interface PendingEntry {
-  resolve: (result: EvalMarkResult) => void
-  timer: ReturnType<typeof setTimeout>
-}
 
 function toDiagnostics(value: unknown): EvalDiagnostic[] | undefined {
   if (!Array.isArray(value)) return undefined
@@ -69,74 +66,30 @@ export function parseEvalMarkResultLine(line: string): EvalMarkResult | undefine
     : { requestId: result.requestId, ok: false, diagnostics }
 }
 
-/** requestId 相関・timeout・engine 停止時の drain。 */
-export class EvalMarkBridge {
-  private readonly pending = new Map<string, PendingEntry>()
+/** `//#evalMark` の相関（骨格は `CorrelatedLineBridge`・#757）。 */
+export class EvalMarkBridge extends CorrelatedLineBridge<EvalMarkResult> {
+  constructor() {
+    super({
+      metaCommand: '//#evalMark',
+      label: 'eval mark',
+      parse: parseEvalMarkResultLine,
+      failure: (requestId, error) => ({ requestId, ok: false, diagnostics: [], error }),
+    })
+  }
 
   send(
     writeLine: (line: string, onError: (error: Error) => void) => boolean | void,
     requestId: string,
     timeoutMs = 120_000,
   ): Promise<EvalMarkResult> {
-    if (this.pending.has(requestId)) {
-      return Promise.resolve({
-        requestId,
-        ok: false,
-        diagnostics: [],
-        error: `duplicate eval mark request id '${requestId}'`,
-      })
-    }
-    return new Promise((resolve) => {
-      const entry: PendingEntry = {
-        resolve,
-        timer: setTimeout(() => {
-          this.pending.delete(requestId)
-          resolve({
-            requestId,
-            ok: false,
-            diagnostics: [],
-            error:
-              `timed out waiting for engine response to //#evalMark — the evaluation queue may ` +
-              `be blocked (see the log for the blocking line)`,
-          })
-        }, timeoutMs),
-      }
-      this.pending.set(requestId, entry)
-      const fail = (error: Error): void => this.fail(requestId, error.message)
-      try {
-        const written = writeLine(`//#evalMark ${JSON.stringify({ requestId })}\n`, fail)
-        if (written === false) this.fail(requestId, 'failed to write //#evalMark to engine stdin')
-      } catch (error) {
-        this.fail(requestId, error instanceof Error ? error.message : String(error))
-      }
-    })
-  }
-
-  handleLine(line: string): boolean {
-    const result = parseEvalMarkResultLine(line)
-    if (!result) return false
-    const entry = this.pending.get(result.requestId)
-    if (!entry) return true
-    this.pending.delete(result.requestId)
-    clearTimeout(entry.timer)
-    entry.resolve(result)
-    return true
-  }
-
-  drainAll(error: string): void {
-    const entries = [...this.pending.entries()]
-    this.pending.clear()
-    for (const [requestId, entry] of entries) {
-      clearTimeout(entry.timer)
-      entry.resolve({ requestId, ok: false, diagnostics: [], error })
-    }
-  }
-
-  private fail(requestId: string, error: string): void {
-    const entry = this.pending.get(requestId)
-    if (!entry) return
-    this.pending.delete(requestId)
-    clearTimeout(entry.timer)
-    entry.resolve({ requestId, ok: false, diagnostics: [], error })
+    return this.request(
+      writeLine,
+      requestId,
+      { requestId },
+      undefined,
+      timeoutMs,
+      `timed out waiting for engine response to //#evalMark — the evaluation queue may ` +
+        `be blocked (see the log for the blocking line)`,
+    )
   }
 }

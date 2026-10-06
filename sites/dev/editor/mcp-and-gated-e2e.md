@@ -328,7 +328,7 @@ export interface EngineState {
 ここで気をつけたいのは、**3 つのフィールドが optional である**という点です。daemon の状態が取れないときにツールごと例外で落ちるのではなく、分かっている分だけ返す設計になっています。
 
 ```typescript
-// packages/vscode-extension/src/engine-state-bridge.ts:123-138
+// packages/vscode-extension/src/engine-state-bridge.ts:79-94
 export async function resolveEngineState(
   base: Pick<EngineState, 'running' | 'liveCoding'>,
   fetchStatus: () => Promise<EngineStatusBridgeResult>,
@@ -1516,7 +1516,7 @@ npm run test:e2e:cold-install
 - `packages/vscode-extension/src/engine-handlers.ts:228-336` — `setupStdoutHandler()`
 - `packages/vscode-extension/src/agent-handlers.ts:72-109` — `evaluateForAgent()`（#614）
 - `packages/vscode-extension/src/agent-handlers.ts:483-499` — `getLogForAgent()` / `analyzeAudioForAgent()`
-- `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — `//#evalMark` の requestId 相関ブリッジ
+- `packages/vscode-extension/src/eval-mark-bridge.ts:1-95` — `//#evalMark` の requestId 相関ブリッジ
 - `packages/vscode-extension/src/log-ring.ts:1-45` — `selectLogLines()`（#567）
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout 行の分類と適用（`isCurrent` 分割）
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()`（spawn 専用オプション）

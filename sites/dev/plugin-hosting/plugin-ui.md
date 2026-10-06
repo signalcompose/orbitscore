@@ -1117,17 +1117,21 @@ struct UiEventHubCore {
 相関 `requestId`・`expectedName` を 1 つの JSON で運ぶため）。
 
 拡張側の `PluginUiBridge` は、engine プロセスの stdin にメタ行を書き、stdout に返ってくる
-`{"pluginUi": ...}` 行を `requestId` で相関させます。
+`{"pluginUi": ...}` 行を `requestId` で相関させます。書き込み・相関・timeout・drain の骨格は
+#757 で他の 3 本（eval mark / plugin state / engine state）と共通の `CorrelatedLineBridge` に
+まとめられ、`PluginUiBridge` が注入するのはメタコマンド名・結果行の parse・失敗の形と、
+待っている要求の `action` との突き合わせだけです。
 
 ```typescript
-// packages/vscode-extension/src/plugin-ui-bridge.ts:90-98
-      const fail = (error: Error): void => this.fail(input.requestId, error.message)
+// packages/vscode-extension/src/correlated-line-bridge.ts:75-84
+      const fail = (error: Error): void => this.fail(requestId, error.message)
       try {
-        const written = writeLine(`//#pluginUi ${JSON.stringify(input)}\n`, fail)
-        if (written === false)
-          this.fail(input.requestId, 'failed to write //#pluginUi to engine stdin')
+        const written = writeLine(`${this.spec.metaCommand} ${JSON.stringify(payload)}\n`, fail)
+        if (written === false) {
+          this.fail(requestId, `failed to write ${this.spec.metaCommand} to engine stdin`)
+        }
       } catch (error) {
-        this.fail(input.requestId, error instanceof Error ? error.message : String(error))
+        this.fail(requestId, error instanceof Error ? error.message : String(error))
       }
     })
 ```
