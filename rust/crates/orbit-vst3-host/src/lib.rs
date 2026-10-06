@@ -457,6 +457,12 @@ pub struct Vst3PluginMain {
     pub(crate) _home_thread: PhantomData<Rc<()>>,
     pub(crate) _library: LoadedLibrary,
     pub(crate) info: LoadedVst3Info,
+    /// component（processor）の class ID。保存する `.vstpreset` の header に書く（CAP.2a・#982）。
+    pub(crate) class_id: TUID,
+    /// 単一コンポーネントの controller が component state をそのまま返すと分かったら `true`
+    /// （[`orbit_vst3_preset::controller_echoes_component`]）。以後の保存では controller の
+    /// `getState` を呼ばない — 同じ state を 2 回シリアライズするだけになるため（#982）。
+    pub(crate) controller_echoes_component: Cell<bool>,
 }
 
 impl Vst3PluginMain {
@@ -465,7 +471,11 @@ impl Vst3PluginMain {
         &mut self.ui_endpoint
     }
 
-    /// 現在の component state を取得する（空 state 拒否の規律込み）。
+    /// 現在の state を `.vstpreset` container として取得する（CAP.2a・#982）。
+    ///
+    /// component state が取れない・空なら `Err`（空 state 拒否の規律）。controller state は
+    /// 取れなければ付けず、component state だけで保存する（音を決めるのは component 側）。
+    /// どの controller state を付けるかは [`orbit_vst3_preset::controller_chunk_to_store`]。
     ///
     /// **スレッド**: home（main）スレッドから呼ぶこと（CAP.5・VST3 の規約）。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
@@ -473,7 +483,29 @@ impl Vst3PluginMain {
             .component
             .as_ref()
             .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
-        capture_component_state(component)
+        let component_state = capture_component_state(component)?;
+        let controller_state = if self.controller_echoes_component.get() {
+            None
+        } else {
+            self.controller.as_ref().and_then(capture_controller_state)
+        };
+        if orbit_vst3_preset::controller_echoes_component(
+            &component_state,
+            controller_state.as_deref(),
+            self.controller_shared_with_component,
+        ) {
+            self.controller_echoes_component.set(true);
+        }
+        let controller_chunk = orbit_vst3_preset::controller_chunk_to_store(
+            &component_state,
+            controller_state.as_deref(),
+            self.controller_shared_with_component,
+        );
+        Ok(orbit_vst3_preset::build(
+            &tuid_bytes(&self.class_id),
+            &component_state,
+            controller_chunk,
+        ))
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
@@ -646,7 +678,7 @@ mod tests {
 
 #[cfg(test)]
 mod best_effort_notice_tests {
-    use super::best_effort_state_notice;
+    use super::{best_effort_state_notice, controller_state_capture_notice};
 
     /// この通知は復元の成功経路で出るので、daemon の stderr router が非エラーと判定できる形で
     /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
@@ -671,5 +703,24 @@ mod best_effort_notice_tests {
                 "notice must say the restore itself succeeded: {line}"
             );
         }
+    }
+
+    /// #982: controller state を取れなくても保存は component state だけで成功する（CAP.2a）。
+    /// ERROR に倒れると E2E の ERROR 件数（ヘルスシグナル）を壊すので、復元側と同じ規約で出す。
+    #[test]
+    fn controller_state_capture_notice_declares_a_non_error_level_token() {
+        let line = controller_state_capture_notice(0x5);
+        assert!(
+            line.starts_with("INFO [orbit-vst3-host] "),
+            "notice must declare a non-error level token and the host tag: {line}"
+        );
+        assert!(
+            line.contains("IEditController::getState") && line.contains("0x5"),
+            "notice must name the call and its result: {line}"
+        );
+        assert!(
+            line.contains("without the controller chunk"),
+            "notice must say the state is still saved: {line}"
+        );
     }
 }

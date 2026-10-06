@@ -237,8 +237,13 @@ fn save_state_succeeds_while_audio_blocks_keep_flowing() {
     // (3) 保存内容が現在 state（復元済みオフセット）であること。
     let captured = std::fs::read(&sidecar).expect("サイドカーが書かれていない");
     assert_eq!(response.bytes_written, captured.len() as u64);
+    // #982: 保存は `.vstpreset` container（CAP.2a）。中身の component chunk を見る。
+    let component = orbit_vst3_preset::parse(&captured)
+        .expect("保存した state が container として壊れている")
+        .expect("保存した state が container（magic `VST3`）になっていない")
+        .component;
     assert_eq!(
-        orbit_vst3_synth_oracle::decode_state(&captured),
+        orbit_vst3_synth_oracle::decode_state(component),
         Some(RESTORED_SEMITONES),
         "吸い上げた state が復元値と違う (captured={captured:?})"
     );

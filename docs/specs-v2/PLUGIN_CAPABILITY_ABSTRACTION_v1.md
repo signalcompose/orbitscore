@@ -109,7 +109,9 @@ VST3 はプラグインの state を **component（音を作る側）と control
      失敗のときは INFO の通知を出し、component state だけで保存する
    - **単一コンポーネント**（controller と component が同じオブジェクト）で、
      `IEditController::getState` の結果が `Comp` と同じバイト列のとき。同じ実装が 2 つの口で
-     答えているので、付けると復元で全 state の `setState` が 2 回走る（Kontakt 級では読み込みが倍になる）
+     答えているので、付けると復元で全 state の `setState` が 2 回走る（Kontakt 級では読み込みが倍になる）。
+     一度そう分かったインスタンスでは、以後の保存で `IEditController::getState` を呼ばない
+     （同じ state を 2 回シリアライズするだけになるため）
 3. **復元は container と raw component chunk（旧形式・先頭が `VST3` でないバイト列）の両方を受け付ける**。
    #982 より前に保存した state ファイルはそのまま読める
 

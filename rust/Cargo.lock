@@ -1148,6 +1148,7 @@ dependencies = [
  "orbit-child-runtime",
  "orbit-vst3-gain-oracle",
  "orbit-vst3-host",
+ "orbit-vst3-preset",
 ]
 
 [[package]]
@@ -1178,6 +1179,7 @@ dependencies = [
  "orbit-audio-sandbox",
  "orbit-child-runtime",
  "orbit-vst3-host",
+ "orbit-vst3-preset",
  "orbit-vst3-synth-oracle",
 ]
 

@@ -139,8 +139,12 @@ fn real_effect_child_restores_and_captures_state_through_the_host_mailbox() {
         .issue_save_state(&sidecar)
         .expect("host mailbox save");
     let captured = std::fs::read(&sidecar).expect("read captured state");
-    assert_eq!(response.bytes_written, expected.len() as u64);
-    assert_eq!(captured, expected);
+    assert_eq!(response.bytes_written, captured.len() as u64);
+    // #982: 保存は `.vstpreset` container（CAP.2a）。中身の component chunk を見る。
+    let chunks = orbit_vst3_preset::parse(&captured)
+        .expect("captured state is a well-formed container")
+        .expect("captured state carries the VST3 magic");
+    assert_eq!(chunks.component, expected);
 
     let _ = std::fs::remove_file(sidecar);
     let _ = std::fs::remove_file(restore);

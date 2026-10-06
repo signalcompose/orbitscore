@@ -28,12 +28,40 @@ pub(crate) fn capture_component_state(
     Ok(bytes)
 }
 
+/// #982: controller state を取り出す（CAP.2a）。`None` = 付けない。
+///
+/// `kNotImplemented` は「controller に state が無い」なので黙って `None`。それ以外の失敗は
+/// INFO の通知を出して `None`（component state だけで保存は成功させる — 現状より悪くしない）。
+/// 0 バイトや単一コンポーネントでの重複は呼び出し側（`controller_chunk_to_store`）が落とす。
+pub(crate) fn capture_controller_state(controller: &ComPtr<IEditController>) -> Option<Vec<u8>> {
+    let stream_wrapper = ComWrapper::new(MemoryStream::new());
+    let stream = stream_wrapper
+        .to_com_ptr::<IBStream>()
+        .expect("MemoryStream exposes IBStream");
+    let result = unsafe { controller.getState(stream.as_ptr()) };
+    if result == kNotImplemented {
+        return None;
+    }
+    if !is_ok(result) {
+        eprintln!("{}", controller_state_capture_notice(result));
+        return None;
+    }
+    let bytes = stream_wrapper.data.borrow().clone();
+    Some(bytes)
+}
+
+/// TUID（`c_char` × 16）をバイト列として読む。`c_char` の符号はプラットフォームで違うので
+/// `as u8` でビットをそのまま写す。
+pub(crate) fn tuid_bytes(tuid: &TUID) -> [u8; 16] {
+    tuid.map(|byte| byte as u8)
+}
+
 impl Vst3InstrumentProcessor {
     /// #555: 現在の plugin state を **バイト列として取り出す**（DAW ループの保存側）。
     ///
-    /// VST3 正準の永続化は `IComponent::getState`。ここでは controller chunk を含めず
-    /// component chunk のみを返す — 復元側（`apply_state_chunks`）が magic 無しの
-    /// raw component state を受理する契約なので対称になる。
+    /// #982 から `.vstpreset` container で返す（`Comp` = `IComponent::getState`、取れれば
+    /// `Cont` = `IEditController::getState`・CAP.2a）。復元側（`apply_state_chunks`）は
+    /// container と旧形式の raw component state の両方を受理する。
     ///
     /// **スレッド**: UI/メインスレッドから呼ぶこと（CAP.5・VST3 の規約）。
     /// child のメインループ（現状は audio spin loop・Phase 2 で runloop 化）が呼び出す。
@@ -203,6 +231,8 @@ impl Vst3InstrumentProcessor {
                     _home_thread: PhantomData,
                     _library: library,
                     info: info.clone(),
+                    class_id: class.cid,
+                    controller_echoes_component: Cell::new(false),
                 }),
             },
             info,

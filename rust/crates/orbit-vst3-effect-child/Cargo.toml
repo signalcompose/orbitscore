@@ -26,3 +26,5 @@ anyhow = "1"
 # テストだけ古い形式のまま「通る」状態が作れてしまう。
 [dev-dependencies]
 orbit-vst3-gain-oracle = { path = "../orbit-vst3-gain-oracle" }
+# #982: 保存した state（`.vstpreset` container）から component chunk を取り出して照合する。
+orbit-vst3-preset = { path = "../orbit-vst3-preset" }

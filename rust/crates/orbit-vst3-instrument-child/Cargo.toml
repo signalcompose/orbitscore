@@ -20,3 +20,5 @@ anyhow = "1"
 [dev-dependencies]
 # 配線テスト (tests/mailbox_wiring.rs) が実プラグインとして oracle をロードする。
 orbit-vst3-synth-oracle = { path = "../orbit-vst3-synth-oracle" }
+# #982: 保存した state（`.vstpreset` container）から component chunk を取り出して照合する。
+orbit-vst3-preset = { path = "../orbit-vst3-preset" }

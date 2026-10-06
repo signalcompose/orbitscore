@@ -177,6 +177,8 @@ impl Vst3EffectProcessor {
                 _home_thread: PhantomData,
                 _library: library,
                 info: info.clone(),
+                class_id: class.cid,
+                controller_echoes_component: Cell::new(false),
             }),
         };
         Ok((processor, info))
@@ -193,7 +195,8 @@ impl Vst3EffectProcessor {
         )
     }
 
-    /// 現在の effect component state を取得する。instrument と同じ空-state拒否規律を使う。
+    /// 現在の effect state を `.vstpreset` container として取得する（CAP.2a・#982）。
+    /// instrument と同じ空-state拒否規律を使う。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
         self.main
             .as_ref()

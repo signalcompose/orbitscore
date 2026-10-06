@@ -38,6 +38,35 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
   一次ソース表に 3 行追加。core spec PH.1 と PROJECT_FILE_SPEC PRJ.7 に 1 文ずつ追従
   - CAP 仕様の末尾は「改訂は owner 承認を要する」。owner は #982 の着手を指示したが、
     **仕様の文面そのものは owner の確認を経ていない**ので PR で確認を求める
+- **fix（本体）**: 保存を `.vstpreset` container に変えた（CAP.2a）
+  - `orbit-vst3-preset` に `build` / `class_id_ascii` / `controller_chunk_to_store` /
+    `controller_echoes_component` を追加。テストは実装前に書いて red（未定義でコンパイル不可）を確認した。
+    書き出しは **parser を使わずに手で組んだ期待バイト列**と突き合わせる（往復テストだけだと、書き出しと
+    解析が同じ向きに間違えたときに気づけない）
+  - `Vst3PluginMain` に component の class ID を持たせ、`capture_state` で `IComponent::getState`（必須）と
+    `IEditController::getState`（任意）を取って container にする。controller の失敗は INFO の通知
+    （`controller_state_capture_notice`・ERROR に倒すと E2E の ERROR 件数を壊す）を出し、component だけで保存する
+  - **単一コンポーネント（Kontakt）の重複**: controller の口でも component state を返す plugin は、`Cont` を
+    付けない（復元で全 state の `setState` が 2 回走るため）。さらに一度そう分かったインスタンスは以後
+    controller の `getState` を呼ばない（毎回の保存で数十 MB 級を 2 回シリアライズするのを避ける・
+    `Vst3PluginMain::controller_echoes_component`）。🔴 **Kontakt が実際にどちらの実装かは未確認**
+  - 既存テストの追従（いずれも macOS 専用）: `orbit-vst3-host/tests/offline.rs` 2 本・
+    `orbit-vst3-instrument-child/tests/{mailbox_wiring,save_during_playback}.rs`・
+    `orbit-vst3-effect-child/tests/mailbox_wiring.rs` を「container を解析して `Comp` を照合」に変えた。
+    effect の往復テストには `Cont` が付かないこと（oracle の controller は何も書かない）と header の class ID
+    （oracle 冒頭コメントの Processor CID）の照合を追加
+  - gain oracle に class ID の定数を足そうとしたら `file-size-ratchet`（基準 685 行）を 1 行超えたので取りやめ、
+    期待値はテスト側（`tests/` は計測対象外）に書いた
+- **検証**（この環境は Linux）:
+  - ✅ `cargo test --workspace --locked`（CI と同じ・576 passed / 0 failed）/ `cargo clippy --workspace --all-targets
+    --locked -D warnings` / `cargo fmt --all --check` / `npx vitest run tests/repo tests/docs`（74 passed）
+  - ✅ macOS 向けの型チェック: `rustup target add aarch64-apple-darwin` の上で
+    `cargo clippy --target aarch64-apple-darwin -p orbit-vst3-host -p orbit-vst3-preset -p orbit-vst3-instrument-child
+    -p orbit-vst3-effect-child -p orbit-vst3-gain-oracle --all-targets -D warnings`（`coreaudio-sys` が macOS SDK を
+    要するので daemon と rack child は対象外）
+  - ✅ 手書き変異 3 件（class ID を小文字 16 進 / list offset を +1 / 単一コンポーネント判定の反転）がすべて red
+  - ❌ **未実施**: macOS 専用テストの実行（上記の追従分を含む）・Kontakt の gated テスト・実機 E2E。
+    owner の macOS 環境で回す必要がある
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 

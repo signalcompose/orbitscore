@@ -132,8 +132,13 @@ fn real_child_captures_the_hosted_plugin_state_through_the_command_mailbox() {
     );
     // 🔴 ここが配線の核心。fixture の固定ペイロードではなく、**実プラグインの state** が
     // 出てきていること、しかも起動時に復元した値と一致していることを確認する。
+    // #982: 保存は `.vstpreset` container（CAP.2a）。中身の component chunk を見る。
+    let component = orbit_vst3_preset::parse(&captured)
+        .expect("保存した state が container として壊れている")
+        .expect("保存した state が container（magic `VST3`）になっていない")
+        .component;
     assert_eq!(
-        orbit_vst3_synth_oracle::decode_state(&captured),
+        orbit_vst3_synth_oracle::decode_state(component),
         Some(RESTORED_SEMITONES),
         "吸い上げた state が復元した値と違う — capture_state が実プラグインを \
          見ていないか、--state の復元が効いていない (captured={captured:?})"

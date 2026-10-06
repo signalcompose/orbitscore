@@ -148,6 +148,19 @@ pub(crate) fn best_effort_state_notice(what: &str, result: i32) -> String {
     )
 }
 
+/// #982: controller state を取れなかったときの通知（CAP.2a）。保存そのものは component state
+/// だけで成功するので、エラーではなく level トークン付きの情報にする（規約は
+/// `orbit_child_runtime::notice`）。
+pub(crate) fn controller_state_capture_notice(result: i32) -> String {
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-host",
+        format_args!(
+            "IEditController::getState returned {result:#x} (best-effort; the state is saved \
+             without the controller chunk)"
+        ),
+    )
+}
+
 pub(crate) fn apply_state_chunks(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,
