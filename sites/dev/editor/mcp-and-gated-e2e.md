@@ -101,7 +101,7 @@ export function handleStepLine(step: StepEvent): void {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
+// packages/vscode-extension/src/extension.ts:231-242
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -285,7 +285,7 @@ async function evaluateForAgent(
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:254-262
+// packages/vscode-extension/src/engine-handlers.ts:255-263
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -373,7 +373,7 @@ const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
 
 ## `get_log` とリングバッファ
 
-拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
+拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して（`log-ring.ts` の `tapOutputIntoLogRing()`）、同じ行をリングバッファにも積んでいます。`append` が行の途中で区切られて呼ばれても、改行の来ていない末尾を持ち越すので、チャネルの 1 行はリングでも 1 行です（2026-10 から。以前は呼び出しごとに区切っていました）。
 
 ```typescript
 // packages/vscode-extension/src/extension-state.ts:60-69
@@ -390,19 +390,28 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:108-119
+// packages/vscode-extension/src/log-ring.ts:58-78
+export function tapOutputIntoLogRing(
+  channel: { append(value: string): void; appendLine(value: string): void },
+  push: (line: string) => void,
+): void {
+  let partial = ''
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
-    pushLogRing(value)
+    push(partial + value)
+    partial = ''
     rawAppendLine(value)
   }
   const rawAppend = channel.append.bind(channel)
   channel.append = (value: string) => {
-    for (const line of value.split('\n')) {
-      if (line) pushLogRing(line)
+    const lines = (partial + value).split('\n')
+    partial = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line) push(line)
     }
     rawAppend(value)
   }
+}
 ```
 
 つまり `get_log` が返すのは「Output パネルの OrbitScore チャネルに出たものと同じ内容」です。engine の stdout がそのまま入るわけではなく、`shouldFilterLine()` を通ったあとの行が入ります（`[STEP]` が通常モードで見えない理由はここにあり、後述します）。

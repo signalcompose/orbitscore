@@ -45,3 +45,34 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
   }
   return out
 }
+
+/**
+ * 出力チャネルの `append` / `appendLine` を横取りし、`get_log` 用リングへ**行単位で**写す。
+ *
+ * 🔴 `append` は行の途中で区切られて呼ばれうる（debug 起動は engine stdout の chunk を
+ * そのまま渡す）。以前は `value.split('\n')` で呼び出しごとに区切っていたので、chunk 境界で
+ * 割れた 1 行がリングでは 2 行になっていた（設計 668 §13.5.2 の「ring proxy」・#964 の残り）。
+ * 改行の来ていない末尾は持ち越し、`appendLine` は持ち越しと合わせて 1 行にする —
+ * 出力チャネルに見えている行とリングの行を一致させる。
+ */
+export function tapOutputIntoLogRing(
+  channel: { append(value: string): void; appendLine(value: string): void },
+  push: (line: string) => void,
+): void {
+  let partial = ''
+  const rawAppendLine = channel.appendLine.bind(channel)
+  channel.appendLine = (value: string) => {
+    push(partial + value)
+    partial = ''
+    rawAppendLine(value)
+  }
+  const rawAppend = channel.append.bind(channel)
+  channel.append = (value: string) => {
+    const lines = (partial + value).split('\n')
+    partial = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line) push(line)
+    }
+    rawAppend(value)
+  }
+}

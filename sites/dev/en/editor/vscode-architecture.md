@@ -123,7 +123,7 @@ After this come four **bridges** that wait for JSON lines coming back on the eng
 The entry point is `activate()` in `extension.ts`. It is called once immediately after VS Code loads the extension. Let's look at the first half.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:92-148
+// packages/vscode-extension/src/extension.ts:93-138
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -140,18 +140,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Tap appendLine/append into the ring buffer so the MCP get_log tool can read
   // recent output without a separate logging sink (#388). Installed before the
   // version banner below so get_log's history starts from activation.
-  const rawAppendLine = channel.appendLine.bind(channel)
-  channel.appendLine = (value: string) => {
-    pushLogRing(value)
-    rawAppendLine(value)
-  }
-  const rawAppend = channel.append.bind(channel)
-  channel.append = (value: string) => {
-    for (const line of value.split('\n')) {
-      if (line) pushLogRing(line)
-    }
-    rawAppend(value)
-  }
+  tapOutputIntoLogRing(channel, pushLogRing)
 
   // Show version info
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'))
@@ -183,7 +172,7 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
 ```
 
-What is interesting is the spot where the Output Channel's `appendLine` / `append` are **monkey-patched**. The extension has no central log sink, so in order for the MCP `get_log` tool (#388) to read it, the lines flowing into the Output Channel are also pushed to a ring buffer (`outputLogRing`, capped by `OUTPUT_LOG_RING_MAX = 1000` in `log-ring.ts`).
+What is interesting is the spot where the Output Channel's `appendLine` / `append` are **monkey-patched** (`tapOutputIntoLogRing()` in `log-ring.ts`). The extension has no central log sink, so in order for the MCP `get_log` tool (#388) to read it, the lines flowing into the Output Channel are also pushed to a ring buffer (`outputLogRing`, capped by `OUTPUT_LOG_RING_MAX = 1000` in `log-ring.ts`). `append` can be called in the middle of a line, so the tail that has not reached a newline is carried to the next call and one line in the channel stays one line in the ring (it used to `split` per call, turning one split line into two ring entries).
 
 The rest of `activate()` is roughly five jobs:
 
@@ -196,7 +185,7 @@ The rest of `activate()` is roughly five jobs:
 The last two are written like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-296 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:231-286 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -339,7 +328,7 @@ When the daemon is found (= the normal state), the indicator is **hidden**. It i
 Let's organize the commands `activate()` registers. There are 16 listed in `contributes.commands` (down from 17 — `forceKillScsynth` / `selectAudioDevice` were removed in #502, then #939 added one), plus 2 internal commands invoked only from TreeView nodes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:160-198
+// packages/vscode-extension/src/extension.ts:150-188
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -536,7 +525,7 @@ The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test e
 Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` as of 2026-05, but #384 extended them to "when opened," "when closed," and "documents already open at activation."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:210-239
+// packages/vscode-extension/src/extension.ts:200-229
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -574,7 +563,7 @@ There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For
 #883 added one more line next to the diagnostic registration: **the quick fix**. `registerOutputCodeActionProvider(context)` returns an "add `<name>.output()`" CodeAction for the two diagnostic codes `output-missing` and `dry-not-routed`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:201-204
+// packages/vscode-extension/src/extension.ts:191-194
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)
@@ -736,7 +725,7 @@ Of those five, `setupStderrHandler` is the one that copies the engine's stderr i
 A small helper therefore sits in between, reassembling the chunk stream into lines.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:376-388
+// packages/vscode-extension/src/engine-handlers.ts:392-404
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -757,7 +746,7 @@ There are three things to read here. The first is carrying `partial` over: a nai
 `setupStderrHandler` itself is now just `push` / `flush` wired up inside `logHandlerFailure` containment.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:412-424
+// packages/vscode-extension/src/engine-handlers.ts:428-440
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -773,19 +762,20 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
     }
 ```
 
-Incidentally, there are **four** routes from "chunk stream" to "lines" across the repository. The implementation comment enumerates all four precisely so that nobody fixes `createLinePrefixer` and assumes the set is now consistent: this one for engine stderr; `createDaemonStderrLineRouter` for daemon stderr (`packages/engine/src/audio/rust-engine/daemon-client.ts`, [#777](https://github.com/signalcompose/orbitscore/issues/777)); `setupStdoutHandler` for engine stdout ([#773](https://github.com/signalcompose/orbitscore/issues/773)); and the ring proxy seen at the start of this chapter (the part that does `value.split('\n')` on `append` and copies into the ring). The extension package does not depend on `@orbitscore/engine`, so at least the first two cannot be shared as things stand. Decisions about newline handling, empty lines, and the trailing flush can propagate to all four sites — that is the conclusion the implementation comment draws.
+Incidentally, there are **four** routes from "chunk stream" to "lines" across the repository. The implementation comment enumerates all four precisely so that nobody fixes `createLinePrefixer` and assumes the set is now consistent: this one for engine stderr; `createDaemonStderrLineRouter` for daemon stderr (`packages/engine/src/audio/rust-engine/daemon-client.ts`, [#777](https://github.com/signalcompose/orbitscore/issues/777)); `setupStdoutHandler` for engine stdout ([#773](https://github.com/signalcompose/orbitscore/issues/773)); and the ring proxy seen at the start of this chapter (`tapOutputIntoLogRing()`, which copies what `append` receives into the ring). Since 2026-10 the daemon stderr router has a `flush()`, and the stdout log transcription and the ring proxy also carry their tail, so all four turn a chunk split mid-line back into one line. The extension package does not depend on `@orbitscore/engine`, so at least the first two cannot be shared as things stand. Decisions about newline handling, empty lines, and the trailing flush can propagate to all four sites — that is the conclusion the implementation comment draws.
 
 ### The stdout bridge envelopes are reassembled into lines too (#773)
 
 The third of them, `setupStdoutHandler`, became a caller of `createLinePrefixer` on 2026-09-08 in [#811](https://github.com/signalcompose/orbitscore/pull/811) (bundle O-wire). Until then it split each chunk with `output.split('\n')` and fed the pieces straight into the four branches for `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"`, so **when a bridge JSON envelope was cut at a chunk boundary, both fragments were lost**: the first half matched none of the prefixes, and the second half did not start with `{`, so it matched none of them either.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:234-241
+// packages/vscode-extension/src/engine-handlers.ts:234-242
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
-  // partial line to the current process. Only bridge dispatch is buffered:
-  // applyEngineStdoutChunk still receives each raw chunk immediately below.
+  // partial line to the current process. Bridge dispatch and the non-debug log
+  // are buffered; applyEngineStdoutChunk (playhead / //#selectAudioDevice) still
+  // receives each raw chunk immediately below.
   const bridgeLines = createLinePrefixer((rawLine) => {
     const trimmedLine = rawLine.trim()
     const isCurrent = engineProcess === process
@@ -796,30 +786,48 @@ The detail worth noticing is that `bridgeLines` is created **inside the handler*
 The other device is `StringDecoder`.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:271-274
-  // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
-  // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
-  // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
+// packages/vscode-extension/src/engine-handlers.ts:272-288
+  // Decode the line-buffered paths (bridge dispatch and the non-debug log) across Buffer
+  // boundaries. The playhead / `//#selectAudioDevice` path keeps its historical per-chunk
+  // `data.toString()` timing and values. stderr has the same UTF-8 boundary hazard but remains
+  // out of scope for this change.
   const bridgeDecoder = new StringDecoder('utf8')
+  // The non-debug log is line-buffered too: filtering a chunk-split half-line on its own could
+  // drop the half that lacks the line's marker (a `🎚️ … play={"type":…}` update cut before
+  // `"type"` lost its tail — #964). Kept lines are written once per chunk.
+  const keptLogLines: string[] = []
+  const logLines = createLinePrefixer((line) => {
+    if (!shouldFilterLine(line)) keptLogLines.push(line)
+  })
+  const writeKeptLog = (): void => {
+    if (keptLogLines.length === 0) return
+    outputChannel?.append(keptLogLines.join('\n') + '\n')
+    keptLogLines.length = 0
+  }
 ```
 
-`data.toString()` interprets a chunk as UTF-8 on its own, so a multi-byte character straddling a chunk boundary **turns into `U+FFFD` right there**. Rejoining the lines afterwards cannot bring the character back. `StringDecoder` carries an incomplete byte sequence over to the next chunk, which guards the step before. As the comment states, the replacement covers **only the bridge dispatch path**: the `output` / `lines` handed to logging and the playhead still come from `data.toString()` as before. That is the line drawn to leave the existing calling convention and timing untouched, and it also records that the same hazard on stderr is out of scope for this change.
+`data.toString()` interprets a chunk as UTF-8 on its own, so a multi-byte character straddling a chunk boundary **turns into `U+FFFD` right there**. Rejoining the lines afterwards cannot bring the character back. `StringDecoder` carries an incomplete byte sequence over to the next chunk, which guards the step before. At first (#773) the replacement covered only the bridge dispatch path; in 2026-10 the **non-debug log transcription** started going through the same decoder and `createLinePrefixer`. The trigger was #964: the check that keeps a `🎚️` line only sees the head of the line, so when a chunk boundary split it, the tail containing `"type"` was filtered on its own and the back half of the line vanished. The `output` / `lines` handed to the playhead and `//#selectAudioDevice` still come from `data.toString()` as before, and the same hazard on stderr remains out of scope.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:289-290
-      const bridgeOutput = bridgeDecoder.write(data)
-      if (bridgeOutput) bridgeLines.push(bridgeOutput)
+// packages/vscode-extension/src/engine-handlers.ts:303-304
+      const decoded = bridgeDecoder.write(data)
+      if (decoded) bridgeLines.push(decoded)
 ```
 
-And, as on the stderr side, everything is flushed on `end`. `bridgeDecoder.end()` comes first because the decoder's pending bytes have to be turned back into characters before they reach the prefixer; otherwise the last line would be emitted already mangled.
+And, as on the stderr side, everything is flushed on `end` (the log side's carried tail too, outside debug mode). `bridgeDecoder.end()` comes first because the decoder's pending bytes have to be turned back into characters before they reach the prefixer; otherwise the last line would be emitted already mangled.
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:333-341
+// packages/vscode-extension/src/engine-handlers.ts:344-357
   process.stdout?.on('end', () => {
     try {
-      const bridgeRemainder = bridgeDecoder.end()
-      if (bridgeRemainder) bridgeLines.push(bridgeRemainder)
+      const remainder = bridgeDecoder.end()
+      if (remainder) bridgeLines.push(remainder)
       bridgeLines.flush()
+      if (!debugMode) {
+        if (remainder) logLines.push(remainder)
+        logLines.flush()
+        writeKeptLog()
+      }
     } catch (err) {
       logHandlerFailure('setupStdoutHandler', err)
     }
@@ -885,7 +893,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:292-328 (effects の中身を一部省略)
+// packages/vscode-extension/src/engine-handlers.ts:306-339 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -899,15 +907,12 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
           )
         },
         transcribeLog: () => {
-          // Second pass over the SAME `lines` array classifyEngineStdoutLine()
-          // (inside applyEngineStdoutChunk) already scanned — not a re-split of
-          // `output`. Unlike before this lifecycle extraction — when a stale
-          // process's line loop ran zero iterations — this now always runs,
-          // current or stale: the malformed-//#selectAudioDevice diagnostic
-          // must see stale output too (#527 review Important #1).
+          // Runs for current and stale processes alike: the malformed-//#selectAudioDevice
+          // diagnostic must see stale output too (#527 review Important #1). Non-debug output
+          // goes through this handler's own line buffer (never shared with another process).
           if (!debugMode) {
-            const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
-            if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
+            if (decoded) logLines.push(decoded)
+            writeKeptLog()
           } else {
             outputChannel?.append(output)
           }

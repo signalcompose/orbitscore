@@ -234,8 +234,9 @@ export function logHandlerFailure(handlerName: string, err: unknown): void {
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
-  // partial line to the current process. Only bridge dispatch is buffered:
-  // applyEngineStdoutChunk still receives each raw chunk immediately below.
+  // partial line to the current process. Bridge dispatch and the non-debug log
+  // are buffered; applyEngineStdoutChunk (playhead / //#selectAudioDevice) still
+  // receives each raw chunk immediately below.
   const bridgeLines = createLinePrefixer((rawLine) => {
     const trimmedLine = rawLine.trim()
     const isCurrent = engineProcess === process
@@ -268,10 +269,23 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       }
     }
   })
-  // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
-  // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
-  // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
+  // Decode the line-buffered paths (bridge dispatch and the non-debug log) across Buffer
+  // boundaries. The playhead / `//#selectAudioDevice` path keeps its historical per-chunk
+  // `data.toString()` timing and values. stderr has the same UTF-8 boundary hazard but remains
+  // out of scope for this change.
   const bridgeDecoder = new StringDecoder('utf8')
+  // The non-debug log is line-buffered too: filtering a chunk-split half-line on its own could
+  // drop the half that lacks the line's marker (a `🎚️ … play={"type":…}` update cut before
+  // `"type"` lost its tail — #964). Kept lines are written once per chunk.
+  const keptLogLines: string[] = []
+  const logLines = createLinePrefixer((line) => {
+    if (!shouldFilterLine(line)) keptLogLines.push(line)
+  })
+  const writeKeptLog = (): void => {
+    if (keptLogLines.length === 0) return
+    outputChannel?.append(keptLogLines.join('\n') + '\n')
+    keptLogLines.length = 0
+  }
 
   process.stdout?.on('error', (err) => {
     logHandlerFailure('setupStdoutHandler', err)
@@ -286,8 +300,8 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
       const isCurrent = engineProcess === process
 
-      const bridgeOutput = bridgeDecoder.write(data)
-      if (bridgeOutput) bridgeLines.push(bridgeOutput)
+      const decoded = bridgeDecoder.write(data)
+      if (decoded) bridgeLines.push(decoded)
 
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
@@ -302,15 +316,12 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
           )
         },
         transcribeLog: () => {
-          // Second pass over the SAME `lines` array classifyEngineStdoutLine()
-          // (inside applyEngineStdoutChunk) already scanned — not a re-split of
-          // `output`. Unlike before this lifecycle extraction — when a stale
-          // process's line loop ran zero iterations — this now always runs,
-          // current or stale: the malformed-//#selectAudioDevice diagnostic
-          // must see stale output too (#527 review Important #1).
+          // Runs for current and stale processes alike: the malformed-//#selectAudioDevice
+          // diagnostic must see stale output too (#527 review Important #1). Non-debug output
+          // goes through this handler's own line buffer (never shared with another process).
           if (!debugMode) {
-            const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
-            if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
+            if (decoded) logLines.push(decoded)
+            writeKeptLog()
           } else {
             outputChannel?.append(output)
           }
@@ -332,9 +343,14 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
   })
   process.stdout?.on('end', () => {
     try {
-      const bridgeRemainder = bridgeDecoder.end()
-      if (bridgeRemainder) bridgeLines.push(bridgeRemainder)
+      const remainder = bridgeDecoder.end()
+      if (remainder) bridgeLines.push(remainder)
       bridgeLines.flush()
+      if (!debugMode) {
+        if (remainder) logLines.push(remainder)
+        logLines.flush()
+        writeKeptLog()
+      }
     } catch (err) {
       logHandlerFailure('setupStdoutHandler', err)
     }
@@ -363,11 +379,11 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  * 2. `packages/engine/src/audio/rust-engine/daemon-stderr-lines.ts` の
  *    `createDaemonStderrLineRouter` — daemon stderr の同型実装。#777 で同じ `{ push, flush }` の
  *    形になった。拡張パッケージは `@orbitscore/engine` に依存しないので今は共有できない。
- * 3. 同ファイルの `setupStdoutHandler` — bridge dispatch だけをこの関数で行へ戻す（#773）。
- *    生 chunk とその `output.split('\n')` は従来どおり即座に `applyEngineStdoutChunk` へ渡し、
- *    ログ転写と playhead / `//#selectAudioDevice` 処理の呼び出し規約は変えない。
- * 4. `activate()` 冒頭の output-channel ring proxy — `append` を `value.split('\n')` して
- *    `get_log` 用 ring へ写す。これは現時点で issue 未追跡である。
+ * 3. 同ファイルの `setupStdoutHandler` — bridge dispatch（#773）と非 debug のログ転写（#964 の残り）を
+ *    この関数で行へ戻す。playhead / `//#selectAudioDevice` 処理は従来どおり生 chunk とその
+ *    `output.split('\n')` を即座に受け取る（呼び出し規約は変えない）。
+ * 4. `log-ring.ts` の `tapOutputIntoLogRing` — 出力チャネルの `append` を `get_log` 用 ring へ写す。
+ *    改行の来ていない末尾を持ち越すので、debug 起動の生 chunk も 1 行 = ring の 1 行になる。
  *
  * **改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる**。
  *

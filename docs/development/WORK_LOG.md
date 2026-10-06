@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): frame the non-debug log and the get_log ring by lines, not chunks (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **関連**: [#964](https://github.com/signalcompose/orbitscore/issues/964) の残り・設計 668 §13.5.2（束 E-router の「ring proxy」）
+
+「chunk → 行」4 経路のうち、残っていた 2 つ（stdout のログ転写・`get_log` 用リングへの写し取り）を行単位にした。
+
+- **ログ転写**（`setupStdoutHandler`・非 debug）: chunk ごとに `split` して `shouldFilterLine()` に通していたため、
+  chunk 境界で割れた行の後半が独立に filter されていた。`🎚️ … play={"type":…}` の行が `"type"` の手前で割れると、
+  `🎚️` の無い後半が `"type"` で落ちる（#964 の修正で残した穴）。bridge と同じ `StringDecoder` + `createLinePrefixer` を通し、
+  残す行は chunk ごとに 1 回の `append` で書く。stdout の `end` で持ち越しを flush。UTF-8 の文字が chunk をまたいでも化けない
+- **ring proxy**: `activate()` の monkey-patch を `log-ring.ts` の `tapOutputIntoLogRing()` に切り出し、`append` の改行の来ていない末尾を
+  持ち越すようにした。`appendLine` は持ち越しと合わせて 1 行（チャネルに見えている行とリングの行を一致させる）。debug 起動の生 chunk も 1 行 = 1 エントリになる
+- playhead（`[STEP]`）と `//#selectAudioDevice` は従来どおり生 chunk のまま（呼び出し規約を変えない）
+- 🔴 **#773 のテストが固定していた「ログ転写は chunk 単位のまま」を変えた**。その PR の範囲を絞るための固定で、製品の要件ではない。
+  新しい期待（割れた行は改行が来たときに 1 行で書く）に書き換えた
+- テスト: `extension-wiring.spec.ts` に 4 件（割れた行・#964 の `"type"` の後半・UTF-8 の分割・`end` の flush）、`log-ring.spec.ts` に 3 件。
+  修正を戻すと 7 件とも red を確認
+- 🔴 `get_log` に入る行の形が変わる（割れた行が 1 行になる）ので、**実機 gated E2E 全件で確認が必要**（設計 668 の PR-E12 の注記と同じ）。この環境では未実行
+- dev サイト（`editor/vscode-architecture.md`・`editor/mcp-and-gated-e2e.md`・ja / en）の引用と散文を更新
+
 ### fix(engine): flush the daemon's last stderr line when the stream ends (Oct 6, 2026)
 
 **Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#777](https://github.com/signalcompose/orbitscore/issues/777)
