@@ -172,7 +172,7 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
 ```
 
-What is interesting is the spot where the Output Channel's `appendLine` / `append` are **monkey-patched** (`tapOutputIntoLogRing()` in `log-ring.ts`). The extension has no central log sink, so in order for the MCP `get_log` tool (#388) to read it, the lines flowing into the Output Channel are also pushed to a ring buffer (`outputLogRing`, capped by `OUTPUT_LOG_RING_MAX = 1000` in `log-ring.ts`). `append` can be called in the middle of a line, so the tail that has not reached a newline is carried to the next call and one line in the channel stays one line in the ring (it used to `split` per call, turning one split line into two ring entries).
+What is interesting is the spot where the Output Channel's `appendLine` / `append` are **monkey-patched** (`tapOutputIntoLogRing()` in `log-ring.ts`). The extension has no central log sink, so in order for the MCP `get_log` tool (#388) to read it, the lines flowing into the Output Channel are also pushed to a ring buffer (`outputLogRing`, capped by `OUTPUT_LOG_RING_MAX = 1000` in `log-ring.ts`). `append` can be called in the middle of a line, so the tail that has not reached a newline is carried to the next call and one line in the channel stays one line in the ring (it used to `split` per call, turning one split line into two ring entries). If an `appendLine` arrives while a tail is carried, the tail goes out first as its own line.
 
 The rest of `activate()` is roughly five jobs:
 
@@ -846,7 +846,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
+// packages/vscode-extension/src/engine-process.ts:646-652
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると

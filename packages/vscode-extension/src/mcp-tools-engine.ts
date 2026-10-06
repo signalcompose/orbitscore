@@ -16,12 +16,16 @@ import type { EvaluateResult, OrbitScoreToolHandlers } from './mcp-types'
  * #966: name the base directory the evaluation used, so an agent sees a wrong base
  * immediately instead of as a distant `[SAMPLE_NOT_FOUND]`. The text still starts with
  * `ok` / `error:` as before; `documentDirectory` absent (code never sent) adds nothing.
+ * `null` means no base was sent — the engine's REPL keeps the base of its previous evaluation,
+ * so the text says so instead of claiming there is no base (core spec IM.6).
  */
 export function evaluateToolResult(result: EvaluateResult): ReturnType<typeof toToolResult> {
   const base =
     result.documentDirectory === undefined
       ? ''
-      : ` (documentDirectory: ${result.documentDirectory ?? 'none'})`
+      : ` (documentDirectory: ${
+          result.documentDirectory ?? 'not sent — the engine keeps its previous base'
+        })`
   return result.ok
     ? toToolResult({ ok: true, message: `ok${base}` })
     : toToolResult({ ok: false, error: `${result.error}${base}` })

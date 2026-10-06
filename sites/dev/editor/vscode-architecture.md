@@ -172,7 +172,7 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
 ```
 
-面白いのは Output Channel の `appendLine` / `append` を **monkey-patch** している箇所です（`tapOutputIntoLogRing()`、`log-ring.ts`）。拡張には中央のログ sink が無いので、MCP の `get_log` ツール (#388) が読めるように、Output Channel に流れる行をリングバッファ (`outputLogRing`、上限は `log-ring.ts` の `OUTPUT_LOG_RING_MAX = 1000`) にも積んでいます。`append` は行の途中で区切られて呼ばれうるので、改行の来ていない末尾は次の呼び出しまで持ち越し、チャネルに見えている 1 行をリングでも 1 行にします（以前は呼び出しごとに `split` していたため、割れた 1 行がリングでは 2 行になっていました）。
+面白いのは Output Channel の `appendLine` / `append` を **monkey-patch** している箇所です（`tapOutputIntoLogRing()`、`log-ring.ts`）。拡張には中央のログ sink が無いので、MCP の `get_log` ツール (#388) が読めるように、Output Channel に流れる行をリングバッファ (`outputLogRing`、上限は `log-ring.ts` の `OUTPUT_LOG_RING_MAX = 1000`) にも積んでいます。`append` は行の途中で区切られて呼ばれうるので、改行の来ていない末尾は次の呼び出しまで持ち越し、チャネルに見えている 1 行をリングでも 1 行にします（以前は呼び出しごとに `split` していたため、割れた 1 行がリングでは 2 行になっていました）。持ち越しの途中で `appendLine` が来たら、持ち越しは独立した 1 行として先に出します。
 
 `activate()` の残りは大きく 5 つの仕事です:
 
@@ -846,7 +846,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
+// packages/vscode-extension/src/engine-process.ts:646-652
 export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると

@@ -199,7 +199,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 One entry from `get_diagnostics` has this shape. `code` is the optional field #883 added; it is present only when `vscode.Diagnostic.code` is a string or a number.
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:105-111
+// packages/vscode-extension/src/mcp-types.ts:106-112
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -218,7 +218,7 @@ What this buys is that **an agent can branch on an identifier instead of on word
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:31-63
+// packages/vscode-extension/src/mcp-tools-engine.ts:35-67
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -312,7 +312,7 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:34-41
+// packages/vscode-extension/src/mcp-types.ts:35-42
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -373,7 +373,7 @@ So `statusError` does not necessarily mean "the daemon is broken" — it can equ
 
 ## `get_log` and the ring buffer
 
-The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` (`tapOutputIntoLogRing()` in `log-ring.ts`) to push the same lines into a ring buffer. Even when `append` is called mid-line, the tail that has not reached a newline is carried over, so one line in the channel is one line in the ring (since 2026-10; it used to split per call).
+The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` (`tapOutputIntoLogRing()` in `log-ring.ts`) to push the same lines into a ring buffer. Even when `append` is called mid-line, the tail that has not reached a newline is carried over, so one line in the channel is one line in the ring (since 2026-10; it used to split per call). The exception is an `appendLine` that arrives while a tail is carried: the tail goes out first as its own line, because gluing it to another writer's line (such as an `ERROR:` line) would hide both from readers that match at the start of a line.
 
 ```typescript
 // packages/vscode-extension/src/extension-state.ts:60-69
@@ -390,7 +390,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/log-ring.ts:58-78
+// packages/vscode-extension/src/log-ring.ts:60-81
 export function tapOutputIntoLogRing(
   channel: { append(value: string): void; appendLine(value: string): void },
   push: (line: string) => void,
@@ -398,8 +398,9 @@ export function tapOutputIntoLogRing(
   let partial = ''
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
-    push(partial + value)
+    if (partial) push(partial)
     partial = ''
+    push(value)
     rawAppendLine(value)
   }
   const rawAppend = channel.append.bind(channel)

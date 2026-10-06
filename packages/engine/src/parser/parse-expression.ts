@@ -129,17 +129,17 @@ export class ExpressionParser {
       return { value: parsed.value, newPos: parsed.newPos }
     }
     if (token.type === 'IDENTIFIER') {
+      // `arrayElement`: only an element of the `[ … ]` itself — never an argument of a call
+      // inside it (`[layer(Reverb)]` keeps `Reverb` a plain value_ref). `r` / `rr` are random
+      // degrees in any array; other names only in a `var X = [ … ]` binding.
       if (
-        this.stackVoiceNames &&
+        arrayElement &&
+        (this.stackVoiceNames || token.value === 'r' || token.value === 'rr') &&
         ParserUtils.peek(this.tokens, this.pos).type !== 'LPAREN' &&
         !ParserUtils.isBooleanLiteral(token.value)
       ) {
         const voice = this.parseStackNameVoice(true)
         return { value: voice as ValueExpression, newPos: this.pos }
-      }
-      if (arrayElement && (token.value === 'r' || token.value === 'rr')) {
-        const parsed = this.parsePlayIdentifier(true)
-        return { value: parsed.value as ValueExpression, newPos: parsed.newPos }
       }
       if (ParserUtils.peek(this.tokens, this.pos).type === 'LPAREN') {
         return this.parseValueCall()

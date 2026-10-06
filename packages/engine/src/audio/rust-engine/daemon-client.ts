@@ -42,7 +42,7 @@ import {
   DaemonQuitError,
   DaemonStartupError,
 } from './errors'
-import { createDaemonStderrLineRouter } from './daemon-stderr-lines'
+import { createDaemonStderrLineRouter, unterminatedTail } from './daemon-stderr-lines'
 import { validateRenderScore, type RenderScore } from './render-score'
 import {
   CommandFrame,
@@ -883,9 +883,6 @@ export class DaemonClient extends EventEmitter {
     }
     child.stderr?.on('data', onStderrData)
     child.stderr?.on('end', () => routeStderrLine.flush())
-    const detachStderr = (): void => {
-      collecting = false
-    }
 
     const reader = createInterface({ input: child.stdout! })
     const port = await new Promise<number>((resolve, reject) => {
@@ -898,7 +895,7 @@ export class DaemonClient extends EventEmitter {
         settled = true
         clearTimeout(to)
         reader.close()
-        detachStderr()
+        collecting = false // stop collecting startup diagnostics; route lines from here on
         fn()
       }
       const to = setTimeout(() => {
@@ -953,6 +950,9 @@ export class DaemonClient extends EventEmitter {
             // 予期せぬ stdout 出力は event で通知して debug に残す。
             this.emit('unexpected-stdout', skippedLines)
           }
+          // 起動中に貯めた stderr が行の途中で終わっていたら、その頭をルータへ渡し、
+          // 起動後に届く残りと 1 行に戻す（unterminatedTail の doc）。
+          routeStderrLine.push(unterminatedTail(stderrChunks.join('')))
           resolve(parsed.port)
         })
       })

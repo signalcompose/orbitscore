@@ -199,7 +199,7 @@ export function buildMcpServerUrl(port: number): string {
 `get_diagnostics` の 1 件はこの形です。`code` は #883 で足された optional フィールドで、`vscode.Diagnostic.code` が文字列か数値のときだけ載ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:105-111
+// packages/vscode-extension/src/mcp-types.ts:106-112
 export interface DiagnosticEntry {
   line: number
   character: number
@@ -218,7 +218,7 @@ export interface DiagnosticEntry {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:31-63
+// packages/vscode-extension/src/mcp-tools-engine.ts:35-67
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -312,7 +312,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 `{"engineState"` の分岐が `{"evalMark"` の隣にあるのは偶然ではありません。#661 で `get_engine_state` は「拡張のプロセスが生きているか」だけを答えるツールから、**daemon が実際にどのデバイスへ音を出しているか**を答えるツールになりました。返り値の型がそのまま変化を語っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-types.ts:34-41
+// packages/vscode-extension/src/mcp-types.ts:35-42
 /** Snapshot of the engine process state. */
 export interface EngineState {
   running: boolean
@@ -373,7 +373,7 @@ const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
 
 ## `get_log` とリングバッファ
 
-拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して（`log-ring.ts` の `tapOutputIntoLogRing()`）、同じ行をリングバッファにも積んでいます。`append` が行の途中で区切られて呼ばれても、改行の来ていない末尾を持ち越すので、チャネルの 1 行はリングでも 1 行です（2026-10 から。以前は呼び出しごとに区切っていました）。
+拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して（`log-ring.ts` の `tapOutputIntoLogRing()`）、同じ行をリングバッファにも積んでいます。`append` が行の途中で区切られて呼ばれても、改行の来ていない末尾を持ち越すので、チャネルの 1 行はリングでも 1 行です（2026-10 から。以前は呼び出しごとに区切っていました）。例外は持ち越しの途中で `appendLine` が来た時で、持ち越しを独立した 1 行として先に出します（別の書き手の `ERROR:` 行などと繋げると、行頭で照合する読み手が両方を見落とすため）。
 
 ```typescript
 // packages/vscode-extension/src/extension-state.ts:60-69
@@ -390,7 +390,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/log-ring.ts:58-78
+// packages/vscode-extension/src/log-ring.ts:60-81
 export function tapOutputIntoLogRing(
   channel: { append(value: string): void; appendLine(value: string): void },
   push: (line: string) => void,
@@ -398,8 +398,9 @@ export function tapOutputIntoLogRing(
   let partial = ''
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
-    push(partial + value)
+    if (partial) push(partial)
     partial = ''
+    push(value)
     rawAppendLine(value)
   }
   const rawAppend = channel.append.bind(channel)

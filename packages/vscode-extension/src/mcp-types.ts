@@ -23,7 +23,8 @@ export type EvaluateResult = (
 ) & {
   /**
    * #966: the base directory this evaluation used (import / audio() / plugin state).
-   * `null` = none could be determined; absent = the code was never sent.
+   * `null` = none could be determined, so none was sent and the engine keeps the base of its
+   * previous evaluation; absent = the code was never sent.
    */
   documentDirectory?: string | null
 }

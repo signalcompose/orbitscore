@@ -112,7 +112,7 @@ Two more norms matter when reading the implementation.
 The implementation is in `packages/engine/src/signal-chain/rack.ts`. Let us look at the types first.
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:12-34
+// packages/engine/src/signal-chain/rack.ts:14-36
 export interface CatalogRackRecipe {
   readonly kind: 'catalog'
   readonly spec: string
@@ -149,7 +149,7 @@ application time (see below).
 `resolveCall` decides which category a call (`ValueCall`) falls into.
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:148-171
+// packages/engine/src/signal-chain/rack.ts:150-173
 function resolveCall(call: ValueCall, env: RackBindingEnvironment): RackRecipe {
   if (/^[A-Z]/.test(call.name)) return [resolveStandardCall(call)]
   switch (call.name) {
@@ -185,7 +185,7 @@ plugin(), chain(), and layer()".
 Standard-plugin resolution is static and **never consults the catalog** (SC.10.8 norm (4)).
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:124-146
+// packages/engine/src/signal-chain/rack.ts:126-148
 function resolveStandardCall(call: ValueCall): StandardRackRecipe {
   if (call.name !== 'Gain') {
     throw new Error(
@@ -221,7 +221,7 @@ arguments accepted are `db` and `enabled`; anything else stops with "no paramete
 `resolveRackValue` flattens array elements recursively.
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:184-221
+// packages/engine/src/signal-chain/rack.ts:175-212
 export function resolveRackValue(value: ValueExpression, env: RackBindingEnvironment): RackRecipe {
   if (typeof value === 'string') {
     return [{ kind: 'catalog', spec: value, enabled: true }]
@@ -309,7 +309,7 @@ binding, and mixing chord variables and rack variables in one array is an explic
 (`rack.ts:231-249`).
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:246-253
+// packages/engine/src/signal-chain/rack.ts:247-254
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
@@ -357,7 +357,7 @@ recipe, and only then is the receiver's method invoked.
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:275-300
+// packages/engine/src/signal-chain/rack.ts:288-313
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,

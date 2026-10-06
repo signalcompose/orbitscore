@@ -18,26 +18,39 @@ const BASELINE = 3
 const CALL = 'skipWhenDacIsBypassed('
 const repoRoot = path.resolve(__dirname, '../..')
 
+/** `tests/` の .ts すべてから、呼び出し箇所（定義行とコメントを除く）を `file:line` で返す。 */
+function callSites(): string[] {
+  return gitLsFiles(repoRoot, ':(glob)tests/**/*.ts')
+    .filter((file) => file !== 'tests/repo/privileges-skip-ratchet.spec.ts')
+    .flatMap((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), 'utf8')
+      if (!source.includes(CALL)) return []
+      return source
+        .split('\n')
+        .map((line, i) => ({ line: line.trim(), at: `${file}:${i + 1}` }))
+        .filter(({ line }) => line.includes(CALL) && !line.startsWith('*'))
+        .filter(({ line }) => !line.startsWith('export function'))
+        .map(({ at }) => at)
+    })
+}
+
 describe('root-skip ratchet (#684)', () => {
+  // 走査対象は隣のラチェットと同じく git の index（`file-size-targets.ts`）。
+  // このファイル自身は CALL を文字列定数として持つだけで、呼び出していない。
+  const calls = callSites()
+
   it(`calls skipWhenDacIsBypassed() at most ${BASELINE} times across tests/`, () => {
-    // 走査対象は隣のラチェットと同じく git の index（`file-size-targets.ts`）。
-    // このファイル自身は CALL を文字列定数として持つだけで、呼び出していない。
-    const calls = gitLsFiles(repoRoot, ':(glob)tests/**/*.spec.ts')
-      .filter((file) => file !== 'tests/repo/privileges-skip-ratchet.spec.ts')
-      .flatMap((file) => {
-        const source = fs.readFileSync(path.join(repoRoot, file), 'utf8')
-        if (!source.includes(CALL)) return []
-        return source
-          .split('\n')
-          .map((line, i) => ({ line, at: `${file}:${i + 1}` }))
-          .filter(({ line }) => line.includes(CALL) && !line.trim().startsWith('*'))
-          .map(({ at }) => at)
-      })
     expect(
       calls.length,
       `skipWhenDacIsBypassed() call sites grew beyond ${BASELINE}: ${calls.join(', ')}`,
     ).toBeLessThanOrEqual(BASELINE)
     // 生存確認: 検索が空振りしていない（helper の改名で 0 件になったら気づく）。
     expect(calls.length).toBeGreaterThan(0)
+  })
+
+  // 🔴 helper で包むと、包んだ関数を何本の spec が呼んでも件数は 1 のまま — ラチェットが
+  // 数えられなくなる。spec から直接呼ぶことを強制する。
+  it('is called directly from spec files, never wrapped in a helper', () => {
+    expect(calls.filter((at) => !at.split(':')[0]!.endsWith('.spec.ts'))).toEqual([])
   })
 })

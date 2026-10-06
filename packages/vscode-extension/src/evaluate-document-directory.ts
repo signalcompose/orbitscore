@@ -7,13 +7,15 @@
  * `evaluate_orbitscore` では解決に失敗した。
  *
  * 順序（IM.6）: 引数 `document_path` → アクティブな OrbitScore エディタ → 最初の
- * ワークスペースフォルダ → 基準なし。`document_path` を先に置くのは、人が前面の
+ * ワークスペースフォルダ → 送らない（engine は直前の基準のまま）。`document_path` を先に置くのは、人が前面の
  * タブで演奏している間もエージェントが別ファイル基準で評価できるようにするため
  * （前面のタブはエージェントから指定できない状態で、`open_file` で変えると人の画面を奪う）。
  *
  * vscode に依存しない純関数にしてある（ファイルの存在確認だけ注入する）。
  */
 import * as path from 'path'
+
+import { isOrbitscoreDocument } from './diagnostics-analysis'
 
 export interface ActiveEditorDocument {
   languageId: string
@@ -57,10 +59,14 @@ export function resolveEvaluateDocumentDirectory(
     if (!input.isFile(absolute)) {
       return { ok: false, error: `document_path "${absolute}" is not an existing file` }
     }
+    // The base travels as one `//#documentDirectory` meta line, which a line break would split.
+    if (/[\r\n]/.test(absolute)) {
+      return { ok: false, error: 'document_path must not contain a line break' }
+    }
     return { ok: true, documentDirectory: path.dirname(absolute) }
   }
 
-  if (activeEditor && activeEditor.languageId === 'orbitscore' && activeEditor.scheme === 'file') {
+  if (activeEditor && isOrbitscoreDocument(activeEditor) && activeEditor.scheme === 'file') {
     return { ok: true, documentDirectory: path.dirname(activeEditor.fsPath) }
   }
 

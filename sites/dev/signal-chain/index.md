@@ -105,7 +105,7 @@ kick.effect([
 実装は `packages/engine/src/signal-chain/rack.ts` にあります。まず型を見てみましょう。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:12-34
+// packages/engine/src/signal-chain/rack.ts:14-36
 export interface CatalogRackRecipe {
   readonly kind: 'catalog'
   readonly spec: string
@@ -141,7 +141,7 @@ v1 の標準プラグインが `Gain` 1 つであることが型の形で現れ�
 呼び出し（`ValueCall`）をどのカテゴリに落とすかは `resolveCall` が決めます。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:148-171
+// packages/engine/src/signal-chain/rack.ts:150-173
 function resolveCall(call: ValueCall, env: RackBindingEnvironment): RackRecipe {
   if (/^[A-Z]/.test(call.name)) return [resolveStandardCall(call)]
   switch (call.name) {
@@ -176,7 +176,7 @@ function resolveCall(call: ValueCall, env: RackBindingEnvironment): RackRecipe {
 標準プラグインの解決は静的で、**カタログを引きません**（SC.10.8 規範 (4)）。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:124-146
+// packages/engine/src/signal-chain/rack.ts:126-148
 function resolveStandardCall(call: ValueCall): StandardRackRecipe {
   if (call.name !== 'Gain') {
     throw new Error(
@@ -212,7 +212,7 @@ function resolveStandardCall(call: ValueCall): StandardRackRecipe {
 配列の要素は `resolveRackValue` が再帰的に平坦化します。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:184-221
+// packages/engine/src/signal-chain/rack.ts:175-212
 export function resolveRackValue(value: ValueExpression, env: RackBindingEnvironment): RackRecipe {
   if (typeof value === 'string') {
     return [{ kind: 'catalog', spec: value, enabled: true }]
@@ -298,7 +298,7 @@ export function processArrayBinding(statement: ChordBinding, state: InterpreterS
 1 つの配列に混ざっていれば明示エラーにします（`rack.ts:231-249`）。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:246-253
+// packages/engine/src/signal-chain/rack.ts:247-254
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
@@ -346,7 +346,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:275-300
+// packages/engine/src/signal-chain/rack.ts:288-313
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,

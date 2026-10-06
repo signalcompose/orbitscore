@@ -194,7 +194,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:681-682
+// packages/vscode-extension/src/engine-process.ts:691-692
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -432,7 +432,7 @@ export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 逆に「ホスト由来の変数を第三者へ渡さない」という一般則は根拠にしていません。それを根拠にするなら拡張ホストの env に乗っている `VSCODE_*` や他の `ELECTRON_*` も落とす必要があり、この関数はそこまではやらないからです。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:916-930
+// packages/engine/src/audio/rust-engine/daemon-client.ts:913-927
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
