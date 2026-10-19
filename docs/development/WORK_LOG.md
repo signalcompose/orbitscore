@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): playhead source provenance carried by the engine (#987 B′, draft) (Oct 19, 2026)
+
+**Date**: 2026-10-19 / **ブランチ**: `claude/sweet-pasteur-2l1eef` / **Issue**: [#987](https://github.com/signalcompose/orbitscore/issues/987)
+
+ライブ再生位置（#390）を「拡張がテキストで `play(` を探す」形から「エンジンが `[STEP]` に評価 ID と引数の文字範囲を載せる」形へ変える設計の**下書き**（`docs/design/987-playhead-source-provenance-design.md`）。実装はしない。owner の確認（設計 §0 の Q1〜Q7）待ち。
+
+- 調べた事実: `argPath` は L2（`resolveChords`）の後の木で数えるため、`x*n`・パターン変数・連結 `(1)(2)`・和音名を含む `play()` では、今の拡張の「カンマ区切りの番号」と一致しない（PR #988 でも同じ）。REPL は文ごとに実行し、`buffer.trim()` した文字列をパースする。ループの次の周期は先読みで予約される
+- 決めた方向（案）: 評価 ID は拡張が振り、設計 694 の属性の仕組み（`//#evalBegin {"evalId":…}`）に載せる / 座標はフレームの物理行と UTF-16 の列 / エンジンは URI を知らない / 位置の木はパーサが作り、L2 が要素と同じ歩調で変換する / 出どころは周期を予約する時点で音に結ぶ / `[STEP]` は末尾に `<src>` を 1 項目足す
+- advisor（Fable）の批判は文書の §14 に反映する（この commit の時点では反映前）
+- 実機 gated E2E は回していない（Linux のコンテナで VS Code・音声デバイスが無い。設計のみの変更）
+
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
 > **2026-10-05 追記（main がマージ前に補正）**: 見出しの「`random` 自体も名前として使えなくなった」は実装より強かった（予約語は `r` / `rr` だけで、`random` という変数名は作れる。書けなくなったのは `var X = random.<名前>` をミキサー派生として読ませることだけ）。正本と core spec の見出しを「`random` という名前のミキサーからは派生できなくなった」へ直した。
