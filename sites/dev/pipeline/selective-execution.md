@@ -233,7 +233,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 `runSelection()` は `writeCodeToEngine()` の戻り値を見て、送れたときだけ視覚フィードバックを出します。
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:227-235
+// packages/vscode-extension/src/run-selection.ts:224-232
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

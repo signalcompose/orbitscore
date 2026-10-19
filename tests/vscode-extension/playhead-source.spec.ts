@@ -381,7 +381,7 @@ describe('playhead source integration', () => {
     expect(decoratedText(a)).toEqual(['1'])
   })
 
-  it('I19: global stop repaints empty ranges after an edit dropped every active range', async () => {
+  it('I19: global stop repaints empty ranges after an edit redrew active entries', async () => {
     const document = new TestDocument('stale.orbs', 'hh.play(1)\nkk.play(2)')
     const editor = new TestEditor(document)
     editors(editor)
@@ -471,7 +471,7 @@ describe('playhead source integration', () => {
     expect(decoratedText(editor)).toEqual(['1'])
   })
 
-  it('I18: does not redraw another sequence at its stale pre-edit range', async () => {
+  it('I18: redraws another sequence only at its current post-edit range', async () => {
     const document = new TestDocument('a.orbs', 'hh.play(1)\nkick.play(2)')
     const editor = new TestEditor(document)
     editors(editor)
@@ -489,7 +489,29 @@ describe('playhead source integration', () => {
     const nonempty = redrawn.flatMap((call) =>
       call.type.options?.border ? call.ranges.map((range) => document.getText(range)) : [],
     )
-    expect(nonempty).toEqual(['1'])
+    expect(nonempty).toEqual(['1', '2'])
+  })
+
+  it('I21: redraws every active sequence at its shifted position after an edit', async () => {
+    const document = new TestDocument('shifted.orbs', 'hh.play(1)\nkk.play(2)')
+    const editor = new TestEditor(document)
+    editors(editor)
+    lineSelection(editor, 0)
+    await run(editor)
+    lineSelection(editor, 1)
+    await run(editor)
+    await step('hh', '0')
+    await step('kk', '0')
+
+    edit(document, 0, 0, '\n')
+    const callsBeforeRedraw = editor.decorationCalls.length
+    await step('hh', '0')
+
+    const redrawn = editor.decorationCalls.slice(callsBeforeRedraw)
+    const nonempty = redrawn.flatMap((call) =>
+      call.type.options?.border ? call.ranges.map((range) => document.getText(range)) : [],
+    )
+    expect(nonempty).toEqual(['1', '2'])
   })
 
   it('W1: activate registers and wires a dedicated document-change listener', async () => {

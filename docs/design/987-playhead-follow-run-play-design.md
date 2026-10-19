@@ -27,7 +27,7 @@
 
 | 論点 | 決定 | 根拠 |
 |---|---|---|
-| 記録するもの | シーケンス名ごとに 1 件。`{ kind: 'call'; docUriString; callStart; openParen; engineGeneration }` か、墓標 `{ kind: 'invalidated'; docUriString; engineGeneration }`。`callStart` は seq 名の先頭、`openParen` は `play(` の `(` の、文書の中の文字オフセット | 最後に流した 1 件だけが意味を持つ（F6） |
+| 記録するもの | シーケンス名ごとに 1 件。`{ docUriString; engineGeneration; anchor: { callStart; openParen } \| null }`。`callStart` は seq 名の先頭、`openParen` は `play(` の `(` の、文書の中の文字オフセット。`anchor: null` は墓標 | 最後に流した 1 件だけが意味を持つ（F6） |
 | 置き場所 | 状態（Map）は `playhead-decorations.ts`。計算はすべて `playhead.ts` の純関数（vscode に依存しない） | 再生位置の状態はすでに `playhead-decorations.ts:24-27` にある。`playhead.ts:19-21` |
 | 記録する時点 | `runSelection` の中で、`writeCodeToEngine` が成功した直後（`run-selection.ts:199-201` の後） | 送れなかったときに記録すると、表示が実際と食い違う |
 | 送った範囲 | `runSelection` が `sentRanges: vscode.Range[]` を作る。選択あり → `[selection]`。subject-block → 集めた行（続き行を含む）を、**連続する行ごとにまとめた**範囲（§8 M1）。standalone → `[executionRange]` | F7。`executionRange` を走査すると、送っていない別の seq の `play(` まで記録してしまう |
@@ -54,7 +54,7 @@
 
 ### 寿命
 
-| 出来事 | 記録 | active range |
+| 出来事 | 記録 | active entry |
 |---|---|---|
 | `⏹ <seq>` | 残す | 消す（今の振る舞い） |
 | `✅ Global stopped` | 残す | 全部消す（今の振る舞い） |
@@ -63,18 +63,18 @@
 | 拡張の再起動 | モジュールの状態ごと消える | — |
 | `__resetPlayheadStateForTest` | 消す（追記する） | 消す |
 
-### 別の seq の古い range
+### 別の seq の range を描画時に求め直す
 
-`applyPlayheadDecorations`（`playhead-decorations.ts:64-87`）は、どこかの seq が 1 歩進むたびに、全 seq の保存済み `vscode.Range` を描き直す。そのため編集のあと、まだ進んでいない seq の range が古い座標のまま描かれる（今もある問題）。
+active entry には `vscode.Range` を保存せず、`{ docUriString; argPath; anchor? }` という導出元だけを持たせる。`applyPlayheadDecorations` は表示中の文書ごとに現在のテキストから字句情報と call 一覧を 1 回だけ作り、その文書の全 entry を `resolvePlayheadStep` で解いてから `vscode.Range` にする。記録がある seq の anchor は `playheadSources` の現在値を使うため、編集で位置がずれた別の seq も正しい位置へ描き直される。
 
-対策: 同じ change listener の中で、その文書の active range のうち、変更の開始位置より後ろに end があるものを削除する（`applyPlayheadDecorations` はここでは呼ばない）。削除した seq は、次に自分が進んだときに今の文書から描き直される。
+解決結果が `out-of-range` / `no-call` の entry はその回だけ描かず、entry 自体は残す。change listener は記録の anchor をずらすか墓標にしたあと、変更文書に active entry があれば 1 回だけ全体を描き直す。これにより「古い座標を消す」処理と、停止時に Map の大きさに関係なく常に描き直す処理は不要になる。
 
 ## 2. 変更するファイル
 
 | ファイル | 要点 |
 |---|---|
-| `packages/vscode-extension/src/playhead.ts` | ① 字句スキャナと `export interface PlayCall { seqName; callStart; openParen }`、`export function findPlayCalls(text): PlayCall[]`（コメントと文字列の外の `<ident>.play(` を文書の順に返す。境界条件は今の正規表現 `:226` と同じ） ② `splitGroupElements` をコメントと文字列に対応させる ③ `findPlayArgRanges(text, seq, openParen?)` / `findPlayArgRangeForPath(text, seq, argPath, openParen?)`（`openParen` を省くと最初の呼び出し。互換を保つ） ④ `resolvePlayheadStep(text, seq, argPath, anchor?)` → `{kind:'range', range}` / `{kind:'out-of-range'}` / `{kind:'no-call'}` ⑤ `shiftPlayCallAnchor(anchor, changes)` → 新しい anchor か `null` ⑥ `:216-221` の「MVP scope … first match」の docstring を書き換える |
-| `packages/vscode-extension/src/playhead-decorations.ts` | ① `playheadSources` Map ② `recordPlayheadSources(document, sentRanges)` ③ `forgetPlayheadSourcesInCode(code)` ④ `notePlayheadDocumentChange(event)` ⑤ `showPlayheadStep` を記録のあり／なしで分ける ⑥ `__resetPlayheadStateForTest` に追記。新しい状態とコードは `handleStepLine`（`:96-107`）より後ろに置く（dev サイトの引用がずれないように） |
+| `packages/vscode-extension/src/playhead.ts` | ① 字句スキャナと `export interface PlayCall { seqName; callStart; openParen }`、`export function findPlayCalls(text): PlayCall[]`（コメントと文字列の外の `<ident>.play(` を文書の順に返す。境界条件は今の正規表現 `:226` と同じ） ② `PlayheadDoc = { text; lexical; calls }` を 1 回作り、call 探索・引数分割・path 解決で使い回す ③ `findPlayArgRanges(text, seq, openParen?)` / `findPlayArgRangeForPath(text, seq, argPath, openParen?)` の公開シグネチャを保つ ④ `resolvePlayheadStep(text, seq, argPath, anchor?, doc?)` → `{kind:'range', range}` / `{kind:'out-of-range'}` / `{kind:'no-call'}` ⑤ `shiftPlayCallAnchor(anchor, changes)` → 新しい anchor か `null` |
+| `packages/vscode-extension/src/playhead-decorations.ts` | ① `playheadSources` Map ② `recordPlayheadSources(document, sentRanges)` ③ `forgetPlayheadSourcesInCode(code)` ④ `notePlayheadDocumentChange(event)` ⑤ active entry は座標でなく `{ docUriString; argPath; anchor? }` を持ち、`applyPlayheadDecorations` が現在の文書から毎回 range を求める ⑥ `showPlayheadStep` は記録の有無を 1 本の解決経路で扱う ⑦ `__resetPlayheadStateForTest` に追記。新しい状態とコードは `handleStepLine`（`:96-107`）より後ろに置く（dev サイトの引用がずれないように） |
 | `packages/vscode-extension/src/run-selection.ts` | 3 つの経路で `sentRanges` を作る。`writeCodeToEngine` が成功した直後に `recordPlayheadSources` を呼ぶ |
 | `packages/vscode-extension/src/agent-handlers.ts` | `evaluateForAgent` で、`writeCodeToEngine` が成功した直後に `forgetPlayheadSourcesInCode(code)` を呼ぶ |
 | `packages/vscode-extension/src/extension.ts` | `activate()` で `onDidChangeTextDocument(notePlayheadDocumentChange)` を登録する（診断用の listener とは別の 1 本） |
@@ -86,18 +86,22 @@
 
 ```ts
 const src = currentSource(step.seqName) // 世代が違う → undefined
-if (src) {
-  if (src.kind === 'invalidated') return clearPlayheadForSequence(step.seqName)
-  const editor = visibleTextEditors.find(e => e.document.uri.toString() === src.docUriString)
-  if (!editor) return
-  const r = resolvePlayheadStep(editor.document.getText(), step.seqName, step.argPath, src)
+const editors = src
+  ? visibleTextEditors.filter(e => e.document.uri.toString() === src.docUriString)
+  : visibleTextEditors
+if (src?.anchor === null) return clearPlayheadForSequence(step.seqName)
+for (const editor of editors) {
+  const r = resolvePlayheadStep(editor.document.getText(), step.seqName, step.argPath, src?.anchor)
   switch (r.kind) { // never で網羅を検査する
-    case 'no-call': return clearPlayheadForSequence(step.seqName)
-    case 'out-of-range': return // 前の表示を残す（今の振る舞い）
-    case 'range': setActive(editor, r.range); return applyPlayheadDecorations()
+    case 'no-call':
+      if (src) return clearPlayheadForSequence(step.seqName)
+      continue
+    case 'out-of-range':
+      if (src) return // 前の表示を残す（今の振る舞い）
+      continue
+    case 'range': return setActiveEntry(editor, step.argPath, src?.anchor)
   }
 }
-// 記録が無い: 今の振る舞い（コメントの外の最初の呼び出し、見えているエディタのうち最初のもの）
 ```
 
 ## 3. 完了条件
@@ -108,7 +112,7 @@ if (src) {
 | C2 | 同じ seq の `play()` が複数あるとき、表示は最後に送った範囲の中の、文書の順で最後の `play()` に付く。subject-block でも、送った行だけが対象になる。`play()` を含まない範囲（`LOOP(hh)` 等）を流しても記録は変わらない。`._play(` は対象外 | P1〜P3, I3〜I7 |
 | C3 | 行コメント、行末コメント、文字列の中の `<seq>.play(` には、記録の有無にかかわらず付かない。`play(` の引数の中のコメントで、引数の範囲を誤らない | P4〜P8, I8 |
 | C4 | 記録が無いとき（起動直後、MCP evaluate で `<seq>.play(` を送った直後のその seq、エンジンの停止・再起動の後）は今と同じ振る舞い。`⏹ <seq>` と `✅ Global stopped` では記録は消えない | I9〜I13 |
-| C5 | 流したあとの編集で、表示が別の `play()` や別の文字へ移らない。前への挿入 → 同じ呼び出しを追う。引数の中の編集 → 今の文字から切り直す（範囲外なら前の表示を残す）。頭を壊す・行ごと消す → 何も光らない。コメントアウト → 光らず、外せば戻る。別の seq の古い range は、古い座標で描き直されない | P9〜P11, I14〜I18 |
+| C5 | 流したあとの編集で、表示が別の `play()` や別の文字へ移らない。前への挿入 → 同じ呼び出しを追う。引数の中の編集 → 今の文字から切り直す（範囲外なら前の表示を残す）。頭を壊す・行ごと消す → 何も光らない。コメントアウト → 光らず、外せば戻る。別の seq の古い range は、古い座標で描き直されない | P9〜P11, I14〜I18, I21 |
 | C6 | 実機（stock VS Code）で、Issue の最小例を使う。① 上を流す → 上の行を動く ② 切り替えブロックを選択して流す → 1 周期以内に下の行へ移り、5〜8 歩目も光る ③ 上に `// hh.play(9, 9)` を足す → 表示は下に残る ④ 下の行を消す → 光らない。main がスクリーンショットで 1 回確かめる | 手動 |
 | C7 | `npm test`・`npm run lint`・`npm run docs:check`・実機 gated 全件が緑 | 機械 |
 
@@ -156,7 +160,10 @@ if (src) {
 | I15 | 引数の中の編集 → 今の文字から切り直す。範囲外なら前の表示を残す |
 | I16 | 流した行を削除 → 何も光らない（上の行には付かない） |
 | I17 | 行頭に `// ` を挿入 → 消える。外す → 戻る |
-| I18 | 編集の後、別の seq の古い Range を描き直さない |
+| I18 | 編集の後、別の seq も古い Range ではなく現在位置へ描き直す |
+| I19 | 編集後に全体停止すると空の装飾を描き直す |
+| I20 | 記録なしで 1 つ目の editor が out-of-range なら次の editor を探す |
+| I21 | hh と kk の両方が active な状態で前に改行を挿入し、次の描画でも kk がずれた後の正しい位置に残る |
 | W1 | `activate()` が document-change の listener を登録している |
 
 ## 5. ドキュメント
@@ -183,7 +190,7 @@ PR の本文は `Refs #987`（B が Issue に残るため、閉じない）。
 | ID | 内容 | 確信度 | 反証の仕方 |
 |---|---|---|---|
 | U1 | `contentChanges` は配列の順に逐次当てる意味論である（一次ソースは未確認） | 中 | 実機で複数カーソルの編集をして、表示が同じ呼び出しに残るかを見る。外れても、表示の直前の確かめ直しで大半を捕まえる |
-| U2 | `setDecorations` で付けた装飾は、編集に追従して動く | 中 | C6 ③で確かめる。外れても、次の 1 歩で描き直される |
+| U2 | `setDecorations` で付けた装飾が編集に追従して動くかどうかへの依存 | — | active entry から編集直後に現在の range を求め直して描く方式に変えたため、この不確実性は不要になった |
 | U3 | 閉じていない文字列を改行で終える判断 | 中〜高 | 複数行にまたがる文字列を DSL が実際に使っていれば、ずれる |
 | U4 | 文書の中ではコメントにあたる部分だけを選んで流すと、記録はされるが表示はされない（音は変わる） | 高 | owner がこの使い方を想定しているなら裁定が要る |
 | U5 | エディタ経路では、評価に失敗しても記録は切り替わる（評価との相関が無い）。正確な相関は B で取る | 高 | — |
@@ -204,3 +211,4 @@ PR の本文は `Refs #987`（B が Issue に残るため、閉じない）。
 - **M3（採用）**: 引数の中のコメントへの対応（`splitGroupElements`）は範囲に含める。同じスキャナで済み、間違った引数を光らせる不具合を直すため
 - **M4（採用）**: 別の seq の古い range の削除は範囲に含める。完了条件 5 の「別の文字へ移らない」に直接かかわるため
 - **M5**: E2E は §7 のとおり。PR 本文と owner への報告で明示する
+- **M6（/simplify、2026-10-19）**: active entry を座標から導出元へ変え、現在の文書から描画時に range を求める方式にした

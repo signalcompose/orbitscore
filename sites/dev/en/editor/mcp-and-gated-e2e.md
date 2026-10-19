@@ -70,7 +70,7 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:92-110
+// packages/vscode-extension/src/playhead-decorations.ts:124-142
 /**
  * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
  * so wait until `atEpochMs` (the event's grid time — actual audio lands a
@@ -1341,7 +1341,7 @@ State mutations are guarded by `isCurrent` (whether the process that produced th
 The real `handleStep` is in `playhead-decorations.ts`, and it **waits until the grid time** before moving the highlight.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:99-110
+// packages/vscode-extension/src/playhead-decorations.ts:131-142
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1359,62 +1359,56 @@ export function handleStepLine(step: StepEvent): void {
 Dispatch runs a lookahead early, so lighting the highlight the moment the line arrives would move it ahead of the sound. Lines more than one second late (replayed buffered output, for example) are dropped.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:209-260
+// packages/vscode-extension/src/playhead-decorations.ts:215-260
 function showPlayheadStep(step: StepEvent): void {
   const source = currentPlayheadSource(step.seqName)
-  if (source) {
-    // An invalidated recorded call must clear instead of falling back to the first
-    // play(): that could light an unsounding line—the exact bug in Issue #987 §1.
-    if (source.kind === 'invalidated') {
-      clearPlayheadForSequence(step.seqName)
-      return
-    }
-    // A recorded source belongs only to the file that was actually run (#987 C1),
-    // so do not search another visible editor for the same sequence.
-    const editor = vscode.window.visibleTextEditors.find(
-      (candidate) => candidate.document.uri.toString() === source.docUriString,
-    )
-    if (!editor) return
+  // A recorded source belongs only to the file that was actually run (#987 C1),
+  // so do not search another visible editor for the same sequence.
+  const editors = source
+    ? vscode.window.visibleTextEditors.filter(
+        (candidate) => candidate.document.uri.toString() === source.docUriString,
+      )
+    : vscode.window.visibleTextEditors
+
+  // An invalidated recorded call must clear instead of falling back to the first
+  // play(): that could light an unsounding line—the exact bug in Issue #987 §1.
+  if (source?.anchor === null) {
+    clearPlayheadForSequence(step.seqName)
+    return
+  }
+
+  for (const editor of editors) {
     const resolution = resolvePlayheadStep(
       editor.document.getText(),
       step.seqName,
       step.argPath,
-      source,
+      source?.anchor,
     )
     switch (resolution.kind) {
       case 'no-call':
         // Do not fall back to the first play(): lighting an unsounding line is
         // the issue's original bug, so a missing recorded call clears safely (§1).
-        clearPlayheadForSequence(step.seqName)
-        return
+        if (source) {
+          clearPlayheadForSequence(step.seqName)
+          return
+        }
+        continue
       case 'out-of-range':
         // Keep the previous display, matching existing behavior; choosing another
         // argument would misleadingly light a value that is not sounding.
-        return
+        if (source) return
+        continue
       case 'range':
-        setActivePlayheadRange(editor, step.seqName, resolution.range)
+        setActivePlayheadEntry(editor, step.seqName, step.argPath, source?.anchor ?? undefined)
         return
     }
     const exhaustive: never = resolution
     return exhaustive
   }
-
-  for (const editor of vscode.window.visibleTextEditors) {
-    // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
-    // degrading to the deepest resolvable ancestor (stacks are one visual
-    // unit). Null = even the top-level arg is gone (user edited away the
-    // pattern) — skip; leaving the previous highlight is less misleading
-    // than lighting a wrong arg.
-    const resolution = resolvePlayheadStep(editor.document.getText(), step.seqName, step.argPath)
-    if (resolution.kind === 'no-call') continue
-    if (resolution.kind === 'out-of-range') continue
-    setActivePlayheadRange(editor, step.seqName, resolution.range)
-    return // first visible editor containing the call wins (MVP)
-  }
 }
 ```
 
-`runSelection()` scans only the ranges actually sent to the engine and records the last `<seqName>.play(` outside comments and strings for each sequence. `showPlayheadStep()` targets only that document and call, while re-slicing the argument range from the current text. Only when no record exists does it search visible editors for the first non-comment call. One active range is kept per sequence and replaced on every step, so the highlight appears to "move per beat and wrap at the loop start". Colours are assigned in order of first appearance from `orbitscore.playheadPalette` (by default 32 colours based on the Tokyo Metro / Toei line colours), and one decoration type per colour is created lazily.
+`runSelection()` scans only the ranges actually sent to the engine and records the last `<seqName>.play(` outside comments and strings for each sequence. `showPlayheadStep()` targets only that document and call. An active entry stores derivation data—document URI, `argPath`, and an optional anchor—instead of coordinates; each time `applyPlayheadDecorations()` paints, it scans the current document once and resolves every sequence in that document again. Thus, when an edit shifts another sequence too, all highlights stay at their current positions without deleting stale ranges or repainting unconditionally on stop. Only when no record exists does it search visible editors for the first non-comment call. Colours are assigned in order of first appearance from `orbitscore.playheadPalette` (by default 32 colours based on the Tokyo Metro / Toei line colours), and one decoration type per colour is created lazily.
 
 ### `[STEP]` is invisible in normal mode
 

@@ -107,7 +107,7 @@ async function runSelection() {
           editor.document.lineAt(firstLine).range.start,
           editor.document.lineAt(lastLine).range.end,
         )
-        sentRanges = []
+        const lineGroups: [number, number][] = []
         let groupStart = collectedLines[0].lineNum
         let groupEnd = groupStart
         for (const line of collectedLines.slice(1)) {
@@ -115,20 +115,17 @@ async function runSelection() {
             groupEnd = line.lineNum
             continue
           }
-          sentRanges.push(
-            new vscode.Range(
-              editor.document.lineAt(groupStart).range.start,
-              editor.document.lineAt(groupEnd).range.end,
-            ),
-          )
+          lineGroups.push([groupStart, groupEnd])
           groupStart = line.lineNum
           groupEnd = line.lineNum
         }
-        sentRanges.push(
-          new vscode.Range(
-            editor.document.lineAt(groupStart).range.start,
-            editor.document.lineAt(groupEnd).range.end,
-          ),
+        lineGroups.push([groupStart, groupEnd])
+        sentRanges = lineGroups.map(
+          ([start, end]) =>
+            new vscode.Range(
+              editor.document.lineAt(start).range.start,
+              editor.document.lineAt(end).range.end,
+            ),
         )
       } else {
         const line = editor.document.lineAt(currentLine)

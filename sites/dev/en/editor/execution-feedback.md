@@ -74,7 +74,7 @@ When there is a selection (`!selection.isEmpty`), it is simple. The text of the 
 The case with no selection is interesting. It investigates "to which variable (subject) does the line at the cursor belong" and gathers **lines from the entire file** related to that subject:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:66-139 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/run-selection.ts:66-136 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -119,7 +119,7 @@ The case with no selection is interesting. It investigates "to which variable (s
           editor.document.lineAt(firstLine).range.start,
           editor.document.lineAt(lastLine).range.end,
         )
-        sentRanges = []
+        const lineGroups: [number, number][] = []
         let groupStart = collectedLines[0].lineNum
         let groupEnd = groupStart
         for (const line of collectedLines.slice(1)) {
@@ -127,20 +127,17 @@ The case with no selection is interesting. It investigates "to which variable (s
             groupEnd = line.lineNum
             continue
           }
-          sentRanges.push(
-            new vscode.Range(
-              editor.document.lineAt(groupStart).range.start,
-              editor.document.lineAt(groupEnd).range.end,
-            ),
-          )
+          lineGroups.push([groupStart, groupEnd])
           groupStart = line.lineNum
           groupEnd = line.lineNum
         }
-        sentRanges.push(
-          new vscode.Range(
-            editor.document.lineAt(groupStart).range.start,
-            editor.document.lineAt(groupEnd).range.end,
-          ),
+        lineGroups.push([groupStart, groupEnd])
+        sentRanges = lineGroups.map(
+          ([start, end]) =>
+            new vscode.Range(
+              editor.document.lineAt(start).range.start,
+              editor.document.lineAt(end).range.end,
+            ),
         )
       } else {
         const line = editor.document.lineAt(currentLine)
@@ -240,7 +237,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 The tail of `runSelection()` looks like this.
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:227-235
+// packages/vscode-extension/src/run-selection.ts:224-232
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -261,7 +258,7 @@ A point to note here is the ordering: if sending fails, **no flash**. As of 2026
 What flashes the executed range in the editor is `flashLines()`. It is implemented using `createTextEditorDecorationType` (VS Code API):
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:168-194
+// packages/vscode-extension/src/run-selection.ts:165-191
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -339,7 +336,7 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` is an index into the argument tree of `play()`; `"1.0"` means "the first element inside the second argument." `atEpochMs` is the event's **grid time**; because the engine dispatches ahead with lookahead, the line arrives early. The extension delays the decoration until that time.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:99-110
+// packages/vscode-extension/src/playhead-decorations.ts:131-142
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -354,7 +351,7 @@ export function handleStepLine(step: StepEvent): void {
 }
 ```
 
-`runSelection()` records the last `<seqName>.play(...)` per sequence from the ranges sent to the engine. `showPlayheadStep()` uses that document and call, then `resolvePlayheadStep()` (`playhead.ts:372-388`) derives the matching argument range from the current text. When no record exists, it falls back to the first non-comment call in the visible editors. The color is decided by `colorForSeq()` from `orbitscore.playheadPalette` (32 colors, a first-come assignment based on Tokyo subway line colors), and it is cleared by `⏹ <seq>` lines, the `✅ Global stopped` line, and engine stop. The `[STEP]` lines themselves are hidden from the Output Channel by `shouldFilterLine()`.
+`runSelection()` records the last `<seqName>.play(...)` per sequence from the ranges sent to the engine. `showPlayheadStep()` uses that document and call, then `resolvePlayheadStep()` derives the matching argument range from the current text. An active entry stores only its document URI, `argPath`, and optional anchor—not range coordinates. Rendering scans each document once and resolves all of its entries again, so edits need neither special deletion of stale ranges nor unconditional repainting on stop. When no record exists, it falls back to the first non-comment call in the visible editors. The color is decided by `colorForSeq()` from `orbitscore.playheadPalette` (32 colors, a first-come assignment based on Tokyo subway line colors), and it is cleared by `⏹ <seq>` lines, the `✅ Global stopped` line, and engine stop. The `[STEP]` lines themselves are hidden from the Output Channel by `shouldFilterLine()`.
 
 For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stacks `[ ... ]`), the comment on `findPlayArgRangeForPath()` says it settles for "the deepest resolvable ancestor." Lighting a range one level shallower is less misleading than lighting a wrong argument.
 

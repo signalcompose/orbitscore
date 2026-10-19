@@ -74,7 +74,7 @@ async function runSelection() {
 選択がない場合が面白いです。「カーソルがいる行はどの変数 (subject) に属しているか」を調べて、そのsubject に関わる **ファイル全体の行** をかき集めます:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:66-139 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/run-selection.ts:66-136 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -119,7 +119,7 @@ async function runSelection() {
           editor.document.lineAt(firstLine).range.start,
           editor.document.lineAt(lastLine).range.end,
         )
-        sentRanges = []
+        const lineGroups: [number, number][] = []
         let groupStart = collectedLines[0].lineNum
         let groupEnd = groupStart
         for (const line of collectedLines.slice(1)) {
@@ -127,20 +127,17 @@ async function runSelection() {
             groupEnd = line.lineNum
             continue
           }
-          sentRanges.push(
-            new vscode.Range(
-              editor.document.lineAt(groupStart).range.start,
-              editor.document.lineAt(groupEnd).range.end,
-            ),
-          )
+          lineGroups.push([groupStart, groupEnd])
           groupStart = line.lineNum
           groupEnd = line.lineNum
         }
-        sentRanges.push(
-          new vscode.Range(
-            editor.document.lineAt(groupStart).range.start,
-            editor.document.lineAt(groupEnd).range.end,
-          ),
+        lineGroups.push([groupStart, groupEnd])
+        sentRanges = lineGroups.map(
+          ([start, end]) =>
+            new vscode.Range(
+              editor.document.lineAt(start).range.start,
+              editor.document.lineAt(end).range.end,
+            ),
         )
       } else {
         const line = editor.document.lineAt(currentLine)
@@ -240,7 +237,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 `runSelection()` の末尾はこうなっています。
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:227-235
+// packages/vscode-extension/src/run-selection.ts:224-232
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -261,7 +258,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 実行した範囲をエディタ上で点滅させるのが `flashLines()` です。`createTextEditorDecorationType` (VS Code API) を使って実装されています:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:168-194
+// packages/vscode-extension/src/run-selection.ts:165-191
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -339,7 +336,7 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` は `play()` の引数ツリーへのインデックスで、`"1.0"` なら「2 番目の引数の中の最初の要素」です。`atEpochMs` はイベントの **グリッド時刻** で、engine は lookahead で先に dispatch するため行は早く届きます。拡張はその時刻まで decoration を遅らせます。
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:99-110
+// packages/vscode-extension/src/playhead-decorations.ts:131-142
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -354,7 +351,7 @@ export function handleStepLine(step: StepEvent): void {
 }
 ```
 
-`runSelection()` は engine へ送った範囲から seq ごとに最後の `<seqName>.play(...)` を記録します。`showPlayheadStep()` はその文書と呼び出しを使い、`resolvePlayheadStep()` (`playhead.ts:372-388`) で現在のテキストから該当引数の文字範囲を求めます。記録が無い場合は、表示中のエディタにあるコメント外の最初の呼び出しへフォールバックします。色は `orbitscore.playheadPalette` (32 色、東京の地下鉄路線色をベースにした first-come 割り当て) から `colorForSeq()` で決まり、`⏹ <seq>` 行や `✅ Global stopped` 行、engine 停止で消えます。`[STEP]` 行そのものは `shouldFilterLine()` で Output Channel から隠されます。
+`runSelection()` は engine へ送った範囲から seq ごとに最後の `<seqName>.play(...)` を記録します。`showPlayheadStep()` はその文書と呼び出しを使い、`resolvePlayheadStep()` で現在のテキストから該当引数の文字範囲を求めます。active entry は range の座標を保存せず、文書 URI・`argPath`・任意の anchor だけを持ちます。描画時は文書を 1 回走査して同じ文書の全 entry を解き直すため、編集後も古い range を削除する特別処理や停止時の無条件再描画は要りません。記録が無い場合は、表示中のエディタにあるコメント外の最初の呼び出しへフォールバックします。色は `orbitscore.playheadPalette` (32 色、東京の地下鉄路線色をベースにした first-come 割り当て) から `colorForSeq()` で決まり、`⏹ <seq>` 行や `✅ Global stopped` 行、engine 停止で消えます。`[STEP]` 行そのものは `shouldFilterLine()` で Output Channel から隠されます。
 
 引数ツリーの深いネスト (`(A)(B).root(X)` のような group run や `[ ... ]` の stack) には「解決できる最深の祖先」で妥協する、と `findPlayArgRangeForPath()` のコメントが書いています。間違った引数を光らせるより、1 段浅い範囲を光らせる方が誤解が少ない、という判断です。
 

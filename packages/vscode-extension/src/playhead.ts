@@ -174,11 +174,20 @@ export function colorForSeq(
   return palette[paletteIndexForSeq(seqName, assigned) % palette.length]
 }
 
+const LEXICAL_STRING = 0
+const LEXICAL_CODE = 1
+const LEXICAL_COMMENT = 2
+
 interface LexicalMap {
-  /** 1 for text outside line comments and strings. */
-  syntax: Uint8Array
-  /** 1 for text inside a `//` line comment. */
-  comment: Uint8Array
+  /** Per-character classification using the LEXICAL_* constants above. */
+  kind: Uint8Array
+}
+
+/** One document's text and the lexical/call data derived from a single scan. */
+export interface PlayheadDoc {
+  text: string
+  lexical: LexicalMap
+  calls: PlayCall[]
 }
 
 /**
@@ -187,8 +196,7 @@ interface LexicalMap {
  * half-typed quote cannot hide every later play call in the editor.
  */
 function scanLexicalMap(text: string): LexicalMap {
-  const syntax = new Uint8Array(text.length)
-  const comment = new Uint8Array(text.length)
+  const kind = new Uint8Array(text.length)
   let state: 'code' | 'comment' | 'string' = 'code'
   let quote = ''
 
@@ -197,16 +205,17 @@ function scanLexicalMap(text: string): LexicalMap {
     if (state === 'comment') {
       if (ch === '\n') {
         state = 'code'
-        syntax[i] = 1
+        kind[i] = LEXICAL_CODE
       } else {
-        comment[i] = 1
+        kind[i] = LEXICAL_COMMENT
       }
       continue
     }
     if (state === 'string') {
+      kind[i] = LEXICAL_STRING
       if (ch === '\n') {
         state = 'code'
-        syntax[i] = 1
+        kind[i] = LEXICAL_CODE
       } else if (ch === '\\') {
         if (i + 1 < text.length && text[i + 1] !== '\n') i++
       } else if (ch === quote) {
@@ -216,21 +225,19 @@ function scanLexicalMap(text: string): LexicalMap {
     }
     if (ch === '/' && text[i + 1] === '/') {
       state = 'comment'
-      comment[i] = 1
-      comment[++i] = 1
+      kind[i] = LEXICAL_COMMENT
+      kind[++i] = LEXICAL_COMMENT
     } else if (ch === '"' || ch === "'") {
       state = 'string'
       quote = ch
     } else {
-      syntax[i] = 1
+      kind[i] = LEXICAL_CODE
     }
   }
-  return { syntax, comment }
+  return { kind }
 }
 
-/** Return every comment/string-external `<ident>.play(` call in document order. */
-export function findPlayCalls(text: string): PlayCall[] {
-  const lexical = scanLexicalMap(text)
+function findPlayCallsInDoc(text: string, lexical: LexicalMap): PlayCall[] {
   // Boundary guard on both sides of the name: `drum.play(` must not match
   // `mydrum.play(` (preceding identifier char) nor `foo.drum.play(` (member
   // access on another object).
@@ -242,7 +249,7 @@ export function findPlayCalls(text: string): PlayCall[] {
     const openParen = matchStart + match[0].lastIndexOf('(')
     let isCode = true
     for (let i = callStart; i <= openParen; i++) {
-      if (!/\s/.test(text[i]) && lexical.syntax[i] === 0) {
+      if (!/\s/.test(text[i]) && lexical.kind[i] !== LEXICAL_CODE) {
         isCode = false
         break
       }
@@ -250,6 +257,17 @@ export function findPlayCalls(text: string): PlayCall[] {
     if (isCode) calls.push({ seqName: match[2], callStart, openParen })
   }
   return calls
+}
+
+/** Build the reusable lexical and call data for one document. */
+export function createPlayheadDoc(text: string): PlayheadDoc {
+  const lexical = scanLexicalMap(text)
+  return { text, lexical, calls: findPlayCallsInDoc(text, lexical) }
+}
+
+/** Return every comment/string-external `<ident>.play(` call in document order. */
+export function findPlayCalls(text: string): PlayCall[] {
+  return createPlayheadDoc(text).calls
 }
 
 const CLOSER: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
@@ -262,20 +280,26 @@ const CLOSER: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
  * not an opening bracket or the group never closes; `closeIndex` is the
  * position of the matching closing bracket.
  */
-function splitGroupElements(
-  documentText: string,
+function splitGroupElementsInDoc(
+  doc: PlayheadDoc,
   openIndex: number,
 ): { elements: ArgRange[]; closeIndex: number } | null {
+  const documentText = doc.text
   const closeCh = CLOSER[documentText[openIndex]]
   if (!closeCh) return null
-  const lexical = scanLexicalMap(documentText)
 
   const elements: ArgRange[] = []
   const pushTrimmed = (start: number, end: number): void => {
-    while (start < end && (/\s/.test(documentText[start]) || lexical.comment[start] === 1)) {
+    while (
+      start < end &&
+      (/\s/.test(documentText[start]) || doc.lexical.kind[start] === LEXICAL_COMMENT)
+    ) {
       start++
     }
-    while (end > start && (/\s/.test(documentText[end - 1]) || lexical.comment[end - 1] === 1)) {
+    while (
+      end > start &&
+      (/\s/.test(documentText[end - 1]) || doc.lexical.kind[end - 1] === LEXICAL_COMMENT)
+    ) {
       end--
     }
     if (start < end) elements.push({ start, end })
@@ -285,7 +309,7 @@ function splitGroupElements(
   let segStart = openIndex + 1
   let i = openIndex + 1
   for (; i < documentText.length; i++) {
-    if (lexical.syntax[i] === 0) continue
+    if (doc.lexical.kind[i] !== LEXICAL_CODE) continue
     const ch = documentText[i]
     if (ch === '(' || ch === '[' || ch === '{') {
       depth++
@@ -302,6 +326,24 @@ function splitGroupElements(
   return { elements, closeIndex: i }
 }
 
+function findMatchingPlayCall(
+  doc: PlayheadDoc,
+  seqName: string,
+  anchor?: Pick<PlayCall, 'openParen'> & Partial<Pick<PlayCall, 'callStart'>>,
+): PlayCall | undefined {
+  return doc.calls.find(
+    (candidate) =>
+      candidate.seqName === seqName &&
+      (anchor === undefined ||
+        (candidate.openParen === anchor.openParen &&
+          (anchor.callStart === undefined || candidate.callStart === anchor.callStart))),
+  )
+}
+
+function findPlayArgRangesInDoc(doc: PlayheadDoc, call: PlayCall): ArgRange[] {
+  return splitGroupElementsInDoc(doc, call.openParen)?.elements ?? []
+}
+
 /**
  * Locate top-level argument ranges for `<seqName>.play(...)`. Without an
  * anchor, the first call outside comments and strings is used for backwards
@@ -313,13 +355,14 @@ export function findPlayArgRanges(
   seqName: string,
   openParen?: number,
 ): ArgRange[] {
-  const call = findPlayCalls(documentText).find(
-    (candidate) =>
-      candidate.seqName === seqName &&
-      (openParen === undefined || candidate.openParen === openParen),
+  const doc = createPlayheadDoc(documentText)
+  const call = findMatchingPlayCall(
+    doc,
+    seqName,
+    openParen === undefined ? undefined : { openParen },
   )
   if (!call) return []
-  return splitGroupElements(documentText, call.openParen)?.elements ?? []
+  return findPlayArgRangesInDoc(doc, call)
 }
 
 /**
@@ -344,18 +387,33 @@ export function findPlayArgRangeForPath(
   argPath: string,
   openParen?: number,
 ): ArgRange | null {
+  const doc = createPlayheadDoc(documentText)
+  const call = findMatchingPlayCall(
+    doc,
+    seqName,
+    openParen === undefined ? undefined : { openParen },
+  )
+  if (!call) return null
+  return findPlayArgRangeForPathInDoc(doc, call, argPath)
+}
+
+function findPlayArgRangeForPathInDoc(
+  doc: PlayheadDoc,
+  call: PlayCall,
+  argPath: string,
+): ArgRange | null {
   const segments = argPath.split('.').map((s) => Number.parseInt(s, 10))
   if (segments.length === 0 || segments.some((n) => !Number.isInteger(n) || n < 0)) {
     return null
   }
-  const topRanges = findPlayArgRanges(documentText, seqName, openParen)
+  const topRanges = findPlayArgRangesInDoc(doc, call)
   if (segments[0] >= topRanges.length) return null
 
   let range = topRanges[segments[0]]
   for (let k = 1; k < segments.length; k++) {
-    const ch = documentText[range.start]
+    const ch = doc.text[range.start]
     if (ch !== '(' && ch !== '{') return range // leaf or stack — stop here
-    const group = splitGroupElements(documentText, range.start)
+    const group = splitGroupElementsInDoc(doc, range.start)
     // Descend only when the group spans the WHOLE element (excludes group
     // runs / chained modifiers) and the segment exists.
     if (!group || group.closeIndex !== range.end - 1 || segments[k] >= group.elements.length) {
@@ -377,15 +435,11 @@ export function resolvePlayheadStep(
   seqName: string,
   argPath: string,
   anchor?: Pick<PlayCall, 'callStart' | 'openParen'>,
+  doc: PlayheadDoc = createPlayheadDoc(documentText),
 ): PlayheadStepResolution {
-  const call = findPlayCalls(documentText).find(
-    (candidate) =>
-      candidate.seqName === seqName &&
-      (anchor === undefined ||
-        (candidate.callStart === anchor.callStart && candidate.openParen === anchor.openParen)),
-  )
+  const call = findMatchingPlayCall(doc, seqName, anchor)
   if (!call) return { kind: 'no-call' }
-  const range = findPlayArgRangeForPath(documentText, seqName, argPath, call.openParen)
+  const range = findPlayArgRangeForPathInDoc(doc, call, argPath)
   return range ? { kind: 'range', range } : { kind: 'out-of-range' }
 }
 
@@ -400,10 +454,7 @@ export function shiftPlayCallAnchor<T extends Pick<PlayCall, 'callStart' | 'open
     const changeStart = change.rangeOffset
     const changeEnd = changeStart + change.rangeLength
     const protectedEnd = openParen + 1
-    if (change.rangeLength > 0 && changeStart < protectedEnd && changeEnd > callStart) {
-      return null
-    }
-    if (change.rangeLength === 0 && changeStart > callStart && changeStart < protectedEnd) {
+    if (changeStart < protectedEnd && changeEnd > callStart) {
       return null
     }
     if (changeEnd <= callStart) {

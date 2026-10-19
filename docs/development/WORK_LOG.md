@@ -43,6 +43,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - 実機 E2E: ハイライトは MCP から読めないので、自動テストは vscode モックの統合テスト（本物の `runSelection` → `handleStepLine` →
   `editor.setDecorations`）で止める。新しい MCP ツールは凍結中の拡張に公開面を足すので作らない。見た目は main がマージ前に 1 回確かめる
 - テスト: 2659 → 2692 passed（純関数 12 件・統合テスト 21 件を追加、既存 1 件は名前の変更のみ）
+- `/simplify`（4 観点）の指摘を適用（2026-10-19）:
+  - **active entry に座標を持たせず、描くたびに今の文書から求める**（設計 §8 M6）。座標を持っていたので編集で古くなり、
+    「編集時に描き直さずに消す」「消去の経路で常に描き直す」という継ぎ当てが要っていた。導出元（文書・argPath・anchor）を持てば
+    古い座標が存在しなくなり、どちらも不要になる。別の seq も編集後に正しい位置に残る（I21）。I18 の期待値はこれに合わせて更新
+  - 字句の走査を 1 回の解決につき 1 回にした（ネストを下るたびに文書全体を走査していた）。描き直しでは文書ごとに 1 回
+  - `showPlayheadStep` の 2 本の経路を 1 本に、記録の型を 1 つ（`anchor: … | null` で墓標）に
+  - 見送り: 文書の版をキーにした STEP をまたぐキャッシュ（今の文書の大きさでは効果が小さい）、record と forget の入口の統合（意味が違う）
+  - テスト: 2693 passed
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
