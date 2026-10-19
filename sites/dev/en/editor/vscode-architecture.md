@@ -123,7 +123,7 @@ After this come four **bridges** that wait for JSON lines coming back on the eng
 The entry point is `activate()` in `extension.ts`. It is called once immediately after VS Code loads the extension. Let's look at the first half.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:92-148
+// packages/vscode-extension/src/extension.ts:93-149
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -196,7 +196,7 @@ The rest of `activate()` is roughly five jobs:
 The last two are written like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-296 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:243-298 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -339,7 +339,7 @@ When the daemon is found (= the normal state), the indicator is **hidden**. It i
 Let's organize the commands `activate()` registers. There are 16 listed in `contributes.commands` (down from 17 — `forceKillScsynth` / `selectAudioDevice` were removed in #502, then #939 added one), plus 2 internal commands invoked only from TreeView nodes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:160-198
+// packages/vscode-extension/src/extension.ts:161-199
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -536,7 +536,7 @@ The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test e
 Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` as of 2026-05, but #384 extended them to "when opened," "when closed," and "documents already open at activation."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:210-239
+// packages/vscode-extension/src/extension.ts:211-241
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -558,6 +558,7 @@ Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` 
       }
     }),
   )
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(notePlayheadDocumentChange))
 
   // Initial pass over documents already open at activation (#384): the
   // extension activates on `onLanguage:orbitscore`, so the triggering document
@@ -574,7 +575,7 @@ There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For
 #883 added one more line next to the diagnostic registration: **the quick fix**. `registerOutputCodeActionProvider(context)` returns an "add `<name>.output()`" CodeAction for the two diagnostic codes `output-missing` and `dry-not-routed`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:201-204
+// packages/vscode-extension/src/extension.ts:202-205
   // Register IntelliSense providers
   registerCompletionProviders(context)
   registerHoverProvider(context)

@@ -85,6 +85,7 @@ import {
 } from './extension-state'
 import {
   clearAllPlayheadDecorations,
+  notePlayheadDocumentChange,
   playheadDecorationTypes,
   resetPlayheadDecorationTypes,
 } from './playhead-decorations'
@@ -228,6 +229,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
   )
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(notePlayheadDocumentChange))
 
   // Initial pass over documents already open at activation (#384): the
   // extension activates on `onLanguage:orbitscore`, so the triggering document

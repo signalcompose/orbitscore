@@ -3,10 +3,14 @@ import * as vscode from 'vscode'
 
 import {
   colorForSeq,
-  findPlayArgRangeForPath,
+  createPlayheadDoc,
+  findPlayCalls,
+  resolvePlayheadStep,
+  shiftPlayCallAnchor,
   type PlayheadColorConfig,
   type StepEvent,
 } from './playhead'
+import { engineGeneration } from './extension-state'
 
 // --- Live playhead highlight (#390) ---
 // The engine emits `[STEP] <seqName> <argPath> <atEpochMs>` on stdout for each
@@ -18,12 +22,23 @@ import {
 // decoration type PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB");
 // each seq gets a vivid color first-come from `orbitscore.playheadPalette`
 // (see playhead.ts colorForSeq; per-seq pinning is the planned DSL feature
-// #391). ONE active range per seq (replaced on each step, so the highlight
+// #391). ONE active entry per seq (replaced on each step, so the highlight
 // "moves" per beat and wraps at loop start). Cleared on seq stop (`⏹ <seq>`
 // line), global stop, engine stop / exit, and deactivate.
 export const playheadDecorationTypes = new Map<string, vscode.TextEditorDecorationType>()
 const playheadPaletteAssignments = new Map<string, number>()
-const playheadActiveRanges = new Map<string, { docUriString: string; range: vscode.Range }>()
+interface PlayheadAnchor {
+  callStart: number
+  openParen: number
+}
+
+interface ActivePlayheadEntry {
+  docUriString: string
+  argPath: string
+  anchor?: PlayheadAnchor
+}
+
+const playheadActiveRanges = new Map<string, ActivePlayheadEntry>()
 const playheadTimeouts = new Set<NodeJS.Timeout>()
 
 function playheadColorConfig(): PlayheadColorConfig {
@@ -63,21 +78,41 @@ export function resetPlayheadDecorationTypes(): void {
 /** Re-apply the current per-seq playhead ranges to every visible editor. */
 function applyPlayheadDecorations(): void {
   const colorConfig = playheadColorConfig()
+  const docsByUri = new Map<string, ReturnType<typeof createPlayheadDoc>>()
   for (const editor of vscode.window.visibleTextEditors) {
     const uri = editor.document.uri.toString()
+    const entries = [...playheadActiveRanges].filter(([, entry]) => entry.docUriString === uri)
     // Start every known type at [] so a seq that stopped (or moved) has its
     // previous color cleared, then fill in the live ranges per color.
     const rangesByType = new Map<vscode.TextEditorDecorationType, vscode.Range[]>()
     for (const decorationType of playheadDecorationTypes.values()) {
       rangesByType.set(decorationType, [])
     }
-    for (const [seqName, entry] of playheadActiveRanges) {
-      if (entry.docUriString !== uri) continue
+    let doc = docsByUri.get(uri)
+    if (entries.length > 0 && !doc) {
+      doc = createPlayheadDoc(editor.document.getText())
+      docsByUri.set(uri, doc)
+    }
+    const text = doc?.text ?? ''
+    for (const [seqName, entry] of entries) {
+      let anchor = entry.anchor
+      const source = currentPlayheadSource(seqName)
+      if (source?.docUriString === uri) {
+        if (source.anchor === null) continue
+        anchor = source.anchor
+      }
+      const resolution = resolvePlayheadStep(text, seqName, entry.argPath, anchor, doc)
+      if (resolution.kind !== 'range') continue
       const decorationType = ensurePlayheadDecorationType(
         colorForSeq(seqName, colorConfig, playheadPaletteAssignments),
       )
       const ranges = rangesByType.get(decorationType) ?? []
-      ranges.push(entry.range)
+      ranges.push(
+        new vscode.Range(
+          editor.document.positionAt(resolution.range.start),
+          editor.document.positionAt(resolution.range.end),
+        ),
+      )
       rangesByType.set(decorationType, ranges)
     }
     for (const [decorationType, ranges] of rangesByType) {
@@ -106,31 +141,126 @@ export function handleStepLine(step: StepEvent): void {
   playheadTimeouts.add(timeout)
 }
 
-function showPlayheadStep(step: StepEvent): void {
-  for (const editor of vscode.window.visibleTextEditors) {
-    // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
-    // degrading to the deepest resolvable ancestor (stacks are one visual
-    // unit). Null = even the top-level arg is gone (user edited away the
-    // pattern) — skip; leaving the previous highlight is less misleading
-    // than lighting a wrong arg.
-    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
-    if (!argRange) continue
-    playheadActiveRanges.set(step.seqName, {
-      docUriString: editor.document.uri.toString(),
-      range: new vscode.Range(
-        editor.document.positionAt(argRange.start),
-        editor.document.positionAt(argRange.end),
-      ),
+interface PlayheadSource {
+  docUriString: string
+  engineGeneration: number
+  anchor: PlayheadAnchor | null
+}
+
+const playheadSources = new Map<string, PlayheadSource>()
+
+/** Record the last play call per sequence from only the ranges sent to the engine. */
+export function recordPlayheadSources(
+  document: vscode.TextDocument,
+  sentRanges: readonly vscode.Range[],
+): void {
+  const calls = sentRanges.flatMap((range) => {
+    const rangeStart = document.offsetAt(range.start)
+    return findPlayCalls(document.getText(range)).map((call) => ({
+      ...call,
+      callStart: call.callStart + rangeStart,
+      openParen: call.openParen + rangeStart,
+    }))
+  })
+  calls.sort((a, b) => a.callStart - b.callStart)
+  const docUriString = document.uri.toString()
+  for (const call of calls) {
+    playheadSources.set(call.seqName, {
+      docUriString,
+      engineGeneration,
+      anchor: { callStart: call.callStart, openParen: call.openParen },
     })
+  }
+}
+
+/** Make agent-supplied play calls fall back to the first visible editor call. */
+export function forgetPlayheadSourcesInCode(code: string): void {
+  for (const call of findPlayCalls(code)) {
+    playheadSources.delete(call.seqName)
+  }
+}
+
+/** Shift recorded call offsets and redraw active entries from the edited text. */
+export function notePlayheadDocumentChange(event: vscode.TextDocumentChangeEvent): void {
+  if (playheadSources.size === 0 && playheadActiveRanges.size === 0) return
+  const docUriString = event.document.uri.toString()
+  for (const source of playheadSources.values()) {
+    if (source.docUriString !== docUriString || source.anchor === null) continue
+    source.anchor = shiftPlayCallAnchor(source.anchor, event.contentChanges)
+  }
+  if ([...playheadActiveRanges.values()].some((entry) => entry.docUriString === docUriString)) {
     applyPlayheadDecorations()
-    return // first visible editor containing the call wins (MVP)
+  }
+}
+
+function currentPlayheadSource(seqName: string): PlayheadSource | undefined {
+  const source = playheadSources.get(seqName)
+  return source?.engineGeneration === engineGeneration ? source : undefined
+}
+
+function setActivePlayheadEntry(
+  editor: vscode.TextEditor,
+  seqName: string,
+  argPath: string,
+  anchor?: PlayheadAnchor,
+): void {
+  playheadActiveRanges.set(seqName, {
+    docUriString: editor.document.uri.toString(),
+    argPath,
+    ...(anchor ? { anchor } : {}),
+  })
+  applyPlayheadDecorations()
+}
+
+function showPlayheadStep(step: StepEvent): void {
+  const source = currentPlayheadSource(step.seqName)
+  // A recorded source belongs only to the file that was actually run (#987 C1),
+  // so do not search another visible editor for the same sequence.
+  const editors = source
+    ? vscode.window.visibleTextEditors.filter(
+        (candidate) => candidate.document.uri.toString() === source.docUriString,
+      )
+    : vscode.window.visibleTextEditors
+
+  // An invalidated recorded call must clear instead of falling back to the first
+  // play(): that could light an unsounding line—the exact bug in Issue #987 §1.
+  if (source?.anchor === null) {
+    clearPlayheadForSequence(step.seqName)
+    return
+  }
+
+  for (const editor of editors) {
+    const resolution = resolvePlayheadStep(
+      editor.document.getText(),
+      step.seqName,
+      step.argPath,
+      source?.anchor,
+    )
+    switch (resolution.kind) {
+      case 'no-call':
+        // Do not fall back to the first play(): lighting an unsounding line is
+        // the issue's original bug, so a missing recorded call clears safely (§1).
+        if (source) {
+          clearPlayheadForSequence(step.seqName)
+          return
+        }
+        continue
+      case 'out-of-range':
+        // Keep the previous display, matching existing behavior; choosing another
+        // argument would misleadingly light a value that is not sounding.
+        if (source) return
+        continue
+      case 'range':
+        setActivePlayheadEntry(editor, step.seqName, step.argPath, source?.anchor ?? undefined)
+        return
+    }
+    const exhaustive: never = resolution
+    return exhaustive
   }
 }
 
 export function clearPlayheadForSequence(seqName: string): void {
-  if (playheadActiveRanges.delete(seqName)) {
-    applyPlayheadDecorations()
-  }
+  if (playheadActiveRanges.delete(seqName)) applyPlayheadDecorations()
 }
 
 export function clearAllPlayheadDecorations(): void {
@@ -151,11 +281,11 @@ export function clearAllPlayheadDecorations(): void {
 // checked only `engineProcess` (governed by `clearEngineState`), so swapping
 // which real implementation lands under the `clearEngineState` vs.
 // `clearAllPlayheads` effect keys type-checked and left every test green.
-// These seams let a spec seed a playhead range and observe its OWN clearing
+// These seams let a spec seed a playhead entry and observe its OWN clearing
 // (via the real `editor.setDecorations` call, once a fake editor is pushed
 // into the `vscode` mock's `window.visibleTextEditors`) as a signal
 // independent of `engineProcess`.
-/** Seed a playhead active range as if a real `[STEP]` line had resolved to it
+/** Seed a playhead active entry as if a real `[STEP]` line had resolved to it
  * — bypasses playhead.ts's document-text parsing (already covered by
  * playhead.spec.ts) and also pre-creates the color's decoration type via
  * `ensurePlayheadDecorationType`, so `clearAllPlayheadDecorations()`'s
@@ -164,17 +294,15 @@ export function clearAllPlayheadDecorations(): void {
 export function __setPlayheadActiveRangeForTest(
   seqName: string,
   docUriString: string,
-  // `unknown`, not `vscode.Range`: the mock's `Range` (tests/mocks/vscode.ts)
-  // is a minimal duck-typed stand-in that does not structurally satisfy the
-  // real `@types/vscode` interface, and nothing this seam's consumers read
-  // needs more than `{ start, end }` — accepting the real type here would
-  // just push an `as unknown as vscode.Range` cast onto every call site.
-  range: unknown,
+  // Kept for compatibility with wiring specs that predate derived entries;
+  // coordinates are intentionally ignored because production entries no
+  // longer store a vscode.Range.
+  _range: unknown,
 ): void {
   ensurePlayheadDecorationType(
     colorForSeq(seqName, playheadColorConfig(), playheadPaletteAssignments),
   )
-  playheadActiveRanges.set(seqName, { docUriString, range: range as vscode.Range })
+  playheadActiveRanges.set(seqName, { docUriString, argPath: '0' })
 }
 export function __getPlayheadActiveRangeCountForTest(): number {
   return playheadActiveRanges.size
@@ -197,4 +325,5 @@ export function __resetPlayheadStateForTest(): void {
   for (const decorationType of playheadDecorationTypes.values()) decorationType.dispose()
   playheadDecorationTypes.clear()
   playheadPaletteAssignments.clear()
+  playheadSources.clear()
 }

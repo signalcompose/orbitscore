@@ -70,7 +70,7 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:89-107
+// packages/vscode-extension/src/playhead-decorations.ts:124-142
 /**
  * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
  * so wait until `atEpochMs` (the event's grid time — actual audio lands a
@@ -101,7 +101,7 @@ export function handleStepLine(step: StepEvent): void {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
+// packages/vscode-extension/src/extension.ts:243-254
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -242,7 +242,7 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:72-75
+// packages/vscode-extension/src/agent-handlers.ts:73-76
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -334,7 +334,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:202-213
+// packages/vscode-extension/src/agent-handlers.ts:204-215
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -372,7 +372,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:108-119
+// packages/vscode-extension/src/extension.ts:109-120
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -1246,7 +1246,7 @@ Finally, we read the path that turns the same stdout into **visual feedback for 
 ```
 
 ```typescript
-// packages/vscode-extension/src/playhead.ts:39-54
+// packages/vscode-extension/src/playhead.ts:48-63
 // Grammar: "[STEP] <seqName> <argPath> <atEpochMs>". seqName is a DSL
 // identifier (no whitespace); argPath is dot-joined non-negative integers;
 // atEpochMs is an integer (the engine rounds fractional bar subdivisions).
@@ -1338,10 +1338,10 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 
 State mutations are guarded by `isCurrent` (whether the process that produced this chunk is the current `engineProcess`) to avoid the `#528` race in which a dead process's trailing output, arriving after a fast `stop_engine → start_engine`, would clear the new engine's playhead.
 
-The real `handleStep` is in `extension.ts`, and it **waits until the grid time** before moving the highlight.
+The real `handleStep` is in `playhead-decorations.ts`, and it **waits until the grid time** before moving the highlight.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:96-107
+// packages/vscode-extension/src/playhead-decorations.ts:131-142
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1359,30 +1359,56 @@ export function handleStepLine(step: StepEvent): void {
 Dispatch runs a lookahead early, so lighting the highlight the moment the line arrives would move it ahead of the sound. Lines more than one second late (replayed buffered output, for example) are dropped.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:109-128
+// packages/vscode-extension/src/playhead-decorations.ts:215-260
 function showPlayheadStep(step: StepEvent): void {
-  for (const editor of vscode.window.visibleTextEditors) {
-    // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
-    // degrading to the deepest resolvable ancestor (stacks are one visual
-    // unit). Null = even the top-level arg is gone (user edited away the
-    // pattern) — skip; leaving the previous highlight is less misleading
-    // than lighting a wrong arg.
-    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
-    if (!argRange) continue
-    playheadActiveRanges.set(step.seqName, {
-      docUriString: editor.document.uri.toString(),
-      range: new vscode.Range(
-        editor.document.positionAt(argRange.start),
-        editor.document.positionAt(argRange.end),
-      ),
-    })
-    applyPlayheadDecorations()
-    return // first visible editor containing the call wins (MVP)
+  const source = currentPlayheadSource(step.seqName)
+  // A recorded source belongs only to the file that was actually run (#987 C1),
+  // so do not search another visible editor for the same sequence.
+  const editors = source
+    ? vscode.window.visibleTextEditors.filter(
+        (candidate) => candidate.document.uri.toString() === source.docUriString,
+      )
+    : vscode.window.visibleTextEditors
+
+  // An invalidated recorded call must clear instead of falling back to the first
+  // play(): that could light an unsounding line—the exact bug in Issue #987 §1.
+  if (source?.anchor === null) {
+    clearPlayheadForSequence(step.seqName)
+    return
+  }
+
+  for (const editor of editors) {
+    const resolution = resolvePlayheadStep(
+      editor.document.getText(),
+      step.seqName,
+      step.argPath,
+      source?.anchor,
+    )
+    switch (resolution.kind) {
+      case 'no-call':
+        // Do not fall back to the first play(): lighting an unsounding line is
+        // the issue's original bug, so a missing recorded call clears safely (§1).
+        if (source) {
+          clearPlayheadForSequence(step.seqName)
+          return
+        }
+        continue
+      case 'out-of-range':
+        // Keep the previous display, matching existing behavior; choosing another
+        // argument would misleadingly light a value that is not sounding.
+        if (source) return
+        continue
+      case 'range':
+        setActivePlayheadEntry(editor, step.seqName, step.argPath, source?.anchor ?? undefined)
+        return
+    }
+    const exhaustive: never = resolution
+    return exhaustive
   }
 }
 ```
 
-`findPlayArgRangeForPath()` (`playhead.ts`) finds the first `<seqName>.play(` in the document text and, tracking bracket depth, splits it into the character ranges of the top-level arguments. One active range is kept per sequence and replaced on every step, so the highlight appears to "move per beat and wrap at the loop start". Colours are assigned in order of first appearance from `orbitscore.playheadPalette` (by default 32 colours based on the Tokyo Metro / Toei line colours), and one decoration type per colour is created lazily.
+`runSelection()` scans only the ranges actually sent to the engine and records the last `<seqName>.play(` outside comments and strings for each sequence. `showPlayheadStep()` targets only that document and call. An active entry stores derivation data—document URI, `argPath`, and an optional anchor—instead of coordinates; each time `applyPlayheadDecorations()` paints, it scans the current document once and resolves every sequence in that document again. Thus, when an edit shifts another sequence too, all highlights stay at their current positions without deleting stale ranges or repainting unconditionally on stop. Only when no record exists does it search visible editors for the first non-comment call. Colours are assigned in order of first appearance from `orbitscore.playheadPalette` (by default 32 colours based on the Tokyo Metro / Toei line colours), and one decoration type per colour is created lazily.
 
 ### `[STEP]` is invisible in normal mode
 

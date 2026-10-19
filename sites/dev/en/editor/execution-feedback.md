@@ -39,7 +39,7 @@ What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "inte
 When `Cmd+Enter` is pressed, the `orbitscore.runSelection` command fires and the `runSelection()` function is called. Two guard conditions are checked first:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:42-47
+// packages/vscode-extension/src/run-selection.ts:43-48
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -59,7 +59,7 @@ Incidentally, the MCP `run_selection` tool calls this same function (`runSelecti
 When there is a selection (`!selection.isEmpty`), it is simple. The text of the selected range is taken as is:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:60-62
+// packages/vscode-extension/src/run-selection.ts:62-64
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -74,7 +74,7 @@ When there is a selection (`!selection.isEmpty`), it is simple. The text of the 
 The case with no selection is interesting. It investigates "to which variable (subject) does the line at the cursor belong" and gathers **lines from the entire file** related to that subject:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:63-112 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/run-selection.ts:66-136 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -119,10 +119,31 @@ The case with no selection is interesting. It investigates "to which variable (s
           editor.document.lineAt(firstLine).range.start,
           editor.document.lineAt(lastLine).range.end,
         )
+        const lineGroups: [number, number][] = []
+        let groupStart = collectedLines[0].lineNum
+        let groupEnd = groupStart
+        for (const line of collectedLines.slice(1)) {
+          if (line.lineNum === groupEnd + 1) {
+            groupEnd = line.lineNum
+            continue
+          }
+          lineGroups.push([groupStart, groupEnd])
+          groupStart = line.lineNum
+          groupEnd = line.lineNum
+        }
+        lineGroups.push([groupStart, groupEnd])
+        sentRanges = lineGroups.map(
+          ([start, end]) =>
+            new vscode.Range(
+              editor.document.lineAt(start).range.start,
+              editor.document.lineAt(end).range.end,
+            ),
+        )
       } else {
         const line = editor.document.lineAt(currentLine)
         text = line.text
         executionRange = line.range
+        sentRanges = [executionRange]
       }
     } else {
 ```
@@ -130,7 +151,7 @@ The case with no selection is interesting. It investigates "to which variable (s
 `getLineSubject()` is a function that looks at each line and returns "to which variable does this line belong." The first draft did not dive into it, but the implementation is a small one with just two regular expressions.
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:27-40
+// packages/vscode-extension/src/run-selection.ts:28-41
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -216,10 +237,11 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 The tail of `runSelection()` looks like this.
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:199-206
+// packages/vscode-extension/src/run-selection.ts:224-232
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
+  recordPlayheadSources(editor.document, sentRanges)
   // Scroll the executed range into view before flashing it: subject-block
   // auto-detection (no explicit selection) never reveals, so an agent-driven run
   // that lands on an off-screen line would otherwise flash outside the viewport.
@@ -236,7 +258,7 @@ A point to note here is the ordering: if sending fails, **no flash**. As of 2026
 What flashes the executed range in the editor is `flashLines()`. It is implemented using `createTextEditorDecorationType` (VS Code API):
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:140-166
+// packages/vscode-extension/src/run-selection.ts:165-191
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -292,7 +314,7 @@ The kinds of colors that can be set:
 The flash is feedback that "it was sent"; #390 added feedback that "it is sounding." The engine (`rust-engine-player.ts` on the Rust daemon path) prints one machine-readable line to stdout for each dispatched play event.
 
 ```typescript
-// packages/vscode-extension/src/playhead.ts:39-54
+// packages/vscode-extension/src/playhead.ts:48-63
 // Grammar: "[STEP] <seqName> <argPath> <atEpochMs>". seqName is a DSL
 // identifier (no whitespace); argPath is dot-joined non-negative integers;
 // atEpochMs is an integer (the engine rounds fractional bar subdivisions).
@@ -314,7 +336,7 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` is an index into the argument tree of `play()`; `"1.0"` means "the first element inside the second argument." `atEpochMs` is the event's **grid time**; because the engine dispatches ahead with lookahead, the line arrives early. The extension delays the decoration until that time.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:96-107
+// packages/vscode-extension/src/playhead-decorations.ts:131-142
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -329,7 +351,7 @@ export function handleStepLine(step: StepEvent): void {
 }
 ```
 
-`showPlayheadStep()` uses `findPlayArgRangeForPath()` (`playhead.ts:509-534`) to locate the character range of the matching argument of `<seqName>.play(...)` in the document text, and replaces the single active range per seq. The color is decided by `colorForSeq()` from `orbitscore.playheadPalette` (32 colors, a first-come assignment based on Tokyo subway line colors), and it is cleared by `⏹ <seq>` lines, the `✅ Global stopped` line, and engine stop. The `[STEP]` lines themselves are hidden from the Output Channel by `shouldFilterLine()`.
+`runSelection()` records the last `<seqName>.play(...)` per sequence from the ranges sent to the engine. `showPlayheadStep()` uses that document and call, then `resolvePlayheadStep()` derives the matching argument range from the current text. An active entry stores only its document URI, `argPath`, and optional anchor—not range coordinates. Rendering scans each document once and resolves all of its entries again, so edits need neither special deletion of stale ranges nor unconditional repainting on stop. When no record exists, it falls back to the first non-comment call in the visible editors. The color is decided by `colorForSeq()` from `orbitscore.playheadPalette` (32 colors, a first-come assignment based on Tokyo subway line colors), and it is cleared by `⏹ <seq>` lines, the `✅ Global stopped` line, and engine stop. The `[STEP]` lines themselves are hidden from the Output Channel by `shouldFilterLine()`.
 
 For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stacks `[ ... ]`), the comment on `findPlayArgRangeForPath()` says it settles for "the deepest resolvable ancestor." Lighting a range one level shallower is less misleading than lighting a wrong argument.
 
@@ -340,7 +362,7 @@ For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stack
 A human user notices errors via the editor's red squiggles and the Output Channel, but an LLM going through MCP receives only the `ok` of `evaluate_orbitscore`. And the `true` of `writeCodeToEngine()` only means "it reached stdin." #614 added a mechanism that sends `//#evalMark {"requestId":...}` right after the code, and when the engine reaches it in FIFO order, returns the diagnostics accumulated during the preceding evaluation as JSON.
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:91-100
+// packages/vscode-extension/src/agent-handlers.ts:93-102
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -772,7 +794,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/diagnostics-provider.ts:21-171` — `updateDiagnostics()`: 3 per-line + 6 cross-line
 - `packages/vscode-extension/src/dsl-providers.ts:176-213` — `registerOutputCodeActionProvider()`: the quick fix for `output-missing` / `dry-not-routed`
 - `packages/vscode-extension/src/playhead.ts:39-54` — the `[STEP]` line grammar and `parseStepLine()`
-- `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
+- `packages/vscode-extension/src/playhead.ts:308-367` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:110-496` — the cross-line analysis functions
 - `packages/vscode-extension/src/diagnostics-analysis.ts:350-496` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: the #883 output diagnostics

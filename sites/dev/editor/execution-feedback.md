@@ -39,7 +39,7 @@ status: draft
 `Cmd+Enter` が押されると `orbitscore.runSelection` コマンドが発火し、`runSelection()` 関数が呼ばれます。まず 2 つのガード条件を確認します:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:42-47
+// packages/vscode-extension/src/run-selection.ts:43-48
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -59,7 +59,7 @@ async function runSelection() {
 選択がある場合 (`!selection.isEmpty`) は単純です。選択範囲のテキストをそのまま取得します:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:60-62
+// packages/vscode-extension/src/run-selection.ts:62-64
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -74,7 +74,7 @@ async function runSelection() {
 選択がない場合が面白いです。「カーソルがいる行はどの変数 (subject) に属しているか」を調べて、そのsubject に関わる **ファイル全体の行** をかき集めます:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:63-112 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/run-selection.ts:66-136 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -119,10 +119,31 @@ async function runSelection() {
           editor.document.lineAt(firstLine).range.start,
           editor.document.lineAt(lastLine).range.end,
         )
+        const lineGroups: [number, number][] = []
+        let groupStart = collectedLines[0].lineNum
+        let groupEnd = groupStart
+        for (const line of collectedLines.slice(1)) {
+          if (line.lineNum === groupEnd + 1) {
+            groupEnd = line.lineNum
+            continue
+          }
+          lineGroups.push([groupStart, groupEnd])
+          groupStart = line.lineNum
+          groupEnd = line.lineNum
+        }
+        lineGroups.push([groupStart, groupEnd])
+        sentRanges = lineGroups.map(
+          ([start, end]) =>
+            new vscode.Range(
+              editor.document.lineAt(start).range.start,
+              editor.document.lineAt(end).range.end,
+            ),
+        )
       } else {
         const line = editor.document.lineAt(currentLine)
         text = line.text
         executionRange = line.range
+        sentRanges = [executionRange]
       }
     } else {
 ```
@@ -130,7 +151,7 @@ async function runSelection() {
 `getLineSubject()` は各行を見て「この行はどの変数に属するか」を返す関数です。初稿では深掘りしませんでしたが、実装は 2 本の正規表現だけの小さなものです。
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:27-40
+// packages/vscode-extension/src/run-selection.ts:28-41
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -216,10 +237,11 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 `runSelection()` の末尾はこうなっています。
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:199-206
+// packages/vscode-extension/src/run-selection.ts:224-232
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
+  recordPlayheadSources(editor.document, sentRanges)
   // Scroll the executed range into view before flashing it: subject-block
   // auto-detection (no explicit selection) never reveals, so an agent-driven run
   // that lands on an off-screen line would otherwise flash outside the viewport.
@@ -236,7 +258,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 実行した範囲をエディタ上で点滅させるのが `flashLines()` です。`createTextEditorDecorationType` (VS Code API) を使って実装されています:
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:140-166
+// packages/vscode-extension/src/run-selection.ts:165-191
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -292,7 +314,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 フラッシュは「送った」ことのフィードバックですが、#390 で「鳴っている」ことのフィードバックが加わりました。engine (Rust daemon 経路の `rust-engine-player.ts`) は dispatch した play イベントごとに機械可読な 1 行を stdout に出します。
 
 ```typescript
-// packages/vscode-extension/src/playhead.ts:39-54
+// packages/vscode-extension/src/playhead.ts:48-63
 // Grammar: "[STEP] <seqName> <argPath> <atEpochMs>". seqName is a DSL
 // identifier (no whitespace); argPath is dot-joined non-negative integers;
 // atEpochMs is an integer (the engine rounds fractional bar subdivisions).
@@ -314,7 +336,7 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` は `play()` の引数ツリーへのインデックスで、`"1.0"` なら「2 番目の引数の中の最初の要素」です。`atEpochMs` はイベントの **グリッド時刻** で、engine は lookahead で先に dispatch するため行は早く届きます。拡張はその時刻まで decoration を遅らせます。
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:96-107
+// packages/vscode-extension/src/playhead-decorations.ts:131-142
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -329,7 +351,7 @@ export function handleStepLine(step: StepEvent): void {
 }
 ```
 
-`showPlayheadStep()` は `findPlayArgRangeForPath()` (`playhead.ts:509-534`) で document テキストの中から `<seqName>.play(...)` の該当引数の文字範囲を探し、seq ごとに 1 つの active range を置き換えます。色は `orbitscore.playheadPalette` (32 色、東京の地下鉄路線色をベースにした first-come 割り当て) から `colorForSeq()` で決まり、`⏹ <seq>` 行や `✅ Global stopped` 行、engine 停止で消えます。`[STEP]` 行そのものは `shouldFilterLine()` で Output Channel から隠されます。
+`runSelection()` は engine へ送った範囲から seq ごとに最後の `<seqName>.play(...)` を記録します。`showPlayheadStep()` はその文書と呼び出しを使い、`resolvePlayheadStep()` で現在のテキストから該当引数の文字範囲を求めます。active entry は range の座標を保存せず、文書 URI・`argPath`・任意の anchor だけを持ちます。描画時は文書を 1 回走査して同じ文書の全 entry を解き直すため、編集後も古い range を削除する特別処理や停止時の無条件再描画は要りません。記録が無い場合は、表示中のエディタにあるコメント外の最初の呼び出しへフォールバックします。色は `orbitscore.playheadPalette` (32 色、東京の地下鉄路線色をベースにした first-come 割り当て) から `colorForSeq()` で決まり、`⏹ <seq>` 行や `✅ Global stopped` 行、engine 停止で消えます。`[STEP]` 行そのものは `shouldFilterLine()` で Output Channel から隠されます。
 
 引数ツリーの深いネスト (`(A)(B).root(X)` のような group run や `[ ... ]` の stack) には「解決できる最深の祖先」で妥協する、と `findPlayArgRangeForPath()` のコメントが書いています。間違った引数を光らせるより、1 段浅い範囲を光らせる方が誤解が少ない、という判断です。
 
@@ -340,7 +362,7 @@ export function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:91-100
+// packages/vscode-extension/src/agent-handlers.ts:93-102
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -771,7 +793,7 @@ flowchart TD
 - `packages/vscode-extension/src/diagnostics-provider.ts:21-171` — `updateDiagnostics()`: 行内 3 種 + 横断 6 種
 - `packages/vscode-extension/src/dsl-providers.ts:176-213` — `registerOutputCodeActionProvider()`: `output-missing` / `dry-not-routed` の quick fix
 - `packages/vscode-extension/src/playhead.ts:39-54` — `[STEP]` 行の文法と `parseStepLine()`
-- `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
+- `packages/vscode-extension/src/playhead.ts:308-367` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:110-496` — 横断解析の関数群
 - `packages/vscode-extension/src/diagnostics-analysis.ts:350-496` — `analyzeMissingOutput()` / `missingOutputQuickFixEdit()`: #883 の出口診断

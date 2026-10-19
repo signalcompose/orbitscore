@@ -9,6 +9,7 @@ import {
   parseStepLine,
   PLAYHEAD_PALETTE,
 } from '../../packages/vscode-extension/src/playhead'
+import * as playheadSource from '../../packages/vscode-extension/src/playhead'
 import { readExtensionManifest } from '../helpers/vscode-extension-manifest'
 
 // #390 live playhead — pure helpers (no vscode dependency, so no mock needed).
@@ -106,13 +107,143 @@ describe('findPlayArgRanges', () => {
     expect(findPlayArgRanges('mydrum.play(1, 2)', 'drum')).toEqual([])
   })
 
-  it('uses the FIRST play call when the seq has several (MVP scope)', () => {
-    const text = 'drum.play(1, 2)\ndrum.play(3, 4, 5)\n'
+  it('without an anchor, falls back to the FIRST non-comment play call', () => {
+    const text = '// drum.play(7)\ndrum.play(1, 2)\ndrum.play(3, 4, 5)\n'
     expect(sliceAll(text, 'drum')).toEqual(['1', '2'])
   })
 
   it('stops at the matching close paren of a chained call', () => {
     expect(sliceAll('drum.play(1, 2).beat(4 by 4)', 'drum')).toEqual(['1', '2'])
+  })
+})
+
+describe('play call source tracking', () => {
+  it('P1: finds every non-comment play call in document order with exact offsets', () => {
+    const text = '// ignored.play(0)\nhh.play(1)\nbd.play(2)\nhh.play(3)\n'
+    const calls = playheadSource.findPlayCalls(text)
+
+    expect(calls.map((call) => call.seqName)).toEqual(['hh', 'bd', 'hh'])
+    for (const call of calls) {
+      expect(call.callStart).toBe(text.indexOf(call.seqName, call.callStart))
+      expect(call.openParen).toBe(text.indexOf('(', call.callStart))
+    }
+  })
+
+  it('P2: keeps the existing identifier boundaries while allowing whitespace', () => {
+    const calls = playheadSource.findPlayCalls(
+      'mydrum.play(1)\nfoo.drum.play(2)\ndrum . play (3)\n',
+    )
+
+    expect(calls.filter((call) => call.seqName === 'drum')).toHaveLength(1)
+    expect(calls.at(-1)?.seqName).toBe('drum')
+  })
+
+  it('P3: excludes _play calls', () => {
+    expect(playheadSource.findPlayCalls('hh._play(1)')).toEqual([])
+  })
+
+  it('P4: ignores calls in whole-line and trailing line comments', () => {
+    const text = '// hh.play(9)\nhh.play(1) // bd.play(8)\n// bd.play(7)\n'
+    expect(playheadSource.findPlayCalls(text).map((call) => call.seqName)).toEqual(['hh'])
+  })
+
+  it('P5: ignores double/single-quoted calls and honors escaped quotes', () => {
+    const text = [
+      'var a = "hh.play(9) and \\" bd.play(8)"',
+      "var b = 'hh.play(7) and \\' bd.play(6)'",
+      'hh.play(1)',
+    ].join('\n')
+    expect(playheadSource.findPlayCalls(text).map((call) => call.seqName)).toEqual(['hh'])
+  })
+
+  it('P6: ends an unterminated string at the newline', () => {
+    const text = 'var a = "hh.play(9)\nhh.play(1)\n'
+    expect(playheadSource.findPlayCalls(text)).toEqual([
+      {
+        seqName: 'hh',
+        callStart: text.lastIndexOf('hh.play'),
+        openParen: text.lastIndexOf('('),
+      },
+    ])
+  })
+
+  it('P7: does not treat block-comment syntax as a comment', () => {
+    expect(playheadSource.findPlayCalls('/* hh.play(9) */')).toHaveLength(1)
+  })
+
+  it('P8: skips comments while splitting multiline play arguments', () => {
+    const text = 'hh.play(\n  1, // kick, (x\n  0\n)'
+    expect(
+      findPlayArgRanges(text, 'hh').map((range) => text.slice(range.start, range.end)),
+    ).toEqual(['1', '0'])
+  })
+
+  it('P9: shifts an anchor for edits before its head, including insertion at callStart', () => {
+    const text = 'xx hh.play(1)'
+    const anchor = playheadSource.findPlayCalls(text)[0]
+
+    expect(
+      playheadSource.shiftPlayCallAnchor(anchor, [
+        { rangeOffset: 0, rangeLength: 0, text: 'abc' },
+        { rangeOffset: anchor.callStart + 3, rangeLength: 0, text: '!' },
+      ]),
+    ).toEqual({ ...anchor, callStart: anchor.callStart + 4, openParen: anchor.openParen + 4 })
+  })
+
+  it('P10: leaves an anchor unchanged for edits after play(', () => {
+    const text = 'hh.play(1, 2)'
+    const anchor = playheadSource.findPlayCalls(text)[0]
+    expect(
+      playheadSource.shiftPlayCallAnchor(anchor, [
+        { rangeOffset: anchor.openParen + 1, rangeLength: 1, text: '999' },
+      ]),
+    ).toEqual(anchor)
+  })
+
+  it('P11: invalidates overlapping heads and applies multiple changes sequentially', () => {
+    const text = 'xx\nhh.play(1)'
+    const anchor = playheadSource.findPlayCalls(text)[0]
+    expect(
+      playheadSource.shiftPlayCallAnchor(anchor, [
+        { rangeOffset: anchor.callStart + 1, rangeLength: 2, text: 'z' },
+      ]),
+    ).toBeNull()
+
+    const cases = [
+      [
+        { rangeOffset: 0, rangeLength: 0, text: 'A' },
+        { rangeOffset: 1, rangeLength: 0, text: 'B' },
+      ],
+      [
+        { rangeOffset: 0, rangeLength: 1, text: '' },
+        { rangeOffset: 0, rangeLength: 0, text: 'xyz' },
+      ],
+    ]
+    for (const changes of cases) {
+      let edited = text
+      for (const change of changes) {
+        edited =
+          edited.slice(0, change.rangeOffset) +
+          change.text +
+          edited.slice(change.rangeOffset + change.rangeLength)
+      }
+      const shifted = playheadSource.shiftPlayCallAnchor(anchor, changes)
+      expect(shifted).not.toBeNull()
+      expect(edited.slice(shifted!.callStart, shifted!.openParen + 1)).toBe('hh.play(')
+    }
+  })
+
+  it('P12: distinguishes a resolved range, an out-of-range path, and a missing call', () => {
+    const text = 'hh.play(1)\nhh.play(2, 3)'
+    const anchor = playheadSource.findPlayCalls(text)[1]
+    expect(playheadSource.resolvePlayheadStep(text, 'hh', '1', anchor)).toEqual({
+      kind: 'range',
+      range: { start: text.lastIndexOf('3'), end: text.lastIndexOf('3') + 1 },
+    })
+    expect(playheadSource.resolvePlayheadStep(text, 'hh', '9', anchor)).toEqual({
+      kind: 'out-of-range',
+    })
+    expect(playheadSource.resolvePlayheadStep(text, 'bd', '0')).toEqual({ kind: 'no-call' })
   })
 })
 

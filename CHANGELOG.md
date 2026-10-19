@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **ライブ playhead が、実際に流した `play()` ではなく、表示中の別ファイルや同じファイルの先頭にある `play()` を示すことがあった問題を修正** ([`#987`](https://github.com/signalcompose/orbitscore/issues/987))
+  - `Cmd+Enter` で送った範囲ごとに、コメントと文字列の外にある最後の `play()` を seq ごとに記録する。subject-block では、実際に送った連続行だけを対象にする
+  - 呼び出しより前や引数内を編集しても同じ `play()` を追い、呼び出しを削除・破損した場合やコメントアウトした場合は、別の `play()` へ移らず表示を消す
+  - 既知の制約: 走行中のパターン差し替えは次の周期で反映されるため、切り替えの境目では playhead の表示が最大 1 周期ずれることがある
+
 ## [4.3.0] - 2026-10-05
 
 DSL の機能追加リリース。Pitch DSL で**音高そのものをランダムに選べる**ようになった。audio シーケンスの意味論・wire・出力は変更なし。

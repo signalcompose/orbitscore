@@ -12,6 +12,7 @@ import * as vscode from 'vscode'
 import { engineProcess, isLiveCodingMode } from './extension-state'
 import { writeCodeToEngine } from './engine-process'
 import type { CommandResult } from './mcp-server'
+import { recordPlayheadSources } from './playhead-decorations'
 
 /**
  * Extract the subject identifier from a line of OrbitScore code.
@@ -55,11 +56,13 @@ async function runSelection() {
   // Get selected text or current line (with multiline detection)
   let text: string
   let executionRange: vscode.Range
+  let sentRanges: vscode.Range[]
   const selection = editor.selection
 
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
+    sentRanges = [executionRange]
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -104,10 +107,31 @@ async function runSelection() {
           editor.document.lineAt(firstLine).range.start,
           editor.document.lineAt(lastLine).range.end,
         )
+        const lineGroups: [number, number][] = []
+        let groupStart = collectedLines[0].lineNum
+        let groupEnd = groupStart
+        for (const line of collectedLines.slice(1)) {
+          if (line.lineNum === groupEnd + 1) {
+            groupEnd = line.lineNum
+            continue
+          }
+          lineGroups.push([groupStart, groupEnd])
+          groupStart = line.lineNum
+          groupEnd = line.lineNum
+        }
+        lineGroups.push([groupStart, groupEnd])
+        sentRanges = lineGroups.map(
+          ([start, end]) =>
+            new vscode.Range(
+              editor.document.lineAt(start).range.start,
+              editor.document.lineAt(end).range.end,
+            ),
+        )
       } else {
         const line = editor.document.lineAt(currentLine)
         text = line.text
         executionRange = line.range
+        sentRanges = [executionRange]
       }
     } else {
       // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
@@ -132,6 +156,7 @@ async function runSelection() {
         editor.document.lineAt(endLine).range.end,
       )
       text = editor.document.getText(executionRange)
+      sentRanges = [executionRange]
     }
   }
 
@@ -199,6 +224,7 @@ async function runSelection() {
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
+  recordPlayheadSources(editor.document, sentRanges)
   // Scroll the executed range into view before flashing it: subject-block
   // auto-detection (no explicit selection) never reveals, so an agent-driven run
   // that lands on an off-screen line would otherwise flash outside the viewport.
