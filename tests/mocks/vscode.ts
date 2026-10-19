@@ -57,6 +57,13 @@ export const StatusBarAlignment = { Left: 1, Right: 2 } as const
 
 export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 } as const
 
+export const TextEditorRevealType = {
+  Default: 0,
+  InCenter: 1,
+  InCenterIfOutsideViewport: 2,
+  AtTop: 3,
+} as const
+
 export class Uri {
   private constructor(public readonly value: string) {}
   toString(): string {
@@ -171,7 +178,7 @@ export const window = {
     hide: () => {},
     dispose: () => {},
   }),
-  createTextEditorDecorationType: () => ({ dispose: () => {} }),
+  createTextEditorDecorationType: (options?: unknown) => ({ options, dispose: () => {} }),
   createWebviewPanel: () => ({
     webview: { html: '' },
     reveal: () => {},
@@ -214,8 +221,17 @@ export const workspace = {
   textDocuments: [] as unknown[],
   onDidChangeConfiguration: () => fakeDisposable(),
   onDidOpenTextDocument: () => fakeDisposable(),
-  onDidChangeTextDocument: () => fakeDisposable(),
+  onDidChangeTextDocument: (listener: (event: unknown) => void) => {
+    documentChangeListeners.push(listener)
+    return fakeDisposable()
+  },
   onDidCloseTextDocument: () => fakeDisposable(),
+}
+
+export const documentChangeListeners: Array<(event: unknown) => void> = []
+
+export function resetDocumentChangeListeners(): void {
+  documentChangeListeners.length = 0
 }
 
 export const registeredCommandHandlers = new Map<string, (...args: unknown[]) => unknown>()

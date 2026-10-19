@@ -590,7 +590,7 @@ go through the daemon: **the extension spawns the scanner binary directly**. The
 follows the same convention as the daemon lookup.
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:89-107
+// packages/vscode-extension/src/playhead-decorations.ts:92-110
 /**
  * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
  * so wait until `atEpochMs` (the event's grid time — actual audio lands a

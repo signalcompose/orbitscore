@@ -70,7 +70,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:89-107
+// packages/vscode-extension/src/playhead-decorations.ts:92-110
 /**
  * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
  * so wait until `atEpochMs` (the event's grid time — actual audio lands a
@@ -101,7 +101,7 @@ export function handleStepLine(step: StepEvent): void {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:241-252
+// packages/vscode-extension/src/extension.ts:243-254
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -242,7 +242,7 @@ export interface DiagnosticEntry {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:72-75
+// packages/vscode-extension/src/agent-handlers.ts:73-76
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -334,7 +334,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:202-213
+// packages/vscode-extension/src/agent-handlers.ts:204-215
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -372,7 +372,7 @@ export function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:108-119
+// packages/vscode-extension/src/extension.ts:109-120
   const rawAppendLine = channel.appendLine.bind(channel)
   channel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -1236,7 +1236,7 @@ stale ガードの 2 本（`keeps the stale guard off cargo targets it can never
 ```
 
 ```typescript
-// packages/vscode-extension/src/playhead.ts:39-54
+// packages/vscode-extension/src/playhead.ts:48-63
 // Grammar: "[STEP] <seqName> <argPath> <atEpochMs>". seqName is a DSL
 // identifier (no whitespace); argPath is dot-joined non-negative integers;
 // atEpochMs is an integer (the engine rounds fractional bar subdivisions).
@@ -1328,10 +1328,10 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 
 `isCurrent`（そのチャンクを出したプロセスが今の `engineProcess` か）で状態変更を守っているのは、`stop_engine → start_engine` を素早く回したときに死んだプロセスの末尾出力が新しい engine の playhead を消してしまう `#528` の競合を避けるためです。
 
-`handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
+`handleStep` の実体は `playhead-decorations.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:96-107
+// packages/vscode-extension/src/playhead-decorations.ts:99-110
 export function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1349,30 +1349,62 @@ export function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/playhead-decorations.ts:109-128
+// packages/vscode-extension/src/playhead-decorations.ts:209-260
 function showPlayheadStep(step: StepEvent): void {
+  const source = currentPlayheadSource(step.seqName)
+  if (source) {
+    // An invalidated recorded call must clear instead of falling back to the first
+    // play(): that could light an unsounding line—the exact bug in Issue #987 §1.
+    if (source.kind === 'invalidated') {
+      clearPlayheadForSequence(step.seqName)
+      return
+    }
+    // A recorded source belongs only to the file that was actually run (#987 C1),
+    // so do not search another visible editor for the same sequence.
+    const editor = vscode.window.visibleTextEditors.find(
+      (candidate) => candidate.document.uri.toString() === source.docUriString,
+    )
+    if (!editor) return
+    const resolution = resolvePlayheadStep(
+      editor.document.getText(),
+      step.seqName,
+      step.argPath,
+      source,
+    )
+    switch (resolution.kind) {
+      case 'no-call':
+        // Do not fall back to the first play(): lighting an unsounding line is
+        // the issue's original bug, so a missing recorded call clears safely (§1).
+        clearPlayheadForSequence(step.seqName)
+        return
+      case 'out-of-range':
+        // Keep the previous display, matching existing behavior; choosing another
+        // argument would misleadingly light a value that is not sounding.
+        return
+      case 'range':
+        setActivePlayheadRange(editor, step.seqName, resolution.range)
+        return
+    }
+    const exhaustive: never = resolution
+    return exhaustive
+  }
+
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
     // degrading to the deepest resolvable ancestor (stacks are one visual
     // unit). Null = even the top-level arg is gone (user edited away the
     // pattern) — skip; leaving the previous highlight is less misleading
     // than lighting a wrong arg.
-    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
-    if (!argRange) continue
-    playheadActiveRanges.set(step.seqName, {
-      docUriString: editor.document.uri.toString(),
-      range: new vscode.Range(
-        editor.document.positionAt(argRange.start),
-        editor.document.positionAt(argRange.end),
-      ),
-    })
-    applyPlayheadDecorations()
+    const resolution = resolvePlayheadStep(editor.document.getText(), step.seqName, step.argPath)
+    if (resolution.kind === 'no-call') continue
+    if (resolution.kind === 'out-of-range') continue
+    setActivePlayheadRange(editor, step.seqName, resolution.range)
     return // first visible editor containing the call wins (MVP)
   }
 }
 ```
 
-`findPlayArgRangeForPath()`（`playhead.ts`）は文書テキストから最初の `<seqName>.play(` を探し、括弧の深さを追って top-level 引数の文字範囲に分割します。seq ごとに 1 つの active range を持ち、step のたびに置き換えるので「ハイライトが拍ごとに移動し、ループ先頭で巻き戻る」ように見えます。色は `orbitscore.playheadPalette`（既定は東京メトロ・都営の路線色をもとにした 32 色）から seq の登場順に割り当てられ、decoration type は色ごとに 1 つだけ遅延生成されます。
+`runSelection()` は実際に engine へ送った範囲を走査し、コメントと文字列の外にある最後の `<seqName>.play(` を seq ごとに記録します。`showPlayheadStep()` は記録した文書と呼び出しだけを対象にし、引数の範囲は現在のテキストから切り直します。記録が無い場合だけ、表示中のエディタからコメント外の最初の呼び出しを探します。seq ごとに 1 つの active range を持ち、step のたびに置き換えるので「ハイライトが拍ごとに移動し、ループ先頭で巻き戻る」ように見えます。色は `orbitscore.playheadPalette`（既定は東京メトロ・都営の路線色をもとにした 32 色）から seq の登場順に割り当てられ、decoration type は色ごとに 1 つだけ遅延生成されます。
 
 ### `[STEP]` は通常モードでは見えない
 

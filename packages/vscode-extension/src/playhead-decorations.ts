@@ -3,10 +3,13 @@ import * as vscode from 'vscode'
 
 import {
   colorForSeq,
-  findPlayArgRangeForPath,
+  findPlayCalls,
+  resolvePlayheadStep,
+  shiftPlayCallAnchor,
   type PlayheadColorConfig,
   type StepEvent,
 } from './playhead'
+import { engineGeneration } from './extension-state'
 
 // --- Live playhead highlight (#390) ---
 // The engine emits `[STEP] <seqName> <argPath> <atEpochMs>` on stdout for each
@@ -106,31 +109,162 @@ export function handleStepLine(step: StepEvent): void {
   playheadTimeouts.add(timeout)
 }
 
+interface RecordedPlayheadCall {
+  kind: 'call'
+  docUriString: string
+  callStart: number
+  openParen: number
+  engineGeneration: number
+}
+
+interface InvalidatedPlayheadCall {
+  kind: 'invalidated'
+  docUriString: string
+  engineGeneration: number
+}
+
+type PlayheadSource = RecordedPlayheadCall | InvalidatedPlayheadCall
+
+const playheadSources = new Map<string, PlayheadSource>()
+
+/** Record the last play call per sequence from only the ranges sent to the engine. */
+export function recordPlayheadSources(
+  document: vscode.TextDocument,
+  sentRanges: readonly vscode.Range[],
+): void {
+  const calls = sentRanges.flatMap((range) => {
+    const rangeStart = document.offsetAt(range.start)
+    return findPlayCalls(document.getText(range)).map((call) => ({
+      ...call,
+      callStart: call.callStart + rangeStart,
+      openParen: call.openParen + rangeStart,
+    }))
+  })
+  calls.sort((a, b) => a.callStart - b.callStart)
+  const docUriString = document.uri.toString()
+  for (const call of calls) {
+    playheadSources.set(call.seqName, {
+      kind: 'call',
+      docUriString,
+      callStart: call.callStart,
+      openParen: call.openParen,
+      engineGeneration,
+    })
+  }
+}
+
+/** Make agent-supplied play calls fall back to the first visible editor call. */
+export function forgetPlayheadSourcesInCode(code: string): void {
+  for (const seqName of new Set(findPlayCalls(code).map((call) => call.seqName))) {
+    playheadSources.delete(seqName)
+  }
+}
+
+function isAfter(a: vscode.Position, b: vscode.Position): boolean {
+  return a.line > b.line || (a.line === b.line && a.character > b.character)
+}
+
+/** Shift recorded call offsets and discard active ranges made stale by an edit. */
+export function notePlayheadDocumentChange(event: vscode.TextDocumentChangeEvent): void {
+  const docUriString = event.document.uri.toString()
+  for (const [seqName, source] of playheadSources) {
+    if (source.kind !== 'call' || source.docUriString !== docUriString) continue
+    const shifted = shiftPlayCallAnchor(source, event.contentChanges)
+    playheadSources.set(
+      seqName,
+      shifted
+        ? { ...source, callStart: shifted.callStart, openParen: shifted.openParen }
+        : { kind: 'invalidated', docUriString, engineGeneration: source.engineGeneration },
+    )
+  }
+  for (const change of event.contentChanges) {
+    for (const [seqName, active] of playheadActiveRanges) {
+      if (active.docUriString === docUriString && isAfter(active.range.end, change.range.start)) {
+        playheadActiveRanges.delete(seqName)
+      }
+    }
+  }
+}
+
+function currentPlayheadSource(seqName: string): PlayheadSource | undefined {
+  const source = playheadSources.get(seqName)
+  return source?.engineGeneration === engineGeneration ? source : undefined
+}
+
+function setActivePlayheadRange(
+  editor: vscode.TextEditor,
+  seqName: string,
+  range: { start: number; end: number },
+): void {
+  playheadActiveRanges.set(seqName, {
+    docUriString: editor.document.uri.toString(),
+    range: new vscode.Range(
+      editor.document.positionAt(range.start),
+      editor.document.positionAt(range.end),
+    ),
+  })
+  applyPlayheadDecorations()
+}
+
 function showPlayheadStep(step: StepEvent): void {
+  const source = currentPlayheadSource(step.seqName)
+  if (source) {
+    // An invalidated recorded call must clear instead of falling back to the first
+    // play(): that could light an unsounding line—the exact bug in Issue #987 §1.
+    if (source.kind === 'invalidated') {
+      clearPlayheadForSequence(step.seqName)
+      return
+    }
+    // A recorded source belongs only to the file that was actually run (#987 C1),
+    // so do not search another visible editor for the same sequence.
+    const editor = vscode.window.visibleTextEditors.find(
+      (candidate) => candidate.document.uri.toString() === source.docUriString,
+    )
+    if (!editor) return
+    const resolution = resolvePlayheadStep(
+      editor.document.getText(),
+      step.seqName,
+      step.argPath,
+      source,
+    )
+    switch (resolution.kind) {
+      case 'no-call':
+        // Do not fall back to the first play(): lighting an unsounding line is
+        // the issue's original bug, so a missing recorded call clears safely (§1).
+        clearPlayheadForSequence(step.seqName)
+        return
+      case 'out-of-range':
+        // Keep the previous display, matching existing behavior; choosing another
+        // argument would misleadingly light a value that is not sounding.
+        return
+      case 'range':
+        setActivePlayheadRange(editor, step.seqName, resolution.range)
+        return
+    }
+    const exhaustive: never = resolution
+    return exhaustive
+  }
+
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
     // degrading to the deepest resolvable ancestor (stacks are one visual
     // unit). Null = even the top-level arg is gone (user edited away the
     // pattern) — skip; leaving the previous highlight is less misleading
     // than lighting a wrong arg.
-    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
-    if (!argRange) continue
-    playheadActiveRanges.set(step.seqName, {
-      docUriString: editor.document.uri.toString(),
-      range: new vscode.Range(
-        editor.document.positionAt(argRange.start),
-        editor.document.positionAt(argRange.end),
-      ),
-    })
-    applyPlayheadDecorations()
+    const resolution = resolvePlayheadStep(editor.document.getText(), step.seqName, step.argPath)
+    if (resolution.kind === 'no-call') continue
+    if (resolution.kind === 'out-of-range') continue
+    setActivePlayheadRange(editor, step.seqName, resolution.range)
     return // first visible editor containing the call wins (MVP)
   }
 }
 
 export function clearPlayheadForSequence(seqName: string): void {
-  if (playheadActiveRanges.delete(seqName)) {
-    applyPlayheadDecorations()
-  }
+  playheadActiveRanges.delete(seqName)
+  // An edit listener may already have dropped the stale coordinate without
+  // repainting. Re-apply even when the map entry is gone so the editor's last
+  // rendered decoration is cleared on the next stop/step decision.
+  applyPlayheadDecorations()
 }
 
 export function clearAllPlayheadDecorations(): void {
@@ -138,10 +272,10 @@ export function clearAllPlayheadDecorations(): void {
     clearTimeout(timeout)
   }
   playheadTimeouts.clear()
-  if (playheadActiveRanges.size > 0) {
-    playheadActiveRanges.clear()
-    applyPlayheadDecorations()
-  }
+  playheadActiveRanges.clear()
+  // An edit listener may already have removed every stale coordinate without
+  // repainting, so global stop must always clear the editor's rendered state.
+  applyPlayheadDecorations()
 }
 
 // -- Playhead test seams (#527 review round 3 Critical #1) ------------------
@@ -197,4 +331,5 @@ export function __resetPlayheadStateForTest(): void {
   for (const decorationType of playheadDecorationTypes.values()) decorationType.dispose()
   playheadDecorationTypes.clear()
   playheadPaletteAssignments.clear()
+  playheadSources.clear()
 }

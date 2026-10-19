@@ -164,10 +164,11 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:60-63
+// packages/vscode-extension/src/run-selection.ts:62-66
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
+    sentRanges = [executionRange]
   } else {
 ```
 
@@ -178,7 +179,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:27-40
+// packages/vscode-extension/src/run-selection.ts:28-41
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -232,10 +233,11 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/run-selection.ts:199-206
+// packages/vscode-extension/src/run-selection.ts:227-235
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
+  recordPlayheadSources(editor.document, sentRanges)
   // Scroll the executed range into view before flashing it: subject-block
   // auto-detection (no explicit selection) never reveals, so an agent-driven run
   // that lands on an off-screen line would otherwise flash outside the viewport.

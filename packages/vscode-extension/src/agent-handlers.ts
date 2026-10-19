@@ -50,6 +50,7 @@ import type {
   SelectionInput,
 } from './mcp-server'
 import type { PluginUiAction } from './plugin-ui-bridge'
+import { forgetPlayheadSourcesInCode } from './playhead-decorations'
 import { analyzeWavBuffer } from './wav-analysis'
 
 /** `pluginUiForAgent` is module-private (only `activate()` wires it into MCP);
@@ -77,6 +78,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!writeCodeToEngine(code, documentDir)) {
     return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
   }
+  forgetPlayheadSourcesInCode(code)
   // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は
   // 「**stdin へ届いた**」までしか意味せず、パース/実行エラーは engine が stderr へ
   // 非同期に出すだけだった。LLM は ok を成功と解釈するので、実機で
