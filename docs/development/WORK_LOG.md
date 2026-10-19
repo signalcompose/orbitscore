@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### docs(design): playhead source provenance carried by the engine (#987 B′, draft) (Oct 19, 2026)
+### docs(design): playhead source provenance carried by the engine (#987 B′) (Oct 19, 2026)
 
 **Date**: 2026-10-19 / **ブランチ**: `claude/sweet-pasteur-2l1eef` / **Issue**: [#987](https://github.com/signalcompose/orbitscore/issues/987)
 
@@ -25,7 +25,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 - 調べた事実: `argPath` は L2（`resolveChords`）の後の木で数えるため、`x*n`・パターン変数・連結 `(1)(2)`・和音名を含む `play()` では、今の拡張の「カンマ区切りの番号」と一致しない（PR #988 でも同じ）。REPL は文ごとに実行し、`buffer.trim()` した文字列をパースする。ループの次の周期は先読みで予約される
 - 決めた方向（案）: 評価 ID は拡張が振り、設計 694 の属性の仕組み（`//#evalBegin {"evalId":…}`）に載せる / 座標はフレームの物理行と UTF-16 の列 / エンジンは URI を知らない / 位置の木はパーサが作り、L2 が要素と同じ歩調で変換する / 出どころは周期を予約する時点で音に結ぶ / `[STEP]` は末尾に `<src>` を 1 項目足す
-- advisor（Fable）の批判は文書の §14 に反映する（この commit の時点では反映前）
+- 1 つ目の commit は advisor の批判を反映する前の下書き
+- 追記（advisor 反映）: advisor（Fable）の批判 13 件を §14 に記録し、すべて採るか理由を付けて見送った。主な変更は 3 点:
+  - フレームの中身をユーザーのテキストだけにする（`//#documentDirectory` をフレームの前へ、`global.setDocumentDirectory(...)` の挿入と `globalInitialized` を廃止。設計 694 §3.2・§3.3 と同じ形）。座標がネイティブ版の `evaluate({ code })` と同じになる
+  - REPL は設計 694 の PR-L2（1 フレーム = 1 回のパース + 1 回の実行）を前提にする。行ごとの実行の上に座標の補正を重ねない。🔴 評価の意味が変わる（選択の中の構文エラーで何も実行しない）ので owner の問い Q2 にした
+  - 出どころは `TimedEvent` ごとに `{ evalId, range }`。光らせる単位は表を作らず「木をたどれる所まで」（入れ子と stack は今と同じ、`.root()` の run の中へは降りる）。描く前に「写した範囲の文字列 = 送った文字列」を確かめる（Q6）
 - 実機 gated E2E は回していない（Linux のコンテナで VS Code・音声デバイスが無い。設計のみの変更）
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
