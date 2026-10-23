@@ -25,7 +25,8 @@ import {
   parseRandomBinding,
   ParserUtils,
 } from './parser-utils'
-import { ExpressionParser, collapseScopedRun } from './parse-expression'
+import { ExpressionParser } from './parse-expression'
+import { collapseScopedRun } from './play-postfix-ops'
 
 /**
  * Bare method names that stay TransportStatements (SC.1). Every other bare name
@@ -170,8 +171,8 @@ export class StatementParser {
    * at execution order.
    */
   private parseChordBinding(variableName: string): { statement: ChordBinding; newPos: number } {
-    const ep = new ExpressionParser(this.tokens, this.pos)
-    const stackResult = ep.parseValueArray()
+    // `true`: name voices read as in a play() `[ ]` (modifiers and `.r(p)` included, #974).
+    const stackResult = new ExpressionParser(this.tokens, this.pos).parseValueArray(true)
     this.pos = stackResult.newPos
     const stack = stackResult.value
 

@@ -62,6 +62,7 @@ import {
   expectLogMarkerAtLeast,
   expectNoNewErrors,
   newErrorLines,
+  readEngineLog,
 } from './helpers/engine-log'
 import {
   BYTES_PER_SAMPLE,
@@ -747,6 +748,8 @@ type IsolatedOrbitStudioOptions = {
   settings: Record<string, unknown> | ((tmpRoot: string) => Record<string, unknown>)
   env: NodeJS.ProcessEnv
   portBase: number
+  /** False opens an empty window with no workspace folder (needed for IM.6 case 4). */
+  openWorkspace?: boolean
   prepareWorkspace?: (tmpRoot: string) => void | Promise<void>
 }
 
@@ -762,6 +765,7 @@ async function launchIsolatedOrbitStudio({
   settings,
   env,
   portBase,
+  openWorkspace = true,
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
   await killHarnessInstances()
@@ -826,7 +830,7 @@ async function launchIsolatedOrbitStudio({
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
-      tmpRoot,
+      ...(openWorkspace ? [tmpRoot] : []),
     ],
     {
       env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
@@ -3032,6 +3036,196 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #964: the non-debug stdout filter dropped every `🎚️ <seq>: play=… (next cycle)` line whose
+  // pattern carried an object element — play() prints those as JSON, and the filter dropped any
+  // line containing `"type"`. The engine had stored the new pattern; only get_log said otherwise,
+  // so an agent checking its own run_selection concluded nested patterns were not evaluated.
+  // Plain start_engine (no debug) on purpose: debug mode bypasses the filter entirely.
+  it.skipIf(!appAvailable)(
+    'shows a nested play() update in get_log after run_selection (#964)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!workAudioDir) throw new Error('main gated phase did not initialize audio fixture state')
+      const activeClient = client
+      const dslPath = path.join(tmpRoot, 'nested-play-update-964.orbs')
+      const nestedPlayLine = 'hat964.play((1, 0), (1, 0, 1, 0), (1, 0), (0, 0, 1, 0))'
+      const dslLines = [
+        'var global = init GLOBAL',
+        'global.tempo(120)',
+        `global.audioPath(${JSON.stringify(path.relative(path.dirname(dslPath), workAudioDir))})`,
+        'var hat964 = init global.seq',
+        'hat964.audio("kick.wav").chop(1)',
+        'hat964.output()',
+        'hat964.play(1, 0, 1, 1)',
+        'global.start()',
+        'LOOP(hat964)',
+        nestedPlayLine,
+      ]
+      // 1-based line numbers derived from the script so edits cannot silently
+      // desynchronize the run_selection ranges below.
+      const loopLine = dslLines.indexOf('LOOP(hat964)') + 1
+      const nestedLine = dslLines.indexOf(nestedPlayLine) + 1
+      expect(loopLine).toBeGreaterThan(0)
+      expect(nestedLine).toBe(loopLine + 1)
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
+      const runLines = async (startLine: number, endLine: number): Promise<void> => {
+        const selected = await activeClient.call('set_selection', {
+          start_line: startLine,
+          start_char: 1,
+          end_line: endLine,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+      }
+
+      const start = await activeClient.call('start_engine')
+      expect(start.isError, start.text).toBe(false)
+      try {
+        await waitForEngine(true, 15_000, '#964 engine running')
+        const opened = await activeClient.call('open_file', { path: dslPath })
+        expect(opened.isError, opened.text).toBe(false)
+
+        // The update is only logged as "(next cycle)" while the sequence loops.
+        const beforeLoop = await readLog()
+        await runLines(1, loopLine)
+        await waitUntil(
+          async () =>
+            newLogLines(beforeLoop, await readLog()).some((line) => line.includes('🔄 hat964')),
+          { intervalMs: 200, timeoutMs: 15_000, label: '#964 hat964 loop started' },
+        )
+
+        const beforeUpdate = await readLog()
+        await runLines(nestedLine, nestedLine)
+        let playUpdates: readonly string[] = []
+        let updateLogTail = ''
+        try {
+          await waitUntil(
+            async () => {
+              const log = await readLog()
+              updateLogTail = log.slice(-2500)
+              playUpdates = newLogLines(beforeUpdate, log).filter((line) =>
+                line.includes('🎚️ hat964: play='),
+              )
+              return playUpdates.length > 0
+            },
+            { intervalMs: 200, timeoutMs: 15_000, label: '#964 nested play() update in get_log' },
+          )
+        } catch (error) {
+          throw new Error(`${String(error)}\n--- log tail ---\n${updateLogTail}`)
+        }
+        expect(playUpdates, 'one run_selection of the nested play() logs one update').toHaveLength(
+          1,
+        )
+        expect(playUpdates[0]).toContain('(next cycle)')
+        expect(
+          newErrorLines(beforeUpdate, await readLog()),
+          '#964 nested play() update must add no ERROR lines',
+        ).toEqual([])
+      } finally {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stop = await activeClient.call('stop_engine')
+        expect(stop.isError, stop.text).toBe(false)
+        await waitForEngine(false, 15_000, '#964 engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  // #966: evaluate_orbitscore always sent the first workspace folder as the base directory,
+  // so a file import written relative to a .orbs in a SUBFOLDER resolved against the
+  // workspace root — while run_selection on the same code worked. Now the base is
+  // document_path → active OrbitScore editor → workspace folder (core spec IM.6), and the
+  // result names the base it used. This also gives file import (#630) its first real-app
+  // coverage through evaluate_orbitscore.
+  it.skipIf(!appAvailable)(
+    'resolves a file import from evaluate_orbitscore against the .orbs directory (#966)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      // The workspace folder is tmpRoot, so a subfolder is exactly the #966 layout.
+      const subDir = path.join(tmpRoot, 'sub966')
+      fs.mkdirSync(subDir, { recursive: true })
+      const libPath = path.join(subDir, 'lib966.orbs')
+      const entryPath = path.join(subDir, 'entry966.orbs')
+      const rootPath = path.join(tmpRoot, 'root966.orbs')
+      fs.writeFileSync(libPath, 'var global = init GLOBAL\nvar lib966 = init global.seq\n')
+      const entryCode = [
+        'import { lib966 } from "./lib966.orbs"',
+        'var global = init GLOBAL',
+        'lib966.play(1, 0)',
+      ].join('\n')
+      fs.writeFileSync(entryPath, entryCode + '\n')
+      fs.writeFileSync(rootPath, 'var global = init GLOBAL\n')
+
+      const usedBase = (text: string): string | undefined => {
+        const match = /\(documentDirectory: (.+)\)$/.exec(text)
+        return match ? fs.realpathSync(match[1]) : undefined
+      }
+      const realSubDir = fs.realpathSync(subDir)
+      const realRoot = fs.realpathSync(tmpRoot)
+
+      const start = await activeClient.call('start_engine')
+      expect(start.isError, start.text).toBe(false)
+      try {
+        await waitForEngine(true, 15_000, '#966 engine running')
+
+        // 2. The active OrbitScore editor (in the subfolder) is the base.
+        const openedEntry = await activeClient.call('open_file', { path: entryPath })
+        expect(openedEntry.isError, openedEntry.text).toBe(false)
+        const viaEditor = await activeClient.call('evaluate_orbitscore', { code: entryCode })
+        expect(viaEditor.isError, viaEditor.text).toBe(false)
+        expect(usedBase(viaEditor.text), viaEditor.text).toBe(realSubDir)
+
+        // With a root-level file in front, the same code resolves against the root and
+        // the import is not found — the failure names the base, so it is diagnosable.
+        const openedRoot = await activeClient.call('open_file', { path: rootPath })
+        expect(openedRoot.isError, openedRoot.text).toBe(false)
+        const viaRootEditor = await activeClient.call('evaluate_orbitscore', { code: entryCode })
+        expect(viaRootEditor.isError, viaRootEditor.text).toBe(true)
+        expect(viaRootEditor.text, viaRootEditor.text).toContain('lib966')
+        expect(usedBase(viaRootEditor.text), viaRootEditor.text).toBe(realRoot)
+
+        // 1. document_path wins over whatever tab is in front — no open_file needed.
+        const beforeExplicit = await readEngineLog(activeClient)
+        const viaPath = await activeClient.call('evaluate_orbitscore', {
+          code: entryCode,
+          document_path: entryPath,
+        })
+        expect(viaPath.isError, viaPath.text).toBe(false)
+        expect(usedBase(viaPath.text), viaPath.text).toBe(realSubDir)
+        const editorState = JSON.parse((await activeClient.call('get_editor_state')).text) as {
+          path: string | null
+        }
+        expect(
+          editorState.path?.endsWith('root966.orbs'),
+          'document_path must not switch tabs',
+        ).toBe(true)
+        expect(
+          newErrorLines(beforeExplicit, await readEngineLog(activeClient)),
+          '#966 evaluation with document_path must add no ERROR lines',
+        ).toEqual([])
+      } finally {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stop = await activeClient.call('stop_engine')
+        expect(stop.isError, stop.text).toBe(false)
+        await waitForEngine(false, 15_000, '#966 engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
   // #654: the live playhead (#390) was wired only into the audio backend, so
   // `instrument()` sequences never moved the highlight — in the 840 piece only
   // the one `audio()` layer stepped while six Kontakt layers sat frozen.
@@ -5110,8 +5304,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const aStatePath = path.resolve(root, aStateRelativePath)
       const bStatePath = path.resolve(root, bStateRelativePath)
       const countMarker = (log: string, marker: string): number => log.split(marker).length - 1
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
       const assertCurrentPid = async (expectedPid: number, label: string): Promise<void> => {
         const pids = rackChildPidsFromLog(await readLog())
         expect(pids[pids.length - 1], `${label}: rack child PID must stay unchanged`).toBe(
@@ -5619,8 +5812,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const activeClient = client
       const catalog = requireCatalogFixtures()
       const { stages } = RACK_CHAIN_GAIN_EXPECTATIONS
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
 
       await startR28Engine(activeClient, '#628 R28 master engine')
 
@@ -6953,6 +7145,39 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #974: a chord definition could not even parse `r1.r(p)` (or `~` / `@v` / `^r` on a name)
+  // while the same voice worked in play(). A one-voice chord variable keeps the score's
+  // pitch oracle unchanged: every slot must be C4 or G4, and both must appear.
+  it.skipIf(!appAvailable)(
+    '#974 a chord variable holding r1.r(1) emits both C4 and G4 across onset-tracked capture windows',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const receiver = 'chordRandom974'
+      const result = await runScore(
+        session,
+        {
+          slug: '974-chord-random-voice',
+          lines: randomPitchScore(
+            receiver,
+            session.catalog.clapSynthName,
+            new Array(RANDOM_PITCH_NOTE_COUNT).fill('c974').join(', '),
+            ['var two = mode(1, 5)', 'var r1 = random.two', 'var c974 = [r1.r(1)]'],
+          ),
+        },
+        async ({ captureSegment }) => {
+          await captureSegment('random-pitches', 10_000, 0)
+        },
+        { capture: true },
+      )
+      expect(result, '#974 chord random voice capture must be available').toBeDefined()
+      if (!result) throw new Error('#974 chord random voice capture was not produced')
+      expectRandomPitchCapture(result, 'random-pitches', '#974 chord random voice')
+      await expectNoNewErrors(session.client, errorsBefore, '#974 chord random voice')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
   it.skipIf(!appAvailable)(
     '#967 E3 rejects random.nope through evaluate_orbitscore with the mode-source diagnostic',
     async () => {
@@ -7564,5 +7789,67 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       }
     },
     TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#966 clears the previous evaluate_orbitscore base when IM.6 has no candidate',
+    async () => {
+      // The shared gated app always opens tmpRoot as a workspace, so IM.6 case 4 is
+      // unreachable there. This dedicated empty-window session deliberately has neither a
+      // workspace folder nor an active editor. An absolute document_path can still establish
+      // a previous base without opening a tab; the next evaluation must clear that base.
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: `${HARNESS_TMP_PREFIX}966-`,
+        settings: { 'orbitscore.engineDebug': false },
+        env: { ...process.env },
+        portBase: 40100,
+        openWorkspace: false,
+        prepareWorkspace: (isolatedRoot) => {
+          const subDir = path.join(isolatedRoot, 'sub966')
+          fs.mkdirSync(subDir, { recursive: true })
+          fs.writeFileSync(
+            path.join(subDir, 'lib966.orbs'),
+            'var global = init GLOBAL\nvar cleared966 = init global.seq\n',
+          )
+          fs.writeFileSync(path.join(subDir, 'entry966.orbs'), '// document_path anchor\n')
+        },
+      })
+      const { child: blankChild, client: blankClient, tmpRoot: blankRoot } = launched
+      try {
+        const editorState = JSON.parse((await blankClient.call('get_editor_state')).text) as {
+          path: string | null
+        }
+        expect(editorState.path, '#966 case 4 requires no active editor').toBeNull()
+
+        const start = await blankClient.call('start_engine')
+        expect(start.isError, start.text).toBe(false)
+        await waitForEngineState(blankClient, true, 15_000, '#966 no-base engine running')
+
+        const subDir = path.join(blankRoot, 'sub966')
+        const entryPath = path.join(subDir, 'entry966.orbs')
+        const importCode = 'import { cleared966 } from "./lib966.orbs"'
+        const withPath = await blankClient.call('evaluate_orbitscore', {
+          code: importCode,
+          document_path: entryPath,
+        })
+        expect(withPath.isError, withPath.text).toBe(false)
+        expect(withPath.text).toContain(`documentDirectory: ${subDir}`)
+
+        const withoutBase = await blankClient.call('evaluate_orbitscore', { code: importCode })
+        expect(withoutBase.isError, withoutBase.text).toBe(true)
+        expect(withoutBase.text).toContain(
+          'import: cannot resolve the base directory — no source file or document directory (IM.6).',
+        )
+        expect(withoutBase.text).toContain('documentDirectory: none')
+      } finally {
+        try {
+          await blankClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        await removeHarnessTree(blankRoot, blankChild)
+      }
+    },
+    TEST_TIMEOUT_MS,
   )
 })

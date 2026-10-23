@@ -9,7 +9,10 @@ import * as path from 'path'
 
 import { describe, it, expect, vi } from 'vitest'
 
-import { extractDocumentDirectoryMeta } from '../../packages/engine/src/cli/repl-mode'
+import {
+  createReplSession,
+  extractDocumentDirectoryMeta,
+} from '../../packages/engine/src/cli/repl-mode'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import { InterpreterV2 } from '../../packages/engine/src/interpreter/interpreter-v2'
 
@@ -22,6 +25,10 @@ describe('extractDocumentDirectoryMeta', () => {
 
   it('returns undefined when absent', () => {
     expect(extractDocumentDirectoryMeta('var global = init GLOBAL')).toBeUndefined()
+  })
+
+  it('returns an empty string when the meta line explicitly clears the base', () => {
+    expect(extractDocumentDirectoryMeta('//#documentDirectory\nvar x = 1')).toBe('')
   })
 
   it('takes the last value when repeated', () => {
@@ -64,6 +71,45 @@ describe('meta-provided documentDirectory feeds import resolution (IM.6)', () =>
       })
       expect(interpreter.getState().sequences).toHaveProperty('kick')
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('clears a previous base so a later relative import fails with the no-base error', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbs-repl-meta-clear-'))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'first.orbs'),
+        'var global = init GLOBAL\nvar first = init global.seq\n',
+      )
+      fs.writeFileSync(
+        path.join(dir, 'second.orbs'),
+        'var global = init GLOBAL\nvar second = init global.seq\n',
+      )
+      const interpreter = new InterpreterV2()
+      const audioEngine = (interpreter as any).state.audioEngine
+      audioEngine.boot = vi.fn().mockResolvedValue(undefined)
+      await interpreter.boot()
+      const session = createReplSession(interpreter)
+
+      session.pushLine(`//#documentDirectory ${dir}`)
+      session.pushLine('import { first } from "./first.orbs"')
+      await session.idle()
+      expect(interpreter.getState().sequences).toHaveProperty('first')
+
+      session.pushLine('//#documentDirectory')
+      session.pushLine('import { second } from "./second.orbs"')
+      await session.idle()
+
+      const errors = error.mock.calls.map((args) => args.join(' ')).join('\n')
+      expect(errors).toContain(
+        'import: cannot resolve the base directory — no source file or document directory (IM.6).',
+      )
+      expect(interpreter.getState().sequences).not.toHaveProperty('second')
+      expect(interpreter.getState().globals.global?.documentDirectory).toBe('')
+    } finally {
+      error.mockRestore()
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })

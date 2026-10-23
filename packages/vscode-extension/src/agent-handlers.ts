@@ -14,6 +14,7 @@ import { resolveEngineState } from './engine-state-bridge'
 import { decideStartEngineForAgent } from './engine-lifecycle'
 import { resolveDeviceClickAction, translateSelectAudioDeviceError } from './engine-view'
 import { writeAudioDeviceSetting } from './engine-view-provider'
+import { resolveEvaluateDocumentDirectory } from './evaluate-document-directory'
 import {
   resolveAudioDeviceSetting,
   sendEngineStateMeta,
@@ -66,15 +67,31 @@ export function __pluginUiForAgentForTest(
 /**
  * Evaluate agent-supplied OrbitScore source (MCP `evaluate_orbitscore` tool).
  * Mirrors the engine-running guard in `runSelection` and reuses
- * `writeCodeToEngine`. Relative audio paths resolve against the first workspace
- * folder, since the agent has no "active editor".
+ * `writeCodeToEngine`. Relative paths (import / audio() / plugin state) resolve
+ * against `document_path`, else the active OrbitScore editor, else the first
+ * workspace folder (#966 / core spec IM.6) — the base used is returned.
  */
-async function evaluateForAgent(code: string): Promise<EvaluateResult> {
+async function evaluateForAgent(
+  code: string,
+  options?: { documentPath?: string },
+): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
-  const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  if (!writeCodeToEngine(code, documentDir)) {
+  const activeDocument = vscode.window.activeTextEditor?.document
+  const base = resolveEvaluateDocumentDirectory({
+    documentPath: options?.documentPath,
+    activeEditor: activeDocument && {
+      languageId: activeDocument.languageId,
+      scheme: activeDocument.uri.scheme,
+      fsPath: activeDocument.uri.fsPath,
+    },
+    workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    isFile: isExistingFileForEvaluation,
+  })
+  if (!base.ok) return base
+  const { documentDirectory } = base
+  if (!writeCodeToEngine(code, documentDirectory)) {
     return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
   }
   // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は
@@ -97,7 +114,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
       }
     })
   }, randomUUID())
-  if (result.ok) return { ok: true }
+  if (result.ok) return { ok: true, documentDirectory }
   const detail = result.diagnostics.length
     ? result.diagnostics.map((d) => `[${d.kind}] ${d.message}`).join('; ')
     : (result.error ?? 'engine reported an evaluation failure')
@@ -105,6 +122,22 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
     ok: false,
     error: `evaluation failed: ${detail}`,
     ...(result.diagnostics.length ? { diagnostics: result.diagnostics } : {}),
+    documentDirectory,
+  }
+}
+
+/** Preserve unexpected stat failures; only a genuinely missing/non-directory path is absent. */
+export function isExistingFileForEvaluation(
+  absolutePath: string,
+  stat: (path: string) => Pick<fs.Stats, 'isFile'> = fs.statSync,
+): boolean {
+  try {
+    return stat(absolutePath).isFile()
+  } catch (error) {
+    const errno = (error as NodeJS.ErrnoException).code
+    if (errno === 'ENOENT' || errno === 'ENOTDIR') return false
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${errno ?? 'UNKNOWN'} while checking "${absolutePath}": ${message}`)
   }
 }
 

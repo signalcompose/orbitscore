@@ -406,7 +406,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:655-668
+// packages/engine/src/audio/rust-engine/daemon-client.ts:590-603
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -1138,17 +1138,21 @@ receiver names with spaces or symbols, the correlating `requestId`, and `expecte
 object).
 
 The extension-side `PluginUiBridge` writes the meta line to the engine process's stdin and
-correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`.
+correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`. In #757 the
+write / correlation / timeout / drain skeleton was folded into `CorrelatedLineBridge`, shared with
+the other three (eval mark / plugin state / engine state); `PluginUiBridge` injects only the meta
+command, the result-line parser, the failure shape, and the check against the pending `action`.
 
 ```typescript
-// packages/vscode-extension/src/plugin-ui-bridge.ts:90-98
-      const fail = (error: Error): void => this.fail(input.requestId, error.message)
+// packages/vscode-extension/src/correlated-line-bridge.ts:83-92
+      const fail = (error: Error): void => this.fail(requestId, error.message)
       try {
-        const written = writeLine(`//#pluginUi ${JSON.stringify(input)}\n`, fail)
-        if (written === false)
-          this.fail(input.requestId, 'failed to write //#pluginUi to engine stdin')
+        const written = writeLine(`${this.spec.metaCommand} ${JSON.stringify(payload)}\n`, fail)
+        if (written === false) {
+          this.fail(requestId, `failed to write ${this.spec.metaCommand} to engine stdin`)
+        }
       } catch (error) {
-        this.fail(input.requestId, error instanceof Error ? error.message : String(error))
+        this.fail(requestId, error instanceof Error ? error.message : String(error))
       }
     })
 ```
@@ -1156,7 +1160,7 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `engine-handlers.ts` picks up this result line by the `{"pluginUi"` prefix. Since #773 ([#811](https://github.com/signalcompose/orbitscore/pull/811)) these four branches live inside the callback of `createLinePrefixer`, so **a line split at a chunk boundary is no longer lost** (see [IV-1](/en/editor/vscode-architecture#the-stdout-bridge-envelopes-are-reassembled-into-lines-too-773)).
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:243-247
+// packages/vscode-extension/src/engine-handlers.ts:262-266
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {
@@ -1187,7 +1191,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2544-2566
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2548-2570
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

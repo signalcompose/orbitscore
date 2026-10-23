@@ -26,10 +26,10 @@ The first edition of this chapter was written against the 2026-05-05 snapshot (0
 - **`PlayRandomDegree` was added to `PlayElement` / `ValueExpression`** (#967, `packages/engine/src/parser/types.ts:508-527`). It carries only modifiers such as `octaveShift` / `detune` / `@v` / `@g` and no degree; which note is chosen is not decided by the parser
 - **`AudioParser.parse()` enforces IM.1, "imports only in the file's head region"** (`audio-parser.ts:76-111`)
 - **`GlobalStatement` / `SequenceStatement` / `MethodChain` gained `invocation?: 'bare' | 'call'`**, so the interpreter can tell `.drums` (no parentheses) from `.TALReverb4()` (with parentheses) (`types.ts:261-283`)
-- **`collapseScopedRun()` was extracted into `parse-expression.ts`**. The rule that folds a pitch-scope chain onto a run of juxtaposed groups such as `(A)(B).root(X)` is shared by both the statement-level and the nested-level parse loops
+- **`collapseScopedRun()` was extracted** (now in `play-postfix-ops.ts`; moved out of `parse-expression.ts` in #974). The rule that folds a pitch-scope chain onto a run of juxtaposed groups such as `(A)(B).root(X)` is shared by both the statement-level and the nested-level parse loops
 
 ```typescript
-// packages/engine/src/parser/parse-expression.ts:80-87
+// packages/engine/src/parser/play-postfix-ops.ts:46-53
 export function collapseScopedRun(list: PlayElement[], runStart: number): void {
   const lastIdx = list.length - 1
   const last = list[lastIdx]
@@ -330,7 +330,7 @@ The processing of `parse()` is to read the token sequence from the start, repeat
 Now let's look inside `StatementParser.parseStatement()`.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:53-80
+// packages/engine/src/parser/parse-statement.ts:54-81
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
@@ -366,7 +366,7 @@ Dispatch happens by the kind of the leading token. `VAR` means a variable declar
 Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking at the first token of the right-hand side.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:96-99
+// packages/engine/src/parser/parse-statement.ts:97-100
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
     //   `init ...` → global / sequence initializer (below).
@@ -380,7 +380,7 @@ Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking
 What is interesting is that when parsing a statement of the form `<identifier>.method(args)`, **the parser always returns `type: 'sequence'`**.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:611-619
+// packages/engine/src/parser/parse-statement.ts:612-620
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.

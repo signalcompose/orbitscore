@@ -16,16 +16,20 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn-fixture'
 import {
   DaemonClient,
-  createDaemonStderrLineRouter,
   daemonEnv,
-  isDaemonNonErrorTracingLine,
   resolveDaemonBinaryPath,
 } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
+import {
+  createDaemonStderrLineRouter,
+  isDaemonNonErrorTracingLine,
+  unterminatedTail,
+} from '../../../packages/engine/src/audio/rust-engine/daemon-stderr-lines'
 import {
   DaemonConnectionError,
   DaemonNotFoundError,
   DaemonProtocolError,
 } from '../../../packages/engine/src/audio/rust-engine/errors'
+import { PROTOCOL_VERSION } from '../../../packages/engine/src/audio/rust-engine/protocol-types'
 
 import { MockDaemonServer } from './mock-daemon-server'
 
@@ -705,6 +709,121 @@ describe('DaemonClient real spawn error handling (C3)', () => {
   )
 })
 
+// /code-review: 起動中の stderr 収集から行ルータへの切り替えが行の途中で起きると、行の後半
+// だけが level 無しでルータへ届き、`console.error`（拡張では `ERROR:`）に落ちていた。
+describe('DaemonClient stderr line straddling the end of startup', () => {
+  // The fake daemon reports the mock server's port (via env), so the client connects and the
+  // child stays alive long enough to write the tail of the line after startup.
+  let tmpDir: string
+  let straddleBin: string
+  let unterminatedBin: string
+  let server: MockDaemonServer
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-stderr-straddle-'))
+    straddleBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon',
+      `#!/bin/sh
+[ -z "$STRADDLE_PORT" ] && exit 1
+printf 'INFO [orbit-audio-daemon] listening on 127.0.0.1:' >&2
+sleep 0.3
+printf '{"ready":true,"port":%s,"protocol_version":"${PROTOCOL_VERSION}"}\\n' "$STRADDLE_PORT"
+sleep 0.5
+printf '%s\\n' "$STRADDLE_PORT" >&2
+sleep 5
+`,
+    )
+    unterminatedBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon-unterminated',
+      `#!/bin/sh
+[ -z "$STRADDLE_PORT" ] && exit 1
+printf '{"ready":true,"port":%s,"protocol_version":"${PROTOCOL_VERSION}"}\\n' "$STRADDLE_PORT"
+sleep 0.3
+printf 'thread main panicked' >&2
+exit 1
+`,
+    )
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    server = new MockDaemonServer()
+  })
+
+  afterEach(async () => {
+    delete process.env.STRADDLE_PORT
+    await server.stop()
+  })
+
+  it(
+    'joins the head collected during startup with the tail that arrives after it',
+    async () => {
+      const port = new URL(await server.start({})).port
+      process.env.STRADDLE_PORT = port
+      const logged: string[] = []
+      const errors: string[] = []
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        logged.push(args.map(String).join(' '))
+      })
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        errors.push(args.map(String).join(' '))
+      })
+      const client = new DaemonClient()
+      try {
+        await client.start({ daemonPath: straddleBin })
+        const deadline = Date.now() + 5_000
+        while (
+          ![...logged, ...errors].some((line) => line.endsWith(port)) &&
+          Date.now() < deadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        expect(logged, JSON.stringify({ logged, errors })).toContain(
+          `[daemon] INFO [orbit-audio-daemon] listening on 127.0.0.1:${port}`,
+        )
+        expect(errors.filter((line) => line.endsWith(port))).toEqual([])
+      } finally {
+        await client.quit()
+        logSpy.mockRestore()
+        errorSpy.mockRestore()
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  it(
+    'forwards the daemon final stderr line even when it has no newline (#777 wiring)',
+    async () => {
+      // Exercise the real spawn/stderr wiring without opening a localhost socket: spawnDaemon
+      // has completed startup as soon as it consumes the ready line; WebSocket connection is a
+      // separate phase of start(). This also keeps the test runnable in network-sandboxed CI.
+      process.env.STRADDLE_PORT = '1'
+      const errors: string[] = []
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        errors.push(args.map(String).join(' '))
+      })
+      const client = new DaemonClient()
+      try {
+        await (client as any).spawnDaemon(unterminatedBin, SPAWN_TEST_TIMEOUT_MS, undefined)
+        const deadline = Date.now() + 5_000
+        while (!errors.includes('[daemon] thread main panicked') && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        expect(errors).toContain('[daemon] thread main panicked')
+      } finally {
+        await (client as any).cleanupAfterStartFailure()
+        errorSpy.mockRestore()
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+})
+
 describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   // 実 daemon バイナリの代わりに argv をファイルへ書き出すだけの shell script を spawn し、
   // `--audio-device <name>` が実際に子プロセスへ渡ることを検証する（daemon 側の解決・縮退
@@ -1021,8 +1140,8 @@ describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () =
       (line) => nonError.push(line),
       (line) => error.push(line),
     )
-    for (const chunk of chunks) router(chunk)
-    return { nonError, error }
+    for (const chunk of chunks) router.push(chunk)
+    return { nonError, error, router }
   }
 
   // 🔴 実測（#618 の E2E をカタログ経路へ寄せた際）: 行がチャンク境界で割れると、
@@ -1041,6 +1160,41 @@ describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () =
   it('改行が来るまで emit しない（未完の行を早出ししない）', () => {
     const { nonError, error } = route(['INFO [orbit-clap-instrument-child] partial'])
     expect(nonError).toEqual([])
+    expect(error).toEqual([])
+  })
+
+  // 🔴 #777: daemon が panic で死ぬと最後の診断は改行なしで切れる。stderr の終端で
+  // flush しないと、クラッシュ経路の最後の 1 行が構造的に落ちる。
+  it('🔴 flush() で改行の無い最後の行を level で振り分けて吐き出す（#777）', () => {
+    const { nonError, error, router } = route([
+      'INFO [orbit-audio-daemon] ok\n',
+      "thread 'main' panicked at src/engine.rs:42",
+    ])
+    expect(error).toEqual([])
+    router.flush()
+    expect(nonError).toEqual(['INFO [orbit-audio-daemon] ok'])
+    expect(error).toEqual(["thread 'main' panicked at src/engine.rs:42"])
+    // 2 回目の flush は何も出さない（同じ行を二重に記録しない）。
+    router.flush()
+    expect(error).toHaveLength(1)
+  })
+
+  // /code-review: 起動中の収集から行ルータへの切り替えが行の途中で起きると、後半だけが
+  // level 無しで ERROR に落ちていた。成功時に収集分の末尾を先に渡せば 1 行に戻る。
+  it('起動中に貯めた分の末尾を先に渡すと、起動後に届く後半と 1 行に戻る', () => {
+    const collected =
+      'INFO [orbit-audio-daemon] booting\nINFO [orbit-audio-daemon] listening on 127.0.0.1:'
+    expect(unterminatedTail(collected)).toBe('INFO [orbit-audio-daemon] listening on 127.0.0.1:')
+    expect(unterminatedTail('complete line\n')).toBe('')
+    const { nonError, error } = route([unterminatedTail(collected), '5555\n'])
+    expect(nonError).toEqual(['INFO [orbit-audio-daemon] listening on 127.0.0.1:5555'])
+    expect(error).toEqual([])
+  })
+
+  it('flush() は空白だけの残りを出さない（ERROR を水増ししない）', () => {
+    const { nonError, error, router } = route(['INFO [orbit-audio-daemon] ok\n', '   '])
+    router.flush()
+    expect(nonError).toEqual(['INFO [orbit-audio-daemon] ok'])
     expect(error).toEqual([])
   })
 

@@ -49,7 +49,7 @@ const RUST_EXCLUDE_PATTERNS: ReadonlyArray<RegExp> = [
 /** 真空防止（§4.1）。列挙が既知の下限を割ったら pathspec の欠陥を疑う。 */
 const MIN_FILES_PER_LANG: Record<Lang, number> = { rust: 100, ts: 100 }
 
-function gitLsFiles(repoRoot: string, pathspec: string): string[] {
+export function gitLsFiles(repoRoot: string, pathspec: string): string[] {
   const output = execFileSync('git', ['ls-files', '-z', '--', pathspec], {
     cwd: repoRoot,
     encoding: 'utf8',

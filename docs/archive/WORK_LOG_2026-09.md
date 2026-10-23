@@ -13661,3 +13661,427 @@ DSP ヘルパー（ゲイン・パン・加算）/ bus topology 検証 / 起動�
 **検証**: cfg 4 象限緑 / `cargo fmt --check` / **`cargo clippy --workspace -D warnings` 緑** /
 `cargo test --workspace --lib` **476 passed** / `npm test` **2,445 passed**（不変）/ lint /
 `docs:check` 948 引用 0 failed。
+
+## 09-12/09-13 分の移設（本体の 2,000 行上限・2026-10-06・#964〜#757 のブランチの追記で超過）
+
+### docs(design): design the cursor-based route to one plugin's UI (#939) (Sep 13, 2026)
+
+**Issue**: #939（#474 の後継）。起案 = Fable subagent / レビュー = main（工程 ①→②）。
+設計文書のみ。実装は次。
+
+#### 何が問題か
+
+DSL の `ui("名前")` は**一致する insert を全部開く**（SC.10.10.1 規範 3・仕様どおり）。
+しかし**同じプラグインを 2 つ挿すと分離できない**。index 形は SC.10.10 規範 (2) で撤回済み
+（ラックは入れ子になり得るので 1 次元では指せない）。
+**MCP は `chain_path` で個別に指せるので、LLM は開けて人間だけが開けない。**
+
+#### 方式は右クリック（⌘クリックではない）
+
+仕様 SC.10.10 規範 (2) は ⌘クリックを主経路としているが、**実装手段が両方とも問題を抱える**:
+`DefinitionProvider` は **⌘ホバーの peek でも発火**する（名前を見ただけで窓が開く）。
+`DocumentLinkProvider` の target に `command:` URI を置く形は**公式 API ドキュメントに記載が無い**
+（Context7 で確認）。一方 command URI は**ホバーの `MarkdownString`（`isTrusted`）では公式サポート**。
+
+`contributes.menus` の `editor/context` は**既に存在**する（`orbitscore.rescanPlugins` が入っている）。
+🔴 **仕様改訂が要る**（§2.5 に文面・残存 4 箇所を列挙）。
+
+#### main のレビューで変えた 3 点
+
+1. 🔴 **E2E のフィクスチャを `[clap, vst3, clap]` → `[clap, Gain(db: -6), clap]`**。
+   旧案は**設計自身が §8 の筆頭に挙げたトラップ（`Gain` を数えない）を検出できない** —
+   3 つとも非標準だと index は数え方に関わらず 1/2/3 で同じになる。`Gain` を挟むと、
+   数えない実装は 3 つ目に index 2 を割り当て、**index 2 は `targets` に無い**ので loud に落ちる
+2. **変異を 1 件 → 2 件**（M2「`Gain` を数えない」を受け入れ条件へ）
+3. **手動ゲートに実 VST3 の右クリックを追加**（owner 指摘）。混在チェーンの index 演算は
+   `#633 E2E-2` が既に実証済みだが、**VST3 の UI が開くことは自動化できない**
+   （フィクスチャ `GainOracle.vst3` の `createView` がヘッドレスで null）
+
+#### main が閉じた穴
+
+起案は「`Gain` が offset を消費する」を **state 経路**（`pluginStateTargets`）から導いていた。
+**UI 経路でも成り立つかは書かれていなかった** — `openPluginUi` も `resolvePluginStateEntry` を
+呼ぶので index 空間は共有で、規則は有効。ここを確かめずに実装すると根拠が宙に浮いていた。
+
+VS Code の `contextmenu.ts` の引用も **`raw.githubusercontent.com` から取得して逐語一致を確認**した
+（委譲先の引用を鵜呑みにしない）。クリック位置が既存選択の外なら `setPosition` する。
+ただし**実機は未確認**なので、§3.1 に 1 分の確認手順、§3.2 にホバーへ倒す代案を置いた。
+**F1 が偽でも解決器・配線・E2E・MCP は無変更**で済む形にしてある。
+
+#### 規模
+
+**約 900〜1,300 変更行**（起案の 700 行は楽観的）。根拠は `#652` のエディタ側の切片で、
+`plugin-name-diagnostics.ts` を新規作成して 324 行 + spec 248 + 配線 102 = **674 行**。
+本件はそれを**拡張**する側。**半分近くがテスト**。
+**1 PR で通す**（owner 裁定）— 分割すると束 1 が消費者のいない層になる。
+
+Part of #939
+
+---
+
+### docs: bring the README back in line with the shipped 4.1.0 (Sep 13, 2026)
+
+**Issue**: #937。README を実体と 1 行ずつ突き合わせ、**乖離 7 件**を直した。
+
+#### 🔴 最重要: 入門例が鳴らなかった
+
+`README.md` の `Basic DSL Syntax` は `kick.play(...)` を書いて **`.output()` が無かった**。
+#883（DSL 2.0・暗黙 master 終端の廃止）以降、**`output()` の無いシーケンスは無音**である。
+
+| | `.output()` |
+|---|---|
+| `examples/01_getting_started.orbs` | ✅ |
+| `sites/user/getting-started/first-sound.md:50` | ✅ |
+| **`README.md`** | 🔴 **無し** |
+
+`examples/` の audio 系 10 本はすべて `output(` を含む（0 は MIDI 専用の 2 本のみ）。
+**README だけが取り残されていた** — 読者が最初にコピペするコードなので実害が一番大きい。
+修正後の例は `parseAudioDSL` に通して **14 statements・エラー 0** を確認した。
+
+#### 直した残り 6 件
+
+| 箇所 | 何が古かったか |
+|---|---|
+| `Current Implementation Status` | **「2.0.0 is released」** — 同じ節の別行は 4.1.0 を名乗っており自己矛盾していた |
+| `Development Status` の Phase 7 | **「SuperCollider Integration」が `<details>` の外**＝現況として読めた（#502 で削除済み） |
+| `Testing` の件数 | `2271/58/2329`（2026-09-10）→ **`2497/76/2573`**（実測） |
+| 拡張のインストール手順 | **`Developer: Install Extension from Location...` でソースフォルダを読ませていた** — #873 / #878 が露出した層を丸ごと飛ばす経路。`npx vsce package` → `.vsix` へ変更し、`pretest:e2e:cold-install` と同じ手順に揃えた |
+| Technical Features | **セッションログ（`.orbslog`）に一言も触れていなかった**（既定 off・`ORBITSCORE_SESSION_LOG=1` で opt-in） |
+| `#138` の行 / `Syntax highlighting (2.0.0)` | 前者は自動化済みの注記を追加、後者は無意味な版表記を削除 |
+
+🔴 **ビルド手順も直した** — 旧手順は `cd packages/vscode-extension && npm run build` だったが、
+engine の `dist` と daemon / plugin-child のバイナリを拡張へ入れるのは**ルートの `npm run build`**
+である。拡張ディレクトリだけでビルドして package すると、中身の入っていない `.vsix` になる。
+
+#### 🔴 自分の誤り: 層を 1 つ見て「存在しない」と判断しかけた
+
+`seq.effect()` / `seq.instrument()` / `seq.ui()` について、`Sequence` クラスの public メソッドを
+列挙して**「存在しない」と結論しかけた**。実際は **interpreter の dispatch**
+（`packages/engine/src/interpreter/process-statement.ts:281,285`）と
+`signal-chain/runtime.ts:53,76` が DSL 表面として扱っており、README の記述は正しかった。
+**DSL の表面はクラスのメソッド一覧ではない。** [[enumeration-stops-one-level-too-early]]
+
+同様に検算して**乖離が無かった**もの: `compressor()`/`limiter()`/`normalizer()` の no-op
+（`rust-engine-player.ts:1462` が warn only）/ LinkAudio の default off（`Cargo.toml:23`）/
+ディレクトリ構造 11 項目 / 参照している issue 番号 10 件の状態。
+
+`docs:check` exit 0 / lint exit 0 / `tests/docs` + `tests/repo` 86 passed。
+
+Closes #937
+
+---
+
+### docs: fold the remaining docs-sync PRs and fix the version claims they found (Sep 13, 2026)
+
+**Issue**: #933。#930 / #907 / #902 / #901 / #900 を取り込み、**#904 と #929 は close**した。
+
+#### 🔴 #904 はマージしてはいけなかった — が、発見は正しかった
+
+#904 は「4.0.1 の bump が漏らしたページ」を直す PR で、**main は既に 4.1.0** なので
+マージすると**版が巻き戻る**（`+` 側に `4.0.1` が 16 箇所）。
+**しかし指摘は当たっていた** — 4.1.0 の bump が届いていない箇所が残っていた:
+
+| 箇所 | 直前の値 | 直した値 |
+|---|---|---|
+| `docs/core/INDEX.md:5` | 拡張 **3.0.0** / `DSL_VERSION 1.2` | 4.1.0 / `DSL_VERSION 2.0` |
+| `sites/dev/{,en/}editor/vscode-architecture.md:15` | package version **3.0.0** | 4.1.0 |
+| `sites/dev/{,en/}editor/vscode-architecture.md:1154/1155` | version **3.0.0** | 4.1.0 |
+
+**2 版分（3.0.0 → 4.0.1 → 4.1.0）取り残されていた。** #904 の中身だけ採って 4.1.0 で書いた。
+
+#### 🔴 版の列挙はこれで 3 回連続で漏れている
+
+| 版 | 漏れ | 後始末 |
+|---|---|---|
+| 4.0.1 | 複数ページ | `10d3c7eb`「follow the bump into the pages it missed」を後出し |
+| 4.1.0 | `README.md:55` | PR #928 の中で修正 |
+| **今回** | 上の 5 スポット | 本 PR |
+
+原因は毎回同じで、**grep のパターンが「現在の版の数字」や特定の強調記法に依存していた**こと。
+`**4.0.1**` と `"version"` を狙ったパターンは、`VS Code 拡張 **3.0.0**` や
+`package version 3.0.0` を**構造的に拾えない**（探しているのが「古い版」ではなく
+「**版を名乗っている場所**」だから）。
+
+**今後は数字に依存しないパターンで数える**:
+
+```
+(拡張|extension)[^0-9]{0,40}[0-9]+\.[0-9]+\.[0-9]+|package version [0-9]+\.[0-9]+\.[0-9]+|Current release
+```
+
+24 箇所が挙がり、1 つずつ「現在の版を名乗るのか／履歴記述か」を判定した。
+履歴（`DEVELOPMENT_MAP:240` の #883、各 provenance Note、`architecture-overview:620`）は触っていない。
+
+#### ついでに直した 2 件
+
+- `sites/dev/en/editor/vscode-architecture.md` の `contributes.commands` が **(17)** だったが、
+  `package.json` の実体は **15**。ja 側は 15 で正しく、**en だけがずれていた**
+- `docs/testing/{TESTING_GUIDE,PERFORMANCE_TEST}.md` のインストール例が
+  `orbitscore-0.0.1.vsix` のままで、**コピペすると失敗する**。
+  `orbitscore-darwin-arm64-*.vsix`（`release.yml:129` の命名と一致）へ直した。
+  `docs/user/{ja,en}/GETTING_STARTED.md` にも同じ例があるが、**両方 DEPRECATED 宣言付き**なので触っていない
+
+#### #902 の衝突は「分割前 vs 分割後」だった
+
+HEAD 側が `output.rs:254-260` / `session.rs:691-718` という**分割前のパス**を指したままで、
+#902 が `output/lines.rs` / `output/render.rs` / `session/dispatch.rs` へ貼り直していた。
+**参照リストは #902 側を採り**、frontmatter は HEAD（`verified-against: f2245bb` が新しい）を採って、
+Note は**両側の固有文を文単位で統合**した。
+
+#### #929 は差分 0 だが中身が重要（→ issue へ）
+
+🔴 **E2E-P が裁定 D′ と旧 `√2 · equal_power_pan` 則を区別できない**ことを指摘している。
+`hardLeftCh1 / hardLeftCh0 ≤ 0.05` も `centerRms / noPanRms ≈ 1` も**旧則で通る** —
+発音側の差は 3 本すべてに等しく掛かるので比を取ると消えるため。
+その他の指摘とあわせて issue 化した。
+
+`docs:check` exit 0 / lint exit 0 / `npm test` 全件 pass。
+
+Closes #933
+
+---
+
+### docs: re-anchor the dev-site code pointers onto the #896 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr896`
+
+PR [#896](https://github.com/signalcompose/orbitscore/pull/896)（#888 子 2・`session.rs` 2,605 → 439 /
+`output.rs` 2,587 → 322 コード行）へのドキュメント追従。
+
+#896 は `// FILE:START-END` 引用ブロックを分割後のモジュールへ張り直しており、`npm run docs:check`
+は 948 件すべて緑である。**しかし `check-citations.mjs` が見ているのは引用ブロックだけ**で、
+本文中のインライン参照と各章末「参考にしたコード」の `path:line` は検査対象外だった。
+その結果、**dev サイトに 44 箇所の宙に浮いた参照が残っていた**（`output.rs:3290-3322` など、
+445 行しかないファイルへの参照）。
+
+本コミットはそれらを**シンボルから引き直して**再アンカーした（ja / en 両方）:
+
+- `sites/dev/rust-engine/index.md` — コマンド表の出典が単一 `match` ではなくなった旨を追記し、
+  `session/run_loop.rs` / `session/dispatch.rs` / `dispatch_plugin.rs` / `dispatch_transport.rs` へ分解
+- `sites/dev/rust-engine/insert-bus.md` — `InsertBusStage` の 2 つの参照が同一定義に解決するため 1 本へ統合
+- `sites/dev/rust-engine/capture-verification.md` — `CAPTURE_RING_SECONDS` / `OutputStream` と
+  `render_block_with_sources` が別ファイルへ分かれたため 2 本へ分割
+- `sites/dev/signal-chain/mixer-audio-line.md` — post-loop が `output/render_full.rs` へ移った
+- `sites/dev/plugin-hosting/plugin-ui.md` — `ClosePluginUI` が `session/dispatch.rs` へ移った
+- 上記 5 章の `verified-against` / `verified-at` を `9c29e45` / `2026-09-12` へ更新
+
+`/docs` 側も 2 件:
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — `validate_line_program` の `Pan` 受理と
+  バス上 pan 則（`line_pan_coefficients`）を `output/line_program.rs` / `output/dsp.rs` へ
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — 最後の session 切断の判定を
+  `session/params_plugin.rs` の `SessionRegistration::disconnect` へ
+
+🔴 **発見: これらの参照は #896 より前から既に壊れていた。** 旧 `path:line` を `9d39d2e`
+（#896 の base）で引き直したところ、**確認した 34 箇所のほぼ全部が無関係な行を指していた**
+（例: `output.rs:823-846` は「active flag snapshot」と書かれていたが実際は `MasterLine::new`、
+`session.rs:1271-1284` は「session 切断 trigger」と書かれていたが実際は outproc frames-clamped の
+ticker）。**引用ブロックだけがラチェットで守られ、その隣の散文参照は誰にも検査されずに漂流していた。**
+CLAUDE.md「規律を足す時は、同時にそれを守らせる仕組みを足すこと」の未適用箇所である。
+
+**実装・テストは 1 行も変更していない。**
+
+---
+
+### docs: re-anchor the dev-site prose citations that PR #895 moved out of engine_wrap.rs (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr895`
+
+PR [#895](https://github.com/signalcompose/orbitscore/pull/895)（merge commit `9d39d2e`）の
+ドキュメント追従。`engine_wrap.rs` は 6,418 → 424 コード行になり、21 の子モジュールへ実体が移った。
+
+### 🔴 `docs:check` が見ていない引用が 40 件残っていた
+
+PR #895 は `// FILE:START-END` の**コードブロック引用**（`docs:check` が文字単位で突合する層）を
+すべて直していた。直っていなかったのは、**本文と「参考」節の散文引用**である。
+
+| 層 | #895 で直ったか | 機械検査 |
+|---|---|---|
+| ` ```rust // path:start-end ` のコードブロック | ✅ | `sites/dev/scripts/check-citations.mjs`（948 件） |
+| 本文の `` `engine_wrap.rs:6470-6560` `` 等 | ❌ **40 件が残存** | **無い** |
+
+`check-citations.mjs` はフェンス直後のヘッダ行しか見ないので、散文に書かれた path:line は
+**ラチェットの外側**にいる。今回はそこを実ファイルへ手で突き合わせて貼り直した。
+
+🔴 **この 40 件は #895 より前から line がずれていた**（base `0819a88` で実測。例:
+`engine_wrap.rs:4455` が指していたのは `path: &std::path::Path,` の行だった）。
+ただし #895 で**ファイルそのものが変わった**ので、行ずれではなく到達不能になった。
+
+### 直した範囲
+
+`sites/dev/`（ja）と `sites/dev/en/`（en）の 6 章 × 2 言語:
+`rust-engine/index.md` / `rust-engine/insert-bus.md` / `signal-chain/index.md` /
+`signal-chain/mixer-audio-line.md` / `plugin-hosting/catalog.md` / `plugin-hosting/plugin-ui.md` /
+`glossary.md` / `rust-engine/oop-children.md`。
+
+置換は 40 件の行番号付き引用と 18 件の散文言及で、**ja / en の件数一致を assert して**適用した
+（片方だけ直る事故を機械で防いだ）。
+
+### DSL 正本（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）も 5 箇所直した
+
+MX.4 の「今日の現在地」表が `SetBusRouting` の kind 拒否と forward-only 拒否を
+`engine_wrap.rs:7212-7216` / `:7237-7241` / `:5802-5806` / `:7207-7211` で引いていた。
+実体は `engine_wrap/bus_lines.rs` の `set_bus_routing` にある:
+
+| 規則 | 現在地 |
+|---|---|
+| `output '<name>' must be a sum bus` | `engine_wrap/bus_lines.rs:299-303` |
+| `send '<name>' must be an aux bus` | `engine_wrap/bus_lines.rs:325-329` |
+| forward-only（output） | `engine_wrap/bus_lines.rs:292-296` |
+| forward-only（send） | `engine_wrap/bus_lines.rs:318-322` |
+
+### frontmatter は触っていない（意図的）
+
+`verified-against` を新しい SHA へ上げると「章全体を再検証した」と主張することになる。
+本 PR が突き合わせたのは `engine_wrap/` 配下の引用だけで、同じ章が引いている
+`session.rs` / `output.rs` は **PR [#896](https://github.com/signalcompose/orbitscore/pull/896)
+（`9d39d2e` の直後にマージ）で分割済み**であり未検証である。`f23eb5d` のまま残すのが正しい。
+
+### docs(dev-site): re-anchor the source pointers left behind by the #888 child-3 split (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr897` / **追従元**: PR [#897](https://github.com/signalcompose/orbitscore/pull/897)（merge `6dcd80bb2086fd6ced22e0c9711a7063e45ee535`）
+
+PR #897 は `orbit-vst3-host/src/lib.rs` / `orbit-plugin-scan/src/lib.rs` /
+`orbit-audio-sandbox/src/transport.rs` を分割し、dev サイトの **`// FILE:START-END`
+引用ヘッダ 32 件**を移動先へ追随させた。しかし各章末の **`## Sources` / 「Further reading」の
+散文ポインタは旧パスのまま**残っていた。
+
+🔴 **`docs:check` はこの取りこぼしを構造的に検出できない。**
+`sites/dev/scripts/check-citations.mjs` が突合するのは ```` ```rust ```` ブロック先頭の
+`// FILE:START-END` ヘッダだけで、**散文の中のバッククォート付きパスは走査対象外**である。
+そのため #897 は `948 citations / 0 failed` で緑のまま、**17 種 34 箇所**（ja / en 対）の
+死んだポインタを残せた。
+
+本コミットはその 17 種すべてを移動先へ張り直した（ja / en 対で 8 ファイル・計 34 箇所）:
+
+| 旧 | 新 |
+|---|---|
+| `transport.rs:79-87`（`EVT_SLOTS`） | `transport/layout.rs:33-41` |
+| `transport.rs:265-277`（evt ring / `dirty_epoch`） | `transport/layout.rs:222-234` |
+| `transport.rs:359-378`（`ReleaseAcquireSeq`） | `transport/event_ring.rs:37-56` |
+| `transport.rs:512-538`（`EventRingChild::service`） | `transport/event_ring.rs:192-218` |
+| `transport.rs:1213-1225`（`UiPumpNotification`） | `transport/ui_codec.rs:33-45` |
+| `transport.rs:1355-1374`（`UiPumpState`） | `transport/ui_pump.rs:63-82` |
+| `transport.rs:113-143,173-288`（`CONTROL_*` / `SharedRegion`） | `transport/layout.rs:67-97,127-239` |
+| `transport.rs:2031-2041`（`create_shared`） | `transport/shm.rs:171-186` |
+| `plugin-scan/src/lib.rs` 9 件（カタログ型・role 判定・scan dir・dedup・atomic write） | `types.rs` / `dirs.rs` / `clap_scan.rs` / `vst3_scan.rs` / `catalog_io.rs` |
+
+`docs/planning/DEVELOPMENT_MAP.md` の 2 件（`extra_scan_dirs_from_env` の実装位置、
+`reset_child_starting` の在処）も同様に張り直した。前者は「`CLAP_PATH` 対応は同じ関数に
+1 行並べるだけ」という**着手手順そのもの**を指すポインタで、死んだままだと実装者が迷う。
+
+`verified-against` / `verified-at` は**更新していない**。STYLE_GUIDE §4 の
+「小規模 cross-link / 体裁修正のみ: 更新しない（本文内容と code の対応関係に変更がないため）」に
+該当する — 純粋な移動なので本文の主張は 1 つも変わっていない。
+
+検証: `npm run docs:build`（user / dev）両方緑 / `npm run docs:check` **948 citations / 0 failed**。
+張り直した 17 種は docs:check の対象外なので、`sed -n '<start>p;<end>p'` で各範囲の先頭行・
+末尾行を**実ファイルから目視照合**した。
+
+### docs: follow the install-route change into the user site (Sep 12, 2026)
+
+**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr906`
+
+PR [#906](https://github.com/signalcompose/orbitscore/pull/906)（マージコミット `85f29aa`）の追従。
+同 PR で**リリースページが持つ内容が変わった**ため、user site の記述を合わせた。
+
+### 何が食い違ったか
+
+`release.yml` の `--notes-file` が先頭に置くのは、**Assets からの入れ方の 1 行と、正本
+（`sites/user/getting-started/installation.md`）へのリンクと、動作環境の注意**である
+（`.github/workflows/release.yml:244-264`）。**手順そのものはリリースページに載らない。**
+
+一方 user site の installation 章は、`::: tip` の中で「リリースページを開くと、そのページに
+インストール手順も載っています」と書いていた。#906 以前から v4.0.0 で外れていた約束であり、
+#906 の後も**手順ではなくリンクが載る**ので、どちらの意味でも成り立たない。
+
+### やったこと
+
+| ファイル | 変更 |
+|---|---|
+| `sites/user/getting-started/installation.md:33` | tip を「Assets に直接行ける / 先頭に動作環境とこのページへのリンクが置かれる / 手順の正本はこのページ」に書き換え |
+| `sites/user/en/getting-started/installation.md:33` | 同内容の英語版（バイリンガル必須） |
+
+### やらなかったこと
+
+- **`docs/user/ja/USER_MANUAL.md:65`** に同じ文が残っているが、この文書は **DEPRECATED で
+  「履歴として保持」（#237）**。#906 でも同じ理由で意図的に触れていないため、追従対象から外した
+- **`sites/dev/`** — 差分はリリースノートの生成（配布面）であり、dev site の章立て
+  （内部構造・評価経路）に該当する節が無い
+- **実装・テスト** — 変更なし（本追従はドキュメントのみ）
+### docs: fold the four pending docs-sync PRs into one branch (Sep 13, 2026)
+
+**Issue**: #931。bot の docs 同期 PR **4 本**（#923 / #916 / #925 / #915）をまとめて取り込んだ。
+
+#### 🔴 1 本ずつ入れると、入れるたびに残りが衝突し直す
+
+4 本とも `WORK_LOG.md` を触るので、**1 本 main へ入れた瞬間に残り 3 本が衝突する**。
+実際 4.1.0 の作業で #927 を入れた直後、4 本が一斉に `CONFLICTING` になった。
+1 つの枝で解消すれば、衝突解消もゲートも 1 回で済む。判定は GitHub の
+`mergeStateStatus` が `UNKNOWN` を返し続けたので **`git merge-tree --write-tree` で手元実測**した。
+
+#### 🔴 #916 が「黙って」取り込めていなかった
+
+ループで 4 本を merge した時、**#916 だけマージコミットが作られていなかった**。
+原因は**サンドボックス**で、#916 は `.claude/hooks/README.md` を触るが、このディレクトリは
+**Bash も git も書き込み拒否**される（[[hook-guards-must-check-the-path-not-just-the-branch]]）。
+`git merge` はエラーを出していたが、私の `grep -E 'CONFLICT|Merge made'` がその行を落としていた。
+
+**「4 本回した」は根拠にならない。** `git merge-base --is-ancestor <head> HEAD` を
+4 本すべてに対して回して初めて分かった。**ループの結果は件数ではなく到達性で検算する。**
+
+#### zsh は未クォート変数を単語分割しない
+
+`U=$(git diff --name-only --diff-filter=U)` を `for f in $U` で回したが、zsh では
+**分割されず 1 つの文字列として渡り**、`FileNotFoundError` になった。bash の癖で書いていた。
+
+#### 衝突の解消方針
+
+| 対象 | 方針 |
+|---|---|
+| `WORK_LOG.md` の新規エントリ同士 | **両側保持**（別の作業の記録なので落とすものが無い） |
+| 既にアーカイブ済みの 3 エントリ | **HEAD（空）を採る** — `### ` 見出しの集合演算で本体 × アーカイブの重複 0 を確認 |
+| `mcp-and-gated-e2e.md` の Note | HEAD が追従チェーンの上位集合（#917 まで）なので HEAD を採り、#915 固有の分割告知だけ足す |
+| アーカイブの索引行 | 両方の説明を統合 |
+
+#### 検査（bot は但し書きを読まない）
+
+#915 の貼り直しは**散文中のファイル参照**で、`docs:check` の対象外（逐語一致するのは
+`// file:start-end` の引用ブロックだけ）。**5 件を抜き取って実ファイルと突き合わせ**、
+`autoStartConfiguredRustEngine()` / 括弧バランス判定 / `deactivate()` / `EvalMarkBridge` /
+`setupErrorHandler` のいずれも正しい位置に着地していることを確認した。
+
+`docs:check` exit 0 / lint exit 0 / `tests/docs` + `tests/repo` 86 passed。
+本体が 1,970 行になったので `test: add a file-size ratchet` を 1 件アーカイブへ移した（162 行）。
+
+Closes #931
+
+---
+
+### docs(hooks): follow PR #914 in the hook docs (Sep 13, 2026)
+
+PR [#914](https://github.com/signalcompose/orbitscore/pull/914)（merge commit `7061245`）が
+`.claude/hooks/pre-edit-check.sh` の判定を「ブランチ名だけ」から
+「ブランチ名 + **編集先が repo 配下か**」に変えたので、フックの挙動を書いている
+ドキュメント 2 箇所を実装に追従させた（ドキュメントのみ・実装とテストは変更なし）。
+
+#### 変更内容
+
+- `.claude/hooks/README.md` §1: 「対象外 / 判定できない入力の倒し方」の表を追加。
+  plan file（#153）と **repo 外の絶対パス**（#913）が allow、相対パス・`..` を含む絶対パス・
+  `file_path` 無しは deny 側へ倒れることを明記。テストの所在（`tests/repo/pre-edit-hook.spec.ts`）も追記
+- `CLAUDE.md` "Hook Protection": `pre-edit-check.sh` の説明に「**リポジトリ配下のみ**」を追記
+
+#### 差分外だが同じ節にあった誤り（併せて訂正）
+
+`.claude/hooks/README.md` はブロック方式を **exit 2** と書いていたが、実装は
+Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して **exit 0** である
+（`.claude/hooks/pre-edit-check.sh:91-92`）。#914 の差分ではないが、書き換えた同じ箇条書きの
+中にあったため放置せず訂正した。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: DSL の構文・意味論は無変更
+- `sites/user/` / `sites/dev/`: 両サイトとも `pre-edit-check` / Claude Code hooks に言及していない
+  （`grep -rl "pre-edit" sites/` が 0 件）。バイリンガル追従の対象も発生しない
+- `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
+  退避した既存エントリ。過去ログなので触らない

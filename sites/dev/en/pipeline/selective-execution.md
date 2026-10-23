@@ -206,8 +206,11 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
-export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:647-656
+export function writeCodeToEngine(
+  rawCode: string,
+  documentDir: string | null | undefined,
+): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
@@ -218,7 +221,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 
 The two ways, summarized:
 
-1. **The meta line `//#documentDirectory <path>`** — always prepended. Being a `//` comment it is harmless as DSL (the tokenizer skips it), and the engine-side REPL only extracts the value
+1. **The meta line `//#documentDirectory <path>`** — always prepended. Being a `//` comment it is harmless as DSL (the tokenizer skips it), and the engine-side REPL only extracts the value. An evaluation with no base sends an empty `//#documentDirectory`, clearing the previous base
 2. **The DSL injection `global.setDocumentDirectory(...)`** — conditional. If the evaluation contains `var global = init GLOBAL`, it is inserted right after the init and the `globalInitialized` flag is set; for any later evaluation it is prepended. It is not injected when `globalInitialized` is `false` and there is no `init` line (to avoid an error from `global` being undefined)
 
 Why are two needed? Because `import` is evaluated before statements. The DSL injection runs as a statement, so at the moment `import` runs in the first evaluation, the base directory is not yet set. Only the meta line can deliver it ahead of time. The DSL injection is kept so that the proven behavior of existing paths such as `audio()` stays unchanged.
@@ -245,7 +248,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 
 `flashLines()` flashes the executed lines in the editor. In case an off-screen line is executed through the MCP `run_selection` tool, `revealRange` brings the range into the viewport before flashing.
 
-The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`, but passes the first workspace folder as `documentDir` (since there is no active editor) (extension.ts:3040-3047).
+The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`. Its `documentDir` is the directory of the `document_path` argument, else the active OrbitScore editor's directory, else the first workspace folder; if none exists, the evaluation has no base. The base it used is returned in the result, with `null` meaning no base (#966, core spec IM.6, `packages/vscode-extension/src/evaluate-document-directory.ts`). It used to always pass the first workspace folder, so with a `.orbs` in a subfolder, relative paths in `import` and `audio()` resolved differently from `run_selection`.
 
 ## On the Engine Side: the REPL's FIFO Queue and Buffer
 
@@ -309,7 +312,7 @@ export function createReplSession(interpreter: InterpreterV2): {
   let buffer = ''
   let emptyLineCount = 0
   // メタ行で受けた基準ディレクトリ（セッション内で最後の値が持続 — エディタ側は eval ごとに
-  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
+  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。空文字は明示的な「基準なし」。
   let sessionDocumentDirectory: string | undefined
   let lineQueue: Promise<void> = Promise.resolve()
 ```
@@ -411,7 +414,7 @@ The body of execution is `executeCurrentBuffer()`. The key point is that parse a
     // ここから先は「入力は完結している」— 失敗しても保留せず必ず報告してバッファを捨てる。
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
+      if (metaDir !== undefined) sessionDocumentDirectory = metaDir
       await interpreter.execute(ir, {
         source: code,
         evalSource: 'human',
@@ -451,13 +454,13 @@ By the same logic, the `EOF` decision must not apply to runtime errors. The ENOE
  * （`global.setDocumentDirectory(...)`）は statements として import より後に評価されるため、
  * import の基準ディレクトリ（IM.6）はこのメタ行でしか先渡しできない。`//` コメントなので
  * DSL としても無害（tokenizer が読み飛ばす）— 戻り値では code から取り除かず、値だけ抽出する。
- * 複数あれば最後の値が勝つ。
+ * 値が空なら基準を消す（空文字を返す）。複数あれば最後の値が勝つ。
  */
 export function extractDocumentDirectoryMeta(code: string): string | undefined {
   let dir: string | undefined
   for (const line of code.split('\n')) {
-    const m = line.match(/^\s*\/\/#documentDirectory\s+(.+?)\s*$/)
-    if (m) dir = m[1]
+    const m = line.match(/^\s*\/\/#documentDirectory(?:\s+(.+?))?\s*$/)
+    if (m) dir = m[1] ?? ''
   }
   return dir
 }

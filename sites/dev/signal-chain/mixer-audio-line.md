@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1881-1885
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1885-1889
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1972-1974
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1976-1978
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -907,7 +907,7 @@ export type WireLineOp =
 送信側は 1 行です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:728-731
+// packages/engine/src/audio/rust-engine/daemon-client.ts:663-666
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1507,7 +1507,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2168-2205
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2172-2209
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1559,7 +1559,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2312-2337
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2316-2341
         [
           'var global = init GLOBAL',
           'global.key("C")',
