@@ -109,7 +109,7 @@ export interface InterpreterState {
 本体は決まった順序で処理を進めます。
 
 ```typescript
-// packages/engine/src/interpreter/interpreter-v2.ts:171-230 (file import の本体と session-log hook の設置を省略)
+// packages/engine/src/interpreter/interpreter-v2.ts:171-231 (file import の本体と session-log hook の設置を省略)
     // Ensure the audio engine is booted
     await this.ensureBooted()
 
@@ -124,8 +124,9 @@ export interface InterpreterState {
       await processGlobalInit(ir.globalInit, this.state)
     }
     // ...
-    // Set documentDirectory on global so audioPath() / audio() can resolve relative paths
-    if (options?.documentDirectory && this.state.currentGlobal) {
+    // Set documentDirectory on global so audioPath() / audio() can resolve relative paths.
+    // An explicit empty string clears a previous REPL base (#966 / IM.6).
+    if (options?.documentDirectory !== undefined && this.state.currentGlobal) {
       this.state.currentGlobal.setDocumentDirectory(options.documentDirectory)
     }
 

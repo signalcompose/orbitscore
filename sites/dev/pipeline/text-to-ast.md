@@ -26,10 +26,10 @@ DSL のテキストが実際に実行されるまでの最初の関門が「パ�
 - **`PlayElement` / `ValueExpression` に `PlayRandomDegree` が加わった** (#967、`packages/engine/src/parser/types.ts:508-527`)。度数を持たないまま `octaveShift` / `detune` / `@v` / `@g` などの修飾だけを運ぶ要素で、どの音を選ぶかはパーサーでは決めません
 - **`AudioParser.parse()` が IM.1 の「import はファイル先頭領域のみ」を検査する** (`audio-parser.ts:76-111`)
 - **`GlobalStatement` / `SequenceStatement` / `MethodChain` に `invocation?: 'bare' | 'call'`** が加わり、`.drums` (括弧なし) と `.TALReverb4()` (括弧あり) を interpreter が区別できるようになった (`types.ts:261-283`)
-- **`collapseScopedRun()` が `parse-expression.ts` に切り出された**。`(A)(B).root(X)` のような並置グループに pitch scope チェーンを畳み込む規則を、statement レベルと nested レベルの両方のループが共有します
+- **`collapseScopedRun()` が切り出された**（現在は `play-postfix-ops.ts`。#974 で `parse-expression.ts` から移した）。`(A)(B).root(X)` のような並置グループに pitch scope チェーンを畳み込む規則を、statement レベルと nested レベルの両方のループが共有します
 
 ```typescript
-// packages/engine/src/parser/parse-expression.ts:80-87
+// packages/engine/src/parser/play-postfix-ops.ts:46-53
 export function collapseScopedRun(list: PlayElement[], runStart: number): void {
   const lastIdx = list.length - 1
   const last = list[lastIdx]
@@ -330,7 +330,7 @@ export type Statement =
 では、`StatementParser.parseStatement()` の中を見てみましょう。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:53-80
+// packages/engine/src/parser/parse-statement.ts:54-81
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
@@ -366,7 +366,7 @@ export type Statement =
 `VAR` の先、`parseVarDeclaration()` は右辺の先頭トークンを見て宣言の種類を決めます。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:96-99
+// packages/engine/src/parser/parse-statement.ts:97-100
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
     //   `init ...` → global / sequence initializer (below).
@@ -380,7 +380,7 @@ export type Statement =
 面白いのは、`<識別子>.メソッド(引数)` という形の文を解析したとき、**パーサーは常に `type: 'sequence'` を返す** という設計です。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:611-619
+// packages/engine/src/parser/parse-statement.ts:612-620
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.

@@ -11,6 +11,7 @@ import {
   DEFAULT_LOG_LINES,
   OUTPUT_LOG_RING_MAX,
   selectLogLines,
+  tapOutputIntoLogRing,
 } from '../../packages/vscode-extension/src/log-ring'
 
 const ring = (n: number): string[] => Array.from({ length: n }, (_, i) => `line-${i}`)
@@ -52,5 +53,46 @@ describe('get_log の行選択 (#567)', () => {
     const out = selectLogLines(ring(3), 10)
     expect(out).toEqual(['line-0', 'line-1', 'line-2'])
     expect(out[0]).not.toMatch(/truncated/)
+  })
+})
+
+// 設計 668 §13.5.2 の「ring proxy」: `append` は行の途中で区切られて呼ばれうる（debug 起動は
+// engine stdout の chunk をそのまま渡す）。呼び出しごとに split すると、1 行がリングでは 2 行になる。
+describe('出力チャネル → get_log リングの写し取り', () => {
+  const tapped = () => {
+    const ring: string[] = []
+    const shown: string[] = []
+    const channel = {
+      append: (value: string) => shown.push(value),
+      appendLine: (value: string) => shown.push(value + '\n'),
+    }
+    tapOutputIntoLogRing(channel, (line) => ring.push(line))
+    return { channel, ring, shown }
+  }
+
+  it('append の途中で割れた行をリングでは 1 行にする', () => {
+    const { channel, ring, shown } = tapped()
+    channel.append('🎚️ hat: play={"ty')
+    expect(ring).toEqual([])
+    channel.append('pe":"tie"} (next cycle)\nnext line\n')
+    expect(ring).toEqual(['🎚️ hat: play={"type":"tie"} (next cycle)', 'next line'])
+    // 出力チャネル自体へは従来どおりそのまま渡す。
+    expect(shown.join('')).toBe('🎚️ hat: play={"type":"tie"} (next cycle)\nnext line\n')
+  })
+
+  // /code-review: debug 起動の生 chunk が行の途中で終わった直後に stderr の `ERROR:` 行が来ると、
+  // 繋げた 1 行では行頭で照合する読み手が両方を見落とす。
+  it('appendLine の前に、持ち越しを独立した 1 行として出す（別の書き手の行と繋げない）', () => {
+    const { channel, ring } = tapped()
+    channel.append('🎚️ seq: play=1 0')
+    channel.appendLine('ERROR: boom')
+    channel.appendLine('')
+    expect(ring).toEqual(['🎚️ seq: play=1 0', 'ERROR: boom', ''])
+  })
+
+  it('append の空行はリングへ入れない（従来どおり）', () => {
+    const { channel, ring } = tapped()
+    channel.append('a\n\nb\n')
+    expect(ring).toEqual(['a', 'b'])
   })
 })

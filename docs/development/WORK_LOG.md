@@ -17,6 +17,251 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix: apply the pr-review-team round 1 and audit findings to the stack (Oct 23, 2026)
+
+**Date**: 2026-10-23 / **ブランチ**: `claude/affectionate-cori-hulchp`（stack の先端・PR #986 の head）/ 手元（macOS）で引き継ぎ
+
+PR #984〜#986 の `/code:pr-review-team` ラウンド 1（4 名・#984 の差分）と、stack 全体の Opus 監査の指摘を直した（実装 = Codex・検証 = main）。
+
+- **#777 の配線をテストで守る**（監査 Important）: daemon の stderr の `end` で最後の行を flush する 1 行を外しても全テストが緑だった。
+  改行の無い最後の行で終わる偽 daemon のテストを足した（外すと `expected [] to include '[daemon] thread main panicked'` で red）
+- **和音変数の `r1.r(0)` が鳴らない**ことを、`play()` の展開を通して固定した（テスト分析 Important。今までは `p=1` しか鳴らしていなかった。
+  presence を捨てる変異で red）
+- 和音定義の中で、以前はパースエラーだったのに黙って声部を落としていた形を、名指しのエラーにした（監査 Minor）:
+  random-walk（`[r1%3, 3]`）と入れ子の `[ ]`。rack 配列中の `NAME.r` は、rack 判定より前に修飾子のエラーで落とす
+- `evaluate_orbitscore` の基準: 改行を含む基準は resolver の段階で使わない（送らないのに「使った基準」として返していた）。
+  `document_path` の確認で `ENOENT` / `ENOTDIR` 以外の失敗は、errno を含むエラーにした
+- テストの区別力（2 要素の格子で乱数の経路を固定・落とすべきログ行が落ちることも確認・#966 の反例で `lib966` を名指し）、
+  root の判定を「実際に読めるか」で行う形、仕様書の行番号の参照
+- 🔴 **未決**: IM.6 の 4 番目（基準が無いとき、engine が前回の基準を使い続ける）は #966 の owner 決定（基準なし）と食い違う。owner の裁定待ち
+- `npm test`: 2723 passed / 85 skipped（macOS・sandbox 外）
+- **ラウンド 2**（修正の差分だけを 2 名で再レビュー）の指摘を直した:
+  - 🔴 上の修正が持ち込んだ不具合: アクティブなエディタのディレクトリ（またはワークスペースのルート）に改行があると、
+    黙って次の候補へ移って `ok: true` を返していた（= #966 で避けると決めた「見えない状態で基準が決まる」形）。`ok: false` で理由を返す
+  - errno のテストが本物の `evaluateForAgent` の配線を通っていなかった。シンボリックリンクのループ（`ELOOP`）で、
+    本物の `fs.statSync` を想定外の errno で失敗させる形にした（`chmod 000` は root で skip されるテストを増やし、
+    `privileges-skip-ratchet` を落としたので使わない）。配線を戻すと red
+  - 中心が負の数の random-walk（`r-2%3`）の文言のテスト
+  - `npm test`: 2725 passed / 85 skipped
+- **実機ゲート**（2026-10-23）: 1 回目は 52/55（#940・state 復元・#611 O0-1 の ERROR 件数）。main でも同じ全件を回すと
+  state 復元が同じ行で落ち、ERROR 件数の別のテスト（#611 E2E-3）が落ちた。stack の 2 回目は **55/55**。
+  → 3 件とも不安定なテストで、stack の退行ではないと判断。cold install 2/2、rack の cargo テストも通過
+- 🔴 **IM.6 の 4 番目を #966 の owner 決定に戻した**（owner 2026-10-23・#966 にコメント）:
+  #986 の `/code-review` 対応が「基準を送らない（engine は前回の基準を使い続ける）」に書き換えていたのを、
+  「どれも無ければ**基準なし**（import は従来どおりエラー）」に戻す。前回の基準を使い続けると、ワークスペースを開かずに
+  `.orbs` 以外を前面にして評価したとき、前回の別フォルダを基準に `import` が解決される（= #966 で避けると決めた形）。
+  - 拡張は基準が無いとき**空の `//#documentDirectory`** を送り、REPL はそれを「基準なし」として保持する
+    （`Global` の `documentDirectory` も消す）。結果は `documentDirectory: none`
+  - テスト: 送ったバイト列（空のメタ行が評価の前に入る）・engine の実体（基準 → 空のメタ行 → 相対 `import` が基準なしのエラー）・
+    gated E2E の 4 番目の局面（ワークスペースの無い専用セッション）。「何も送らない」に戻す変異で red
+  - ラウンド 3 の Minor（空文字のワークスペースは `null`・ELOOP の errno の照合・改行の検査の順序）
+  - `npm test`: 2733 passed / 86 skipped
+  - 修正の差分だけの再レビュー（1 名）で Important 1 件: `writeCodeToEngine` が改行を含む基準を「送らない（`undefined`）」にしていた。
+    送らないと REPL は前回の基準を使い続ける（= 上で禁じた形）。「基準なし（`null`）」として空のメタ行を送るよう main が直した
+    （1 行・テストの期待値を合わせて変更。旧の行に戻すと red）。コメント 2 行の追加でずれた dev サイトの引用 4 件を直した（着地先は同じ行）
+
+### fix: address the /code-review findings on this branch (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **対象**: `19910c1...HEAD`（#964 / #966 / #684 / #974 / #777 / #757 と /simplify）
+
+owner が回した `/code-review` の 10 件をすべて直した（owner 指示: 推奨どおり全部・以前からある 2 件もあわせて）。
+各修正は、修正を外すとテストが red になることを確認した。
+
+- **退行（/simplify で私が入れた）**: `stackVoiceNames` を状態に移した時に `arrayElement` の条件を外し、`var fx = [layer(Reverb)]` の
+  呼び出し引数まで音符として読んでいた。条件を戻し、`r` / `rr` の別分岐を同じ分岐へ畳んだ
+- **#974 の穴**: `var X = [fx1.r]` は 1 声の和音として通り、ラック／未定義の名前が和音扱いになっていた。`classifyArrayBinding` で
+  `NAME.r` の名前を素の参照と同じく判定（ラック → 修飾子エラー・未定義 → 既存の「chord でも rack でもない」エラー）。
+  音符修飾子の判定は `random-degree.ts` の `hasNoteModifiers` 1 本に（chord / pattern / rack の 3 経路で共有）
+- **#966 の穴**: 基準が決まらない時は `//#documentDirectory` を送らず、engine は直前の基準のまま（`repl-mode.ts:429`）なのに、結果は
+  「none」と言っていた。結果を「not sent — the engine keeps its previous base」にし、core spec IM.6 の 4 を実際の挙動に合わせた
+- **ring**: 持ち越しの途中で `appendLine` が来たら、持ち越しを独立した 1 行として先に出す（stderr の `ERROR:` 行と繋げない）
+- **パス**（以前から）: `setDocumentDirectory("…")` に注入するパスの `"` をエスケープ（tokenizer の `\x` → `x` で往復することをエンジンのパーサで確認）。
+  改行を含むディレクトリはメタ行が割れるので送らず警告。`document_path` に改行があれば解決時にエラー
+- **daemon stderr**（以前から）: 起動中の収集から行ルータへの切り替えが行の途中で起きると、後半だけが level 無しで ERROR に落ちていた。
+  起動成功時に収集分の末尾（`unterminatedTail`）をルータへ先に渡す。実プロセス（偽 daemon + mock server）のテストで、修正を外すと `[daemon] <port>` が ERROR になることを確認
+- 整理: `isOrbitscoreDocument` の再利用・`writeCodeToEngine` の古い説明の更新・root-skip ラチェットを `tests/**/*.ts` へ広げ、helper で包むことを禁止
+- ファイルサイズ: `daemon-client.ts`（1 回だけ使う `detachStderr` を畳んで 784 → 782）・`parse-expression.ts`（980 → 977）。どちらも baseline を下げた
+- WORK_LOG が 2,000 行を超えたので、09-12 / 09-13 の 9 エントリ（423 行）を `docs/archive/WORK_LOG_2026-09.md` へ移した
+- dev サイトの引用・散文（ring の例外）を更新
+
+### refactor: apply the /simplify findings on this branch (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **対象**: `19910c1...HEAD` のコード差分（#964 / #966 / #684 / #974 / #777 / #757）
+
+`/simplify`（再利用・簡素化・効率・修正の深さの 4 観点を並行）の指摘を集約して直した。
+
+- **#974 の続き（修正の深さ）**: `stackVoiceNames` を引数で 2 段渡していたため、入れ子の `[ ]`（`var c = [[r1~0.5, 3], 5]`）では
+  パースエラーのままだった。`ExpressionParser` の状態に移し、入れ子でも同じ読み方にした（引数の二重化も解消）。
+  あわせて、`var X = [ … ]` はラックか和音かが実行時に決まるので、**ラック参照に付いた音符の修飾子を黙って捨てずにエラー**にした（`rack.ts` の `resolveRackValue`）。テスト 5 件
+- **stdout の行バッファを 1 本に**: bridge 振り分けとログ転写が同じ文字列を別々の `createLinePrefixer` で二重に分割していた。
+  1 本の `stdoutLines` のコールバックでログ行も集め、`transcribeLog` で書く（書く時機と、不正な封筒の警告より後に書く順序は不変）
+- `CorrelatedLineBridge.request()` の位置引数 6 個をオプションオブジェクトに、`WriteLine` 型を共有
+- テスト: `extension-wiring.spec.ts` の stdout 転写テスト 5 件の共通準備を `stdoutHarness()` に。
+  gated E2E は `get_log` の窓を `LOG_WINDOW_LINES` で読む `readEngineLog()`（`tests/e2e/helpers/engine-log.ts`）を新設して新規テストで使用。
+  root-skip のラチェットは隣のラチェットと同じ `git ls-files`（`file-size-targets.ts` の `gitLsFiles` を export）で列挙し、呼び出しの無いファイルは分割しない
+- 細部: `tests/helpers/privileges.ts` の未使用 export を非公開に、`EvaluateResult` の `documentDirectory` を交差型で 1 回だけ宣言、
+  `daemon-client.ts` の `daemon-stderr-lines.ts` と重複するコメントを 1 行の参照に
+- `parse-expression.ts` の baseline を 982 → 980 に下げた。dev サイトの引用・散文（ja / en）を更新
+- **見送った指摘**:
+  - `engine-handlers.ts` の SC 時代の部分一致フィルタの削除（#964 本文の案 A）: 拡張は凍結中で、実機 gated の ERROR 件数を確かめられないため。別 Issue 候補
+  - 既存 gated テスト 2 本の `runDslLines` と新規 `runLines` の共通化、`start_engine`〜`stop_engine` の `withEngine` 化: 実機で回せない既存テストに手を入れることになるため
+  - 音声エンジンを mock したインタプリタ起動の共通化（既存 6 か所）、偽プロセスの stdin 記録の共通化: 差分の外に広がるため
+  - `run-selection.ts` と `evaluate-document-directory.ts` の基準の共通化: 見た目だけの整理で、未保存エディタの扱いが変わる
+  - `document_path` の `fs.statSync` を非同期に: 1 回あたり約 10 µs で、決定関数の同期の形を崩すほどの価値がない
+  - 改行の無い長い行で `createLinePrefixer` が分割を繰り返す件: 既存の部品の性質で、今回の差分では悪化していない（バッファを 1 本にしたので回数は減った）
+- 確認: `npm test` 2699 passed / 88 skipped / 0 failed（root）・lint・`docs:check` 0 failed
+
+### refactor(extension): one request-correlation skeleton for the four requestId bridges (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#757](https://github.com/signalcompose/orbitscore/issues/757)
+
+requestId 相関・timeout・書き込み失敗・drain・重複拒否を持つクラスが 5 本、ほぼ一字一句同じ形で複製されていた。
+
+- `packages/vscode-extension/src/correlated-line-bridge.ts` に骨格 `CorrelatedLineBridge<TResult, TContext>` を新設。
+  `EvalMarkBridge` / `PluginUiBridge` / `PluginStateBridge` / `EngineStateBridge` はこれを継承し、
+  メタコマンド名・結果行の parse・失敗の形・（plugin UI だけ）待っている要求の `action` との突き合わせを注入する。4 ファイルで 285 行減・89 行増
+- **`DeviceSwitchBridge` は載せない**（Issue の「抽出時に判断」）: requestId を持たず送った順で相関する FIFO で、
+  相関の仕組みが違うものを 1 つに畳むと、どちらの規則で相関しているかが型から読めなくなる
+- 動作の差: `EngineStateBridge` に重複 requestId の拒否が入った（Issue が指摘していたずれ。requestId は `randomUUID()` なので実際には起きない）。
+  `EvalMarkBridge` に `pendingCount` が増えた。それ以外の公開 API・文言は不変
+- 🔴 **動作不変の確認**: 5 本のブリッジの spec を含む `tests/vscode-extension/` を**1 行も変えずに** 654 件全件緑。
+  骨格への変異 5 種（重複チェック無効・`accept` 無視・待ち手なしで false・drain で pending を残す・write の false 無視）は、
+  いずれも既存の spec が red にした
+- dev サイト `plugin-hosting/plugin-ui.md`（ja / en）の引用を骨格へ付け替え、散文に #757 の構成を追記
+- 動作を変える修正（#777・ログの行単位化）とはコミットを分けた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1 の検算の機会を残すため）
+
+### fix(extension): frame the non-debug log and the get_log ring by lines, not chunks (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **関連**: [#964](https://github.com/signalcompose/orbitscore/issues/964) の残り・設計 668 §13.5.2（束 E-router の「ring proxy」）
+
+「chunk → 行」4 経路のうち、残っていた 2 つ（stdout のログ転写・`get_log` 用リングへの写し取り）を行単位にした。
+
+- **ログ転写**（`setupStdoutHandler`・非 debug）: chunk ごとに `split` して `shouldFilterLine()` に通していたため、
+  chunk 境界で割れた行の後半が独立に filter されていた。`🎚️ … play={"type":…}` の行が `"type"` の手前で割れると、
+  `🎚️` の無い後半が `"type"` で落ちる（#964 の修正で残した穴）。bridge と同じ `StringDecoder` + `createLinePrefixer` を通し、
+  残す行は chunk ごとに 1 回の `append` で書く。stdout の `end` で持ち越しを flush。UTF-8 の文字が chunk をまたいでも化けない
+- **ring proxy**: `activate()` の monkey-patch を `log-ring.ts` の `tapOutputIntoLogRing()` に切り出し、`append` の改行の来ていない末尾を
+  持ち越すようにした。`appendLine` は持ち越しと合わせて 1 行（チャネルに見えている行とリングの行を一致させる）。debug 起動の生 chunk も 1 行 = 1 エントリになる
+- playhead（`[STEP]`）と `//#selectAudioDevice` は従来どおり生 chunk のまま（呼び出し規約を変えない）
+- 🔴 **#773 のテストが固定していた「ログ転写は chunk 単位のまま」を変えた**。その PR の範囲を絞るための固定で、製品の要件ではない。
+  新しい期待（割れた行は改行が来たときに 1 行で書く）に書き換えた
+- テスト: `extension-wiring.spec.ts` に 4 件（割れた行・#964 の `"type"` の後半・UTF-8 の分割・`end` の flush）、`log-ring.spec.ts` に 3 件。
+  修正を戻すと 7 件とも red を確認
+- 🔴 `get_log` に入る行の形が変わる（割れた行が 1 行になる）ので、**実機 gated E2E 全件で確認が必要**（設計 668 の PR-E12 の注記と同じ）。この環境では未実行
+- dev サイト（`editor/vscode-architecture.md`・`editor/mcp-and-gated-e2e.md`・ja / en）の引用と散文を更新
+
+### fix(engine): flush the daemon's last stderr line when the stream ends (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#777](https://github.com/signalcompose/orbitscore/issues/777)
+
+`createDaemonStderrLineRouter` は改行の無い残りを持ち越すだけで吐き出す経路が無く、daemon が panic / SIGSEGV で
+改行なしに死ぬと**クラッシュ経路の最後の 1 行**が落ちていた。
+
+- owner 裁定（2026-10-06）: 計画では「#757 に着手する時点で #777 と畳む」（`IMPLEMENTATION_PLAN_2026-09.md` §2.5）。
+  どちらも実機確認なしにはマージしないので、#757 と同じブランチでまとめて行う。動作を変える修正（本件）と
+  変えないリファクタ（#757）はコミットを分ける
+- 戻り値を拡張側の双子 `createLinePrefixer`（#756）と同じ `{ push, flush }` にし、`child.stderr` の `end` で `flush()` する
+- `flush()` も level で振り分ける（panic の行は ERROR 側）。空白だけの残りは出さない（ERROR の水増し防止）。二重 flush は何も出さない
+- ファイルサイズのラチェット: `daemon-client.ts` が baseline 804 を超えたので、状態を持たない行処理
+  （`ANSI_ESCAPE_RE` / `isDaemonNonErrorTracingLine` / `createDaemonStderrLineRouter`）を `daemon-stderr-lines.ts` へ移し、baseline を 784 に下げた
+- テスト: `tests/audio/rust-engine/daemon-client.spec.ts` に 2 件。`flush()` を空にする変異で red を確認
+- 「chunk → 行」の 4 経路のうち daemon stderr はこれで flush を持つ。共有部品への一本化はパッケージ依存の判断が要るので範囲外のまま
+
+### fix(pitch-dsl): read name modifiers in chord definitions the same way as play() (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#974](https://github.com/signalcompose/orbitscore/issues/974)
+
+- 🔴 **Issue の前提が実態と違った**: 「chord 定義の中の `NAME.r(p)` は警告で声部が落ちる」とあったが、DSL からは
+  評価器のその分岐に届かず、**パースエラー**（`Expected comma or closing bracket but got DOT`）になっていた。
+  調べると、chord 定義の `[ ]` では名前に付く修飾子 `.r` / `.r(p)` / `~` / `@v` / `^r` と `r.r(p)` がすべてパースエラーで、
+  `play()` の `[ ]` ではすべて読める（実測の表は Issue への報告に記載）。PITCH_DSL_SPEC §6.2.1「どこでも同じ」に反する
+- owner 裁定（2026-10-06）: **案 A** = chord 定義でも `play()` と同じ読み方にする
+- パーサー: chord 定義（`parseChordBinding`）の配列だけ、名前の要素を `play()` の `[ ]` の声部と同じ処理
+  （`parseStackNameVoice`。`parseStackElement` から切り出して共有）で読む。effect() / instrument() のラック配列は従来どおり
+- 評価: `NAME.r(p)` の判定（ランダム音源ならランダム声部・chord / pattern への `.r` はエラー）を `resolveReferenceThin` に切り出し、
+  `play()` と chord 定義で共有。chord / pattern の参照に付いたランダム専用の修飾子（`~` / `^r` / `@v` / `@g`）も、定義の中で
+  `play()` と同じくエラーにした
+- 🔴 もう 1 つの穴: `signal-chain/rack.ts` の `chordElement` が chord_ref を「名前と `^N`」だけで作り直しており、修飾子が**黙って落ちていた**
+  （パーサーを直しただけでは `r1~0.5` の detune が消える）。参照をそのまま渡すようにした
+- ファイルサイズのラチェット: `parse-expression.ts` が baseline 987 を超えたので、状態を持たない後置語彙
+  （`VOICING_OPS` / `SCOPE_CHAIN_OPS` / `VOICING_ARITY` / `ScopeChain` / `collapseScopedRun`）を `parser/play-postfix-ops.ts` へ移した。
+  baseline は 982 に**下げた**。dev サイトの `collapseScopedRun` の引用（ja / en）を新しい場所へ
+- 仕様: PITCH_DSL_SPEC §6.2.1 と core spec P.12.1 に「chord 定義の声部も同じ」を追記
+- テスト: `tests/midi/random-degree.spec.ts` に 6 件（確率つきランダム声部の保持・`play()` と同じ音・全修飾子・chord / pattern の拒否）。
+  ソースの修正を戻すと 6 件とも red を確認
+- gated E2E: 1 声の chord 変数 `[r1.r(1)]` を 16 回鳴らし、C4 / G4 だけ・両方が出ることをキャプチャで確認するテストを追加。
+  🔴 **この環境では未実行**
+
+### test: skip the three DAC-dependent cases when running as root (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#684](https://github.com/signalcompose/orbitscore/issues/684)
+
+`chmod 0o000` で「読めないファイル」を作って EACCES を期待するテスト 3 件が、root では DAC を迂回して読めてしまうため
+必ず落ちていた（root のクラウド環境では pre-commit hook が常に通らない）。設計 668 §13（PR-E11）のとおり直した。
+
+- `tests/helpers/privileges.ts` を新設（`RUNNING_AS_ROOT` / `skipWhenDacIsBypassed(context)`）。
+  設計の `it.skipIf` ではなく `context.skip(条件, 理由)` を使い、**skip の理由がレポーターに出る**ようにした（#684 の受け入れ基準）
+- 対象 3 件: `tests/interpreter/file-import.spec.ts`（import の EACCES 分類）・`tests/vscode-extension/mcp-server-docs.spec.ts` 2 件
+- 設計の「併せて」: 呼び出し箇所のラチェット `tests/repo/privileges-skip-ratchet.spec.ts`（3 件から増えたら red。基準を 2 にすると red になることを確認）
+- 実測: root で 3 件が `[root bypasses DAC: chmod 0o000 stays readable (#684)]` 付きで skip。
+  `setpriv --reuid=65534` の非 root 実行では 3 件とも走って緑。root での `npm test` 全体: 2680 passed / 87 skipped / 0 failed
+
+### fix(extension): resolve evaluate_orbitscore paths against the .orbs directory (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#966](https://github.com/signalcompose/orbitscore/issues/966)
+
+`evaluate_orbitscore` は基準ディレクトリ（`//#documentDirectory`）に常に最初のワークスペースフォルダを送っていたため、
+`.orbs` がサブフォルダにあると import・`audio()`・plugin state の相対パスが `run_selection` とずれていた。
+方針は owner と議論して決めた（記録: [#966 のコメント](https://github.com/signalcompose/orbitscore/issues/966#issuecomment-6005747794)）。
+
+- **仕様を先に更新**: core spec IM.6 に順序を追記 — 引数 `document_path` → アクティブな OrbitScore エディタ → 最初のワークスペースフォルダ → 基準なし。
+  使った基準を結果に含める
+- `document_path` を入れた理由: 前面のタブはエージェントから指定できず、`open_file` で変えると人の画面を奪う。
+  人の演奏と並行してエージェントが書き換える使い方（FuruFuruFruits / WCTM のハーネス）で競合しないようにするため。
+  「人の操作を検知して待つ」案は、この問題の代わりにならないとして採らなかった（理由は上の Issue コメント）
+- 実装: 決め方を純関数 `packages/vscode-extension/src/evaluate-document-directory.ts` に切り出し、`evaluateForAgent` から使う。
+  存在しない `document_path` は黙って dirname を取らずエラー（engine へ何も送らない）。未保存（untitled）のエディタは基準にしない
+- MCP: `evaluate_orbitscore` に任意の `document_path` を追加。結果の文言は従来どおり `ok` / `error:` で始まり、
+  末尾に `(documentDirectory: <path>|none)` を付ける（コードを送らなかった失敗には付けない）
+- テスト: `tests/vscode-extension/evaluate-document-directory.spec.ts`（決め方 9 件 + `evaluateForAgent` の配線 3 件。
+  配線の 3 件は旧実装に戻すと red を確認）、`tests/vscode-extension/mcp-server.spec.ts`（スキーマ・引数の受け渡し・結果の文言）
+- gated E2E: サブフォルダの `.orbs` から `import` を `evaluate_orbitscore` で評価し、前面のエディタ基準・ルートの失敗・
+  `document_path` 優先（タブが切り替わらないこと）を確認するテストを追加。#630（import の実機確認 0 件）の初の実機カバーにもなる。
+  🔴 **この環境では未実行**（ゲート未設定で skip のみ確認）
+- dev サイト: `pipeline/selective-execution.md` の散文（ja / en）を新しい挙動に更新。引用の行ずれ（#964 分を含む 58 件）を
+  `check-citations.mjs --fix` と手作業（中身が変わった 4 箇所 × ja / en）で直し、`docs:check` 0 failed
+
+### fix(extension): keep play() update lines that carry object elements in the log (Oct 5, 2026)
+
+**Date**: 2026-10-05 / **ブランチ**: `claude/affectionate-cori-hulchp` / **Issue**: [#964](https://github.com/signalcompose/orbitscore/issues/964)
+
+ループ中に `play()` を差し替えたときの `🎚️ <seq>: play=… (next cycle)` 行が、パターンに
+オブジェクトになる要素（入れ子 `(0, 1)`・タイ `_`・`1@v+10`・臨時記号 `b3`）を含むと
+出力チャネル（= MCP の `get_log`）から消えていた。
+
+- **原因**: `play()` はそれらの要素を JSON で行に書き出す（`packages/engine/src/core/sequence.ts` の `play()` 末尾）。
+  非 debug 起動の `shouldFilterLine()`（`packages/vscode-extension/src/engine-handlers.ts`）は、
+  SC 時代の OSC ダンプを隠すための部分一致で `"type"` を含む行を一律に落としており、
+  残す一覧（`ERROR` / `⚠️` / `🎛️`）に `🎚️` が無かった（`🎛️` は U+1F39B で別の文字）
+- **修正**: 残す一覧に `🎚️`（U+1F39A）を足した。残す判定は落とす判定より前にあるので、
+  パラメータ更新の行は中身に関係なく残る。#964 のコメント（2026-10-05・WCTM からの報告）の案をそのまま採った
+- **採らなかった案**（Issue 本文の A〜C・どれにするかは owner 未決）: A（SC 時代の条件群の削除）/ B（OSC ダンプの形への限定）は、
+  daemon から転送される行（`"/` を含むパスや `channels` を含むデバイス情報）の扱いも変わり、
+  `get_log` の固定 500 行窓に入る行の量が変わるので、実機 gated で確かめられないこの環境では入れなかった。
+  C（ログを DSL 表記で出す）は `PlayElement` の全形について表記を決める必要があり、別作業とした
+- **テスト**: `tests/vscode-extension/play-update-log-filter.spec.ts` を追加。行を手で書かず、
+  実際のインタプリタ（mock の audio エンジン）にループ中の `play()` 差し替えを評価させて採った行を
+  `shouldFilterLine()` に通す。修正を戻すと平らなパターン（対照）以外の 4 件が red・修正後は 6 件すべて緑（実測）
+- **gated E2E**: `tests/e2e/orbitstudio-mcp-gated.spec.ts` に
+  「入れ子の `play()` を `run_selection` → `get_log` に `🎚️ hat964: play=` が 1 行出る」を追加。
+  🔴 **この環境（Linux・VS Code / 音声デバイス無し）では実行していない**。ゲート未設定で skip されることだけ確認した
+- 4 形のうち `1@v+10` / `b3` は note シーケンス向けの形だが、テストでは audio シーケンスで評価して行を採った
+  （note シーケンスは実 MIDI ポート / プラグインを要する。更新行は `seamlessParameterUpdate('play', …)` が出すもので、シーケンスの種類に依らない）
+- 残る穴（未着手）: ログ転写は stdout の chunk ごとに `split('\n')` しており行を持ち越さない（`createLinePrefixer` の注記の経路 3・4）。
+  長い `play=` 行が chunk 境界で割れると、`🎚️` を含まない後半は従来どおり部分一致で落ちうる（コードを読んでの推測・実測なし）
+- この環境は root で動くため、`npm test` は #684 の権限テスト 3 件（`file-import.spec.ts` 1 件・`mcp-server-docs.spec.ts` 2 件）が落ちる。
+  本変更を stash した状態でも同じ 3 件が落ちることを確認した（本変更とは無関係）
+
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
 > **2026-10-05 追記（main がマージ前に補正）**: 見出しの「`random` 自体も名前として使えなくなった」は実装より強かった（予約語は `r` / `rr` だけで、`random` という変数名は作れる。書けなくなったのは `var X = random.<名前>` をミキサー派生として読ませることだけ）。正本と core spec の見出しを「`random` という名前のミキサーからは派生できなくなった」へ直した。
@@ -1388,429 +1633,6 @@ main が sandbox 外で回し直して **2,541 passed / 77 skipped / exit 0**。
    フィクスチャは同名 CLAP **2 つ + `Gain`**。設計 §0b でフィクスチャを変えた時に**名前だけ
    取り残されていた**（Codex が報告で指摘してきた）。名前を実体に合わせ、設計側も同期した
 2. **本エントリの見出しが日本語だった** — 規約は「タイトルは英語・本文は日本語」
-
-### docs(design): design the cursor-based route to one plugin's UI (#939) (Sep 13, 2026)
-
-**Issue**: #939（#474 の後継）。起案 = Fable subagent / レビュー = main（工程 ①→②）。
-設計文書のみ。実装は次。
-
-#### 何が問題か
-
-DSL の `ui("名前")` は**一致する insert を全部開く**（SC.10.10.1 規範 3・仕様どおり）。
-しかし**同じプラグインを 2 つ挿すと分離できない**。index 形は SC.10.10 規範 (2) で撤回済み
-（ラックは入れ子になり得るので 1 次元では指せない）。
-**MCP は `chain_path` で個別に指せるので、LLM は開けて人間だけが開けない。**
-
-#### 方式は右クリック（⌘クリックではない）
-
-仕様 SC.10.10 規範 (2) は ⌘クリックを主経路としているが、**実装手段が両方とも問題を抱える**:
-`DefinitionProvider` は **⌘ホバーの peek でも発火**する（名前を見ただけで窓が開く）。
-`DocumentLinkProvider` の target に `command:` URI を置く形は**公式 API ドキュメントに記載が無い**
-（Context7 で確認）。一方 command URI は**ホバーの `MarkdownString`（`isTrusted`）では公式サポート**。
-
-`contributes.menus` の `editor/context` は**既に存在**する（`orbitscore.rescanPlugins` が入っている）。
-🔴 **仕様改訂が要る**（§2.5 に文面・残存 4 箇所を列挙）。
-
-#### main のレビューで変えた 3 点
-
-1. 🔴 **E2E のフィクスチャを `[clap, vst3, clap]` → `[clap, Gain(db: -6), clap]`**。
-   旧案は**設計自身が §8 の筆頭に挙げたトラップ（`Gain` を数えない）を検出できない** —
-   3 つとも非標準だと index は数え方に関わらず 1/2/3 で同じになる。`Gain` を挟むと、
-   数えない実装は 3 つ目に index 2 を割り当て、**index 2 は `targets` に無い**ので loud に落ちる
-2. **変異を 1 件 → 2 件**（M2「`Gain` を数えない」を受け入れ条件へ）
-3. **手動ゲートに実 VST3 の右クリックを追加**（owner 指摘）。混在チェーンの index 演算は
-   `#633 E2E-2` が既に実証済みだが、**VST3 の UI が開くことは自動化できない**
-   （フィクスチャ `GainOracle.vst3` の `createView` がヘッドレスで null）
-
-#### main が閉じた穴
-
-起案は「`Gain` が offset を消費する」を **state 経路**（`pluginStateTargets`）から導いていた。
-**UI 経路でも成り立つかは書かれていなかった** — `openPluginUi` も `resolvePluginStateEntry` を
-呼ぶので index 空間は共有で、規則は有効。ここを確かめずに実装すると根拠が宙に浮いていた。
-
-VS Code の `contextmenu.ts` の引用も **`raw.githubusercontent.com` から取得して逐語一致を確認**した
-（委譲先の引用を鵜呑みにしない）。クリック位置が既存選択の外なら `setPosition` する。
-ただし**実機は未確認**なので、§3.1 に 1 分の確認手順、§3.2 にホバーへ倒す代案を置いた。
-**F1 が偽でも解決器・配線・E2E・MCP は無変更**で済む形にしてある。
-
-#### 規模
-
-**約 900〜1,300 変更行**（起案の 700 行は楽観的）。根拠は `#652` のエディタ側の切片で、
-`plugin-name-diagnostics.ts` を新規作成して 324 行 + spec 248 + 配線 102 = **674 行**。
-本件はそれを**拡張**する側。**半分近くがテスト**。
-**1 PR で通す**（owner 裁定）— 分割すると束 1 が消費者のいない層になる。
-
-Part of #939
-
----
-
-### docs: bring the README back in line with the shipped 4.1.0 (Sep 13, 2026)
-
-**Issue**: #937。README を実体と 1 行ずつ突き合わせ、**乖離 7 件**を直した。
-
-#### 🔴 最重要: 入門例が鳴らなかった
-
-`README.md` の `Basic DSL Syntax` は `kick.play(...)` を書いて **`.output()` が無かった**。
-#883（DSL 2.0・暗黙 master 終端の廃止）以降、**`output()` の無いシーケンスは無音**である。
-
-| | `.output()` |
-|---|---|
-| `examples/01_getting_started.orbs` | ✅ |
-| `sites/user/getting-started/first-sound.md:50` | ✅ |
-| **`README.md`** | 🔴 **無し** |
-
-`examples/` の audio 系 10 本はすべて `output(` を含む（0 は MIDI 専用の 2 本のみ）。
-**README だけが取り残されていた** — 読者が最初にコピペするコードなので実害が一番大きい。
-修正後の例は `parseAudioDSL` に通して **14 statements・エラー 0** を確認した。
-
-#### 直した残り 6 件
-
-| 箇所 | 何が古かったか |
-|---|---|
-| `Current Implementation Status` | **「2.0.0 is released」** — 同じ節の別行は 4.1.0 を名乗っており自己矛盾していた |
-| `Development Status` の Phase 7 | **「SuperCollider Integration」が `<details>` の外**＝現況として読めた（#502 で削除済み） |
-| `Testing` の件数 | `2271/58/2329`（2026-09-10）→ **`2497/76/2573`**（実測） |
-| 拡張のインストール手順 | **`Developer: Install Extension from Location...` でソースフォルダを読ませていた** — #873 / #878 が露出した層を丸ごと飛ばす経路。`npx vsce package` → `.vsix` へ変更し、`pretest:e2e:cold-install` と同じ手順に揃えた |
-| Technical Features | **セッションログ（`.orbslog`）に一言も触れていなかった**（既定 off・`ORBITSCORE_SESSION_LOG=1` で opt-in） |
-| `#138` の行 / `Syntax highlighting (2.0.0)` | 前者は自動化済みの注記を追加、後者は無意味な版表記を削除 |
-
-🔴 **ビルド手順も直した** — 旧手順は `cd packages/vscode-extension && npm run build` だったが、
-engine の `dist` と daemon / plugin-child のバイナリを拡張へ入れるのは**ルートの `npm run build`**
-である。拡張ディレクトリだけでビルドして package すると、中身の入っていない `.vsix` になる。
-
-#### 🔴 自分の誤り: 層を 1 つ見て「存在しない」と判断しかけた
-
-`seq.effect()` / `seq.instrument()` / `seq.ui()` について、`Sequence` クラスの public メソッドを
-列挙して**「存在しない」と結論しかけた**。実際は **interpreter の dispatch**
-（`packages/engine/src/interpreter/process-statement.ts:281,285`）と
-`signal-chain/runtime.ts:53,76` が DSL 表面として扱っており、README の記述は正しかった。
-**DSL の表面はクラスのメソッド一覧ではない。** [[enumeration-stops-one-level-too-early]]
-
-同様に検算して**乖離が無かった**もの: `compressor()`/`limiter()`/`normalizer()` の no-op
-（`rust-engine-player.ts:1462` が warn only）/ LinkAudio の default off（`Cargo.toml:23`）/
-ディレクトリ構造 11 項目 / 参照している issue 番号 10 件の状態。
-
-`docs:check` exit 0 / lint exit 0 / `tests/docs` + `tests/repo` 86 passed。
-
-Closes #937
-
----
-
-### docs: fold the remaining docs-sync PRs and fix the version claims they found (Sep 13, 2026)
-
-**Issue**: #933。#930 / #907 / #902 / #901 / #900 を取り込み、**#904 と #929 は close**した。
-
-#### 🔴 #904 はマージしてはいけなかった — が、発見は正しかった
-
-#904 は「4.0.1 の bump が漏らしたページ」を直す PR で、**main は既に 4.1.0** なので
-マージすると**版が巻き戻る**（`+` 側に `4.0.1` が 16 箇所）。
-**しかし指摘は当たっていた** — 4.1.0 の bump が届いていない箇所が残っていた:
-
-| 箇所 | 直前の値 | 直した値 |
-|---|---|---|
-| `docs/core/INDEX.md:5` | 拡張 **3.0.0** / `DSL_VERSION 1.2` | 4.1.0 / `DSL_VERSION 2.0` |
-| `sites/dev/{,en/}editor/vscode-architecture.md:15` | package version **3.0.0** | 4.1.0 |
-| `sites/dev/{,en/}editor/vscode-architecture.md:1154/1155` | version **3.0.0** | 4.1.0 |
-
-**2 版分（3.0.0 → 4.0.1 → 4.1.0）取り残されていた。** #904 の中身だけ採って 4.1.0 で書いた。
-
-#### 🔴 版の列挙はこれで 3 回連続で漏れている
-
-| 版 | 漏れ | 後始末 |
-|---|---|---|
-| 4.0.1 | 複数ページ | `10d3c7eb`「follow the bump into the pages it missed」を後出し |
-| 4.1.0 | `README.md:55` | PR #928 の中で修正 |
-| **今回** | 上の 5 スポット | 本 PR |
-
-原因は毎回同じで、**grep のパターンが「現在の版の数字」や特定の強調記法に依存していた**こと。
-`**4.0.1**` と `"version"` を狙ったパターンは、`VS Code 拡張 **3.0.0**` や
-`package version 3.0.0` を**構造的に拾えない**（探しているのが「古い版」ではなく
-「**版を名乗っている場所**」だから）。
-
-**今後は数字に依存しないパターンで数える**:
-
-```
-(拡張|extension)[^0-9]{0,40}[0-9]+\.[0-9]+\.[0-9]+|package version [0-9]+\.[0-9]+\.[0-9]+|Current release
-```
-
-24 箇所が挙がり、1 つずつ「現在の版を名乗るのか／履歴記述か」を判定した。
-履歴（`DEVELOPMENT_MAP:240` の #883、各 provenance Note、`architecture-overview:620`）は触っていない。
-
-#### ついでに直した 2 件
-
-- `sites/dev/en/editor/vscode-architecture.md` の `contributes.commands` が **(17)** だったが、
-  `package.json` の実体は **15**。ja 側は 15 で正しく、**en だけがずれていた**
-- `docs/testing/{TESTING_GUIDE,PERFORMANCE_TEST}.md` のインストール例が
-  `orbitscore-0.0.1.vsix` のままで、**コピペすると失敗する**。
-  `orbitscore-darwin-arm64-*.vsix`（`release.yml:129` の命名と一致）へ直した。
-  `docs/user/{ja,en}/GETTING_STARTED.md` にも同じ例があるが、**両方 DEPRECATED 宣言付き**なので触っていない
-
-#### #902 の衝突は「分割前 vs 分割後」だった
-
-HEAD 側が `output.rs:254-260` / `session.rs:691-718` という**分割前のパス**を指したままで、
-#902 が `output/lines.rs` / `output/render.rs` / `session/dispatch.rs` へ貼り直していた。
-**参照リストは #902 側を採り**、frontmatter は HEAD（`verified-against: f2245bb` が新しい）を採って、
-Note は**両側の固有文を文単位で統合**した。
-
-#### #929 は差分 0 だが中身が重要（→ issue へ）
-
-🔴 **E2E-P が裁定 D′ と旧 `√2 · equal_power_pan` 則を区別できない**ことを指摘している。
-`hardLeftCh1 / hardLeftCh0 ≤ 0.05` も `centerRms / noPanRms ≈ 1` も**旧則で通る** —
-発音側の差は 3 本すべてに等しく掛かるので比を取ると消えるため。
-その他の指摘とあわせて issue 化した。
-
-`docs:check` exit 0 / lint exit 0 / `npm test` 全件 pass。
-
-Closes #933
-
----
-
-### docs: re-anchor the dev-site code pointers onto the #896 split (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr896`
-
-PR [#896](https://github.com/signalcompose/orbitscore/pull/896)（#888 子 2・`session.rs` 2,605 → 439 /
-`output.rs` 2,587 → 322 コード行）へのドキュメント追従。
-
-#896 は `// FILE:START-END` 引用ブロックを分割後のモジュールへ張り直しており、`npm run docs:check`
-は 948 件すべて緑である。**しかし `check-citations.mjs` が見ているのは引用ブロックだけ**で、
-本文中のインライン参照と各章末「参考にしたコード」の `path:line` は検査対象外だった。
-その結果、**dev サイトに 44 箇所の宙に浮いた参照が残っていた**（`output.rs:3290-3322` など、
-445 行しかないファイルへの参照）。
-
-本コミットはそれらを**シンボルから引き直して**再アンカーした（ja / en 両方）:
-
-- `sites/dev/rust-engine/index.md` — コマンド表の出典が単一 `match` ではなくなった旨を追記し、
-  `session/run_loop.rs` / `session/dispatch.rs` / `dispatch_plugin.rs` / `dispatch_transport.rs` へ分解
-- `sites/dev/rust-engine/insert-bus.md` — `InsertBusStage` の 2 つの参照が同一定義に解決するため 1 本へ統合
-- `sites/dev/rust-engine/capture-verification.md` — `CAPTURE_RING_SECONDS` / `OutputStream` と
-  `render_block_with_sources` が別ファイルへ分かれたため 2 本へ分割
-- `sites/dev/signal-chain/mixer-audio-line.md` — post-loop が `output/render_full.rs` へ移った
-- `sites/dev/plugin-hosting/plugin-ui.md` — `ClosePluginUI` が `session/dispatch.rs` へ移った
-- 上記 5 章の `verified-against` / `verified-at` を `9c29e45` / `2026-09-12` へ更新
-
-`/docs` 側も 2 件:
-
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — `validate_line_program` の `Pan` 受理と
-  バス上 pan 則（`line_pan_coefficients`）を `output/line_program.rs` / `output/dsp.rs` へ
-- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — 最後の session 切断の判定を
-  `session/params_plugin.rs` の `SessionRegistration::disconnect` へ
-
-🔴 **発見: これらの参照は #896 より前から既に壊れていた。** 旧 `path:line` を `9d39d2e`
-（#896 の base）で引き直したところ、**確認した 34 箇所のほぼ全部が無関係な行を指していた**
-（例: `output.rs:823-846` は「active flag snapshot」と書かれていたが実際は `MasterLine::new`、
-`session.rs:1271-1284` は「session 切断 trigger」と書かれていたが実際は outproc frames-clamped の
-ticker）。**引用ブロックだけがラチェットで守られ、その隣の散文参照は誰にも検査されずに漂流していた。**
-CLAUDE.md「規律を足す時は、同時にそれを守らせる仕組みを足すこと」の未適用箇所である。
-
-**実装・テストは 1 行も変更していない。**
-
----
-
-### docs: re-anchor the dev-site prose citations that PR #895 moved out of engine_wrap.rs (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr895`
-
-PR [#895](https://github.com/signalcompose/orbitscore/pull/895)（merge commit `9d39d2e`）の
-ドキュメント追従。`engine_wrap.rs` は 6,418 → 424 コード行になり、21 の子モジュールへ実体が移った。
-
-### 🔴 `docs:check` が見ていない引用が 40 件残っていた
-
-PR #895 は `// FILE:START-END` の**コードブロック引用**（`docs:check` が文字単位で突合する層）を
-すべて直していた。直っていなかったのは、**本文と「参考」節の散文引用**である。
-
-| 層 | #895 で直ったか | 機械検査 |
-|---|---|---|
-| ` ```rust // path:start-end ` のコードブロック | ✅ | `sites/dev/scripts/check-citations.mjs`（948 件） |
-| 本文の `` `engine_wrap.rs:6470-6560` `` 等 | ❌ **40 件が残存** | **無い** |
-
-`check-citations.mjs` はフェンス直後のヘッダ行しか見ないので、散文に書かれた path:line は
-**ラチェットの外側**にいる。今回はそこを実ファイルへ手で突き合わせて貼り直した。
-
-🔴 **この 40 件は #895 より前から line がずれていた**（base `0819a88` で実測。例:
-`engine_wrap.rs:4455` が指していたのは `path: &std::path::Path,` の行だった）。
-ただし #895 で**ファイルそのものが変わった**ので、行ずれではなく到達不能になった。
-
-### 直した範囲
-
-`sites/dev/`（ja）と `sites/dev/en/`（en）の 6 章 × 2 言語:
-`rust-engine/index.md` / `rust-engine/insert-bus.md` / `signal-chain/index.md` /
-`signal-chain/mixer-audio-line.md` / `plugin-hosting/catalog.md` / `plugin-hosting/plugin-ui.md` /
-`glossary.md` / `rust-engine/oop-children.md`。
-
-置換は 40 件の行番号付き引用と 18 件の散文言及で、**ja / en の件数一致を assert して**適用した
-（片方だけ直る事故を機械で防いだ）。
-
-### DSL 正本（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）も 5 箇所直した
-
-MX.4 の「今日の現在地」表が `SetBusRouting` の kind 拒否と forward-only 拒否を
-`engine_wrap.rs:7212-7216` / `:7237-7241` / `:5802-5806` / `:7207-7211` で引いていた。
-実体は `engine_wrap/bus_lines.rs` の `set_bus_routing` にある:
-
-| 規則 | 現在地 |
-|---|---|
-| `output '<name>' must be a sum bus` | `engine_wrap/bus_lines.rs:299-303` |
-| `send '<name>' must be an aux bus` | `engine_wrap/bus_lines.rs:325-329` |
-| forward-only（output） | `engine_wrap/bus_lines.rs:292-296` |
-| forward-only（send） | `engine_wrap/bus_lines.rs:318-322` |
-
-### frontmatter は触っていない（意図的）
-
-`verified-against` を新しい SHA へ上げると「章全体を再検証した」と主張することになる。
-本 PR が突き合わせたのは `engine_wrap/` 配下の引用だけで、同じ章が引いている
-`session.rs` / `output.rs` は **PR [#896](https://github.com/signalcompose/orbitscore/pull/896)
-（`9d39d2e` の直後にマージ）で分割済み**であり未検証である。`f23eb5d` のまま残すのが正しい。
-
-### docs(dev-site): re-anchor the source pointers left behind by the #888 child-3 split (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr897` / **追従元**: PR [#897](https://github.com/signalcompose/orbitscore/pull/897)（merge `6dcd80bb2086fd6ced22e0c9711a7063e45ee535`）
-
-PR #897 は `orbit-vst3-host/src/lib.rs` / `orbit-plugin-scan/src/lib.rs` /
-`orbit-audio-sandbox/src/transport.rs` を分割し、dev サイトの **`// FILE:START-END`
-引用ヘッダ 32 件**を移動先へ追随させた。しかし各章末の **`## Sources` / 「Further reading」の
-散文ポインタは旧パスのまま**残っていた。
-
-🔴 **`docs:check` はこの取りこぼしを構造的に検出できない。**
-`sites/dev/scripts/check-citations.mjs` が突合するのは ```` ```rust ```` ブロック先頭の
-`// FILE:START-END` ヘッダだけで、**散文の中のバッククォート付きパスは走査対象外**である。
-そのため #897 は `948 citations / 0 failed` で緑のまま、**17 種 34 箇所**（ja / en 対）の
-死んだポインタを残せた。
-
-本コミットはその 17 種すべてを移動先へ張り直した（ja / en 対で 8 ファイル・計 34 箇所）:
-
-| 旧 | 新 |
-|---|---|
-| `transport.rs:79-87`（`EVT_SLOTS`） | `transport/layout.rs:33-41` |
-| `transport.rs:265-277`（evt ring / `dirty_epoch`） | `transport/layout.rs:222-234` |
-| `transport.rs:359-378`（`ReleaseAcquireSeq`） | `transport/event_ring.rs:37-56` |
-| `transport.rs:512-538`（`EventRingChild::service`） | `transport/event_ring.rs:192-218` |
-| `transport.rs:1213-1225`（`UiPumpNotification`） | `transport/ui_codec.rs:33-45` |
-| `transport.rs:1355-1374`（`UiPumpState`） | `transport/ui_pump.rs:63-82` |
-| `transport.rs:113-143,173-288`（`CONTROL_*` / `SharedRegion`） | `transport/layout.rs:67-97,127-239` |
-| `transport.rs:2031-2041`（`create_shared`） | `transport/shm.rs:171-186` |
-| `plugin-scan/src/lib.rs` 9 件（カタログ型・role 判定・scan dir・dedup・atomic write） | `types.rs` / `dirs.rs` / `clap_scan.rs` / `vst3_scan.rs` / `catalog_io.rs` |
-
-`docs/planning/DEVELOPMENT_MAP.md` の 2 件（`extra_scan_dirs_from_env` の実装位置、
-`reset_child_starting` の在処）も同様に張り直した。前者は「`CLAP_PATH` 対応は同じ関数に
-1 行並べるだけ」という**着手手順そのもの**を指すポインタで、死んだままだと実装者が迷う。
-
-`verified-against` / `verified-at` は**更新していない**。STYLE_GUIDE §4 の
-「小規模 cross-link / 体裁修正のみ: 更新しない（本文内容と code の対応関係に変更がないため）」に
-該当する — 純粋な移動なので本文の主張は 1 つも変わっていない。
-
-検証: `npm run docs:build`（user / dev）両方緑 / `npm run docs:check` **948 citations / 0 failed**。
-張り直した 17 種は docs:check の対象外なので、`sed -n '<start>p;<end>p'` で各範囲の先頭行・
-末尾行を**実ファイルから目視照合**した。
-
-### docs: follow the install-route change into the user site (Sep 12, 2026)
-
-**Date**: 2026-09-12 / **ブランチ**: `claude/docs-sync-pr906`
-
-PR [#906](https://github.com/signalcompose/orbitscore/pull/906)（マージコミット `85f29aa`）の追従。
-同 PR で**リリースページが持つ内容が変わった**ため、user site の記述を合わせた。
-
-### 何が食い違ったか
-
-`release.yml` の `--notes-file` が先頭に置くのは、**Assets からの入れ方の 1 行と、正本
-（`sites/user/getting-started/installation.md`）へのリンクと、動作環境の注意**である
-（`.github/workflows/release.yml:244-264`）。**手順そのものはリリースページに載らない。**
-
-一方 user site の installation 章は、`::: tip` の中で「リリースページを開くと、そのページに
-インストール手順も載っています」と書いていた。#906 以前から v4.0.0 で外れていた約束であり、
-#906 の後も**手順ではなくリンクが載る**ので、どちらの意味でも成り立たない。
-
-### やったこと
-
-| ファイル | 変更 |
-|---|---|
-| `sites/user/getting-started/installation.md:33` | tip を「Assets に直接行ける / 先頭に動作環境とこのページへのリンクが置かれる / 手順の正本はこのページ」に書き換え |
-| `sites/user/en/getting-started/installation.md:33` | 同内容の英語版（バイリンガル必須） |
-
-### やらなかったこと
-
-- **`docs/user/ja/USER_MANUAL.md:65`** に同じ文が残っているが、この文書は **DEPRECATED で
-  「履歴として保持」（#237）**。#906 でも同じ理由で意図的に触れていないため、追従対象から外した
-- **`sites/dev/`** — 差分はリリースノートの生成（配布面）であり、dev site の章立て
-  （内部構造・評価経路）に該当する節が無い
-- **実装・テスト** — 変更なし（本追従はドキュメントのみ）
-### docs: fold the four pending docs-sync PRs into one branch (Sep 13, 2026)
-
-**Issue**: #931。bot の docs 同期 PR **4 本**（#923 / #916 / #925 / #915）をまとめて取り込んだ。
-
-#### 🔴 1 本ずつ入れると、入れるたびに残りが衝突し直す
-
-4 本とも `WORK_LOG.md` を触るので、**1 本 main へ入れた瞬間に残り 3 本が衝突する**。
-実際 4.1.0 の作業で #927 を入れた直後、4 本が一斉に `CONFLICTING` になった。
-1 つの枝で解消すれば、衝突解消もゲートも 1 回で済む。判定は GitHub の
-`mergeStateStatus` が `UNKNOWN` を返し続けたので **`git merge-tree --write-tree` で手元実測**した。
-
-#### 🔴 #916 が「黙って」取り込めていなかった
-
-ループで 4 本を merge した時、**#916 だけマージコミットが作られていなかった**。
-原因は**サンドボックス**で、#916 は `.claude/hooks/README.md` を触るが、このディレクトリは
-**Bash も git も書き込み拒否**される（[[hook-guards-must-check-the-path-not-just-the-branch]]）。
-`git merge` はエラーを出していたが、私の `grep -E 'CONFLICT|Merge made'` がその行を落としていた。
-
-**「4 本回した」は根拠にならない。** `git merge-base --is-ancestor <head> HEAD` を
-4 本すべてに対して回して初めて分かった。**ループの結果は件数ではなく到達性で検算する。**
-
-#### zsh は未クォート変数を単語分割しない
-
-`U=$(git diff --name-only --diff-filter=U)` を `for f in $U` で回したが、zsh では
-**分割されず 1 つの文字列として渡り**、`FileNotFoundError` になった。bash の癖で書いていた。
-
-#### 衝突の解消方針
-
-| 対象 | 方針 |
-|---|---|
-| `WORK_LOG.md` の新規エントリ同士 | **両側保持**（別の作業の記録なので落とすものが無い） |
-| 既にアーカイブ済みの 3 エントリ | **HEAD（空）を採る** — `### ` 見出しの集合演算で本体 × アーカイブの重複 0 を確認 |
-| `mcp-and-gated-e2e.md` の Note | HEAD が追従チェーンの上位集合（#917 まで）なので HEAD を採り、#915 固有の分割告知だけ足す |
-| アーカイブの索引行 | 両方の説明を統合 |
-
-#### 検査（bot は但し書きを読まない）
-
-#915 の貼り直しは**散文中のファイル参照**で、`docs:check` の対象外（逐語一致するのは
-`// file:start-end` の引用ブロックだけ）。**5 件を抜き取って実ファイルと突き合わせ**、
-`autoStartConfiguredRustEngine()` / 括弧バランス判定 / `deactivate()` / `EvalMarkBridge` /
-`setupErrorHandler` のいずれも正しい位置に着地していることを確認した。
-
-`docs:check` exit 0 / lint exit 0 / `tests/docs` + `tests/repo` 86 passed。
-本体が 1,970 行になったので `test: add a file-size ratchet` を 1 件アーカイブへ移した（162 行）。
-
-Closes #931
-
----
-
-### docs(hooks): follow PR #914 in the hook docs (Sep 13, 2026)
-
-PR [#914](https://github.com/signalcompose/orbitscore/pull/914)（merge commit `7061245`）が
-`.claude/hooks/pre-edit-check.sh` の判定を「ブランチ名だけ」から
-「ブランチ名 + **編集先が repo 配下か**」に変えたので、フックの挙動を書いている
-ドキュメント 2 箇所を実装に追従させた（ドキュメントのみ・実装とテストは変更なし）。
-
-#### 変更内容
-
-- `.claude/hooks/README.md` §1: 「対象外 / 判定できない入力の倒し方」の表を追加。
-  plan file（#153）と **repo 外の絶対パス**（#913）が allow、相対パス・`..` を含む絶対パス・
-  `file_path` 無しは deny 側へ倒れることを明記。テストの所在（`tests/repo/pre-edit-hook.spec.ts`）も追記
-- `CLAUDE.md` "Hook Protection": `pre-edit-check.sh` の説明に「**リポジトリ配下のみ**」を追記
-
-#### 差分外だが同じ節にあった誤り（併せて訂正）
-
-`.claude/hooks/README.md` はブロック方式を **exit 2** と書いていたが、実装は
-Issue #119 以降 `permissionDecision: "deny"` の JSON を stdout に出して **exit 0** である
-（`.claude/hooks/pre-edit-check.sh:91-92`）。#914 の差分ではないが、書き換えた同じ箇条書きの
-中にあったため放置せず訂正した。
-
-#### 追従不要と判断したもの
-
-- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: DSL の構文・意味論は無変更
-- `sites/user/` / `sites/dev/`: 両サイトとも `pre-edit-check` / Claude Code hooks に言及していない
-  （`grep -rl "pre-edit" sites/` が 0 件）。バイリンガル追従の対象も発生しない
-- `docs/archive/WORK_LOG_2026-09.md`: #914 が WORK_LOG の行数上限（2,000 行）のために
-  退避した既存エントリ。過去ログなので触らない
-
 
 ## Archived sections
 

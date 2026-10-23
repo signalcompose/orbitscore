@@ -17,7 +17,14 @@
  *    resolved-pitch matching as context-dependent).
  *  - `^N` on a ref = a whole-chord structural octave shift on that ref's voices.
  */
-import { PlayElement, PlayChordRef, PlayChordRemoval, StackElement } from '../../parser/types'
+import {
+  PlayElement,
+  PlayChordRef,
+  PlayChordRemoval,
+  PlayRandomDegree,
+  PlayStack,
+  StackElement,
+} from '../../parser/types'
 import { degreeToSemitone } from '../degree-resolution'
 
 import { ChordVoice, BoundValue } from './types'
@@ -376,6 +383,35 @@ function applyVoicing(
   }
 }
 
+/**
+ * `NAME.r` / `NAME.r(p)` parses as a one-voice stack marked `referenceThin` before the
+ * binding kind is known. A random source becomes a random voice carrying the presence
+ * probability; inside a `[ ]` (structural), `.r` on a chord / pattern is an evaluation
+ * error. Shared by `play()` and chord definitions so `var c = [r1.r(0.5), 3]` means the
+ * same as `[r1.r(0.5), 3]` written in `play()` (#974). Returns undefined otherwise.
+ */
+function resolveReferenceThin(
+  stack: PlayStack,
+  getBinding: BindingLookup,
+  structural: boolean,
+): PlayRandomDegree | undefined {
+  const sole = stack.voices.length === 1 ? stack.voices[0] : undefined
+  if (!stack.referenceThin || !sole || typeof sole !== 'object' || sole.type !== 'chord_ref') {
+    return undefined
+  }
+  const bound = getBinding(sole.name)
+  if (bound?.kind === 'random') {
+    return randomBindingToElement({ ...sole, random: stack.random }, bound, structural)
+  }
+  if (structural && (bound?.kind === 'chord' || bound?.kind === 'pattern')) {
+    throw new Error(
+      `"${sole.name}" は ${bound.kind} です。[ ] の声部では .r を付けられません` +
+        '（和音全体の間引きは [ … ].r で書きます）',
+    )
+  }
+  return undefined
+}
+
 /** Resolve a single play element (1→1), recursing through groups / stacks / modifiers. */
 function resolveElement(
   el: PlayElement,
@@ -387,19 +423,8 @@ function resolveElement(
   if (!el || typeof el !== 'object') return el // bare degree / slice number
   switch (el.type) {
     case 'stack': {
-      const sole = el.voices.length === 1 ? el.voices[0] : undefined
-      if (el.referenceThin && sole && typeof sole === 'object' && sole.type === 'chord_ref') {
-        const bound = getBinding(sole.name)
-        if (bound?.kind === 'random') {
-          return randomBindingToElement({ ...sole, random: el.random }, bound, structural)
-        }
-        if (structural && (bound?.kind === 'chord' || bound?.kind === 'pattern')) {
-          throw new Error(
-            `"${sole.name}" は ${bound.kind} です。[ ] の声部では .r を付けられません` +
-              '（和音全体の間引きは [ … ].r で書きます）',
-          )
-        }
-      }
+      const thinnedRandom = resolveReferenceThin(el, getBinding, structural)
+      if (thinnedRandom) return thinnedRandom
       const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)
       return {
         type: 'stack',
@@ -516,6 +541,15 @@ export function evaluateChordDefinition(
   const result: ChordVoice[] = []
   const warnings: string[] = []
   for (const voice of voices) {
+    // `r1.r(p)` (one-voice stack) — the same rule as a `[ ]` voice in play() (#974).
+    const thinnedRandom =
+      voice && typeof voice === 'object' && voice.type === 'stack'
+        ? resolveReferenceThin(voice, getBinding, true)
+        : undefined
+    if (thinnedRandom) {
+      result.push(randomElementToChordVoice(thinnedRandom))
+      continue
+    }
     if (typeof voice === 'number') {
       result.push({ degree: voice, alteration: 0, octaveShift: 0, detune: 0 })
     } else if (voice && typeof voice === 'object' && voice.type === 'chord_ref') {
@@ -523,6 +557,11 @@ export function evaluateChordDefinition(
       if (bound?.kind === 'random') {
         result.push(randomElementToChordVoice(randomBindingToElement(voice, bound, true)))
         continue
+      }
+      // Same E8 rule as a `[ ]` voice in play(): `~` / `^r` / `@v` / `@g` belong to random
+      // sources and degrees only. Definitions parse these since #974, so check them here too.
+      if (bound?.kind === 'chord' || bound?.kind === 'pattern') {
+        assertRandomOnlyModifiers(voice, bound.kind)
       }
       const spread = bound?.kind === 'chord' ? bound.voices : undefined
       if (!spread) {

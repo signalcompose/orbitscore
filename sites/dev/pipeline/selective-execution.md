@@ -206,8 +206,11 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 送るコードが確定したあと、`writeCodeToEngine()` がドキュメントのディレクトリパスを 2 通りの方法で engine に伝えます。`audioPath()` / `audio()` の相対パス解決、そして `import` の基準ディレクトリ (IM.6) に使われます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
-export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:647-656
+export function writeCodeToEngine(
+  rawCode: string,
+  documentDir: string | null | undefined,
+): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
@@ -218,7 +221,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 
 2 通りの伝え方を整理すると:
 
-1. **メタ行 `//#documentDirectory <path>`** — 常に先頭に付く。`//` コメントなので DSL としては無害 (tokenizer が読み飛ばす) で、engine 側の REPL が値だけ抜き出す
+1. **メタ行 `//#documentDirectory <path>`** — 常に先頭に付く。`//` コメントなので DSL としては無害 (tokenizer が読み飛ばす) で、engine 側の REPL が値だけ抜き出す。基準が無い評価では空の `//#documentDirectory` を送り、前回の基準を消す
 2. **DSL 注入 `global.setDocumentDirectory(...)`** — 条件付き。`var global = init GLOBAL` を含む評価なら init の直後に挿入して `globalInitialized` フラグを立て、それ以降の評価なら先頭に prepend する。`globalInitialized` が `false` で `init` 行も無い評価には注入しない (`global` 未定義のためエラー回避)
 
 なぜ 2 つ要るのかというと、`import` が statements より先に評価されるからです。DSL 注入は statement として実行されるので、初回の評価で `import` が動く時点ではまだ基準ディレクトリが設定されていません。メタ行だけがそれを先渡しできます。DSL 注入を残しているのは、`audio()` などの既存経路の実績を変えないためです。
@@ -245,7 +248,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 
 `flashLines()` でエディタの実行行をフラッシュ (点滅) させます。MCP の `run_selection` 経由で画面外の行が実行される場合に備えて、flash の前に `revealRange` で範囲を表示域に入れます。
 
-MCP の `evaluate_orbitscore` も同じ `writeCodeToEngine()` を呼びますが、`documentDir` には (アクティブエディタが無いので) ワークスペースの先頭フォルダを渡します (extension.ts:3040-3047)。
+MCP の `evaluate_orbitscore` も同じ `writeCodeToEngine()` を呼びます。`documentDir` は、引数 `document_path` のファイルのディレクトリ → アクティブな OrbitScore エディタのディレクトリ → ワークスペースの先頭フォルダ、の順で決まり、どれも無ければ基準なしになります。使った基準は結果に返り、基準なしは `null` です (#966・core spec IM.6・`packages/vscode-extension/src/evaluate-document-directory.ts`)。以前は常にワークスペースの先頭フォルダを渡していたため、`.orbs` がサブフォルダにあると import や `audio()` の相対パスが `run_selection` とずれていました。
 
 ## エンジン側: REPL の FIFO キューとバッファ
 
@@ -309,7 +312,7 @@ export function createReplSession(interpreter: InterpreterV2): {
   let buffer = ''
   let emptyLineCount = 0
   // メタ行で受けた基準ディレクトリ（セッション内で最後の値が持続 — エディタ側は eval ごとに
-  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
+  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。空文字は明示的な「基準なし」。
   let sessionDocumentDirectory: string | undefined
   let lineQueue: Promise<void> = Promise.resolve()
 ```
@@ -411,7 +414,7 @@ export function createReplSession(interpreter: InterpreterV2): {
     // ここから先は「入力は完結している」— 失敗しても保留せず必ず報告してバッファを捨てる。
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
+      if (metaDir !== undefined) sessionDocumentDirectory = metaDir
       await interpreter.execute(ir, {
         source: code,
         evalSource: 'human',
@@ -451,13 +454,13 @@ export function createReplSession(interpreter: InterpreterV2): {
  * （`global.setDocumentDirectory(...)`）は statements として import より後に評価されるため、
  * import の基準ディレクトリ（IM.6）はこのメタ行でしか先渡しできない。`//` コメントなので
  * DSL としても無害（tokenizer が読み飛ばす）— 戻り値では code から取り除かず、値だけ抽出する。
- * 複数あれば最後の値が勝つ。
+ * 値が空なら基準を消す（空文字を返す）。複数あれば最後の値が勝つ。
  */
 export function extractDocumentDirectoryMeta(code: string): string | undefined {
   let dir: string | undefined
   for (const line of code.split('\n')) {
-    const m = line.match(/^\s*\/\/#documentDirectory\s+(.+?)\s*$/)
-    if (m) dir = m[1]
+    const m = line.match(/^\s*\/\/#documentDirectory(?:\s+(.+?))?\s*$/)
+    if (m) dir = m[1] ?? ''
   }
   return dir
 }

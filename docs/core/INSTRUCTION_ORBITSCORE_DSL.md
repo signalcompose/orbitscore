@@ -1192,6 +1192,10 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
 
 - `r` works the same at the top of `play()`, inside `( )` / `{ }`, and as a `[ ]` voice. Re-rolled per
   event per cycle like `Xr` / `^r`; no seed. `^N` is sticky for both `r^1` and `r1^1`.
+- A chord definition `var c = [ … ]` reads its voices the same way, name modifiers included
+  (`r1.r(0.5)` / `r1~0.5` / `r1@v100` / `r1^r`; `.r` or a random-only modifier on a chord / pattern
+  is an evaluation error, as in `play()`). Through 4.3.0 these were parse errors only inside a
+  definition (#974).
 - `random.<mode var>` only (no `random.mode(...)`; the mode var must be defined). The source's lattice wins
   over the scope's mode; the root always comes from the note's scope. Duplicates in the mode = weights.
 - `r` / `rr` are reserved at pitch positions (`var r` / `var rr` are errors); `r1` is a name unless `%`
@@ -1200,7 +1204,7 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
   `var NAME = random.<name>` always reads as a random-source declaration, so a mixer named `random`
   cannot be derived from: `var random = init global.mixer` followed by `var drums = random.sum` is read as
   a random source over a mode named `sum`, not as a mixer-bus derivation. The branch sits **before** the
-  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:127-134`); the parse shape is
+  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:129-134`); the parse shape is
   pinned in `tests/parser/random-degree.spec.ts:82-88`. See SC.2.1 for the mixer side.
 - Chords: `.drop()` / `.invert()` are allowed on a stack with a random voice; `.close()` / `.open()` /
   `.shell()` / `.rootless()` are errors; `.voicelead()` leaves random voices out.
@@ -2138,6 +2142,19 @@ import chords                                 // 既存の stdlib import（§6�
   （import 行を含むファイルでは未定義変数診断を抑制する方向で段階対応）
 - REPL / 部分 eval（行・ブロック実行）からの import 文は entry ファイル基準が定まらないため
   **エディタで開いているファイルのディレクトリ**を基準とする
+- MCP `evaluate_orbitscore`（エディタの選択を介さず、コード片を直接送る評価）の基準
+  ディレクトリは次の順で決める（#966）。import・`audio()`・plugin state ファイルの相対パスに
+  共通する基準である:
+  1. 引数 `document_path` で指定された `.orbs` ファイルのディレクトリ（コード片が属するファイル。
+     絶対パス、または最初のワークスペースフォルダからの相対パス。存在しないパスはエラー）
+  2. アクティブな OrbitScore エディタのファイルのディレクトリ（`run_selection` と同じ）
+  3. 最初のワークスペースフォルダ
+  4. どれも無ければ**基準なし**（import は従来どおりエラー）
+
+  結果には、その評価で実際に使った基準（`documentDirectory`、無ければ `null`）を含める。
+  基準は**評価ごと**に決まる（import は評価のたびに読み直す — IM.5）。1 があるのは、
+  人がエディタで演奏している間にエージェントが別ファイルのコードを評価しても、前面の
+  タブ（= 2）に左右されないようにするため
 
 ---
 

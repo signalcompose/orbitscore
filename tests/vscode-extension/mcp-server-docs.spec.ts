@@ -13,6 +13,7 @@ import {
   resolveUserDocsLocation,
   searchDevDocs,
 } from '../../packages/vscode-extension/src/mcp-server'
+import { skipWhenDacIsBypassed } from '../helpers/privileges'
 
 const temporaryDirectories: string[] = []
 
@@ -59,7 +60,8 @@ describe('development docs helpers', () => {
     ])
   })
 
-  it('readDevDoc returns null when the read fails after existsSync passed (TOCTOU/EACCES)', () => {
+  it('readDevDoc returns null when the read fails after existsSync passed (TOCTOU/EACCES)', (context) => {
+    skipWhenDacIsBypassed(context)
     const root = temporaryDirectory()
     const filePath = path.join(root, 'race.md')
     fs.writeFileSync(filePath, '# racy')
@@ -74,7 +76,8 @@ describe('development docs helpers', () => {
     }
   })
 
-  it('searchDevDocs skips an unreadable file instead of aborting the walk', () => {
+  it('searchDevDocs skips an unreadable file instead of aborting the walk', (context) => {
+    skipWhenDacIsBypassed(context)
     const root = temporaryDirectory()
     fs.writeFileSync(path.join(root, 'bad.md'), 'search target broken')
     fs.writeFileSync(path.join(root, 'good.md'), 'search target ok')
