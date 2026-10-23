@@ -56,6 +56,9 @@ PR #984〜#986 の `/code:pr-review-team` ラウンド 1（4 名・#984 の差�
     gated E2E の 4 番目の局面（ワークスペースの無い専用セッション）。「何も送らない」に戻す変異で red
   - ラウンド 3 の Minor（空文字のワークスペースは `null`・ELOOP の errno の照合・改行の検査の順序）
   - `npm test`: 2733 passed / 86 skipped
+  - 修正の差分だけの再レビュー（1 名）で Important 1 件: `writeCodeToEngine` が改行を含む基準を「送らない（`undefined`）」にしていた。
+    送らないと REPL は前回の基準を使い続ける（= 上で禁じた形）。「基準なし（`null`）」として空のメタ行を送るよう main が直した
+    （1 行・テストの期待値を合わせて変更。旧の行に戻すと red）
 
 ### fix: address the /code-review findings on this branch (Oct 6, 2026)
 

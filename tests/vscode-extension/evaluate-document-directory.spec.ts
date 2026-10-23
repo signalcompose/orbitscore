@@ -352,12 +352,13 @@ describe('evaluateForAgent の配線 (#966)', () => {
     expect(result).toEqual({ ok: true, documentDirectory: null })
   })
 
-  it('a directory with a line break is not sent at all (it would split the meta line)', () => {
+  // A line break would split the meta line, so the directory itself is never sent. It is
+  // sent as "no base" (an empty meta line), not omitted: omitting it would let the REPL keep
+  // the previous evaluation's base (#966 / IM.6 rule 4).
+  it('a directory with a line break is sent as "no base", never as the directory itself', () => {
     writeCodeToEngine('global.tempo(120)', '/ws/odd\nname')
 
-    expect(written).toHaveLength(1)
-    expect(written[0]).not.toContain('documentDirectory')
-    expect(written[0]).not.toContain('setDocumentDirectory')
+    expect(written).toEqual(['//#evalBegin\n//#documentDirectory\nglobal.tempo(120)\n//#evalEnd\n'])
   })
 
   // /code-review: `"` in the directory used to end the injected DSL string early.

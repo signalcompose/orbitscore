@@ -656,12 +656,14 @@ export function writeCodeToEngine(
   }
   let codeToSend = rawCode
   // The base travels in a one-line meta line and a DSL string literal: a line break would
-  // split the meta line, so such a directory is not sent (with a visible reason).
+  // split the meta line, so such a directory is not sent (with a visible reason). It becomes
+  // "no base" (null), not "omitted" (undefined): omitting the meta line would let the REPL
+  // keep the previous evaluation's base, which #966 / IM.6 rule 4 forbids.
   if (documentDir && /[\r\n]/.test(documentDir)) {
     outputChannel?.appendLine(
       `⚠️ the document directory contains a line break and was not sent to the engine: ${JSON.stringify(documentDir)}`,
     )
-    documentDir = undefined
+    documentDir = null
   }
   if (documentDir === null) {
     // #966 / IM.6: no candidate means no base for this evaluation. The empty value is
