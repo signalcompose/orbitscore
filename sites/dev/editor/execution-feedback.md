@@ -175,7 +175,7 @@ _kick.play(
 `getLineSubject()` が `null` を返した場合は、スタンドアロンコマンド (`LOOP`, `RUN`, `MUTE` 等) と判断します。この場合も同じ `parenBalance` ロジックで複数行を追いかけますが、ファイル全体を走査するのではなく**カーソル行から下方向のみ**に範囲を拡張します:
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:325-327
+// packages/vscode-extension/src/engine-handlers.ts:324-326
           } else {
             outputChannel?.append(output)
           }
@@ -188,8 +188,11 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:645-651
-export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:647-656
+export function writeCodeToEngine(
+  rawCode: string,
+  documentDir: string | null | undefined,
+): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
@@ -200,7 +203,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 
 2 層とは次のことです。
 
-1. **`//#documentDirectory` メタ行** (#456 I3): 先頭に必ず付けます。REPL 側がメタ行として先に処理するため、`import` 文 (どの statement よりも先に評価される) の基準ディレクトリも初回 eval から確定します
+1. **`//#documentDirectory` メタ行** (#456 I3): 先頭に必ず付けます。REPL 側がメタ行として先に処理するため、`import` 文 (どの statement よりも先に評価される) の基準ディレクトリも初回 eval から確定します。基準が無い評価では空のメタ行で前回値を消します
 2. **`global.setDocumentDirectory(...)` の DSL 注入**: 従来どおりの経路で、`var global = init GLOBAL` を含む評価ならその直後に挿入して `globalInitialized` フラグを立て、以降の評価ではコード先頭に prepend します。global 未初期化のセッションでは注入しません (`global is not defined` になるため)
 
 `globalInitialized` フラグは engine プロセスのライフサイクル (起動・停止・拡張の activate) でリセットされます。Windows のパス区切り文字 (`\`) を `\\` にエスケープする処理も含まれています。
@@ -340,7 +343,7 @@ export function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:114-123
+// packages/vscode-extension/src/agent-handlers.ts:108-117
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -356,7 +359,7 @@ export function handleStepLine(step: StepEvent): void {
 stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** として置かれています。コメントが、最初は `{"pluginUi"` 分岐に相乗りさせて一度も dispatch されず、ユニットテストは全部緑で実機 E2E だけが捕まえた、と記録しています。
 
 ```typescript
-// packages/vscode-extension/src/engine-handlers.ts:255-263
+// packages/vscode-extension/src/engine-handlers.ts:267-275
     } else if (trimmedLine.startsWith('{"evalMark"')) {
       // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
       // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も

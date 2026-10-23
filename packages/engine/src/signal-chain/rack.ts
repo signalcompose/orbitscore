@@ -1,7 +1,9 @@
+import { hasNoteModifiers } from '../midi/chord/random-degree'
 import type { BoundValue } from '../midi/chord/types'
 import type {
   NamedArg,
   PlayChordRef,
+  PlayStack,
   StackElement,
   ValueArray,
   ValueCall,
@@ -178,6 +180,13 @@ export function resolveRackValue(value: ValueExpression, env: RackBindingEnviron
     if (value.octaveShift !== 0) {
       throw new Error(`rack variable "${value.name}" cannot use a chord octave shift (^N).`)
     }
+    // `var X = [ … ]` parses names as pitch voices (#974) before the binding is known to be
+    // a rack, so a rack ref can arrive carrying note modifiers. Reject them, never drop them.
+    if (value.type === 'chord_ref' && hasNoteModifiers(value)) {
+      throw new Error(
+        `rack variable "${value.name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`,
+      )
+    }
     const rack = env.getRack(value.name)
     if (rack) return cloneRack(rack)
     if (env.getBinding(value.name)?.kind === 'chord') {
@@ -225,13 +234,83 @@ function chordElement(value: ValueExpression): StackElement {
   return value as StackElement
 }
 
+function referenceThinName(value: ValueExpression): string | undefined {
+  // A ValueArray element can be a play element the parser produced for a chord binding.
+  const stack = value as unknown as Partial<PlayStack>
+  if (stack?.type !== 'stack' || !stack.referenceThin || stack.voices?.length !== 1) {
+    return undefined
+  }
+  const sole = stack.voices[0]
+  return sole && typeof sole === 'object' && sole.type === 'chord_ref' ? sole.name : undefined
+}
+
+type RandomWalkValue = {
+  type: 'random-walk'
+  center: number
+  range: number
+}
+
+function randomWalkValue(value: unknown): RandomWalkValue | undefined {
+  const candidate = value as Partial<RandomWalkValue> | null
+  return candidate?.type === 'random-walk' &&
+    typeof candidate.center === 'number' &&
+    typeof candidate.range === 'number'
+    ? (candidate as RandomWalkValue)
+    : undefined
+}
+
+/** A nested array containing pitch primitives/bindings can only be an attempted nested chord. */
+function nestedChordArray(value: ValueExpression, env: RackBindingEnvironment): boolean {
+  if (!isValueArray(value)) return false
+  return value.elements.some(
+    (element) =>
+      typeof element === 'number' ||
+      (element &&
+        typeof element === 'object' &&
+        (['pitch', 'random_degree', 'nested', 'legato', 'tie', 'chord_removal'].includes(
+          element.type,
+        ) ||
+          (element.type === 'chord_ref' &&
+            ['chord', 'random'].includes(env.getBinding(element.name)?.kind ?? '')))) ||
+      randomWalkValue(element) !== undefined ||
+      nestedChordArray(element, env),
+  )
+}
+
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
   env: RackBindingEnvironment,
 ): { kind: 'chord'; voices: StackElement[] } | { kind: 'rack'; rack: RackRecipe } {
+  if (value.elements.some((element) => nestedChordArray(element, env))) {
+    throw new Error(
+      '和音定義の中では入れ子の [ ] は使えません。声部を一段の [ ] に並べてください。',
+    )
+  }
+  // Inspect NAME.r before the rack-syntax early return. A catalog string or call elsewhere in
+  // the array makes the whole value rack-shaped, but must not hide the modifier-specific error.
+  for (const element of value.elements) {
+    const name = referenceThinName(element)
+    if (name === undefined) continue
+    if (env.getRack(name)) {
+      throw new Error(`rack variable "${name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`)
+    }
+    if (!env.getBinding(name)) {
+      throw new Error(`array identifier "${name}" is neither a chord variable nor a rack variable.`)
+    }
+  }
   if (value.elements.some(containsRackSyntax) || value.elements.length === 0) {
     return { kind: 'rack', rack: resolveRackValue(value, env) }
+  }
+  const randomWalk = value.elements
+    .map(randomWalkValue)
+    .find((candidate) => candidate !== undefined)
+  if (randomWalk) {
+    const center = randomWalk.center < 0 ? `-${Math.abs(randomWalk.center)}` : randomWalk.center
+    throw new Error(
+      `和音定義の中では \`r${center}%${randomWalk.range}\`（random-walk）は使えません。` +
+        '`play()` の中で書いてください。',
+    )
   }
   const refs = value.elements.filter(isValueRef)
   let chordRefs = 0

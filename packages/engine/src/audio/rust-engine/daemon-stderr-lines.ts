@@ -80,3 +80,14 @@ export function createDaemonStderrLineRouter(
     },
   }
 }
+
+/**
+ * 改行で終わっていない末尾（`text` が改行で終わっていれば空文字）。
+ *
+ * 起動中は stderr を診断用に貯め、起動後に行ルータへ切り替える。切り替えが行の途中で起きると、
+ * 行の頭は貯めた側に残り、後半だけがルータへ届く。後半は level を持たないので ERROR 側へ倒れる。
+ * 起動に成功した時点で、この末尾をルータへ先に渡しておけば、後半と 1 行に戻る。
+ */
+export function unterminatedTail(text: string): string {
+  return text.slice(text.lastIndexOf('\n') + 1)
+}

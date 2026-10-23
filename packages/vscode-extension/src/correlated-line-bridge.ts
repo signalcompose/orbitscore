@@ -15,6 +15,18 @@
  * 「どちらの規則で相関しているか」が型から読めなくなる。
  */
 
+/** メタ行を engine の stdin へ書く関数。`false` / 同期 throw / `onError` のどれでも書き込み失敗。 */
+export type WriteLine = (line: string, onError: (error: Error) => void) => boolean | void
+
+export interface CorrelatedRequest<TContext> {
+  requestId: string
+  /** メタ行の JSON 本体。 */
+  payload: unknown
+  context: TContext
+  timeoutMs: number
+  timeoutError: string
+}
+
 export interface CorrelatedBridgeSpec<TResult extends { requestId: string }, TContext> {
   /** `//#evalMark` など。書き込み失敗の文言にも使う。 */
   readonly metaCommand: string
@@ -46,12 +58,8 @@ export class CorrelatedLineBridge<TResult extends { requestId: string }, TContex
    * timeout を待たずにこの要求だけを失敗で解決する。
    */
   protected request(
-    writeLine: (line: string, onError: (error: Error) => void) => boolean | void,
-    requestId: string,
-    payload: unknown,
-    context: TContext,
-    timeoutMs: number,
-    timeoutError: string,
+    writeLine: WriteLine,
+    { requestId, payload, context, timeoutMs, timeoutError }: CorrelatedRequest<TContext>,
   ): Promise<TResult> {
     if (this.pending.has(requestId)) {
       return Promise.resolve(

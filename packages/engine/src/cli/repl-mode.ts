@@ -68,13 +68,13 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
  * （`global.setDocumentDirectory(...)`）は statements として import より後に評価されるため、
  * import の基準ディレクトリ（IM.6）はこのメタ行でしか先渡しできない。`//` コメントなので
  * DSL としても無害（tokenizer が読み飛ばす）— 戻り値では code から取り除かず、値だけ抽出する。
- * 複数あれば最後の値が勝つ。
+ * 値が空なら基準を消す（空文字を返す）。複数あれば最後の値が勝つ。
  */
 export function extractDocumentDirectoryMeta(code: string): string | undefined {
   let dir: string | undefined
   for (const line of code.split('\n')) {
-    const m = line.match(/^\s*\/\/#documentDirectory\s+(.+?)\s*$/)
-    if (m) dir = m[1]
+    const m = line.match(/^\s*\/\/#documentDirectory(?:\s+(.+?))?\s*$/)
+    if (m) dir = m[1] ?? ''
   }
   return dir
 }
@@ -361,7 +361,7 @@ export function createReplSession(interpreter: InterpreterV2): {
   let buffer = ''
   let emptyLineCount = 0
   // メタ行で受けた基準ディレクトリ（セッション内で最後の値が持続 — エディタ側は eval ごとに
-  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
+  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。空文字は明示的な「基準なし」。
   let sessionDocumentDirectory: string | undefined
   let lineQueue: Promise<void> = Promise.resolve()
   /// 🔴 #607: 実行中の行が滞留していることを報告するまでの待ち時間。
@@ -426,7 +426,7 @@ export function createReplSession(interpreter: InterpreterV2): {
     // ここから先は「入力は完結している」— 失敗しても保留せず必ず報告してバッファを捨てる。
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
+      if (metaDir !== undefined) sessionDocumentDirectory = metaDir
       await interpreter.execute(ir, {
         source: code,
         evalSource: 'human',

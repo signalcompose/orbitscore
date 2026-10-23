@@ -80,12 +80,14 @@ describe('出力チャネル → get_log リングの写し取り', () => {
     expect(shown.join('')).toBe('🎚️ hat: play={"type":"tie"} (next cycle)\nnext line\n')
   })
 
-  it('appendLine は持ち越しと合わせて、チャネルに見えている 1 行としてリングへ入れる', () => {
+  // /code-review: debug 起動の生 chunk が行の途中で終わった直後に stderr の `ERROR:` 行が来ると、
+  // 繋げた 1 行では行頭で照合する読み手が両方を見落とす。
+  it('appendLine の前に、持ち越しを独立した 1 行として出す（別の書き手の行と繋げない）', () => {
     const { channel, ring } = tapped()
-    channel.append('partial ')
-    channel.appendLine('end')
+    channel.append('🎚️ seq: play=1 0')
+    channel.appendLine('ERROR: boom')
     channel.appendLine('')
-    expect(ring).toEqual(['partial end', ''])
+    expect(ring).toEqual(['🎚️ seq: play=1 0', 'ERROR: boom', ''])
   })
 
   it('append の空行はリングへ入れない（従来どおり）', () => {

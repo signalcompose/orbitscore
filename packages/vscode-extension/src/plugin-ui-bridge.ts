@@ -1,4 +1,4 @@
-import { CorrelatedLineBridge } from './correlated-line-bridge'
+import { CorrelatedLineBridge, type WriteLine } from './correlated-line-bridge'
 
 export type PluginUiAction = 'open' | 'close'
 
@@ -72,17 +72,16 @@ export class PluginUiBridge extends CorrelatedLineBridge<PluginUiBridgeResult, P
   }
 
   send(
-    writeLine: (line: string, onError: (error: Error) => void) => boolean | void,
+    writeLine: WriteLine,
     input: PluginUiBridgeInput,
     timeoutMs = 35_000,
   ): Promise<PluginUiBridgeResult> {
-    return this.request(
-      writeLine,
-      input.requestId,
-      input,
-      input.action,
+    return this.request(writeLine, {
+      requestId: input.requestId,
+      payload: input,
+      context: input.action,
       timeoutMs,
-      `timed out waiting for engine response to //#pluginUi ${input.action}`,
-    )
+      timeoutError: `timed out waiting for engine response to //#pluginUi ${input.action}`,
+    })
   }
 }

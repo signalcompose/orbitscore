@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP `evaluate_orbitscore` の相対パス基準を core spec IM.6 に一致させた** ([`#966`](https://github.com/signalcompose/orbitscore/issues/966))
+  - `document_path` → アクティブな `.orbs` → 最初のワークスペースフォルダの順で決め、どれも無ければ基準を消す。以前は直前の評価の基準が REPL に残り、相対 `import` が誤って解決されていた
+
 ## [4.3.0] - 2026-10-05
 
 DSL の機能追加リリース。Pitch DSL で**音高そのものをランダムに選べる**ようになった。audio シーケンスの意味論・wire・出力は変更なし。

@@ -15,6 +15,8 @@
  */
 import * as path from 'path'
 
+import { isOrbitscoreDocument } from './diagnostics-analysis'
+
 export interface ActiveEditorDocument {
   languageId: string
   /** `uri.scheme`。未保存（untitled）のエディタはファイルを持たないので基準にしない。 */
@@ -52,17 +54,42 @@ export function resolveEvaluateDocumentDirectory(
       }
       absolute = path.resolve(workspaceRoot, documentPath)
     }
+    // The base travels as one `//#documentDirectory` meta line, which a line break would split.
+    if (/[\r\n]/.test(absolute)) {
+      return { ok: false, error: 'document_path must not contain a line break' }
+    }
     // 🔴 黙って dirname を取らない。打ち間違いのパスで評価すると、基準だけがずれて
     // 原因の遠い `[SAMPLE_NOT_FOUND]` 等として現れる（#966 の症状そのもの）。
-    if (!input.isFile(absolute)) {
+    let isFile: boolean
+    try {
+      isFile = input.isFile(absolute)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: `could not inspect document_path "${absolute}": ${detail}` }
+    }
+    if (!isFile) {
       return { ok: false, error: `document_path "${absolute}" is not an existing file` }
     }
     return { ok: true, documentDirectory: path.dirname(absolute) }
   }
 
-  if (activeEditor && activeEditor.languageId === 'orbitscore' && activeEditor.scheme === 'file') {
-    return { ok: true, documentDirectory: path.dirname(activeEditor.fsPath) }
+  if (activeEditor && isOrbitscoreDocument(activeEditor) && activeEditor.scheme === 'file') {
+    const activeDirectory = path.dirname(activeEditor.fsPath)
+    if (/[\r\n]/.test(activeDirectory)) {
+      return {
+        ok: false,
+        error: 'active OrbitScore editor path must not contain a line break',
+      }
+    }
+    return { ok: true, documentDirectory: activeDirectory }
   }
 
-  return { ok: true, documentDirectory: workspaceRoot ?? null }
+  if (workspaceRoot && /[\r\n]/.test(workspaceRoot)) {
+    return {
+      ok: false,
+      error: 'workspace folder path must not contain a line break',
+    }
+  }
+
+  return { ok: true, documentDirectory: workspaceRoot || null }
 }
