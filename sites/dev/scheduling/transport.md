@@ -287,7 +287,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 `Cmd+Enter` を押すと、VS Code extension はカーソル位置のブロック (または選択範囲) のテキストだけを stdin に書き込みます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:681-681
+// packages/vscode-extension/src/engine-process.ts:701-701
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -297,7 +297,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 // packages/engine/src/cli/repl-mode.ts:427-435
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
+      if (metaDir !== undefined) sessionDocumentDirectory = metaDir
       await interpreter.execute(ir, {
         source: code,
         evalSource: 'human',
@@ -327,7 +327,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 `InterpreterV2.execute()` には `skipTransportCommands` というオプションがあります。オプション型は §L1 と import (#456) で増えましたが、transport に関わる部分は冒頭と末尾だけです。
 
 ```typescript
-// packages/engine/src/interpreter/interpreter-v2.ts:133-230 (§L1 の記録・import・global/sequence init を // ... で省略)
+// packages/engine/src/interpreter/interpreter-v2.ts:133-231 (§L1 の記録・import・global/sequence init を // ... で省略)
   async execute(
     ir: AudioIR,
     options?: {

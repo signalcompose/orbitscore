@@ -29,6 +29,7 @@ import {
 } from './engine-process'
 import { openDevDocs, openDevDocsPanel, openUserDocs, openWalkthrough } from './docs-panels'
 import { configureFlash, configureFlashForAgent } from './flash-config'
+import { tapOutputIntoLogRing } from './log-ring'
 import { terminateActivePluginScans } from './plugin-catalog-reader'
 import {
   analyzeAudioForAgent,
@@ -105,18 +106,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Tap appendLine/append into the ring buffer so the MCP get_log tool can read
   // recent output without a separate logging sink (#388). Installed before the
   // version banner below so get_log's history starts from activation.
-  const rawAppendLine = channel.appendLine.bind(channel)
-  channel.appendLine = (value: string) => {
-    pushLogRing(value)
-    rawAppendLine(value)
-  }
-  const rawAppend = channel.append.bind(channel)
-  channel.append = (value: string) => {
-    for (const line of value.split('\n')) {
-      if (line) pushLogRing(line)
-    }
-    rawAppend(value)
-  }
+  tapOutputIntoLogRing(channel, pushLogRing)
 
   // Show version info
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'))

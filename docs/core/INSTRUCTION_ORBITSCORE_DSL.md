@@ -1204,7 +1204,7 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
   `var NAME = random.<name>` always reads as a random-source declaration, so a mixer named `random`
   cannot be derived from: `var random = init global.mixer` followed by `var drums = random.sum` is read as
   a random source over a mode named `sum`, not as a mixer-bus derivation. The branch sits **before** the
-  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:127-134`); the parse shape is
+  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:129-134`); the parse shape is
   pinned in `tests/parser/random-degree.spec.ts:82-88`. See SC.2.1 for the mixer side.
 - Chords: `.drop()` / `.invert()` are allowed on a stack with a random voice; `.close()` / `.open()` /
   `.shell()` / `.rootless()` are errors; `.voicelead()` leaves random voices out.
@@ -2149,7 +2149,7 @@ import chords                                 // 既存の stdlib import（§6�
      絶対パス、または最初のワークスペースフォルダからの相対パス。存在しないパスはエラー）
   2. アクティブな OrbitScore エディタのファイルのディレクトリ（`run_selection` と同じ）
   3. 最初のワークスペースフォルダ
-  4. どれも無ければ基準なし（import はエラー）
+  4. どれも無ければ**基準なし**（import は従来どおりエラー）
 
   結果には、その評価で実際に使った基準（`documentDirectory`、無ければ `null`）を含める。
   基準は**評価ごと**に決まる（import は評価のたびに読み直す — IM.5）。1 があるのは、

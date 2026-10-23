@@ -907,7 +907,7 @@ export type WireLineOp =
 送信側は 1 行です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:728-731
+// packages/engine/src/audio/rust-engine/daemon-client.ts:663-666
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1507,7 +1507,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2168-2205
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2172-2209
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1559,7 +1559,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2312-2337
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2316-2341
         [
           'var global = init GLOBAL',
           'global.key("C")',

@@ -939,7 +939,7 @@ export type WireLineOp =
 The sending side is one line.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:728-731
+// packages/engine/src/audio/rust-engine/daemon-client.ts:663-666
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1553,7 +1553,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2168-2205
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2172-2209
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1616,7 +1616,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2312-2337
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2316-2341
         [
           'var global = init GLOBAL',
           'global.key("C")',

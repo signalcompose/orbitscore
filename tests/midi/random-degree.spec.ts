@@ -508,11 +508,24 @@ describe('#967 random-degree dispatch (statistical)', () => {
   })
 
   it('a chord variable with r1.r(1) sounds the same as the stack written in play() (#974)', async () => {
-    const prelude = 'var two = mode(1)\nvar r1 = random.two'
-    const direct = await playOnce('[r1.r(1), 3]', prelude)
-    const viaChord = await playOnce('c', `${prelude}\nvar c = [r1.r(1), 3]`)
-    expect(direct.capture.ons.map(({ note }) => note)).toEqual([60, 64])
-    expect(viaChord.capture.ons.map(({ note }) => note)).toEqual([60, 64])
+    const prelude = 'var two = mode(1, 5)\nvar r1 = random.two'
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.999)
+    try {
+      const direct = await playOnce('[r1.r(1), 3]', prelude)
+      const viaChord = await playOnce('c', `${prelude}\nvar c = [r1.r(1), 3]`)
+      expect(direct.capture.ons.map(({ note }) => note)).toEqual([67, 64])
+      expect(viaChord.capture.ons.map(({ note }) => note)).toEqual([67, 64])
+    } finally {
+      random.mockRestore()
+    }
+  })
+
+  it('a r1.r(0) voice stored in a chord variable never sounds when play() expands it', async () => {
+    const result = await playOnce(
+      'c',
+      'var two = mode(1, 5)\nvar r1 = random.two\nvar c = [r1.r(0), 3]',
+    )
+    expect(result.capture.ons.map(({ note }) => note)).toEqual([64])
   })
 
   it('a chord definition reads every random-source modifier a play() stack voice reads (#974)', async () => {
@@ -525,6 +538,29 @@ describe('#967 random-degree dispatch (statistical)', () => {
       expect.objectContaining({ kind: 'random', random: 0.25 }),
       expect.objectContaining({ degree: 3 }),
     ])
+  })
+
+  // /simplify had only pinned parsing here. Chord definitions are flat, so evaluation must
+  // identify the unsupported nested array instead of misclassifying its contents as rack syntax.
+  it('rejects a nested [ ] in a chord definition with a named error', async () => {
+    await expect(
+      evaluate('var two = mode(1, 5)\nvar r1 = random.two\nvar c = [[r1~0.5, 3], 5]'),
+    ).rejects.toThrow('和音定義の中では入れ子の [ ] は使えません')
+    await expect(
+      evaluate('var two = mode(1, 5)\nvar r1 = random.two\nvar c = [[r1~0.5]]'),
+    ).rejects.toThrow('和音定義の中では入れ子の [ ] は使えません')
+  })
+
+  it('rejects random-walk syntax in a chord definition with a named error', async () => {
+    await expect(evaluate('var c = [r1%3, 3]')).rejects.toThrow(
+      '和音定義の中では `r1%3`（random-walk）は使えません。`play()` の中で書いてください。',
+    )
+  })
+
+  it('preserves a negative random-walk center in the chord-definition error', async () => {
+    await expect(evaluate('var c = [r-2%3, 3]')).rejects.toThrow(
+      '和音定義の中では `r-2%3`（random-walk）は使えません。`play()` の中で書いてください。',
+    )
   })
 
   it('rejects random-only modifiers on a chord ref inside a chord definition, as play() does (#974)', async () => {

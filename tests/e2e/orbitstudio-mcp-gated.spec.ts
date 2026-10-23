@@ -62,6 +62,7 @@ import {
   expectLogMarkerAtLeast,
   expectNoNewErrors,
   newErrorLines,
+  readEngineLog,
 } from './helpers/engine-log'
 import {
   BYTES_PER_SAMPLE,
@@ -747,6 +748,8 @@ type IsolatedOrbitStudioOptions = {
   settings: Record<string, unknown> | ((tmpRoot: string) => Record<string, unknown>)
   env: NodeJS.ProcessEnv
   portBase: number
+  /** False opens an empty window with no workspace folder (needed for IM.6 case 4). */
+  openWorkspace?: boolean
   prepareWorkspace?: (tmpRoot: string) => void | Promise<void>
 }
 
@@ -762,6 +765,7 @@ async function launchIsolatedOrbitStudio({
   settings,
   env,
   portBase,
+  openWorkspace = true,
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
   await killHarnessInstances()
@@ -826,7 +830,7 @@ async function launchIsolatedOrbitStudio({
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
-      tmpRoot,
+      ...(openWorkspace ? [tmpRoot] : []),
     ],
     {
       env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
@@ -3071,8 +3075,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(nestedLine).toBe(loopLine + 1)
       fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
 
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
       const runLines = async (startLine: number, endLine: number): Promise<void> => {
         const selected = await activeClient.call('set_selection', {
           start_line: startLine,
@@ -3191,10 +3194,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(openedRoot.isError, openedRoot.text).toBe(false)
         const viaRootEditor = await activeClient.call('evaluate_orbitscore', { code: entryCode })
         expect(viaRootEditor.isError, viaRootEditor.text).toBe(true)
+        expect(viaRootEditor.text, viaRootEditor.text).toContain('lib966')
         expect(usedBase(viaRootEditor.text), viaRootEditor.text).toBe(realRoot)
 
         // 1. document_path wins over whatever tab is in front — no open_file needed.
-        const beforeExplicit = (await activeClient.call('get_log', { lines: 500 })).text
+        const beforeExplicit = await readEngineLog(activeClient)
         const viaPath = await activeClient.call('evaluate_orbitscore', {
           code: entryCode,
           document_path: entryPath,
@@ -3209,7 +3213,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'document_path must not switch tabs',
         ).toBe(true)
         expect(
-          newErrorLines(beforeExplicit, (await activeClient.call('get_log', { lines: 500 })).text),
+          newErrorLines(beforeExplicit, await readEngineLog(activeClient)),
           '#966 evaluation with document_path must add no ERROR lines',
         ).toEqual([])
       } finally {
@@ -5300,8 +5304,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const aStatePath = path.resolve(root, aStateRelativePath)
       const bStatePath = path.resolve(root, bStateRelativePath)
       const countMarker = (log: string, marker: string): number => log.split(marker).length - 1
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
       const assertCurrentPid = async (expectedPid: number, label: string): Promise<void> => {
         const pids = rackChildPidsFromLog(await readLog())
         expect(pids[pids.length - 1], `${label}: rack child PID must stay unchanged`).toBe(
@@ -5809,8 +5812,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const activeClient = client
       const catalog = requireCatalogFixtures()
       const { stages } = RACK_CHAIN_GAIN_EXPECTATIONS
-      const readLog = async (): Promise<string> =>
-        (await activeClient.call('get_log', { lines: 500 })).text
+      const readLog = (): Promise<string> => readEngineLog(activeClient)
 
       await startR28Engine(activeClient, '#628 R28 master engine')
 
@@ -7787,5 +7789,67 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       }
     },
     TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#966 clears the previous evaluate_orbitscore base when IM.6 has no candidate',
+    async () => {
+      // The shared gated app always opens tmpRoot as a workspace, so IM.6 case 4 is
+      // unreachable there. This dedicated empty-window session deliberately has neither a
+      // workspace folder nor an active editor. An absolute document_path can still establish
+      // a previous base without opening a tab; the next evaluation must clear that base.
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: `${HARNESS_TMP_PREFIX}966-`,
+        settings: { 'orbitscore.engineDebug': false },
+        env: { ...process.env },
+        portBase: 40100,
+        openWorkspace: false,
+        prepareWorkspace: (isolatedRoot) => {
+          const subDir = path.join(isolatedRoot, 'sub966')
+          fs.mkdirSync(subDir, { recursive: true })
+          fs.writeFileSync(
+            path.join(subDir, 'lib966.orbs'),
+            'var global = init GLOBAL\nvar cleared966 = init global.seq\n',
+          )
+          fs.writeFileSync(path.join(subDir, 'entry966.orbs'), '// document_path anchor\n')
+        },
+      })
+      const { child: blankChild, client: blankClient, tmpRoot: blankRoot } = launched
+      try {
+        const editorState = JSON.parse((await blankClient.call('get_editor_state')).text) as {
+          path: string | null
+        }
+        expect(editorState.path, '#966 case 4 requires no active editor').toBeNull()
+
+        const start = await blankClient.call('start_engine')
+        expect(start.isError, start.text).toBe(false)
+        await waitForEngineState(blankClient, true, 15_000, '#966 no-base engine running')
+
+        const subDir = path.join(blankRoot, 'sub966')
+        const entryPath = path.join(subDir, 'entry966.orbs')
+        const importCode = 'import { cleared966 } from "./lib966.orbs"'
+        const withPath = await blankClient.call('evaluate_orbitscore', {
+          code: importCode,
+          document_path: entryPath,
+        })
+        expect(withPath.isError, withPath.text).toBe(false)
+        expect(withPath.text).toContain(`documentDirectory: ${subDir}`)
+
+        const withoutBase = await blankClient.call('evaluate_orbitscore', { code: importCode })
+        expect(withoutBase.isError, withoutBase.text).toBe(true)
+        expect(withoutBase.text).toContain(
+          'import: cannot resolve the base directory — no source file or document directory (IM.6).',
+        )
+        expect(withoutBase.text).toContain('documentDirectory: none')
+      } finally {
+        try {
+          await blankClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        await removeHarnessTree(blankRoot, blankChild)
+      }
+    },
+    TEST_TIMEOUT_MS,
   )
 })
