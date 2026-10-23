@@ -340,7 +340,7 @@ export function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/agent-handlers.ts:114-123
+// packages/vscode-extension/src/agent-handlers.ts:108-117
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {

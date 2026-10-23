@@ -716,6 +716,7 @@ describe('DaemonClient stderr line straddling the end of startup', () => {
   // child stays alive long enough to write the tail of the line after startup.
   let tmpDir: string
   let straddleBin: string
+  let unterminatedBin: string
   let server: MockDaemonServer
 
   beforeAll(async () => {
@@ -731,6 +732,17 @@ printf '{"ready":true,"port":%s,"protocol_version":"${PROTOCOL_VERSION}"}\\n' "$
 sleep 0.5
 printf '%s\\n' "$STRADDLE_PORT" >&2
 sleep 5
+`,
+    )
+    unterminatedBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon-unterminated',
+      `#!/bin/sh
+[ -z "$STRADDLE_PORT" ] && exit 1
+printf '{"ready":true,"port":%s,"protocol_version":"${PROTOCOL_VERSION}"}\\n' "$STRADDLE_PORT"
+sleep 0.3
+printf 'thread main panicked' >&2
+exit 1
 `,
     )
   }, SPAWN_TEST_TIMEOUT_MS)
@@ -778,6 +790,33 @@ sleep 5
       } finally {
         await client.quit()
         logSpy.mockRestore()
+        errorSpy.mockRestore()
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  it(
+    'forwards the daemon final stderr line even when it has no newline (#777 wiring)',
+    async () => {
+      // Exercise the real spawn/stderr wiring without opening a localhost socket: spawnDaemon
+      // has completed startup as soon as it consumes the ready line; WebSocket connection is a
+      // separate phase of start(). This also keeps the test runnable in network-sandboxed CI.
+      process.env.STRADDLE_PORT = '1'
+      const errors: string[] = []
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        errors.push(args.map(String).join(' '))
+      })
+      const client = new DaemonClient()
+      try {
+        await (client as any).spawnDaemon(unterminatedBin, SPAWN_TEST_TIMEOUT_MS, undefined)
+        const deadline = Date.now() + 5_000
+        while (!errors.includes('[daemon] thread main panicked') && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        expect(errors).toContain('[daemon] thread main panicked')
+      } finally {
+        await (client as any).cleanupAfterStartFailure()
         errorSpy.mockRestore()
       }
     },

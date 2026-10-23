@@ -244,16 +244,51 @@ function referenceThinName(value: ValueExpression): string | undefined {
   return sole && typeof sole === 'object' && sole.type === 'chord_ref' ? sole.name : undefined
 }
 
+type RandomWalkValue = {
+  type: 'random-walk'
+  center: number
+  range: number
+}
+
+function randomWalkValue(value: unknown): RandomWalkValue | undefined {
+  const candidate = value as Partial<RandomWalkValue> | null
+  return candidate?.type === 'random-walk' &&
+    typeof candidate.center === 'number' &&
+    typeof candidate.range === 'number'
+    ? (candidate as RandomWalkValue)
+    : undefined
+}
+
+/** A nested array containing pitch primitives/bindings can only be an attempted nested chord. */
+function nestedChordArray(value: ValueExpression, env: RackBindingEnvironment): boolean {
+  if (!isValueArray(value)) return false
+  return value.elements.some(
+    (element) =>
+      typeof element === 'number' ||
+      (element &&
+        typeof element === 'object' &&
+        (['pitch', 'random_degree', 'nested', 'legato', 'tie', 'chord_removal'].includes(
+          element.type,
+        ) ||
+          (element.type === 'chord_ref' &&
+            ['chord', 'random'].includes(env.getBinding(element.name)?.kind ?? '')))) ||
+      randomWalkValue(element) !== undefined ||
+      nestedChordArray(element, env),
+  )
+}
+
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
   env: RackBindingEnvironment,
 ): { kind: 'chord'; voices: StackElement[] } | { kind: 'rack'; rack: RackRecipe } {
-  if (value.elements.some(containsRackSyntax) || value.elements.length === 0) {
-    return { kind: 'rack', rack: resolveRackValue(value, env) }
+  if (value.elements.some((element) => nestedChordArray(element, env))) {
+    throw new Error(
+      '和音定義の中では入れ子の [ ] は使えません。声部を一段の [ ] に並べてください。',
+    )
   }
-  // `NAME.r` / `NAME.r(p)` parses as a one-voice stack (#974). Classify its name like a bare
-  // ref, so a rack or unknown name fails here instead of passing as a chord voice.
+  // Inspect NAME.r before the rack-syntax early return. A catalog string or call elsewhere in
+  // the array makes the whole value rack-shaped, but must not hide the modifier-specific error.
   for (const element of value.elements) {
     const name = referenceThinName(element)
     if (name === undefined) continue
@@ -263,6 +298,19 @@ export function classifyArrayBinding(
     if (!env.getBinding(name)) {
       throw new Error(`array identifier "${name}" is neither a chord variable nor a rack variable.`)
     }
+  }
+  if (value.elements.some(containsRackSyntax) || value.elements.length === 0) {
+    return { kind: 'rack', rack: resolveRackValue(value, env) }
+  }
+  const randomWalk = value.elements
+    .map(randomWalkValue)
+    .find((candidate) => candidate !== undefined)
+  if (randomWalk) {
+    const center = randomWalk.center < 0 ? `-${Math.abs(randomWalk.center)}` : randomWalk.center
+    throw new Error(
+      `和音定義の中では \`r${center}%${randomWalk.range}\`（random-walk）は使えません。` +
+        '`play()` の中で書いてください。',
+    )
   }
   const refs = value.elements.filter(isValueRef)
   let chordRefs = 0

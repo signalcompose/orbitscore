@@ -87,13 +87,7 @@ async function evaluateForAgent(
       fsPath: activeDocument.uri.fsPath,
     },
     workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    isFile: (absolutePath) => {
-      try {
-        return fs.statSync(absolutePath).isFile()
-      } catch {
-        return false
-      }
-    },
+    isFile: isExistingFileForEvaluation,
   })
   if (!base.ok) return base
   const { documentDirectory } = base
@@ -129,6 +123,21 @@ async function evaluateForAgent(
     error: `evaluation failed: ${detail}`,
     ...(result.diagnostics.length ? { diagnostics: result.diagnostics } : {}),
     documentDirectory,
+  }
+}
+
+/** Preserve unexpected stat failures; only a genuinely missing/non-directory path is absent. */
+export function isExistingFileForEvaluation(
+  absolutePath: string,
+  stat: (path: string) => Pick<fs.Stats, 'isFile'> = fs.statSync,
+): boolean {
+  try {
+    return stat(absolutePath).isFile()
+  } catch (error) {
+    const errno = (error as NodeJS.ErrnoException).code
+    if (errno === 'ENOENT' || errno === 'ENOTDIR') return false
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${errno ?? 'UNKNOWN'} while checking "${absolutePath}": ${message}`)
   }
 }
 

@@ -306,15 +306,33 @@ export function processArrayBinding(statement: ChordBinding, state: InterpreterS
 `classifyArrayBinding` decides "rack" when the array contains a string, a call or an array, or
 when it is empty. An identifier-only array (`[m7]` / `[glue]`) is decided by the kind of the
 binding, and mixing chord variables and rack variables in one array is an explicit error
-(`rack.ts:231-249`).
+(`rack.ts:277-330`). A chord-only nested array and `NAME.r` on a rack reference are routed to
+their dedicated errors before the early rack classification.
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:247-254
+// packages/engine/src/signal-chain/rack.ts:280-304
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
   env: RackBindingEnvironment,
 ): { kind: 'chord'; voices: StackElement[] } | { kind: 'rack'; rack: RackRecipe } {
+  if (value.elements.some((element) => nestedChordArray(element, env))) {
+    throw new Error(
+      '和音定義の中では入れ子の [ ] は使えません。声部を一段の [ ] に並べてください。',
+    )
+  }
+  // Inspect NAME.r before the rack-syntax early return. A catalog string or call elsewhere in
+  // the array makes the whole value rack-shaped, but must not hide the modifier-specific error.
+  for (const element of value.elements) {
+    const name = referenceThinName(element)
+    if (name === undefined) continue
+    if (env.getRack(name)) {
+      throw new Error(`rack variable "${name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`)
+    }
+    if (!env.getBinding(name)) {
+      throw new Error(`array identifier "${name}" is neither a chord variable nor a rack variable.`)
+    }
+  }
   if (value.elements.some(containsRackSyntax) || value.elements.length === 0) {
     return { kind: 'rack', rack: resolveRackValue(value, env) }
   }
@@ -357,7 +375,7 @@ recipe, and only then is the receiver's method invoked.
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:288-313
+// packages/engine/src/signal-chain/rack.ts:336-361
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,
@@ -1518,7 +1536,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5408-5415
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5409-5416
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

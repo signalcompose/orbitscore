@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix: apply the pr-review-team round 1 and audit findings to the stack (Oct 23, 2026)
+
+**Date**: 2026-10-23 / **ブランチ**: `claude/affectionate-cori-hulchp`（stack の先端・PR #986 の head）/ 手元（macOS）で引き継ぎ
+
+PR #984〜#986 の `/code:pr-review-team` ラウンド 1（4 名・#984 の差分）と、stack 全体の Opus 監査の指摘を直した（実装 = Codex・検証 = main）。
+
+- **#777 の配線をテストで守る**（監査 Important）: daemon の stderr の `end` で最後の行を flush する 1 行を外しても全テストが緑だった。
+  改行の無い最後の行で終わる偽 daemon のテストを足した（外すと `expected [] to include '[daemon] thread main panicked'` で red）
+- **和音変数の `r1.r(0)` が鳴らない**ことを、`play()` の展開を通して固定した（テスト分析 Important。今までは `p=1` しか鳴らしていなかった。
+  presence を捨てる変異で red）
+- 和音定義の中で、以前はパースエラーだったのに黙って声部を落としていた形を、名指しのエラーにした（監査 Minor）:
+  random-walk（`[r1%3, 3]`）と入れ子の `[ ]`。rack 配列中の `NAME.r` は、rack 判定より前に修飾子のエラーで落とす
+- `evaluate_orbitscore` の基準: 改行を含む基準は resolver の段階で使わない（送らないのに「使った基準」として返していた）。
+  `document_path` の確認で `ENOENT` / `ENOTDIR` 以外の失敗は、errno を含むエラーにした
+- テストの区別力（2 要素の格子で乱数の経路を固定・落とすべきログ行が落ちることも確認・#966 の反例で `lib966` を名指し）、
+  root の判定を「実際に読めるか」で行う形、仕様書の行番号の参照
+- 🔴 **未決**: IM.6 の 4 番目（基準が無いとき、engine が前回の基準を使い続ける）は #966 の owner 決定（基準なし）と食い違う。owner の裁定待ち
+- `npm test`: 2723 passed / 85 skipped（macOS・sandbox 外）
+
 ### fix: address the /code-review findings on this branch (Oct 6, 2026)
 
 **Date**: 2026-10-06 / **ブランチ**: `claude/affectionate-cori-hulchp` / **対象**: `19910c1...HEAD`（#964 / #966 / #684 / #974 / #777 / #757 と /simplify）

@@ -198,6 +198,16 @@ describe('#628 generic array parsing and three-category rack resolution', () => 
     expect(classifyArrayBinding(value('[m7.r, 3]'), env({ chords: ['m7'] })).kind).toBe('chord')
   })
 
+  it.each(['["Bar", ra.r]', '[ra, ra.r]'])(
+    'rejects NAME.r in a rack array with the note-modifier error (%s)',
+    (source) => {
+      const racks = { ra: [{ kind: 'catalog', spec: 'EQ', enabled: true }] }
+      expect(() => classifyArrayBinding(value(source), env({ racks }))).toThrow(
+        'rack variable "ra" cannot take note modifiers',
+      )
+    },
+  )
+
   // /code-review: the voice-name mode of `var X = [ … ]` must not leak into call arguments
   // inside the array — `Reverb` stays a value_ref so the "did you mean Reverb(...)" hint works.
   it('keeps call arguments inside a var array as plain value refs', () => {

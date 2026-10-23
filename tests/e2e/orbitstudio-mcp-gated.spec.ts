@@ -3191,6 +3191,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(openedRoot.isError, openedRoot.text).toBe(false)
         const viaRootEditor = await activeClient.call('evaluate_orbitscore', { code: entryCode })
         expect(viaRootEditor.isError, viaRootEditor.text).toBe(true)
+        expect(viaRootEditor.text, viaRootEditor.text).toContain('lib966')
         expect(usedBase(viaRootEditor.text), viaRootEditor.text).toBe(realRoot)
 
         // 1. document_path wins over whatever tab is in front — no open_file needed.

@@ -295,15 +295,33 @@ export function processArrayBinding(statement: ChordBinding, state: InterpreterS
 
 `classifyArrayBinding` は、文字列・呼び出し・配列のいずれかを含むか、空配列なら rack と
 判定します。識別子だけの配列（`[m7]` / `[glue]`）は束縛の種類で決め、chord 変数と rack 変数が
-1 つの配列に混ざっていれば明示エラーにします（`rack.ts:231-249`）。
+1 つの配列に混ざっていれば明示エラーにします（`rack.ts:277-330`）。和音としてしか読めない
+入れ子と、rack 参照に付いた `NAME.r` は、rack の早期判定より前に専用エラーへ振り分けます。
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:247-254
+// packages/engine/src/signal-chain/rack.ts:280-304
 /** Runtime classification for `var x = [...]`; identifier kinds are consulted here, not in the parser. */
 export function classifyArrayBinding(
   value: ValueArray,
   env: RackBindingEnvironment,
 ): { kind: 'chord'; voices: StackElement[] } | { kind: 'rack'; rack: RackRecipe } {
+  if (value.elements.some((element) => nestedChordArray(element, env))) {
+    throw new Error(
+      '和音定義の中では入れ子の [ ] は使えません。声部を一段の [ ] に並べてください。',
+    )
+  }
+  // Inspect NAME.r before the rack-syntax early return. A catalog string or call elsewhere in
+  // the array makes the whole value rack-shaped, but must not hide the modifier-specific error.
+  for (const element of value.elements) {
+    const name = referenceThinName(element)
+    if (name === undefined) continue
+    if (env.getRack(name)) {
+      throw new Error(`rack variable "${name}" cannot take note modifiers (~ / ^r / @v / @g / .r).`)
+    }
+    if (!env.getBinding(name)) {
+      throw new Error(`array identifier "${name}" is neither a chord variable nor a rack variable.`)
+    }
+  }
   if (value.elements.some(containsRackSyntax) || value.elements.length === 0) {
     return { kind: 'rack', rack: resolveRackValue(value, env) }
   }
@@ -346,7 +364,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 ```
 
 ```typescript
-// packages/engine/src/signal-chain/rack.ts:288-313
+// packages/engine/src/signal-chain/rack.ts:336-361
 export function effectArgumentsToRack(
   args: readonly unknown[],
   env: RackBindingEnvironment,
@@ -1484,7 +1502,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5408-5415
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5409-5416
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

@@ -1204,7 +1204,7 @@ bass.play((1, r1, r1.r(0.5), r1^r).root(5))  // root comes from the note's scope
   `var NAME = random.<name>` always reads as a random-source declaration, so a mixer named `random`
   cannot be derived from: `var random = init global.mixer` followed by `var drums = random.sum` is read as
   a random source over a mode named `sum`, not as a mixer-bus derivation. The branch sits **before** the
-  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:127-134`); the parse shape is
+  mixer-derivation lookahead (`packages/engine/src/parser/parse-statement.ts:129-134`); the parse shape is
   pinned in `tests/parser/random-degree.spec.ts:82-88`. See SC.2.1 for the mixer side.
 - Chords: `.drop()` / `.invert()` are allowed on a stack with a random voice; `.close()` / `.open()` /
   `.shell()` / `.rootless()` are errors; `.voicelead()` leaves random voices out.

@@ -104,4 +104,8 @@ describe('stdout フィルタは play() の更新行を残す (#964)', () => {
     expect(line, `no play= line was captured for ${source}`).toBeDefined()
     expect(shouldFilterLine(line)).toBe(false)
   })
+
+  it('🎚️ の無い OSC 風の "type" 行は引き続き落とす', () => {
+    expect(shouldFilterLine('stdout : {"type":"osc","address":"/orbit/play"}')).toBe(true)
+  })
 })

@@ -14,7 +14,10 @@ import * as path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
-import { evaluateForAgent } from '../../packages/vscode-extension/src/agent-handlers'
+import {
+  evaluateForAgent,
+  isExistingFileForEvaluation,
+} from '../../packages/vscode-extension/src/agent-handlers'
 import { writeCodeToEngine } from '../../packages/vscode-extension/src/engine-process'
 import { EvalMarkBridge } from '../../packages/vscode-extension/src/eval-mark-bridge'
 import { resolveEvaluateDocumentDirectory } from '../../packages/vscode-extension/src/evaluate-document-directory'
@@ -100,6 +103,16 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
     ).toEqual({ ok: true, documentDirectory: '/ws/piece' })
   })
 
+  it('2. 改行を含むアクティブエディタのパスは使わず、workspace へフォールバックする', () => {
+    expect(
+      resolveEvaluateDocumentDirectory({
+        activeEditor: orbsEditor('/ws/odd\nname/piece.orbs'),
+        workspaceRoot: WORKSPACE,
+        isFile: existing(),
+      }),
+    ).toEqual({ ok: true, documentDirectory: WORKSPACE })
+  })
+
   it.each([
     [
       'OrbitScore 以外のエディタ',
@@ -121,6 +134,35 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
       ok: true,
       documentDirectory: null,
     })
+  })
+
+  it('改行を含む workspace root しかなければ送らない（null）', () => {
+    expect(
+      resolveEvaluateDocumentDirectory({ workspaceRoot: '/ws/odd\nname', isFile: existing() }),
+    ).toEqual({ ok: true, documentDirectory: null })
+  })
+
+  it('document_path の検査が失敗したときは errno を含むエラーを返す', () => {
+    const result = resolveEvaluateDocumentDirectory({
+      documentPath: '/ws/secret.orbs',
+      isFile: (file) =>
+        isExistingFileForEvaluation(file, () => {
+          throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+        }),
+    })
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'could not inspect document_path "/ws/secret.orbs": EACCES while checking "/ws/secret.orbs": permission denied',
+    })
+  })
+
+  it.each(['ENOENT', 'ENOTDIR'])('%s は「存在するファイルではない」として扱う', (code) => {
+    expect(
+      isExistingFileForEvaluation('/ws/missing.orbs', () => {
+        throw Object.assign(new Error(code), { code })
+      }),
+    ).toBe(false)
   })
 })
 
@@ -177,6 +219,29 @@ describe('evaluateForAgent の配線 (#966)', () => {
 
     expect(sentDirectory()).toBe(path.dirname(piece))
     expect(result).toEqual({ ok: true, documentDirectory: path.dirname(piece) })
+  })
+
+  it('改行を含むアクティブエディタの基準は送らず、workspace の基準を送って返す', async () => {
+    vscodeMock.window.activeTextEditor = {
+      document: {
+        languageId: 'orbitscore',
+        uri: { scheme: 'file', fsPath: path.join(tmpRoot, 'odd\nname', 'piece.orbs') },
+      },
+    }
+
+    const result = await evaluateForAgent('global.tempo(120)')
+
+    expect(sentDirectory()).toBe(tmpRoot)
+    expect(result).toEqual({ ok: true, documentDirectory: tmpRoot })
+  })
+
+  it('改行を含む workspace root しかなければ基準を送らず null を返す', async () => {
+    vscodeMock.workspace.workspaceFolders = [{ uri: { fsPath: `${tmpRoot}\nodd` } }]
+
+    const result = await evaluateForAgent('global.tempo(120)')
+
+    expect(sentDirectory()).toBeUndefined()
+    expect(result).toEqual({ ok: true, documentDirectory: null })
   })
 
   it('document_path は前面のエディタより優先される', async () => {
