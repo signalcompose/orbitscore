@@ -51,6 +51,8 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3", "kontakt-8-id", 
 
 The second argument is classified by its file extension alone. Anything ending in `.vstpreset` or `.state` is treated as a state path; any other string is treated as a pluginId. Relative paths are resolved against the directory of the file being edited.
 
+**VST3 state files** (from 4.4.0, #982): a VST3 state saved by OrbitScore uses Steinberg's standard `.vstpreset` format and holds both the sound itself (the component) and the settings the plugin keeps on its editor side (the controller). State files saved by 4.3.0 or earlier still load as they are. Passing a `.vstpreset` made for a different plugin is not loaded silently; it fails with an error that names both plugins' IDs.
+
 ## Each Sequence Gets an Independent Instance
 
 Each sequence that declares `instrument()` gets its own independent plugin instance (an independent child process). **Declaring the same plugin on multiple sequences does not share the sound or parameters between them.**

@@ -51,6 +51,8 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3", "kontakt-8-id", 
 
 第 2 引数の判別は拡張子だけで行われます。`.vstpreset` / `.state` で終わるものは state パス、それ以外の文字列は pluginId として扱われます。相対パスは編集中のファイルのディレクトリを基準に解決されます。
 
+**VST3 の state ファイル**（4.4.0 から・#982）: OrbitScore が保存する VST3 の state は、Steinberg 標準の `.vstpreset` 形式で、音色そのもの（component）に加えて、プラグインがエディタ側に持つ設定（controller）も含みます。4.3.0 以前に保存した state ファイルもそのまま読めます。別のプラグインの `.vstpreset` を渡すと、黙って読み込まずに、両方のプラグインの ID を示すエラーになります。
+
 ## シーケンスごとに独立したインスタンス
 
 `instrument()` を宣言したシーケンスは、それぞれ独立したプラグインインスタンス（独立した子プロセス）を持ちます。**同じプラグインを複数のシーケンスで宣言しても、音色やパラメータは共有されません。**

@@ -7,10 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-10-23
+
+修正と小さな機能追加のリリース。audio シーケンスの意味論・wire・出力は変更なし。
+
+### Added
+
+- **MCP `evaluate_orbitscore` に任意の引数 `document_path`** ([`#966`](https://github.com/signalcompose/orbitscore/issues/966))
+  - 相対パス（`import`・音源・state）の基準ディレクトリを決める順序を core spec IM.6 に合わせた: `document_path` → アクティブな `.orbs` のディレクトリ → 最初のワークスペースフォルダ → どれも無ければ**基準なし**
+  - 結果に使った基準（`documentDirectory`、無ければ `none`）を返す
+- **VST3 の state に controller の state も保存する** ([`#982`](https://github.com/signalcompose/orbitscore/issues/982) / [`#989`](https://github.com/signalcompose/orbitscore/pull/989))
+  - OrbitScore が保存する VST3 の state は、Steinberg 標準の `.vstpreset` container（`Comp` + `Cont`）になった。主要ホスト（Steinberg SDK・JUCE・Ardour・REAPER・Bitwig / PreSonus の DAWproject）と同じく、component と controller の両方を保存する
+  - 4.3.0 以前に保存した raw の state ファイルもそのまま読める
+
+### Changed
+
+- 🔴 **VST3 の state を復元するとき、container の class ID を照合する**（#982）。別のプラグインの `.vstpreset` は、黙って読み込まずに両方の ID を示すエラーになる（SDK の `loadPreset` / Ardour と同じ）
+- コード変数の定義（`var c = [ … ]`）の中でも、名前に修飾子（`.r(p)` / `~` / `@v` / `^r`）を付けられるようになった（`play()` の `[ ]` と同じ読み方）([`#974`](https://github.com/signalcompose/orbitscore/issues/974))
+  - 定義の中で使えない形（random-walk の `r1%3`・入れ子の `[ ]`・rack 配列の中の `NAME.r`）は、黙って声部を落とさずに名指しのエラーになる
+
 ### Fixed
 
-- **MCP `evaluate_orbitscore` の相対パス基準を core spec IM.6 に一致させた** ([`#966`](https://github.com/signalcompose/orbitscore/issues/966))
-  - `document_path` → アクティブな `.orbs` → 最初のワークスペースフォルダの順で決め、どれも無ければ基準を消す。以前は直前の評価の基準が REPL に残り、相対 `import` が誤って解決されていた
+- **ループ中の `play()` の差し替えの行（`🎚️ <名前>: play=… (next cycle)`）が、`@v`・`_`・入れ子を含むと `get_log` / 出力パネルに出なかった** ([`#964`](https://github.com/signalcompose/orbitscore/issues/964))
+- **MCP `evaluate_orbitscore` で、前の評価の基準ディレクトリが残り、相対 `import` が別のフォルダで解決されることがあった** ([`#966`](https://github.com/signalcompose/orbitscore/issues/966))。基準が決まらないときは前の基準を消し、`import` は基準なしのエラーになる。パスに改行を含む基準は、黙って別の候補に切り替えずにエラーになる
+- **daemon が改行の無い最後の行（panic など）で終わると、その行がログから消えていた** ([`#777`](https://github.com/signalcompose/orbitscore/issues/777))
+- ログ（出力パネル・`get_log`）を、受け取った塊ごとではなく行ごとに区切るようにした。長い行が途中で割れて別の行として記録されることがなくなった
+- root で走らせると必ず落ちる権限のテスト 3 件を、実際に読めるかで判定して skip するようにした ([`#684`](https://github.com/signalcompose/orbitscore/issues/684))
 
 ## [4.3.0] - 2026-10-05
 
@@ -213,7 +235,8 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
 - ローカル / オフライン閲覧手順を README に追記
 - README に学習サイト (web) セクションを追加
 
-[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/signalcompose/orbitscore/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/signalcompose/orbitscore/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/signalcompose/orbitscore/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/signalcompose/orbitscore/compare/v4.1.0...v4.2.0
