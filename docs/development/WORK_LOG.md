@@ -143,6 +143,9 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
   - 未対応として仕様に 1 行: プラグインに「プロジェクトの読み込み」と伝える `kStateType = Project`（JUCE / Ardour も渡さない）
   - 検証: macOS 専用の VST3 crate 6 つ **88 passed / 0 failed / 4 ignored**・clippy / fmt 緑。840 で #989 が保存した container
     （ピアノ）を class ID の照合つきで読み込めた（6.0 s）
+  - 修正の差分だけの再レビュー（1 名）: Important 0。Minor 1 件（版をまたいで class ID を変えたプラグインの旧 ID の container を読む
+    別名〔SDK の `otherClassIDArray`〕が無い）は、CAP.2a に**既知の制約**として 1 文書いた
+  - 実機ゲート（`1b0be318`）: `npm test` 2659 passed・gated E2E **52/52**・cold install 2/2
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 

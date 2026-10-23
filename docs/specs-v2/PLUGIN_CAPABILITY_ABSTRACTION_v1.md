@@ -115,7 +115,10 @@ VST3 はプラグインの state を **component（音を作る側）と control
 3. **復元は container と raw component chunk（旧形式・先頭が `VST3` でないバイト列）の両方を受け付ける**。
    #982 より前に保存した state ファイルはそのまま読める。container は header の class ID と
    読み込む component の class ID を ASCII の大文字小文字を区別せず照合し、不一致なら両方の
-   ID を含むロード失敗にする。raw には header がないため照合しない
+   ID を含むロード失敗にする。raw には header がないため照合しない。
+   **既知の制約**: 版をまたいで class ID を変えたプラグインについて、旧 class ID で書かれた
+   container を新しい版で読むための別名（SDK `loadPreset` の `otherClassIDArray` に相当）は
+   扱わない（v1 では意図的に未対応。必要になったら別名表を足す）
 
 **SDK との差**: SDK の `savePreset` は、controller が `kNotImplemented` を返しても空の `Cont` を書き、
 controller の失敗で保存全体を失敗させる。OrbitScore は空の `Cont` を書かず、controller の失敗で
