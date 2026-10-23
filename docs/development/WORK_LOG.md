@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): revise the OrbitStudio design against 4.4.0 and fix the session protocol shape (Oct 23, 2026)
+
+**Date**: 2026-10-23 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+OrbitStudio（ネイティブ版）の設計 848 を、拡張 4.4.0（main `7410dcb0`）と外部参照の調査に合わせて改訂した。層 2（`packages/session`）の実装をクラウドのセッションに出すために、**プロトコルの形（一方通行の判断 N-1）をここで確定させる**のが目的。9/18 の改訂（`848-native-design-revised`・main に未マージ）は main から大きく遅れていたので、main から切り直したブランチに cherry-pick してから直した。
+
+- **進め方**: main が審査（再測・所見 6 件）→ 外部参照の調査（Bitwig / SuperCollider / Sonic Pi / MCP 仕様 / MCP Inspector の CVE / Jupyter / VS Code server / Monaco × WKWebView × IME）→ advisor と方針を決定 → 起案は fresh subagent → main が本文と引用を読んで受け入れ
+- **崩れていた前提**: 比較元 `1276ab1f` は 09-18 ではなく 09-14 の 4.2.0 マージ / 「4.2.0 で凍結・以後 bug fix のみ」（4.3.0・4.4.0 が owner の個別例外で出た）/ MCP ツールは 26 ではなく 28（`registerTool(` の字面の grep は 24 しか出さない）/ 「docs は `.vsix` に同梱されていない」（4.2.1 から偽）/ #757 は凍結版で閉じた
+- **プロトコルの形**: `session.evaluate` は状態を持たない（`documentDirectory: string | null` を毎回必須・凍結版の三値は stdio の REPL の副産物）/ `evalId` はサーバが振る / `transport.step` に省略可能な `source` / `log.line` に `level`・`kind` / `docs.*` に `site` / `engine.start` に `hostBundleId`。**評価の単位（#987 Q2）は wire に焼かず §14 (22)**、実装の既定は凍結版と同じ意味論
+- 🔴 **セキュリティの結論を反転**: 旧 §4.4・§11「`/mcp` が無認証だから `/rpc` にも付けない」を撤回し、`/rpc` と `/mcp` の両方にトークン + Origin 検証（Host 許可リストは残す）。現行 `/mcp` は MCP 仕様 2025-11-25 の MUST（Origin 検証）を満たしておらず、WebSocket は CORS の対象外なので Origin を見ない `/rpc` は任意の Web ページから届く。新設 §4.7（脅威モデル）・D-10・F-13
+- **ライフサイクル**: F-1 に機構（stdin の EOF が主・`--parent-pid` が補助。daemon 側は engine 線への申し送り）/ F-12（層 2 だけが落ちた時の回復）を新設 / ハーネスがトークンを知る経路（`ORBITSCORE_SESSION_TOKEN_FILE` → `--token-file`）
+- **完了条件**: D-1 の基準を v4.4.0（gated 56 `it`・`PARITY_BASELINE_TAG` の 1 か所から読む）/ D-6 を Monaco の既知 issue の再現手順に / D-9 は 4.2.1 の同梱の引き継ぎに
+- **§14 に 4 件追加**: (22) 評価の単位 / (23) LLM へのトークンの渡し方 / (24) `.orbs` を 2 つ開いた時の共有 / (25) F-12 の自動再評価とプラグイン状態の喪失の伝え方
+- 計画に束ごとの「実行環境」（Linux で完結 / macOS 実機が要る）の列を足した。地図の現在地を 4.4.0 に合わせた
+- 出荷済み 4.4.0 の `/mcp` と daemon も Origin を検査していない（daemon は `accept_async` にヘッダ検査なし）。issue にするかは owner 判断待ち
+
+Part of #848
+
+---
+
 ### chore(release): bump the extension to 4.4.0 (Oct 23, 2026)
 
 **Date**: 2026-10-23 / **ブランチ**: `992-release-4.4.0` / **Issue**: [#992](https://github.com/signalcompose/orbitscore/issues/992)

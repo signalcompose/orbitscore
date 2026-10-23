@@ -2,9 +2,11 @@
 
 **対象 issue**: #848（ネイティブ版の設計・計画・地図）の別冊
 **関連**: [`848-native-orbitstudio-design.md`](848-native-orbitstudio-design.md)（本体・D-9 / §9.1 / §10.3 / §14 (15)〜(20) から参照）/ [`IMPLEMENTATION_PLAN_NATIVE.md`](../planning/IMPLEMENTATION_PLAN_NATIVE.md)（R-app N4-e・docs の連続 PR ①〜③）/ [`NATIVE_DEVELOPMENT_MAP.md`](../planning/NATIVE_DEVELOPMENT_MAP.md) §4.G
-**状態**: 設計（実装しない）・2026-09-18・main `1276ab1f` 実測
+**状態**: 設計（実装しない）・2026-09-18・`1276ab1f` 実測（🔴 これは 09-14 の 4.2.0 マージで、09-18 の main ではない — 本体 §2）・**改訂 2026-10-23（main `7410dcb0`・拡張 4.4.0）: 崩れた前提「`.vsix` に docs は同梱されていない」を直した**（§0 の 3 行・§6.1・§6.4・§8 G-7・§9。下の注記）
 **起案 / 審査**: Fable（effort: high）/ main。**owner 裁定待ちは §10**。
-**用語**: **OrbitStudio = macOS ネイティブ版アプリ**（owner 2026-09-18）。VS Code 拡張は「拡張版」（4.2.0・機能凍結）。
+**用語**: **OrbitStudio = macOS ネイティブ版アプリ**（owner 2026-09-18）。VS Code 拡張は「拡張版」（凍結線・現 4.4.0。凍結後も owner の個別例外で 4.2.1 / 4.3.0 / 4.4.0 が出た）。
+
+> 🔴 **改訂の注記（2026-10-23）**: 本書は 09-18 の時点で「凍結版は docs を `.vsix` に同梱していない」を前提にしていたが、**同じ 09-18 の 09:37 に #954 / PR #955 がマージされ、拡張 4.2.1 で user サイトが同梱された**（`scripts/copy-user-site.sh` が Markdown 45 本 + ビルド済み dist を拡張パッケージの内側 `packages/vscode-extension/sites/user/` へコピーし、`resolveUserDocsLocation` がモノレポ → `extension-bundle` の順に探す。**dev サイトは owner 決定で意図的に同梱しない**）。したがってアプリへの同梱は**新設ではなく、凍結版の同梱の引き継ぎ**になる（本体 D-9）。本書で新しいのは、同梱の**形**（Markdown + dist + DSL 仕様 + manifest・§6.2）と、可用性表記（§5）・追従ルーチン（§7）の設計である。前提を直した行には「改訂（10-23）」と付した。
 
 > 🔴 **読み方**: §1 の owner 要件 4 点が制約のすべて。§2 は本書の核（「実装依存 / 非依存」は 1 軸ではなく 2 軸に割れる）。
 > §3〜§7 がブリーフの Q1〜Q4 への答え。§9 に確信度と反証、§10 に裁定待ち。「実測」はすべて `path:line` か実行コマンドを併記した。
@@ -21,9 +23,9 @@
 | 引用の機械検証 | dev サイトのみ。`// <file>:<start>-<end>` 付きコードブロックを実ファイルと突合（`npm run docs:check`）。user サイトは対象外（`SKIP_DIRS` と `walk()` は `sites/dev` 配下だけ） | `sites/dev/scripts/check-citations.mjs:1-50` / `docs/development/USER_LEARNING_SITE.md:110`（user は line range 引用を採らない） |
 | 公開 | **GitHub Pages・`main` への push で即 deploy**（`paths: sites/**`）。user = `/orbitscore/`・dev = `/orbitscore/dev/` | `.github/workflows/deploy-sites.yml:15-22,56-70` |
 | 版の分岐 | **無し**。`base` は固定（`'/orbitscore/'` / `'/orbitscore/dev/'`）。locales は ja / en のみ | `sites/user/.vitepress/config.ts:11,18-69` / `sites/dev/.vitepress/config.ts:6,14` |
-| `.vsix` への同梱 | 🔴 **無し**。`.vscodeignore` が `../../**` と `../*/**` を除外 | `packages/vscode-extension/.vscodeignore:20,28` |
-| 拡張の Docs 機能 | Docs パネル / `openDocs` / `get_dev_doc` / `search_dev_docs` は **`__dirname/../../..`（= モノレポ root）の `sites/*/.vitepress/dist` と `sites/dev` ソース**を読む → cold install では**動かない** | `packages/vscode-extension/src/mcp-server.ts:89,137-138` / `mcp-docs.ts:29-36,90-101,103-136` / `docs-panels.ts:17-26` |
-| Docs 機能の E2E | **0 本**（gated suite に `get_dev_doc` / `search_dev_docs` の呼び出し無し） | `grep -n "get_dev_doc\|search_dev_docs" tests/e2e/orbitstudio-mcp-gated.spec.ts` = 0 件 |
+| `.vsix` への同梱 | ~~🔴 **無し**~~ → 改訂（10-23）: **user サイトは同梱**（4.2.1・#954 / PR #955）。`.vscodeignore` の `../../**` と `../*/**` の除外は今もあるが、`copy-user-site.sh` がパッケージの**内側**へコピーするので除外に当たらない。**dev サイトは owner 決定で同梱しない** | `packages/vscode-extension/.vscodeignore:20,28` / `scripts/copy-user-site.sh` / `package.json:18,22` / `.gitignore:47-49` |
+| 拡張の Docs 機能 | 改訂（10-23）: user サイト（Docs パネル / `openDocs` / `get_user_doc` / `search_user_docs`）は **モノレポ → `extension-bundle` の順**に探し、cold install でも動く。dev サイト（`openDevDocs*` / `get_dev_doc` / `search_dev_docs`）はモノレポだけを探し、無ければ **`DEV_DOCS_UNAVAILABLE_MESSAGE`**（モノレポでだけ読める + 公開 URL）を返す | `packages/vscode-extension/src/mcp-server.ts:151-154` / `mcp-docs.ts:38-48` / `mcp-tools-editor.ts:284-330` / `docs-panels.ts` |
+| Docs 機能の E2E | `orbitstudio-mcp-gated.spec.ts` には今も 0 本。改訂（10-23）: **cold-install の gated `assertDocsBundled`** が `get_user_doc`（成功）/ `get_dev_doc`（unavailable）/ `GET /orbitscore/`（200）を検査し、通常の vitest に HTTP 往復の `mcp-server-docs-http.spec.ts` がある | `tests/e2e/vsix-cold-install-gated.spec.ts:155-175` / `tests/vscode-extension/mcp-server-docs-http.spec.ts` |
 | リリースノートの導線 | インストール手順は `installation.md` を正本にし、リリースノートは**リンクだけ**（v4.0.0 で手書き手順が消えた #905 の教訓） | `.github/workflows/release.yml:245-252` |
 | 版の表記の現状 | user サイトは `#883 / DSL 2.0`・`v3.0 以降`・`2.0.0 時点の仕様 — post-2.0 で見直し予定`・`配布されている OrbitScore（.vsix）では …` など**自由文で 4 種以上の形** | `sites/user/mixing/routing.md:20,41,100` / `basics/live-coding.md:172` / `midi/mode-scale.md:10-12` / `midi/link-audio.md:11` |
 | 版の掃除の実績 | 4.2.0 のバンプで**形を狙った grep が 4 回連続で取りこぼし**、番号固定の素の grep でしか全件を拾えなかった | `docs/development/WORK_LOG.md`「版の列挙 — 番号非依存のパターンで洗った」（2026-09-14） |
@@ -72,7 +74,7 @@ main の見立て（Q1）は「DSL / エンジンの章 = 非依存、editor / g
 | `mixing/` は非依存 | `mixing/routing.md:41,145` 診断名 `dry-not-routed` / `output-missing` とクイックフィックスの表示（軸 A・計算は層 2 で同じ = 設計 §5.5） | 部分的に誤り（軸 A・段落） |
 | `plugins/` は非依存 | `plugins/instrument.md:37` コマンドパレット（軸 A）・`:97-100` 未実装リスト（軸 B・engine 線で先にアプリへ） | 誤り（両軸） |
 | `getting-started/` は依存 | `first-sound.md` の DSL 部分（`:41-54,106-119`）と `engine-settings.md` の**エンジンの振る舞い**（`:44-62` デバイス切替の縮退規則 = 層 1 の規則）は非依存。依存なのは手順（`:29-35,62-64,96-98`）と UI の置き場（`engine-settings.md:12-20`） | 粗い（章内に両方） |
-| `rust-engine/` `signal-chain/` は非依存（dev） | 引用は `rust/` 中心で `packages/vscode-extension` の引用は 0〜1 件。**ただし layer 1 の wire は engine 線で v0.2 → v0.3 に進んだ**（`protocol.rs:8`）ので、dev サイトは「拡張版では v0.2 相当のまま」を表せない。dev サイトは `verified-against` で commit を刻む（`STYLE_GUIDE.md:91-99`）ので**軸 B は既に持っている**（章単位・commit 粒度） | 正しい（軸 B は既存機構が受ける） |
+| `rust-engine/` `signal-chain/` は非依存（dev） | 引用は `rust/` 中心で `packages/vscode-extension` の引用は 0〜1 件。**ただし layer 1 の wire は engine 線で v0.2 → v0.3 に進んだ**（`protocol.rs:8`）ので、dev サイトは「拡張版では v0.2 相当のまま」を表せない（改訂 10-23: この例そのものは当たらない — 凍結版も `v4.2.0` タグの時点で既に v0.3 で出荷している（`git show v4.2.0:…/protocol.rs` の `:8`）。ただし engine 線で層 1 の wire が今後進めば、同じ問題が起きる）。dev サイトは `verified-against` で commit を刻む（`STYLE_GUIDE.md:91-99`）ので**軸 B は既に持っている**（章単位・commit 粒度） | 正しい（軸 B は既存機構が受ける） |
 | `editor/` は依存（dev） | `editor/vscode-architecture.md`（`packages/vscode-extension` 引用 65 件）/ `execution-feedback.md`（39）/ `mcp-and-gated-e2e.md`（50）。**ただし後 2 章の半分は層 2 の話**（MCP ツールの意味論・gated ハーネス）で、ネイティブ線でも生きる | 正しいが、章の**中**で層 2 と層 3 が混ざる |
 
 ---
@@ -175,7 +177,7 @@ DSL の説明本文は触らない。併記は **`::: tip` / `::: warning` の�
 
 ### 4.3 V-D を足す時の形（設計だけ置く・実装しない）
 
-- `deploy-sites.yml` に job `snapshot-ext`: `actions/checkout@v4` with `ref: v4.2.0`（凍結タグ）→ `SITE_BASE=/orbitscore/ext/ npm run docs:build -w @orbitscore/user-site` → `dist-pages/ext/` へ
+- `deploy-sites.yml` に job `snapshot-ext`: `actions/checkout@v4` with `ref: <凍結線の最新タグ>`（改訂 10-23: 例外で凍結線のタグが進むので固定の `v4.2.0` ではない。10-23 は `v4.4.0`）→ `SITE_BASE=/orbitscore/ext/ npm run docs:build -w @orbitscore/user-site` → `dist-pages/ext/` へ
 - `sites/user/.vitepress/config.ts:11` の `base` を `process.env.SITE_BASE ?? '/orbitscore/'` に（**タグ側の config を触れないので、env 対応はタグより前に main に入れておく必要がある** — 今入れなければ 4.2.0 タグでは使えず、次の凍結版タグ 4.2.1 からになる。これが「今決めなくてよい」の唯一の但し書き）
 - 一方通行ではない: 出すのをやめれば job を消すだけ
 
@@ -240,7 +242,7 @@ host: both            # both | app | ext | both+split（§3.1）
 | 対象 | 同梱 | 理由 |
 |---|---|---|
 | **user サイト（ja + en）の Markdown**（`host` が `both` / `app` / `both+split` の章。`ext` の章と `both+split` の `ext` 節は落とす） | ✅ | R-1 の本体。LLM が読むのは「何を書けばどう鳴るか」 |
-| **user サイトのビルド済み HTML**（VitePress dist・同じ commit） | ✅ | 人間向けの Docs パネル（設計 §7.4）。層 2 の HTTP リスナーが今日の `mcp-server.ts:180-200` と同じ形で配信する。`file://` で SPA を開けない問題を層 2 の配信で避ける |
+| **user サイトのビルド済み HTML**（VitePress dist・同じ commit） | ✅ | 人間向けの Docs パネル（設計 §7.4）。層 2 の HTTP リスナーが今日の `mcp-server.ts:201-272` と同じ形で配信する（改訂 10-23: 凍結版は 4.2.1 からこの dist を `.vsix` に同梱している。アプリでは `/app/` とは別の WKWebView で開く・本体 §4.7）。`file://` で SPA を開けない問題を層 2 の配信で避ける |
 | **DSL 仕様** `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2,334 行） | ✅ | 正本。user サイトが省いた規則（例外・優先順位）を LLM が引ける。`manifest.json` で `normative: true` と印を付ける |
 | `docs/user/ja/USER_MANUAL.md`（843 行） | ❌（既定） | user サイトの primary source だが、同梱すると**同じ内容が 3 系統**になり LLM が矛盾を拾う。owner が「仕様寄りの 1 本」を望むなら DSL 仕様の代わりにこれ、という選択肢として §10 (15) に載せる |
 | **dev サイト** | ❌（既定） | 1.19 MB・読者は開発者・引用は `path:line` でソースが無いと検証できない。`get_dev_doc` の互換のため **`--docs-dir` を複数指定可**にしておき（計画 N-3）、開発者が手元のモノレポを指せる形にする |
@@ -276,7 +278,7 @@ OrbitStudio.app/Contents/Resources/docs/
 | `manifest.json` と `user-site/index.html` の実在 | `verify-app.sh`（設計 §9.0） | 無い |
 | `未リリース` 0 件 | `verify-app.sh`（`check-availability.mjs --release`） | 1 件でも在る（→ リリース bump PR で置換し忘れ） |
 | `manifest.commit` == ビルド時の `HEAD` | `verify-app.sh` | 不一致（→ 古い dist を拾った。`isDocsDistStale` #480 と同じクラス・`mcp-docs.ts:167-190`） |
-| cold install で `docs.get`（`get_dev_doc`）が 1 章を返す | cold-install E2E（設計 D-7 の `.app` 版） | `null` |
+| cold install で `docs.get`（`site:"user"`・`get_user_doc`）が 1 章を返し、`site:"dev"`（`get_dev_doc`）が unavailable の案内を返す | cold-install E2E（設計 D-7 の `.app` 版。改訂 10-23: 凍結版の `assertDocsBundled`・`vsix-cold-install-gated.spec.ts:155-175` を写す） | user が読めない / dev が「見つからない」と区別できない |
 | Docs パネルがネットワーク無しで開く | 同上（`ORBIT_GATED_TARGET=native`） | 開かない |
 
 ### 6.5 リリース後に文書が更新された場合
@@ -337,7 +339,7 @@ OrbitStudio.app/Contents/Resources/docs/
 | G-4 | 可用性の行の文法がばらける | grep で拾えない | `check-availability.mjs`（§5.4） |
 | G-5 | ja だけ更新され en が古い | 英語の LLM が古い可用性を読む | ja / en の件数差 lint + `TRANSLATION_STATUS.md` の `outdated` |
 | G-6 | ルーチンが「OrbitStudio」を拡張版の意味で使う | サイト上で語が両義になる | §7.4 の用語修正 + `check-availability.mjs` が `OrbitStudio（凍結版` の並びを red に |
-| G-7 | Docs パネルが `file://` で SPA を開けない | 空白ページ | 層 2 の HTTP 配信（今日の `mcp-server.ts:180-200` と同じ形）。N3 Docs パネルの最初の小 PR で実測 |
+| G-7 | Docs パネルが `file://` で SPA を開けない | 空白ページ | 層 2 の HTTP 配信（今日の `mcp-server.ts:201-272` と同じ形）。N3 Docs パネルの最初の小 PR で実測。改訂（10-23）: Docs パネルは `/app/` と別の WKWebView（本体 §4.7 の docs の同一オリジン配信の条件） |
 | G-8 | DSL 仕様と user サイトが矛盾する | LLM が 2 つの答えを出す | manifest の `normative: true`（仕様を優先する規則を LLM 向けの `README` に 1 行）。矛盾自体は既存の運用（user サイトは USER_MANUAL / 仕様から逸脱しない・`sites/user/STYLE_GUIDE.md:94-102`）で防ぐ |
 
 ---
@@ -349,7 +351,7 @@ OrbitStudio.app/Contents/Resources/docs/
 | 「実装依存 / 非依存」は軸 A（host）と軸 B（可用性）に割れ、DSL の章は軸 B に依存する | 高（§2 の実測表: `link-audio.md:11` / `instrument.md:97-100` / `engine-settings.md:33` / `methods.md:435,460` が非依存に分類された章の中に在る） | 上の行が**アプリ版と拡張版で同じ値になる**なら軸 B は要らない。具体的には LinkAudio の egress がアプリ版でも off のまま **かつ** O-multiout / ラック / render がアプリの初回リリースに入らない場合 |
 | user サイトは 1 本のまま固定文法で両版を表せる（V-A） | 高（DSL の記述は両版で同一・層 2 の意味論を共有する設計 §10.3） | 「拡張版でだけ**振る舞いが違う** DSL」が 2 つ以上現れたら（今は #883 系の破壊的変更が 4.0.0 で凍結版にも入っており 0 件）。その時は V-D（スナップショット）を足す |
 | 固定文法なら版の掃除が grep 1 本で済む | 高（`WORK_LOG.md` 2026-09-14 の実測: 番号固定の素の grep だけが全件を拾った） | リリース bump PR で `> **対応**:` を置換した後に**別の形の版表記が残って**利用者に見える |
-| docs 系ツールは cold install で動かない | 高（`mcp-server.ts:137-138` / `.vscodeignore:20,28`） | 凍結版 `.vsix` を cold install して `get_dev_doc` が `null` 以外を返す |
+| ~~docs 系ツールは cold install で動かない~~ → 🔴 **反証済み**（10-23）: 4.2.1 から user サイトは同梱され cold install で `get_user_doc` が成功する（`vsix-cold-install-gated.spec.ts:155-175`）。dev は意図的に非同梱で unavailable を返す。代わりの主張: **凍結版の user サイトの同梱の仕組み（`copy-user-site.sh`・`resolveUserDocsLocation`）は `.app` の同梱の前例として使える** | 高（凍結版で出荷済み・cold-install の gated が在る） | `.app` の cold-install で `get_user_doc` が 1 章を返さない |
 | Markdown + HTML の二重同梱で乖離しない | 高（同じ commit・同じ段で生成） | manifest の commit と dist の `base + '/assets/'` 指標（`isDocsDistStale`）が食い違う |
 | 153 KB の user サイトは LLM が丸ごと読める量なので索引は manifest で足りる | 中（ja 153,918 bytes・en は未計測〔`du` で 164 KB〕。合わせて約 300 KB ≒ 100k トークン弱） | ローカル LLM の context が 32k 以下なら章単位の選択が要る → manifest の `description` が**その選択の材料**なので、索引を別に作る必要は変わらない |
 | T-B（リリーストリガー）は同梱物を構造的に 1 版古くする | 高（追従 PR はリリース後にしかマージできない） | ルーチンがリリース**前**（タグ打ちの前）に走り、その PR をタグの前にマージする運用が可能なら誤り。ただしそれは「タグを打つ前に手で待つ」= T-A の置換と同じ人手が要る |
@@ -378,3 +380,4 @@ OrbitStudio.app/Contents/Resources/docs/
 | 日付 | 内容 |
 |---|---|
 | 2026-09-18 | 初版（#848 別冊・Fable 起案・effort high・main `1276ab1f`）。Q1〜Q4 の答え・軸 A / 軸 B の分離・user 21 章 / dev 27 章の分類・固定文法・同梱の形・ルーチンのトリガー・裁定待ち (15)〜(21) |
+| 2026-10-23 | 改訂（起案: fresh subagent / 審査: main・main `7410dcb0`・拡張 4.4.0）。崩れた前提「凍結版は docs を `.vsix` に同梱していない」を直した: 4.2.1（#954 / PR #955・2026-09-18 09:37）で user サイトは同梱済み、dev サイトは owner 決定で意図的に非同梱。§0 の 3 行・§6.1 の配信元の注記・§6.4 の cold-install の検査・§8 G-7・§9 の確信度の行を更新。比較元 `1276ab1f` の日付を 09-14 に訂正。§4.3 V-D のタグを「凍結線の最新タグ」に。裁定待ち (15)〜(21) の推奨は変えていない |

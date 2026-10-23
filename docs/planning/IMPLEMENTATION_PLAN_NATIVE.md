@@ -1,6 +1,6 @@
 # 実装プラン（ネイティブ版）— 段・束・受け入れ基準（#848）
 
-**状態**: 計画（実装しない）・初版 2026-09-11（main `229d6387` 起点）・**改訂 2026-09-18（main `1276ab1f`・拡張 4.2.0 凍結後。設計 §2b の判定に従って直した行に「改訂」と付す）**
+**状態**: 計画（実装しない）・初版 2026-09-11（main `229d6387` 起点）・改訂 2026-09-18（`1276ab1f` — 🔴 09-14 の 4.2.0 マージで、09-18 の main ではない・設計 §2）・**改訂 2026-10-23（main `7410dcb0`・拡張 4.4.0。設計 §2c の判定に従って直した行に「改訂（10-23）」と付す。§2.1 に束ごとの実行環境の列を足した）**
 **用語**: **OrbitStudio = macOS ネイティブ版アプリ**（owner 2026-09-18）。拡張版は「凍結版」「拡張版」と書く。文書（user / dev サイト）の保持構造は [`848-docs-structure-design.md`](../design/848-docs-structure-design.md)（別冊）
 **前提**: [`848-native-orbitstudio-design.md`](../design/848-native-orbitstudio-design.md)（設計・完了条件 §1.2）/ [`NATIVE_MIGRATION_2026-09.md`](NATIVE_MIGRATION_2026-09.md) §12（裁定）/ [`NATIVE_DEVELOPMENT_MAP.md`](NATIVE_DEVELOPMENT_MAP.md)（地図）/ [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md) / `PROJECT_RULES.md` §1b-§1d / CLAUDE.md「テストの積み上げ規律」（① 仕様 → ② MCP 経由 E2E → ③ 機能テスト → ④ 変異は最後の手段）
 **既存の検討との関係**: 設計 §0b（引き継ぐ / 棄却 / 失効の仕分け）が正本。配布は `656-release-design.md` を再設計せず**差分だけ**（設計 §9.0）。
@@ -16,11 +16,11 @@
 
 | # | 判断 | どこで確定するか | 戻せない理由 | 裁定の状態 |
 |---|---|---|---|---|
-| N-1 | セッションプロトコル v1（JSON-RPC 2.0 over WebSocket・`/rpc`・逆方向 `editor.*`・通知）の**形** | 束 S-rpc | クライアント（WebView・headless・将来の拡張）が増えた後は変えにくい。同梱なので互換期間は不要だが**形**は残る | 設計 §5（起案）。**確定は束 S-rpc の締めのレビュー**で |
+| N-1 | セッションプロトコル v1（JSON-RPC 2.0 over WebSocket・`/rpc`・逆方向 `editor.*`・通知）の**形**。改訂（10-23）: 形を設計で確定した — `session.evaluate` は状態を持たない（`documentDirectory` 毎回必須・`null` = 基準なし）/ `evalId` はサーバが振る / `transport.step` に省略可能な `source`（0 始まり・UTF-16）/ `log.line` に `level` / `kind` / `session.attach` の `token` / `docs.*` の `site` / `limit` / `engine.start` の `hostBundleId`。**評価の単位は wire に焼かない**（#987 Q2・設計 §14 (22)） | 束 S-rpc | クライアント（WebView・headless・将来の拡張）が増えた後は変えにくい。同梱なので互換期間は不要だが**形**は残る | 設計 §5.2・§5.3（10-23 確定）。S-rpc の締めのレビューは**設計との一致**を確かめる（#987 の `StepEvent` との突き合わせを含む・設計 §13） |
 | N-2 | ディレクトリ `packages/session/` `apps/OrbitStudio/` `protocol/` の新設・`packages/engine` は rename しない | 束 S-rpc | パスは後から変えにくい | 設計 §8・§14 (2) 推奨 A |
-| N-3 | `orbitscore session --port --mcp --docs-dir` の起動引数と ready 行の形（改訂: `--docs-dir` は**複数指定可・先勝ち**にする — 別冊 §6.5 の上書きディレクトリと dev サイトの追加同梱 (15) に備える。v1 で使うのは 1 つ） | 束 S-rpc | host（Swift・ハーネス）が依存 | 設計 §4.4 |
-| N-4 | ハーネスの env `ORBIT_GATED_TARGET = vscode \| native \| headless`（既定 `vscode`） | 束 S-mcp | CI・手順書・memory が依存 | 設計 §10.2 |
-| N-5 | パリティ台帳 `tests/e2e/native-parity-ledger.ts` の形（凍結タグ時点の `it` 題名を全列挙・分類必須） | 束 S-mcp | 増やす方向にしか編集できないラチェット | 設計 §1.2 D-1 |
+| N-3 | `orbitscore session --port --mcp --docs-dir` の起動引数と ready 行の形（改訂: `--docs-dir` は**複数指定可・先勝ち**にする — 別冊 §6.5 の上書きディレクトリと dev サイトの追加同梱 (15) に備える。v1 で使うのは 1 つ）。改訂（10-23）: ready 行に **`token`**（秘密・転写しない）、起動引数に `--token-file` / `--workspace-root` / `--parent-pid` / `--web-dir` / `--host-bundle-id` / `--plugin-catalog` / `--plugin-scan-path`、stdin はパイプ（EOF = 親の終了） | 束 S-rpc | host（Swift・ハーネス）が依存 | 設計 §4.4・§4.5・§4.7 |
+| N-4 | ハーネスの env `ORBIT_GATED_TARGET = vscode \| native \| headless`（既定 `vscode`）。改訂（10-23）: アプリへ渡す **`ORBITSCORE_SESSION_TOKEN_FILE`**（ハーネスがトークンを知る経路） | 束 S-mcp | CI・手順書・memory が依存 | 設計 §10.2 |
+| N-5 | パリティ台帳 `tests/e2e/native-parity-ledger.ts` の形（基準タグ時点の `it` 題名を全列挙・分類必須）。改訂（10-23）: **基準タグは定数 `PARITY_BASELINE_TAG` 1 か所**（現在 v4.4.0・56 `it`）。凍結版に例外が入ったらその PR で進める | 束 S-mcp | 増やす方向にしか編集できないラチェット | 設計 §1.2 D-1・§5.7 |
 | N-6 | スキーマの `x-surfaces` と `npm run protocol:check`（生成物をコミット） | 束 S-rpc | 生成物の置き場 | 設計 §5.8 |
 | N-7 | Node を `.app` に同梱 | 束 R-app | 署名対象 +1・entitlements | 🔴 §14 (3)。改訂: **W-22 の「引き継ぎ」ではなくアプリ線の独立した判断** — 拡張側は #878（PR #889）で VS Code 同梱の Node（`ELECTRON_RUN_AS_NODE`・`engine-process.ts:407-416`）に乗り、同梱 node を要らなくした。Swift app に Electron は無い |
 | N-13（改訂） | **同梱 docs の形**（`Contents/Resources/docs/` = user サイトの Markdown + ビルド済み HTML + DSL 仕様 + `manifest.json`・別冊 §6.2） | 束 R-app（`make-bundle.sh`）。**可用性表記の文法**（別冊 §5）は docs 側の main 直行 PR で先に | LLM 向けの索引と `docs.get` のパス体系が固定される。文法は全章に書かれると変えにくい | 🔴 §14 (15)(16) |
@@ -72,17 +72,17 @@
 
 🔴 統合ブランチ名は **束ごとの issue を地図の節から起票してから**その番号で切る（地図 §0.2・PROJECT_RULES「ISSUE 番号のないブランチ名は禁止」）。起票までは `848-` を仮置きし、起票時に本表を更新する。
 
-| 束 | 統合ブランチ（仮） | 中身（小 PR） | 概算（変更行・**未実測**） | 検証（束 PR で） | 🔴 ここで切る理由 |
-|---|---|---|---|---|---|
-| **N-spike** | `848-native-spike` | **N0-a** Swift + WKWebView + Monaco（`.orbs` ハイライト・⌘Enter・**IME**）/ **N0-b** `protocol/` の生成ツール選定（3 メッセージ往復）/ **N0-c** SwiftPM → `.app` 組み立て → 同梱 node 起動 → 署名（hardened runtime）で `spctl` 通過 | 約 900 | N0-a: **owner 実機確認**（IME・D-6）+ `file://` → `ws://127.0.0.1` の可否を記録 / N0-b: 生成物の往復テスト / N0-c: 署名済み skeleton が起動し node が走る（entitlements の実測表を `docs/research/` へ） | 結果が**設計の前提**（§1.3・§7.3・§9.2）を左右する。実装より先に、実装と混ぜずに |
-| **S-rpc** 🔴 | `848-session-rpc` | **N1-a1** `protocol/session/v1` スキーマ + 生成 + `protocol:check` / **N1-a2** `packages/session` の WebSocket サーバ（handshake・attach・`session.evaluate`・`transport.step`・`log.line`・`session.getLog`）/ **N1-a3** `orbitscore session` CLI（ready 行・shutdown・daemon の畳み方） | 約 1,100 | unit（2 クライアント同時 attach・FIFO の順序・不一致 version の拒否）+ **実機**: headless で `session.evaluate` → capture RMS > 0 | 一方通行 N-1〜N-3・N-6 を**この束だけ**に閉じる |
-| **S-mcp** 🔴 | `848-session-mcp` | **N1-b1**（改訂）**MCP 層 8 ファイル 1,658 行**（`mcp-server` / `mcp-tools-{editor,engine,plugins}` / `mcp-types` / `mcp-docs` / `mcp-sdk` / `mcp-registration`・全部 pure・設計 §3.1）を `packages/session/src/mcp/` へ移動し、**`OrbitScoreToolHandlers`（`mcp-types.ts:176-224`）を層 2 の RPC メソッドで実装**する（`agent-handlers.ts` は書き換えず、同じ型を別実装で満たす）。`mcp-docs.ts` の docs root は `--docs-dir` から / **N1-b2** ハーネスに `ORBIT_GATED_TARGET=headless` / **N1-b3** `native-parity-ledger.ts`（**4.2.0 タグの 49 `it` 題名**を全列挙・`needs-editor` 分類・未分類 red。docs 系ツール 2 本は「凍結版に E2E 無し」の別枠） | 約 900 | 🔴 **goldens が 1 つも動かないこと**（`OUTPUT_LINE_GOLDENS` / rack 期待値）を headless で + editor 非依存の題名が全件緑（D-3） | **振る舞いを変えない host の入れ替え**なので、検算は「goldens が動かないこと」。S-editor（振る舞いを足す）と同じ束に入れるとこの検算は失われる |
-| **S-editor** | `848-session-editor` | **N1-c1** document 同期（`editor.didOpen/didChange/didClose/didChangeSelection`）と写し / **N1-c2** 診断・補完・subject-block を層 2 のサービスへ（`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts` / `completion-context.ts` の vscode 依存除去 / `getLineSubject` の移動〔改訂: 09-18 は `run-selection.ts:27`〕/ 改訂: **`plugin-ui-at-cursor.ts` の「カーソル下のプラグイン名 → `(receiver,index)`」解決**を `plugin.openUiAtCursor` として層 2 へ・#939 / #940 の規則込み）/ **N1-c3** 逆方向 `editor.*` リクエストと `NO_EDITOR_ATTACHED` | 約 1,200 | unit（`editor.diagnostics` 通知と `get_diagnostics` の一致・subject-block の既存 unit を層 2 で再実行）+ 実機: headless で `open_file` が `NO_EDITOR_ATTACHED` を返す | 逆方向の契約（設計 §5.4）を単独で確かめる |
-| **A-skeleton** 🔴 | `848-app-skeleton` | **N2-a** Swift シェル（1 ウィンドウ・WKWebView・session の spawn / 監視 / shutdown・⌘Enter）/ **N2-b** Web クライアント（Monaco + RPC クライアント + `playhead.ts` の decoration）/ **N2-c** ハーネスに `ORBIT_GATED_TARGET=native`（起動・PID オラクルの teardown） | 約 1,500（Swift 700 / TS 800・**上限に近い**。N0-a の Monaco 設定を持ち越して減らす） | 設計 §1.3 の 1〜5 + 🔴 **goldens が動かないこと**（native）+ IME（owner） | walking skeleton を**表面を足す前に**閉じる。裁定 §5 Phase 2「数週間で結論が出る想定」の単位 |
-| **A-document** | `848-app-document` | **N3-a1** `NSDocument`（open / save / autosave / 未保存確認・バイト同一の往復）/ **N3-a2** タブ・メニュー・最近使った書類 / **N3-a3** 環境設定（設定 10 項目の写像・設計 §7.4） | 約 900 | 実機: `open_file` → `edit_replace` → `save_file` → ファイルが byte 一致（E2E）+ 自動保存の実機確認 | AppKit 標準機能の受け入れ。ライブ経路とは独立 |
-| **A-panels** | `848-app-panels` | **N3-b1** Engine パネル（`engine-view.ts` の写像・デバイス選択・起動停止）/ **N3-b2** Log パネル + ステータス（`transport.state`）/ **N3-b3** Catalog パネル（rescan / browse / 改訂: 右クリック → `plugin.openUiAtCursor`）/ **N3-b4** Docs パネル（改訂: **同梱 docs をネットワーク無しで表示**。層 2 の HTTP リスナーが `--docs-dir` の HTML を配信する = 今日の `mcp-server.ts:180-200` の形）/ **N3-b5** flash と playhead palette | 約 1,000 | 実機: `select_audio_device` 後に capture RMS > 0（E-2 相当）/ `get_log` と Log パネルの行数一致 / `rescan_plugins` 後に Catalog に fixture が出る / 改訂: `get_dev_doc` が同梱 docs の 1 章を返す（**凍結版に無い E2E・新規**） | 表面ごとに E2E が付く。D-4 の検査をここで初めて全面適用 |
-| **A-parity** | `848-app-parity` | **N3-c1** 台帳の残り（`native-required` の全件緑）/ **N3-c2** `not-applicable` の owner 裁定を台帳へ（§14 (11)）/ **N3-c3** D-5（モーダル無し・50 回連続評価の分散）| 約 600 | **D-1 全件緑 + D-2 + D-3 + D-4 + D-5** | 完了条件の締め。ここを過ぎたら**拡張版に無い機能**を足してよい |
-| **R-app** 🔴 | `848-release-app` | **N4-a** `make-local-release.sh`（app 版・656 §4.2 の 12 段を設計 §9.2 の対応表で差し替え・`verify-app.sh`・内側から署名 → dmg → notarize → staple）+ entitlements（N0-c の実測表から）/ **N4-b** `release-app.yml`（`app-v*` tag・macos-14・同じ 1 本を呼ぶ）/ **N4-c** cold-install E2E（`ORBIT_GATED_APP_PATH=<成果物>` で gated `native`・PATH を絞る・quarantine を明示的に付ける = 656 E2E-D3 の後継）/ **N4-d** docs（`CODESIGN_PIPELINE.md` 全面改訂・`installation.md`・656 §13 の引き継ぎ）/ 改訂 **N4-e** **docs 同梱**（`make-bundle.sh` 段 2 で `docs:build` + `build-docs-bundle.mjs` → `Contents/Resources/docs/`・`verify-app.sh` に manifest / index.html / **`未リリース` 0 件**の検査 = D-9・別冊 §6）| 約 900（+ N4-e 約 200・未実測） | 別アカウントで `.dmg` → 音（D-7）+ `spctl --assess` + 署名済み `.app` で 3rd-party が鳴る（656 E2E-D4）+ `verify-app.sh` exit 0（656 E2E-D5 の後継）+ 改訂: cold-install で `get_dev_doc` が同梱 docs を返す（D-9） | 一方通行 N-7〜N-9・N-11・N-13 を**この束だけ**に閉じる。**owner 裁定が来るまで他の束は止まらない**。🔴 **656 を再設計しない** — 差分は設計 §9.0 の表 |
+| 束 | 統合ブランチ（仮） | 中身（小 PR） | 概算（変更行・**未実測**） | 検証（束 PR で） | 🔴 ここで切る理由 | 実行環境（改訂 10-23・事実） |
+|---|---|---|---|---|---|---|
+| **N-spike** | `848-native-spike` | **N0-a** Swift + WKWebView + Monaco（`.orbs` ハイライト・⌘Enter・**IME**）。改訂（10-23）: **IME は設計 D-6 の再現手順 ①〜⑤**（monaco-editor #4796 / #5390 / #3549・変換中の ⌘Enter・blur 中の `compositionend`）で判定し、**Monaco の版の固定とパッチの当て方**を決める。**WebView の配信元 3 つ（`http://127.0.0.1:<port>/app/` / `file://` / 独自スキーム）それぞれで WebSocket のハンドシェイクが送る Origin の実際の値**と、**ATS `NSAllowsLocalNetworking` が要るか**を測る（設計 §7.3）/ **N0-b** `protocol/` の生成ツール選定（3 メッセージ往復）/ **N0-c** SwiftPM → `.app` 組み立て → 同梱 node 起動 → 署名（hardened runtime）で `spctl` 通過 | 約 900 | N0-a: **owner 実機確認**（IME・D-6 の ①〜⑤・Monaco の版を `WORK_LOG` に）+ Origin の実測表（3 配信元）+ ATS の要否を `docs/research/` に記録 / N0-b: 生成物の往復テスト / N0-c: 署名済み skeleton が起動し node が走る（entitlements の実測表を `docs/research/` へ） | 結果が**設計の前提**（§1.3・§7.3・§9.2）を左右する。実装より先に、実装と混ぜずに | **macOS 実機が要る**（WKWebView・IME・署名・Swift）。N0-b の TS 側の生成だけは Linux でもできるが、往復の検査は Swift 側が要る |
+| **S-rpc** 🔴 | `848-session-rpc` | 改訂（10-23）: **N1-a0** 評価の単位の写し（`packages/session/src/eval/`）+ 凍結版 `createReplSession` との**差分テスト**（設計 §4.5.1・最初の作業）/ **N1-a1** `protocol/session/v1` スキーマ + 生成 + `protocol:check`（`session.evaluate` は状態を持たない形・`evalId`・`transport.step` の `source`・`log.line` の `level` / `kind`・`session.attach` の `token`・設計 §5.2 / §5.3）/ **N1-a2** `packages/session` の WebSocket サーバ（handshake・attach・**Host + Origin + トークンの検査**・`session.evaluate`・`transport.step`・`log.line`・`session.getLog`）/ **N1-a3** `orbitscore session` CLI（ready 行に `token`・`--token-file`・`--workspace-root`・`--parent-pid`・**stdin の EOF と親 PID で終了する機構**（F-1）・shutdown・daemon の畳み方） | 約 1,100 | unit（2 クライアント同時 attach・FIFO の順序・不一致 version の拒否・**D-10 の 12 ケース**・stdin のパイプを閉じると終了・`log.line` の分類が凍結版の `shouldFilterLine` / `isDaemonNonErrorTracingLine` の事例と一致・差分テスト）+ **実機**: headless で `session.evaluate` → capture RMS > 0 | 一方通行 N-1〜N-3・N-6 を**この束だけ**に閉じる | 実装と unit は **Linux（クラウド）で完結**（engine はモックで駆動できる・`tests/cli/repl-*.spec.ts` と同じ形。`npm test` は既に ubuntu で回っている・`.github/workflows/code-review.yml:9,26`）。受け入れの実機（capture RMS > 0）は **macOS 実機** |
+| **S-mcp** 🔴 | `848-session-mcp` | **N1-b1**（改訂）**MCP 層 8 ファイル 1,885 行**（10-23 実測・`mcp-server` / `mcp-tools-{editor,engine,plugins}` / `mcp-types` / `mcp-docs` / `mcp-sdk` / `mcp-registration`・全部 pure・設計 §3.1）を `packages/session/src/mcp/` へ移動し、**`OrbitScoreToolHandlers`（`mcp-types.ts:184-235`）を層 2 の RPC メソッドで実装**する（`agent-handlers.ts` は書き換えず、同じ型を別実装で満たす）。改訂（10-23）: **28 本を全ターゲットで凍結版と同じ順序に登録**（設計 §6）・`evaluate_orbitscore` の IM.6 の解決とエラー文言（設計 §5.3.1）・`docs.*` の `site` / `limit` / dev が無い時の契約・`/mcp` の **トークン + Origin**・`evaluate-document-directory.ts`（95 行）を層 2 へ / **N1-b2** ハーネスに `ORBIT_GATED_TARGET=headless` + **`--token-file` と `Authorization: Bearer`**（`helpers/mcp-client.ts`）+ `openWorkspace` → `--workspace-root` / **N1-b3** `native-parity-ledger.ts`（改訂: **`PARITY_BASELINE_TAG` = v4.4.0 の 56 `it` 題名**を全列挙・`needs-editor` 分類・未分類 red。基準タグはこの定数 1 か所から読む） | 約 900 | 🔴 **goldens が 1 つも動かないこと**（`OUTPUT_LINE_GOLDENS` / rack 期待値）を headless で + editor 非依存の題名が全件緑（D-3）+ headless の `tools/list` が設計 §6 の 28 名を同じ順序で返す + D-10 の gated 2 本（トークンなし → 401 / Origin なし + 正しいトークン → 通る） | **振る舞いを変えない host の入れ替え**なので、検算は「goldens が動かないこと」。S-editor（振る舞いを足す）と同じ束に入れるとこの検算は失われる | 移動・実装・unit は **Linux で完結**。gated headless（daemon・実音・capture）は **macOS 実機** |
+| **S-editor** | `848-session-editor` | **N1-c1** document 同期（`editor.didOpen/didChange/didClose/didChangeSelection` + 改訂 10-23 `didChangeActive`）と写し / **N1-c2** 診断・補完・subject-block を層 2 のサービスへ（`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts` / `completion-context.ts` の vscode 依存除去 / `getLineSubject` の移動〔`run-selection.ts:27`〕/ **`plugin-ui-at-cursor.ts` の「カーソル下のプラグイン名 → `(receiver,index)`」解決**を `plugin.openUiAtCursor` として層 2 へ・#939 / #940 の規則込み）/ **N1-c3** 逆方向 `editor.*` リクエストと `NO_EDITOR_ATTACHED` | 約 1,200 | unit（`editor.diagnostics` 通知と `get_diagnostics` の一致・subject-block の既存 unit を層 2 で再実行・IM.6 の第 2 候補が `didChangeActive` に従う）+ 実機: headless で `open_file` が `NO_EDITOR_ATTACHED` を返す | 逆方向の契約（設計 §5.4）を単独で確かめる | 実装と unit は **Linux で完結**。実機の headless は **macOS 実機** |
+| **A-skeleton** 🔴 | `848-app-skeleton` | **N2-a** Swift シェル（1 ウィンドウ・WKWebView・session の spawn（stdin をパイプで渡す・`--parent-pid`）/ ready 行の消費（転写しない）/ 監視 / shutdown・⌘Enter）+ 改訂（10-23）: **トークンを `WKUserScript`（main frame のみ）で注入・`/app/` の外へ遷移させない**・**F-12 のアプリ側**（層 2 の終了を検知 → モーダルでない通知 + 再起動ボタン → 再 attach → 全 document の `didOpen` 再送）/ **N2-b** Web クライアント（Monaco + RPC クライアント + playhead。`transport.step` の `source` を正本に、`null` の間は `playhead.ts` を暫定の消費者に・設計 §1.3）/ **N2-c** ハーネスに `ORBIT_GATED_TARGET=native`（起動・`ORBITSCORE_SESSION_TOKEN_FILE`・PID オラクルの teardown） | 約 1,500（Swift 700 / TS 800・**上限に近い**。N0-a の Monaco 設定を持ち越して減らす） | 設計 §1.3 の 1〜5 + 🔴 **goldens が動かないこと**（native）+ IME（owner・D-6 の ①〜⑤）+ D-10 の native 版（トークンなし → 拒否） | walking skeleton を**表面を足す前に**閉じる。裁定 §5 Phase 2「数週間で結論が出る想定」の単位 | **macOS 実機が要る**（Swift・WKWebView・IME・実音） |
+| **A-document** | `848-app-document` | **N3-a1** `NSDocument`（open / save / autosave / 未保存確認・バイト同一の往復）/ **N3-a2** タブ・メニュー・最近使った書類（改訂 10-23: 起動時に渡されたフォルダを `--workspace-root` に・設計 §4.5.2。「フォルダを開く」メニューを置くかはここで決める）/ **N3-a3** 環境設定（改訂 10-23: **設定 8 項目**の写像・設計 §7.4） | 約 900 | 実機: `open_file` → `edit_replace` → `save_file` → ファイルが byte 一致（E2E）+ 自動保存の実機確認 | AppKit 標準機能の受け入れ。ライブ経路とは独立 | **macOS 実機が要る**（AppKit） |
+| **A-panels** | `848-app-panels` | **N3-b1** Engine パネル（`engine-view.ts` の写像・デバイス選択・起動停止・`restartEngine` = `engine.stop` + `engine.start`）/ **N3-b2** Log パネル + ステータス（`transport.state`・`log.line` の `level` で色分け）/ **N3-b3** Catalog パネル（rescan / browse = `plugin.list` + Monaco への挿入 / 右クリック → `plugin.openUiAtCursor`）/ **N3-b4** Docs パネル（改訂 10-23: **`/app/` とは別の WKWebView**・同梱の user サイトをネットワーク無しで表示 = 凍結版 4.2.1 の同梱を引き継ぐ・dev は「モノレポでだけ読める」案内）/ **N3-b5** flash と playhead palette | 約 1,000 | 実機: `select_audio_device` 後に capture RMS > 0（E-2 相当）/ `get_log` と Log パネルの行数一致 / `rescan_plugins` 後に Catalog に fixture が出る / 改訂 10-23: `get_user_doc` が同梱 docs の 1 章を返す・`get_dev_doc` が unavailable の案内を返す（凍結版の cold-install の `assertDocsBundled` と同じ検査） | 表面ごとに E2E が付く。D-4 の検査をここで初めて全面適用 | **macOS 実機が要る** |
+| **A-parity** | `848-app-parity` | **N3-c1** 台帳の残り（`native-required` の全件緑）/ **N3-c2** `not-applicable` の owner 裁定を台帳へ（§14 (11)・改訂 10-23: `showCommands` を含む）/ **N3-c3** D-5（モーダル無し・50 回連続評価の分散）| 約 600 | **D-1 全件緑 + D-2 + D-3 + D-4 + D-5 + D-10** | 完了条件の締め。ここを過ぎたら**拡張版に無い機能**を足してよい | **macOS 実機が要る** |
+| **R-app** 🔴 | `848-release-app` | **N4-a** `make-local-release.sh`（app 版・656 §4.2 の 12 段を設計 §9.2 の対応表で差し替え・`verify-app.sh`・内側から署名 → dmg → notarize → staple）+ entitlements と `Info.plist`（N0-c の実測表・N0-a の ATS の結論から）/ **N4-b** `release-app.yml`（`app-v*` tag・macos-14・同じ 1 本を呼ぶ）/ **N4-c** cold-install E2E（`ORBIT_GATED_APP_PATH=<成果物>` で gated `native`・PATH を絞る・quarantine を明示的に付ける = 656 E2E-D3 の後継）/ **N4-d** docs（`CODESIGN_PIPELINE.md` 全面改訂・`installation.md`・656 §13 の引き継ぎ）/ **N4-e** **docs 同梱**（改訂 10-23: 凍結版 4.2.1 の user サイトの同梱を引き継ぐ。`make-bundle.sh` 段 2 で `docs:build:user` + `build-docs-bundle.mjs` → `Contents/Resources/docs/`・`verify-app.sh` に manifest / index.html / **`未リリース` 0 件**の検査 = D-9・別冊 §6）| 約 900（+ N4-e 約 200・未実測） | 別アカウントで `.dmg` → 音（D-7）+ `spctl --assess` + 署名済み `.app` で 3rd-party が鳴る（656 E2E-D4）+ `verify-app.sh` exit 0（656 E2E-D5 の後継）+ cold-install で `get_user_doc` が同梱 docs を返し `get_dev_doc` が unavailable を返す（D-9） | 一方通行 N-7〜N-9・N-11・N-13 を**この束だけ**に閉じる。**owner 裁定が来るまで他の束は止まらない**。🔴 **656 を再設計しない** — 差分は設計 §9.0 の表 | **macOS 実機が要る**（署名・公証・別アカウント）。`release-app.yml` は GitHub の macos-14 |
 
 **docs の連続 PR（main 直行・束を通さない・改訂）**: 別冊の順序 — ① 可用性表記の文法と frontmatter `host:` を `sites/user/STYLE_GUIDE.md` に足し、lint（`sites/user/scripts/check-availability.mjs`）を置く ② 現在の章に frontmatter と host 依存段落の併記を入れる（別冊 §3 の表どおり）③ docs 追従ルーチンの手順を (18) の裁定に合わせて更新。①〜③ はコードを触らない docs PR なので R-app を待たず、**S-mcp の前に済ませてよい**（`mcp-docs.ts` が manifest を読む形にするのは S-mcp の中）。
 
@@ -112,7 +112,7 @@
 
 - **結果**: 設計の 3 つの未検証（Monaco + IME / スキーマ生成 / 同梱 node の署名）に**実測の答え**が付き、設計 §13 の確信度が「低」から「高 or 反証」へ動く。
 - **受け入れ**:
-  - N0-a: WKWebView 上の Monaco で `.orbs` がハイライトされ、⌘Enter が JS 側に届き、**日本語 IME の変換・確定・未確定描画が動く**（owner 確認・日付と hash を `WORK_LOG`）。`file://` から `ws://127.0.0.1` へ繋がるかの実測（可否どちらでも設計は変わらない・§7.3）。TextMate 流用か Monarch かを 20 譜面のトークン列比較で決める
+  - N0-a: WKWebView 上の Monaco で `.orbs` がハイライトされ、⌘Enter が JS 側に届き、改訂（10-23）: **日本語 IME が設計 D-6 の再現手順 ①〜⑤ を 1 つも再現しない**（owner 確認・①〜⑤ の結果・日付・hash・**Monaco の版**を `WORK_LOG`）。**Monaco の版の固定とパッチの当て方**を決めて計画に戻す。**WebView の配信元 3 つ（`http://127.0.0.1:<port>/app/` / `file://` / 独自スキーム）で WebSocket のハンドシェイクが送る Origin の実際の値**を node の `ws` サーバに記録させて表にし、**ATS `NSAllowsLocalNetworking` が要るか**を決める（旧版の「`file://` から繋がるか・可否どちらでも設計は変わらない」は撤回 — 設計 §7.3）。TextMate 流用か Monarch かを 20 譜面のトークン列比較で決める
   - N0-b: `protocol/session/v1/` の 3 メッセージが TS ↔ Swift で往復して等しい。生成ツールを固定
   - N0-c: `Package.swift` → `make-bundle.sh` → `.app` に node を同梱 → hardened runtime で署名 → `spctl --assess` 通過 → node が `--version` を返す。**entitlements の実測表**（656 §5.3 の手順）を `docs/research/848-native-spike-report.md` に残す
 - **🔴 実機**: 上の 3 つはすべて実機でしか答えが出ない。**Codex の sandbox では 1 つも走らない**（GUI・署名・キーチェーン）。main が回す。
@@ -122,30 +122,30 @@
 
 - **結果**: `orbitscore session --port 39123 --mcp` だけで、エディタ無しに LLM が今日と同じ MCP ツールでセッションを操作できる。拡張は**触っていない**。
 - **受け入れ**:
-  - S-rpc: unit（attach 2 件・FIFO・version 不一致の拒否・`session.evaluate` の 1 リクエスト = 1 `execute()`）+ 実機 headless で `session.evaluate` → capture RMS > 0
-  - S-mcp: 🔴 **goldens が 1 つも動かない**（headless）+ 台帳の `needs-editor` 以外が全件緑（D-3）+ `get_log` の ERROR が `<=`
+  - S-rpc（改訂 10-23）: unit — attach 2 件・FIFO・version 不一致の拒否 / **評価の単位の写しと凍結版 `createReplSession` の差分テストが一致**（設計 §4.5.1。旧版の「1 リクエスト = 1 `execute()`」は撤回 — 実装の既定は凍結版と同じ行ごとの評価・設計 §5.3.1）/ **`session.evaluate` は `documentDirectory` を毎回必須で受け**、`null` が基準のクリアになり、応答に `evalId` と使った `documentDirectory` が載る / `transport.step` に `source`（v1 の実装では `null`）/ `log.line` の `level` / `kind` が凍結版の `shouldFilterLine`・`isDaemonNonErrorTracingLine` の事例と一致 / **D-10 の 12 ケース**（Origin 別・`null`・トークンなし・トークン違いの拒否 × `/rpc`・`/mcp`、通る 2 通り）/ **F-1 の機構**: stdin のパイプを閉じると session が畳む経路を通って終了し、`--parent-pid` の PID が消えても終了する / **F-12 の層 2 側**: session を落として同じ引数で起動し直し、再 attach + `didOpen` 再送で `session.getState` が元の document 一覧を返す。+ 実機 headless で `session.evaluate` → capture RMS > 0
+  - S-mcp: 🔴 **goldens が 1 つも動かない**（headless）+ 台帳（`PARITY_BASELINE_TAG` = v4.4.0 の 56 `it`）の `needs-editor` 以外が全件緑（D-3）+ `get_log` の ERROR が `<=` + 改訂（10-23）: headless の `tools/list` が設計 §6 の **28 名を同じ順序**で返す / `evaluate_orbitscore` の IM.6 のエラー文言（`evaluate-document-directory.spec.ts` を層 2 で再実行）と応答の末尾 `(documentDirectory: …)` が凍結版と同じ（gated `#966` の 2 題名）/ `docs.*` の `site:"dev"` が unavailable の契約を返す / D-10 の gated 2 本
   - S-editor: `open_file` が headless で `NO_EDITOR_ATTACHED`（構造化エラー・黙らない）+ 診断の一致 unit
-- **🔴 実機**: `npm run test:e2e:gated` を `ORBIT_GATED_TARGET=headless` で。daemon の台数（PID オラクル）が各 phase 境界で高々 1。`.orbslog` に `evalSource` / `clientId` が写る（人間 + LLM の交互評価を 1 本のログで）。
-- **閉じる**: 設計 §5.3 の表の各行が実装済み（列挙表を PR 本文で `[x]` 化・PROJECT_RULES §1d）。**#757 は新ラインでは発生しない**ことを台帳に記録（凍結版では OPEN のまま）。
+- **🔴 実機**: `npm run test:e2e:gated` を `ORBIT_GATED_TARGET=headless` で。daemon の台数（PID オラクル）が各 phase 境界で高々 1。`.orbslog` に `evalSource` / `clientId` が写る（人間 + LLM の交互評価を 1 本のログで）。各実行の終わりにトークン文字列が `get_log` と session の stderr に 0 件（D-10）。
+- **閉じる**: 設計 §5.3 の表の各行が実装済み（列挙表を PR 本文で `[x]` 化・PROJECT_RULES §1d）。改訂（10-23）: #757 は凍結版で共通骨格に畳んで CLOSED（PR #985・2026-10-23）。新ラインでは骨格ごと不要なので台帳に書くことは無い。
 
 ### N2 — walking skeleton（束 A-skeleton）
 
 - **結果**: `OrbitStudio.app` を開き、`.orbs` を書いて ⌘Enter で音が出て playhead が動く。タブ・保存・設定は無い。
-- **受け入れ**: 設計 §1.3 の 1〜5 + 🔴 **goldens が動かない**（native）+ **IME**（owner・D-6）+ ハーネス teardown で session / daemon が残らない（PID オラクル）。
-- **🔴 実機**: `ORBIT_GATED_TARGET=native` で `open_file` → `run_selection` → capture RMS > 0 の 1 本 + goldens。WebView を強制リロードしても音が続く（層 2 が生き残る）。Swift 本体を SIGKILL して session / daemon が消える。
+- **受け入れ**: 設計 §1.3 の 1〜5 + 🔴 **goldens が動かない**（native）+ **IME**（owner・D-6 の ①〜⑤）+ ハーネス teardown で session / daemon が残らない（PID オラクル）+ 改訂（10-23）: D-10 の native 版（トークンなし → 拒否・`ORBITSCORE_SESSION_TOKEN_FILE` で通る）+ **F-12**（session を `kill` → モーダルでない通知 → 再起動ボタン → 再 attach → document が戻り、再評価で音が戻る）。
+- **🔴 実機**: `ORBIT_GATED_TARGET=native` で `open_file` → `run_selection` → capture RMS > 0 の 1 本 + goldens。WebView を強制リロードしても音が続く（層 2 が生き残る）。Swift 本体を SIGKILL して **session が消える**（F-1 の機構・stdin の EOF）。daemon が消えるかは engine 線の申し送り（設計 §4.4）が入るまで PID オラクルで観測し、残った分は teardown が止める。
 - **閉じる**: 裁定 §5 Phase 2。**崩れたら Electron 検討へ戻る**（§1.3）— その判断は owner。
 
 ### N3 — パリティ（束 A-document → A-panels → A-parity）
 
 - **結果**: 凍結版の拡張でできたことが、アプリで**同じ MCP ツール名**で全部できる。
-- **受け入れ**: A-document: 保存の byte 一致 E2E / A-panels: 各パネルに 1 本以上の E2E（設計 §7.4 の行ごと・改訂: Docs パネルは**同梱 docs をオフラインで**。`get_dev_doc` の E2E は凍結版に無いので新規に書く）/ A-parity: **D-1〜D-5 全部**。
+- **受け入れ**: A-document: 保存の byte 一致 E2E / A-panels: 各パネルに 1 本以上の E2E（設計 §7.4 の行ごと・Docs パネルは**同梱 docs をオフラインで**。改訂 10-23: docs の検査は凍結版の cold-install の `assertDocsBundled` を写す — `get_user_doc` 成功・`get_dev_doc` は unavailable）/ A-parity: **D-1〜D-5 と D-10 の全部**。
 - **🔴 実機**: `ORBIT_GATED_TARGET=native` 全件 + `get_log` ERROR `<=` + D-5 の 50 回連続評価 + プラグイン UI の開閉（child の `NSWindow`）が `open_plugin_ui` / `close_plugin_ui` で人手なしに動く。
 - **閉じる**: 台帳の未分類 0・`native-required` 全緑。§14 (11) の裁定を台帳へ転記。
 
 ### N4 — 配布（束 R-app）
 
 - **結果**: 署名・公証済み `OrbitStudio-<version>-darwin-arm64.dmg` が GitHub Releases に置かれ、新規環境で起動して音が出る。
-- **受け入れ**: D-7 + **D-9**（改訂: 同梱 docs がオフラインで読め、`未リリース` マーカー 0 件）+ `spctl --assess` + 656 E2E-D4（署名済み `.app` で 3rd-party が鳴る）+ tag で `release-app.yml` が 1 回通る。
+- **受け入れ**: D-7 + **D-9**（同梱 docs がオフラインで読め、`未リリース` マーカー 0 件。改訂 10-23: 凍結版 4.2.1 の同梱を引き継ぐ形）+ `spctl --assess` + 656 E2E-D4（署名済み `.app` で 3rd-party が鳴る）+ tag で `release-app.yml` が 1 回通る。
 - **🔴 実機**: 別の macOS アカウント（または別機）で `.dmg` から。**PATH に node が無い**状態で。quarantine を `xattr -w` で明示的に付けてから開く。
 - **閉じる**: #656 / #659 / #138 を**ネイティブ app の配布として書き直した issue**（起票待ち・地図 §4.D）。
 
@@ -164,7 +164,7 @@ N4 完了 ∧ engine 線 K（ラック #635 / #636 / #669）完了。**凍結版
 | 旧 PR | 旧計画で触る拡張側のファイル | 新ラインでの置き場 |
 |---|---|---|
 | PR-L1b `feat(extension): enable the session log from OrbitStudio` | `package.json` / `extension.ts`（env・`writeCodeToEngine` 3 引数） | `packages/session`（`session.evaluate` の `frame` と `.orbslog` writer の起動引数）+ アプリ環境設定。**`//#sourceFile` は wire 上に出ない**（`editor.didOpen` の `uri` が持つ） |
-| PR-L2 `feat(repl): //#evalBegin / //#evalEnd frame` | `repl-mode.ts` / `extension.ts` | ✅ **凍結版に入った**（改訂: `repl-mode.ts:108-115` に実在・4.2.0）。新ラインでは `session.evaluate` が構造的に 1 リクエスト = 1 `execute()` なのでフレームのメタ行は不要（設計 §5.3） |
+| PR-L2 `feat(repl): //#evalBegin / //#evalEnd frame` | `repl-mode.ts` / `extension.ts` | ✅ **凍結版に入った**（`repl-mode.ts:108-115` に実在・4.2.0）。新ラインでは `session.evaluate` の 1 要求が 1 バッチなのでフレームのメタ行は不要（設計 §5.3.1）。改訂（10-23）: 🔴 旧版の「構造的に 1 リクエスト = 1 `execute()`」は誤り — 凍結版のフレームの中も**行ごと**にパース・実行しており（`repl-mode.ts:390-556`）、「1 要求 = 1 パース」に変えるかは #987 Q2（設計 §14 (22)）。実装の既定は凍結版と同じ |
 | PR-L7 `feat(session-log): result / import records; agent provenance from the MCP path` | `extension.ts` `evaluateForAgent` | `session.evaluate` の `source: "agent"` |
 | PR-D2 `fix(diagnostics): run the engine parser behind the editor diagnostics` | `extension.ts`（+40） | `packages/session/src/services/diagnostics`（設計 §5.5） |
 | PR-D6 `fix(engine): attribute diagnostics to the submission that caused them` | `repl-mode.ts` / `extension.ts` | request id が wire にあるので**構造で解ける**（`session.evaluate` の応答に診断が付く） |
@@ -175,7 +175,7 @@ N4 完了 ∧ engine 線 K（ラック #635 / #636 / #669）完了。**凍結版
 | PR-V12 `feat(orbitstudio): rework the Engine view as a WebviewView` | 新 webview | **不要**（アプリは最初から WebView） |
 | PR-S-T1 / T2 / T3 / C1 / C2（workspace trust・node pre-check） | `package.json` / `product.overrides.json` / `extension.ts` | **不要**（trust の概念が無い・node は同梱）。#385 は凍結版の話として残る（所属未定・旧計画 §3 ステージ 1） |
 | PR-S-R3 / R4 / R5（`make-local-release.sh` / 署名 / CI） | 旧フォーク前提 | **束 R-app に置き換え**（設計 §9・裁定 §12.3「ステージ 8 は再定義」） |
-| PR-E12 `fix(extension): one line router for every chunk stream`（#777 backlog） | `daemon-client.ts` / `extension.ts` | `extension.ts` 側は**新ラインでは不要**（WebSocket フレーミング・設計 §5.2）。`daemon-client.ts` 側（#777 の flush）は層 2 の資産なので旧 PR のまま |
+| PR-E12 `fix(extension): one line router for every chunk stream`（#777 backlog） | `daemon-client.ts` / `extension.ts` | `extension.ts` 側は**新ラインでは不要**（WebSocket フレーミング・設計 §5.2）。改訂（10-23）: `daemon-client.ts` 側（#777 の flush）は ✅ **凍結版 4.4.0 で入った**（`daemon-stderr-lines.ts`・PR #985・#777 CLOSED 2026-10-23）。層 2 はそれをそのまま使う |
 
 ### 4.2 順序（engine 線の中）
 
@@ -218,7 +218,7 @@ N4 完了 ∧ engine 線 K（ラック #635 / #636 / #669）完了。**凍結版
 | (8) 複数エディタ | 待ち・推奨 A | なし（1 つまでで実装） |
 | (9) `protocol/` のライセンス | 待ち | **S-rpc の `protocol/LICENSE`**（無ければルートの LICENSE が適用され、後から変える作業が増えるだけ。止めない） |
 | (10) bundle id / 名前 / 配布物名 | 待ち | **R-app の N4-a**（初回署名の前） |
-| (11) not-applicable の表面 | 待ち・推奨あり | **A-parity の N3-c2**（それまで台帳は `native-required` として保持） |
+| (11) not-applicable の表面（改訂 10-23: `showCommands` を追加） | 待ち・推奨あり | **A-parity の N3-c2**（それまで台帳は `native-required` として保持） |
 | (12) issue 本文の出力先 `847` → `848` | main | なし |
 | (13) ラックをリリースゲートに含める再確認 | 待ち・前提「含める」 | 🚪 の判定のみ |
 | (14) app の版の正本 | 待ち・推奨 A（`apps/OrbitStudio/VERSION`） | **R-app の N4-a**（preflight）。それまで `0.1.0-dev` 固定で進める |
@@ -228,8 +228,14 @@ N4 完了 ∧ engine 線 K（ラック #635 / #636 / #669）完了。**凍結版
 | (18) ルーチンのトリガーと暫定行（改訂） | 待ち・推奨 A（PR マージ + マーカー・暫定行は撤回） | **docs の連続 PR ③**。それまでルーチンは現状（PR マージ）のまま動く |
 | (19) リリース後の docs 更新経路（改訂） | 待ち・推奨 A（v1 は含めない） | なし（`--docs-dir` の複数指定は N-3 で先に入れる） |
 | (20) user サイトの主語と host 依存段落の時期（改訂） | 待ち・推奨 A（段落は今・主語は A-parity 後） | **docs の連続 PR ②** |
+| (22) 評価の単位（#987 Q2・改訂 10-23） | 待ち・推奨: S-rpc / S-mcp では凍結版と同じ行ごとのまま。B を採るなら S-mcp の後の独立した PR | **なし**（wire は同じ形。実装の既定は凍結版と同じ・§4.5.1 の差分テスト） |
+| (23) LLM へのトークンの渡し方（改訂 10-23） | 待ち・推奨: v1 は local スコープに `Authorization` を書く（project スコープは拒否）+ stdio の経路を設計に置く | **S-mcp の `session.registerMcp`**（推奨どおりなら止めない。B を v1 に入れるなら S-mcp に小 PR が 1 本増える） |
+| (24) `.orbs` を 2 つ開いた時の共有（改訂 10-23・低優先） | 待ち・推奨 A（共有する = 拡張版と同じ） | なし |
+| (25) F-12 の自動再評価とプラグイン状態の喪失の伝え方（改訂 10-23） | 待ち・推奨: 自動で再評価しない（ボタン）/ 失われた `(receiver,index)` を通知に 1 行 | **A-skeleton の N2-a**（F-12 のアプリ側）。層 2 側（S-rpc）は裁定に依らない |
 
 **今すぐ着手できる**: N0-a / N0-b / N0-c（裁定待ち 0）・S-rpc（(9) は止めない）・改訂: docs の連続 PR ①〜③ は (16)(18) の裁定が要る（推奨どおりなら即日）。
+
+改訂（10-23）: **クラウド（Linux）に出せるのは S-rpc / S-mcp / S-editor の実装と unit**（§2.1 の「実行環境」列）。どれも受け入れの実機（headless の capture・gated）は macOS で main が回す。S-rpc の最初の小 PR は「評価の単位の写し + 差分テスト」（設計 §4.5.1）で、裁定待ち 0。
 
 ---
 
@@ -239,3 +245,4 @@ N4 完了 ∧ engine 線 K（ラック #635 / #636 / #669）完了。**凍結版
 |---|---|
 | 2026-09-11 | 初版（#848・Fable 起案）。段 N0〜N4・束 9 本・一方通行 10 件・engine 線の付け替え表・裁定待ち 13 件 |
 | 2026-09-18 | 改訂（Fable・effort high・main `1276ab1f`）。設計 §2b の判定に追従: S-mcp の中身（MCP 層 8 本 + `OrbitScoreToolHandlers`）/ S-editor に `plugin-ui-at-cursor` / A-panels の Docs パネルは同梱 docs / R-app に N4-e（docs 同梱・D-9）/ N-7 の理由（#878）/ N-13 / 裁定待ち (15)〜(20) / docs の連続 PR ①〜③。束の数と概算は据え置き（設計 §3.1 で移す量が初版と同じ桁と確認） |
+| 2026-10-23 | 改訂（起案: fresh subagent / 審査: main・main `7410dcb0`・拡張 4.4.0）。設計 §2c の判定に追従: §2.1 に**束ごとの実行環境（Linux で完結 / macOS 実機が要る）**の列 / S-rpc に評価の単位の写し + 差分テスト・トークン + Origin・F-1 の機構・F-12 の層 2 側・状態を持たない `session.evaluate`・`transport.step` の `source`・`log.line` の `level` / `kind` / S-mcp に 28 本の順序・IM.6 の契約・`docs.*` の `site`・ハーネスのトークン経路・台帳の基準タグ v4.4.0（56 `it`）/ N0-a に Origin の実測（3 配信元）・ATS・D-6 の再現手順・Monaco の版の固定 / 「1 リクエスト = 1 `execute()`」を撤回（3 か所）/ #757・#777 は凍結版で CLOSED / 一方通行 N-1・N-3〜N-5 を更新 / 裁定待ち (22)〜(25)。束の数と概算は据え置き |
