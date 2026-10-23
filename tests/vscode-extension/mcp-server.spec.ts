@@ -578,11 +578,7 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
 
   it.each([
     [{ ok: true, documentDirectory: '/ws/piece' }, false, 'ok (documentDirectory: /ws/piece)'],
-    [
-      { ok: true, documentDirectory: null },
-      false,
-      'ok (documentDirectory: not sent — the engine keeps its previous base)',
-    ],
+    [{ ok: true, documentDirectory: null }, false, 'ok (documentDirectory: none)'],
     [
       { ok: false, error: 'evaluation failed: [runtime] x', documentDirectory: '/ws/piece' },
       true,

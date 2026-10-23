@@ -7,7 +7,7 @@
  * `evaluate_orbitscore` では解決に失敗した。
  *
  * 順序（IM.6）: 引数 `document_path` → アクティブな OrbitScore エディタ → 最初の
- * ワークスペースフォルダ → 送らない（engine は直前の基準のまま）。`document_path` を先に置くのは、人が前面の
+ * ワークスペースフォルダ → 基準なし。`document_path` を先に置くのは、人が前面の
  * タブで演奏している間もエージェントが別ファイル基準で評価できるようにするため
  * （前面のタブはエージェントから指定できない状態で、`open_file` で変えると人の画面を奪う）。
  *
@@ -91,5 +91,5 @@ export function resolveEvaluateDocumentDirectory(
     }
   }
 
-  return { ok: true, documentDirectory: workspaceRoot ?? null }
+  return { ok: true, documentDirectory: workspaceRoot || null }
 }

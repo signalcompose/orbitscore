@@ -523,7 +523,8 @@ export function stopEngine(): boolean {
  *   in case the user switched .orbs files).
  * - If global has not yet been initialized, do not inject (would fail with
  *   "global is not defined").
- * When `documentDir` is undefined, no directory is injected.
+ * `null` prepends an empty meta line that clears the REPL base. When `documentDir` is
+ * undefined, no directory instruction is sent.
  *
  * Returns whether the code was handed to the engine's stdin. False = the
  * engine process or its stdin was gone (e.g. died between the caller's guard
@@ -643,7 +644,10 @@ export function sendPluginUiMeta(
   )
 }
 
-export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+export function writeCodeToEngine(
+  rawCode: string,
+  documentDir: string | null | undefined,
+): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
@@ -659,7 +663,11 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
     )
     documentDir = undefined
   }
-  if (documentDir) {
+  if (documentDir === null) {
+    // #966 / IM.6: no candidate means no base for this evaluation. The empty value is
+    // distinct from omitting the meta line: omission preserves the REPL session value.
+    codeToSend = `//#documentDirectory\n` + codeToSend
+  } else if (documentDir) {
     // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
     // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
     // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。

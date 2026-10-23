@@ -91,7 +91,7 @@ async function evaluateForAgent(
   })
   if (!base.ok) return base
   const { documentDirectory } = base
-  if (!writeCodeToEngine(code, documentDirectory ?? undefined)) {
+  if (!writeCodeToEngine(code, documentDirectory)) {
     return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
   }
   // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は

@@ -846,8 +846,11 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:646-652
-export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:647-656
+export function writeCodeToEngine(
+  rawCode: string,
+  documentDir: string | null | undefined,
+): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。

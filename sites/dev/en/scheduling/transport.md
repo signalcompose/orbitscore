@@ -287,7 +287,7 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:691-691
+// packages/vscode-extension/src/engine-process.ts:699-699
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -297,7 +297,7 @@ The engine's REPL evaluates the received text via `parseAudioDSL()` → `interpr
 // packages/engine/src/cli/repl-mode.ts:427-435
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
+      if (metaDir !== undefined) sessionDocumentDirectory = metaDir
       await interpreter.execute(ir, {
         source: code,
         evalSource: 'human',
@@ -327,7 +327,7 @@ In this way, selective execution is an operation that "updates parameters while 
 `InterpreterV2.execute()` has an option called `skipTransportCommands`. The options type grew with §L1 and import (#456), but the parts relevant to transport are only the head and the tail.
 
 ```typescript
-// packages/engine/src/interpreter/interpreter-v2.ts:133-230 (§L1 の記録・import・global/sequence init を // ... で省略)
+// packages/engine/src/interpreter/interpreter-v2.ts:133-231 (§L1 の記録・import・global/sequence init を // ... で省略)
   async execute(
     ir: AudioIR,
     options?: {

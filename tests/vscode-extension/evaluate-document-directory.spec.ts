@@ -132,8 +132,31 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
     ).toEqual({ ok: true, documentDirectory: WORKSPACE })
   })
 
-  it('4. どれも無ければ送らない（null）', () => {
+  it.each([
+    ['OrbitScore 以外', { languageId: 'markdown', scheme: 'file', fsPath: '/ws/odd\nname/x.md' }],
+    [
+      'file scheme 以外',
+      { languageId: 'orbitscore', scheme: 'untitled', fsPath: '/ws/odd\nname/x.orbs' },
+    ],
+  ])('3. 改行を含む%sのアクティブエディタは拒まず、次の候補へ進む', (_label, activeEditor) => {
+    expect(
+      resolveEvaluateDocumentDirectory({
+        activeEditor,
+        workspaceRoot: WORKSPACE,
+        isFile: existing(),
+      }),
+    ).toEqual({ ok: true, documentDirectory: WORKSPACE })
+  })
+
+  it('4. どれも無ければ基準なし（null）', () => {
     expect(resolveEvaluateDocumentDirectory({ isFile: existing() })).toEqual({
+      ok: true,
+      documentDirectory: null,
+    })
+  })
+
+  it('4. 空文字の workspace root は基準なし（null）', () => {
+    expect(resolveEvaluateDocumentDirectory({ workspaceRoot: '', isFile: existing() })).toEqual({
       ok: true,
       documentDirectory: null,
     })
@@ -146,6 +169,27 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
       ok: false,
       error: 'workspace folder path must not contain a line break',
     })
+  })
+
+  it('1. document_path が決めた後は、改行を含む workspace root を検査しない', () => {
+    const file = '/outside/piece.orbs'
+    expect(
+      resolveEvaluateDocumentDirectory({
+        documentPath: file,
+        workspaceRoot: '/ws/odd\nname',
+        isFile: existing(file),
+      }),
+    ).toEqual({ ok: true, documentDirectory: '/outside' })
+  })
+
+  it('2. 有効なアクティブエディタが決めた後は、改行を含む workspace root を検査しない', () => {
+    expect(
+      resolveEvaluateDocumentDirectory({
+        activeEditor: orbsEditor('/outside/piece.orbs'),
+        workspaceRoot: '/ws/odd\nname',
+        isFile: existing(),
+      }),
+    ).toEqual({ ok: true, documentDirectory: '/outside' })
   })
 
   it('document_path の検査が失敗したときは errno を含むエラーを返す', () => {
@@ -290,11 +334,22 @@ describe('evaluateForAgent の配線 (#966)', () => {
       documentPath: path.join(loopA, 'piece.orbs'),
     })
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.stringContaining('could not inspect'),
-    })
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected document_path inspection to fail')
+    expect(result.error).toContain('could not inspect')
+    expect(result.error).toContain('ELOOP')
     expect(written).toEqual([])
+  })
+
+  it('基準が無いときは空のメタ行で前回の基準を消してから評価する', async () => {
+    vscodeMock.workspace.workspaceFolders = undefined
+
+    const result = await evaluateForAgent('import { kick } from "./drums.orbs"')
+
+    expect(written).toEqual([
+      '//#evalBegin\n//#documentDirectory\nimport { kick } from "./drums.orbs"\n//#evalEnd\n',
+    ])
+    expect(result).toEqual({ ok: true, documentDirectory: null })
   })
 
   it('a directory with a line break is not sent at all (it would split the meta line)', () => {

@@ -43,6 +43,19 @@ PR #984〜#986 の `/code:pr-review-team` ラウンド 1（4 名・#984 の差�
     `privileges-skip-ratchet` を落としたので使わない）。配線を戻すと red
   - 中心が負の数の random-walk（`r-2%3`）の文言のテスト
   - `npm test`: 2725 passed / 85 skipped
+- **実機ゲート**（2026-10-23）: 1 回目は 52/55（#940・state 復元・#611 O0-1 の ERROR 件数）。main でも同じ全件を回すと
+  state 復元が同じ行で落ち、ERROR 件数の別のテスト（#611 E2E-3）が落ちた。stack の 2 回目は **55/55**。
+  → 3 件とも不安定なテストで、stack の退行ではないと判断。cold install 2/2、rack の cargo テストも通過
+- 🔴 **IM.6 の 4 番目を #966 の owner 決定に戻した**（owner 2026-10-23・#966 にコメント）:
+  #986 の `/code-review` 対応が「基準を送らない（engine は前回の基準を使い続ける）」に書き換えていたのを、
+  「どれも無ければ**基準なし**（import は従来どおりエラー）」に戻す。前回の基準を使い続けると、ワークスペースを開かずに
+  `.orbs` 以外を前面にして評価したとき、前回の別フォルダを基準に `import` が解決される（= #966 で避けると決めた形）。
+  - 拡張は基準が無いとき**空の `//#documentDirectory`** を送り、REPL はそれを「基準なし」として保持する
+    （`Global` の `documentDirectory` も消す）。結果は `documentDirectory: none`
+  - テスト: 送ったバイト列（空のメタ行が評価の前に入る）・engine の実体（基準 → 空のメタ行 → 相対 `import` が基準なしのエラー）・
+    gated E2E の 4 番目の局面（ワークスペースの無い専用セッション）。「何も送らない」に戻す変異で red
+  - ラウンド 3 の Minor（空文字のワークスペースは `null`・ELOOP の errno の照合・改行の検査の順序）
+  - `npm test`: 2733 passed / 86 skipped
 
 ### fix: address the /code-review findings on this branch (Oct 6, 2026)
 

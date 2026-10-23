@@ -209,8 +209,9 @@ export class InterpreterV2 {
       this.sessionHooksInstalled = true
     }
 
-    // Set documentDirectory on global so audioPath() / audio() can resolve relative paths
-    if (options?.documentDirectory && this.state.currentGlobal) {
+    // Set documentDirectory on global so audioPath() / audio() can resolve relative paths.
+    // An explicit empty string clears a previous REPL base (#966 / IM.6).
+    if (options?.documentDirectory !== undefined && this.state.currentGlobal) {
       this.state.currentGlobal.setDocumentDirectory(options.documentDirectory)
     }
 

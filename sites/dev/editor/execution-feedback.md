@@ -188,8 +188,11 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:646-652
-export function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+// packages/vscode-extension/src/engine-process.ts:647-656
+export function writeCodeToEngine(
+  rawCode: string,
+  documentDir: string | null | undefined,
+): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
     // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
@@ -200,7 +203,7 @@ export function writeCodeToEngine(rawCode: string, documentDir: string | undefin
 
 2 層とは次のことです。
 
-1. **`//#documentDirectory` メタ行** (#456 I3): 先頭に必ず付けます。REPL 側がメタ行として先に処理するため、`import` 文 (どの statement よりも先に評価される) の基準ディレクトリも初回 eval から確定します
+1. **`//#documentDirectory` メタ行** (#456 I3): 先頭に必ず付けます。REPL 側がメタ行として先に処理するため、`import` 文 (どの statement よりも先に評価される) の基準ディレクトリも初回 eval から確定します。基準が無い評価では空のメタ行で前回値を消します
 2. **`global.setDocumentDirectory(...)` の DSL 注入**: 従来どおりの経路で、`var global = init GLOBAL` を含む評価ならその直後に挿入して `globalInitialized` フラグを立て、以降の評価ではコード先頭に prepend します。global 未初期化のセッションでは注入しません (`global is not defined` になるため)
 
 `globalInitialized` フラグは engine プロセスのライフサイクル (起動・停止・拡張の activate) でリセットされます。Windows のパス区切り文字 (`\`) を `\\` にエスケープする処理も含まれています。

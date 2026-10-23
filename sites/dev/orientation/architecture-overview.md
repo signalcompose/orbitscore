@@ -194,7 +194,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:691-692
+// packages/vscode-extension/src/engine-process.ts:699-700
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```

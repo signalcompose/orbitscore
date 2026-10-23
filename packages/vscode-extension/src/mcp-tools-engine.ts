@@ -16,16 +16,13 @@ import type { EvaluateResult, OrbitScoreToolHandlers } from './mcp-types'
  * #966: name the base directory the evaluation used, so an agent sees a wrong base
  * immediately instead of as a distant `[SAMPLE_NOT_FOUND]`. The text still starts with
  * `ok` / `error:` as before; `documentDirectory` absent (code never sent) adds nothing.
- * `null` means no base was sent — the engine's REPL keeps the base of its previous evaluation,
- * so the text says so instead of claiming there is no base (core spec IM.6).
+ * `null` means there is no base for this evaluation (core spec IM.6).
  */
 export function evaluateToolResult(result: EvaluateResult): ReturnType<typeof toToolResult> {
   const base =
     result.documentDirectory === undefined
       ? ''
-      : ` (documentDirectory: ${
-          result.documentDirectory ?? 'not sent — the engine keeps its previous base'
-        })`
+      : ` (documentDirectory: ${result.documentDirectory ?? 'none'})`
   return result.ok
     ? toToolResult({ ok: true, message: `ok${base}` })
     : toToolResult({ ok: false, error: `${result.error}${base}` })
@@ -44,8 +41,9 @@ export function registerEngineTools(server: McpServerLike, handlers: OrbitScoreT
         'or runtime diagnostics. A failure lists the diagnostics, so you do NOT need to poll ' +
         'get_log to find out whether your score was accepted. Relative paths (import, ' +
         'audio(), plugin state files) resolve against the directory of document_path if ' +
-        'given, else the active OrbitScore editor, else the first workspace folder; the ' +
-        'result names the directory that was used. Pass document_path when the code belongs ' +
+        'given, else the active OrbitScore editor, else the first workspace folder. If none ' +
+        'exists, there is no base and relative imports fail. The result names the directory ' +
+        'that was used. Pass document_path when the code belongs ' +
         'to a file that may not be the active editor (e.g. while a person is performing in ' +
         'another tab) — it avoids switching their editor with open_file.',
       inputSchema: {

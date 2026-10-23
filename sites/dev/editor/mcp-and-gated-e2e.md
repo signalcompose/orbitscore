@@ -218,7 +218,7 @@ export interface DiagnosticEntry {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-tools-engine.ts:35-67
+// packages/vscode-extension/src/mcp-tools-engine.ts:32-65
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -231,8 +231,9 @@ export interface DiagnosticEntry {
         'or runtime diagnostics. A failure lists the diagnostics, so you do NOT need to poll ' +
         'get_log to find out whether your score was accepted. Relative paths (import, ' +
         'audio(), plugin state files) resolve against the directory of document_path if ' +
-        'given, else the active OrbitScore editor, else the first workspace folder; the ' +
-        'result names the directory that was used. Pass document_path when the code belongs ' +
+        'given, else the active OrbitScore editor, else the first workspace folder. If none ' +
+        'exists, there is no base and relative imports fail. The result names the directory ' +
+        'that was used. Pass document_path when the code belongs ' +
         'to a file that may not be the active editor (e.g. while a person is performing in ' +
         'another tab) — it avoids switching their editor with open_file.',
       inputSchema: {
@@ -626,7 +627,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — stock VS Code と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:812-843
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:815-846
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -645,7 +646,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
-      tmpRoot,
+      ...(openWorkspace ? [tmpRoot] : []),
     ],
     {
       env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
@@ -719,7 +720,7 @@ async function killHarnessInstances(): Promise<void> {
 `killHarnessInstances()` は teardown 専用の関数ではありません。`launchIsolatedOrbitStudio()` が **冒頭で** これを呼ぶので、自前のアプリを立てるテストは「走り出した瞬間に、そのとき生きているハーネス由来の VS Code をすべて落とす」という副作用を持ちます。gated spec の大半は `describe` のセットアップが 1 回だけ起動した**共有セッション**に相乗りしているので、自前アプリのテストをその並びの途中に置くと、後ろに残った共有セッションのテストは接続先を失います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:7202-7205
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7205-7208
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -733,7 +734,7 @@ async function killHarnessInstances(): Promise<void> {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1540-1545
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1543-1548
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -914,7 +915,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2150-2164
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2153-2167
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1419,7 +1420,7 @@ export function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3246-3257
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3249-3260
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1435,13 +1436,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3265-3266
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3268-3269
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3322-3324
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3325-3327
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
