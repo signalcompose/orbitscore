@@ -138,6 +138,11 @@ fn real_child_captures_the_hosted_plugin_state_through_the_command_mailbox() {
         .expect("保存した state が container（magic `VST3`）になっていない")
         .component;
     assert_eq!(
+        &captured[8..40],
+        b"4D16F7A1C14B4D4DA292B0D8A331C421",
+        "header must carry the synth oracle Processor CID"
+    );
+    assert_eq!(
         orbit_vst3_synth_oracle::decode_state(component),
         Some(RESTORED_SEMITONES),
         "吸い上げた state が復元した値と違う — capture_state が実プラグインを \

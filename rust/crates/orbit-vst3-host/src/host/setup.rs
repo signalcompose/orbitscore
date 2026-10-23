@@ -1,6 +1,6 @@
 //! プラグインのセットアップ（controller 接続・preset・バス構成）（#888 子 3・orbit-vst3-host）。
 //!
-//! 🔴 **これは純粋な移動である。** `lib.rs` からそのまま移した。本文は 1 行も書き換えていない。
+//! controller 接続と state 復元をまとめた host setup 実装。
 
 #[allow(unused_imports)]
 use crate::*;
@@ -119,12 +119,6 @@ pub(crate) fn connect_controller(
     })
 }
 
-/// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 公式 FAQ
-/// (Persistence): ① `IComponent::setState` ② `IEditController::setComponentState`
-/// ③ `IEditController::setState`（controller chunk がある場合のみ）。
-///
-/// ① の失敗は音色が復元されていないことを意味するのでハードエラー。②③ は GUI/表示側の
-/// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
 /// state 復元の **成功経路**で出す best-effort 通知の文言。
 ///
 /// 呼び出し元はどちらも `Ok(())` を返す経路にあり、**復元そのものは成功している**
@@ -143,16 +137,24 @@ pub(crate) fn best_effort_state_notice(what: &str, result: i32) -> String {
 /// #982: controller state を取れなかったときの通知（CAP.2a）。保存そのものは component state
 /// だけで成功するので、エラーではなく level トークン付きの情報にする（規約は
 /// `orbit_child_runtime::notice`）。
-pub(crate) fn controller_state_capture_notice(result: i32) -> String {
+pub(crate) fn controller_state_capture_notice(plugin_name: &str, result: i32) -> String {
     orbit_child_runtime::notice::child_info(
         "orbit-vst3-host",
         format_args!(
-            "IEditController::getState returned {result:#x} (best-effort; the state is saved \
+            "IEditController::getState for plugin {plugin_name:?} returned {result:#x} \
+             (best-effort; the state is saved \
              without the controller chunk)"
         ),
     )
 }
 
+/// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 SDK の
+/// `PresetFile::loadPreset` と同じく、① `IComponent::setState`
+/// ② `IEditController::setComponentState` ③ `IEditController::setState`
+/// （controller chunk がある場合のみ）。
+///
+/// ① の失敗は音色が復元されていないことを意味するのでハードエラー。②③ は GUI/表示側の
+/// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
 pub(crate) fn apply_state_chunks(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,

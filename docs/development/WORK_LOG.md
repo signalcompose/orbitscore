@@ -78,6 +78,28 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
       エラー文言を固定するテストは `From` の変換を通る形で host crate へ移した
     - 見送り: テストの「container を解析して `Comp` を取り出す」重複（crate をまたぐので、まとめるとかえって複雑）、
       通知の文字列を作る関数（隣の既存関数に倣った形）、初回保存で controller の `getState` を 1 回呼ぶこと（静的に判定できない）
+  - 引用のずれ 4 件（core spec PH.1 の 1 行の追記による）を直した（`sites/dev/{,en/}signal-chain/mixer-audio-line.md`）
+- **`/code:pr-review-team` ラウンド 1 と Opus 監査の指摘を適用**（2026-10-23・実装 = Codex・検証 = main）:
+  - 🔴 監査の結論: 保存形式・復元順序・main thread の制約・壊れたファイルの扱いは SDK の一次ソースと一致。ただし
+    **`Cont` を書いて読み戻す経路と、単一コンポーネントの判定・ラッチを、どのテストも一度も通っていなかった**
+    （oracle の controller が 0 バイトを返すため）
+  - gain oracle に controller state の seam（環境変数）を足し、`Cont` の往復・SDK の復元順序・取得の 3 分岐
+    （`kNotImplemented` / 失敗 / 成功）・単一コンポーネントを固定（`tests/controller_state.rs`）。
+    `Cont` を捨てる・1 回でラッチする・通知を抑える、の 3 つの変異がそれぞれ red
+  - ラッチを「**2 回続けて一致したら**」に変えた（レビュアー 4 者が「1 回の偶然の一致でエディタの state を失う」と指摘）
+  - 取得失敗の INFO 通知をインスタンスごとに 1 回にし、プラグイン名を入れた
+  - instrument のテストでも header の class ID を照合。旧形式（raw）を実際の復元経路で読むテスト
+  - parse の重複 chunk を SDK と同じ先勝ちに。途中で切れた entry と 0 バイトの `Comp` は意図的に拒否（doc に明記）
+  - probe の class ID の書式を `orbit_vst3_preset::class_id_ascii` に統一。gain oracle を分割（行数のラチェットの基準から外れた）
+  - **Kontakt 8 の実測**（手元の state ファイル・gated テスト `kontakt_captures_state_three_times_and_reports_controller_chunks`）:
+    3 回の capture で `Comp` = 4322 / 4319 / 4320 バイト、**`Cont` = 0**、所要時間は 0.1〜0.2 ms。
+    → Kontakt の controller は state を返さない（二重シリアライズの懸念は Kontakt では起きない）。
+    **`Comp` のサイズが毎回わずかに違う**（出力が決定論的でない）ので、仮に echo するプラグインでも、バイト比較では一致せず
+    ラッチは立たない（監査 I-2 の指摘どおり。害は「毎回取る」側に倒れるだけ）
+  - 見送り: 実機 E2E「保存 → 再起動 → 同じ音」。DSL / MCP にロード後の VST3 の state を変える手段が無く、
+    synth oracle の state は音高を変えるので RMS では復元漏れを区別できない。必要な手段（state を変える MCP の seam か、
+    RMS が変わる controller state 付きの oracle）は別 issue にする
+  - macOS 専用の VST3 crate 6 つ: **84 passed / 0 failed / 4 ignored**（sandbox 外）
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 

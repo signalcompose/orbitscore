@@ -465,10 +465,12 @@ pub struct Vst3PluginMain {
     pub(crate) info: LoadedVst3Info,
     /// component（processor）の class ID。保存する `.vstpreset` の header に書く（CAP.2a・#982）。
     pub(crate) class_id: TUID,
-    /// 単一コンポーネントの controller が component state をそのまま返すと分かったら `true`
-    /// （[`orbit_vst3_preset::controller_echoes_component`]）。以後の保存では controller の
-    /// `getState` を呼ばない — 同じ state を 2 回シリアライズするだけになるため（#982）。
-    pub(crate) controller_echoes_component: Cell<bool>,
+    /// 単一コンポーネントの controller state が component state と連続して一致した回数。
+    /// 2 回一致した後は controller の `getState` を省く（#982）。ただし、最初の 2 回が偶然
+    /// 一致し、その後 editor state だけが変わる plugin は検出できない、という限界は残る。
+    pub(crate) controller_echo_match_streak: Cell<u8>,
+    /// controller state 取得失敗の INFO 通知を、この plugin インスタンスで既に出したか。
+    pub(crate) controller_state_failure_notified: Cell<bool>,
 }
 
 impl Vst3PluginMain {
@@ -490,10 +492,17 @@ impl Vst3PluginMain {
             .as_ref()
             .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
         let component_state = capture_component_state(component)?;
-        let controller_state = if self.controller_echoes_component.get() {
+        let controller_echo_latched = self.controller_echo_match_streak.get() >= 2;
+        let controller_state = if controller_echo_latched {
             None
         } else {
-            self.controller.as_ref().and_then(capture_controller_state)
+            self.controller.as_ref().and_then(|controller| {
+                capture_controller_state(
+                    controller,
+                    &self.info.name,
+                    &self.controller_state_failure_notified,
+                )
+            })
         };
         // VST3 SDK の単一コンポーネントでは IEditController::getState が getEditorState の
         // 別名で、component state とは別物になりうる。オブジェクトの同一性だけでは決められ
@@ -503,8 +512,13 @@ impl Vst3PluginMain {
             controller_state.as_deref(),
             self.controller_shared_with_component,
         );
-        if controller_echoes_component {
-            self.controller_echoes_component.set(true);
+        if !controller_echo_latched {
+            let next_streak = if controller_echoes_component {
+                self.controller_echo_match_streak.get().saturating_add(1)
+            } else {
+                0
+            };
+            self.controller_echo_match_streak.set(next_streak);
         }
         let controller_chunk = orbit_vst3_preset::controller_chunk_to_store(
             controller_state.as_deref(),
@@ -732,7 +746,7 @@ mod best_effort_notice_tests {
     /// ERROR に倒れると E2E の ERROR 件数（ヘルスシグナル）を壊すので、復元側と同じ規約で出す。
     #[test]
     fn controller_state_capture_notice_declares_a_non_error_level_token() {
-        let line = controller_state_capture_notice(0x5);
+        let line = controller_state_capture_notice("Orbit Test Synth", 0x5);
         assert!(
             line.starts_with("INFO [orbit-vst3-host] "),
             "notice must declare a non-error level token and the host tag: {line}"
@@ -740,6 +754,10 @@ mod best_effort_notice_tests {
         assert!(
             line.contains("IEditController::getState") && line.contains("0x5"),
             "notice must name the call and its result: {line}"
+        );
+        assert!(
+            line.contains("Orbit Test Synth"),
+            "notice must identify the affected plugin: {line}"
         );
         assert!(
             line.contains("without the controller chunk"),

@@ -99,12 +99,9 @@ pub(crate) fn char16_array_to_string(data: &[TChar]) -> String {
 }
 
 pub(crate) fn tuid_to_string(cid: &TUID) -> String {
-    let mut encoded = String::with_capacity(32);
-    for byte in cid {
-        use std::fmt::Write;
-        write!(encoded, "{byte:02X}").expect("writing to String cannot fail");
-    }
-    encoded
+    let bytes = cid.map(|byte| byte as u8);
+    String::from_utf8(orbit_vst3_preset::class_id_ascii(&bytes).to_vec())
+        .expect("class_id_ascii only writes ASCII hex digits")
 }
 
 pub fn probe_plugin(path: &Path) -> ProbeResult {

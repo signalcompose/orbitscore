@@ -130,3 +130,39 @@ fn kontakt_loads_with_saved_state() {
     outcome.unwrap_or_else(|error| panic!("state 付きの load が失敗: {error}"));
     eprintln!("(A) state 付き: {elapsed:?} で load 完了");
 }
+
+/// #982: Kontakt の controller state 取得コストと単一コンポーネント latch を実測する。
+/// 3 回目が前 2 回より明確に短ければ latch の傍証になるが、実プラグイン内部の呼び出し回数を
+/// 公開 API から直接は観測できないため、各所要時間と `Cont` の有無・サイズを一次データとして出す。
+#[test]
+fn kontakt_captures_state_three_times_and_reports_controller_chunks() {
+    let Some((bundle, state_path)) = gated_env() else {
+        return;
+    };
+    let initial_state = std::fs::read(&state_path).unwrap_or_else(|error| {
+        panic!("state ファイルが読めない {}: {error}", state_path.display())
+    });
+    let (processor, _) =
+        Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES, Some(&initial_state))
+            .unwrap_or_else(|error| {
+                panic!("Kontakt load failed before capture measurement: {error}")
+            });
+
+    for attempt in 1..=3 {
+        let started = Instant::now();
+        let state = processor
+            .capture_state()
+            .unwrap_or_else(|error| panic!("capture {attempt} failed: {error}"));
+        let elapsed = started.elapsed();
+        let chunks = orbit_vst3_preset::parse(&state)
+            .expect("Kontakt capture produced a malformed container")
+            .expect("Kontakt capture did not produce a VST3 container");
+        let controller_size = chunks.controller.map_or(0, <[u8]>::len);
+        eprintln!(
+            "Kontakt capture {attempt}: elapsed={elapsed:?} total={} Comp={} Cont={} bytes",
+            state.len(),
+            chunks.component.len(),
+            controller_size
+        );
+    }
+}

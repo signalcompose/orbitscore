@@ -1,6 +1,6 @@
 //! VST3 インストゥルメントのプロセッサとオーディオ経路（#888 子 3・orbit-vst3-host）。
 //!
-//! 🔴 **これは純粋な移動である。** `lib.rs` からそのまま移した。本文は 1 行も書き換えていない。
+//! state capture を含む instrument 固有の実装を `lib.rs` から分離している。
 
 #[allow(unused_imports)]
 use crate::*;
@@ -33,17 +33,24 @@ pub(crate) fn capture_component_state(
 /// `kNotImplemented` は「controller に state が無い」なので黙って `None`。それ以外の失敗は
 /// INFO の通知を出して `None`（component state だけで保存は成功させる — 現状より悪くしない）。
 /// 0 バイトや単一コンポーネントでの重複は呼び出し側（`controller_chunk_to_store`）が落とす。
-pub(crate) fn capture_controller_state(controller: &ComPtr<IEditController>) -> Option<Vec<u8>> {
+pub(crate) fn capture_controller_state(
+    controller: &ComPtr<IEditController>,
+    plugin_name: &str,
+    failure_notified: &Cell<bool>,
+) -> Option<Vec<u8>> {
     let stream_wrapper = ComWrapper::new(MemoryStream::new());
     let stream = stream_wrapper
         .to_com_ptr::<IBStream>()
-        .expect("MemoryStream exposes IBStream");
+        .ok_or_else(|| Vst3HostError::State("MemoryStream exposes no IBStream".into()))
+        .ok()?;
     let result = unsafe { controller.getState(stream.as_ptr()) };
     if result == kNotImplemented {
         return None;
     }
     if !is_ok(result) {
-        eprintln!("{}", controller_state_capture_notice(result));
+        if !failure_notified.replace(true) {
+            eprintln!("{}", controller_state_capture_notice(plugin_name, result));
+        }
         return None;
     }
     let bytes = std::mem::take(&mut *stream_wrapper.data.borrow_mut());
@@ -232,7 +239,8 @@ impl Vst3InstrumentProcessor {
                     _library: library,
                     info: info.clone(),
                     class_id: class.cid,
-                    controller_echoes_component: Cell::new(false),
+                    controller_echo_match_streak: Cell::new(0),
+                    controller_state_failure_notified: Cell::new(false),
                 }),
             },
             info,

@@ -23,6 +23,9 @@ use std::{ptr, slice};
 
 use vst3::{uid, Class, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*};
 
+mod controller_state_seam;
+mod factory;
+
 fn copy_cstring(src: &str, dst: &mut [c_char]) {
     let c_string = CString::new(src).unwrap_or_else(|_| CString::default());
     let bytes = c_string.as_bytes_with_nul();
@@ -95,7 +98,12 @@ struct GainProcessor {
 }
 
 impl Class for GainProcessor {
-    type Interfaces = (IComponent, IAudioProcessor, IProcessContextRequirements);
+    type Interfaces = (
+        IComponent,
+        IAudioProcessor,
+        IProcessContextRequirements,
+        IEditController,
+    );
 }
 
 impl GainProcessor {
@@ -121,6 +129,9 @@ impl IPluginBaseTrait for GainProcessor {
 
 impl IComponentTrait for GainProcessor {
     unsafe fn getControllerClassId(&self, class_id: *mut TUID) -> tresult {
+        if std::env::var_os("ORBIT_VST3_GAIN_SINGLE_COMPONENT").is_some() {
+            return kNotImplemented;
+        }
         *class_id = GainController::CID;
         kResultOk
     }
@@ -210,6 +221,7 @@ impl IComponentTrait for GainProcessor {
     }
 
     unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+        controller_state_seam::trace("component.setState");
         if state.is_null() {
             return kResultFalse;
         }
@@ -234,6 +246,7 @@ impl IComponentTrait for GainProcessor {
     }
 
     unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        controller_state_seam::trace("component.getState");
         if state.is_null() {
             return kResultFalse;
         }
@@ -445,341 +458,6 @@ impl IPluginBaseTrait for GainController {
 
     unsafe fn terminate(&self) -> tresult {
         kResultOk
-    }
-}
-
-impl IEditControllerTrait for GainController {
-    unsafe fn setComponentState(&self, _state: *mut IBStream) -> tresult {
-        kNotImplemented
-    }
-
-    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
-
-    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
-
-    unsafe fn getParameterCount(&self) -> i32 {
-        1
-    }
-
-    unsafe fn getParameterInfo(&self, param_index: i32, info: *mut ParameterInfo) -> tresult {
-        match param_index {
-            0 => {
-                let info = &mut *info;
-
-                info.id = 0;
-                copy_wstring("Gain", &mut info.title);
-                copy_wstring("Gain", &mut info.shortTitle);
-                copy_wstring("", &mut info.units);
-                info.stepCount = 0;
-                info.defaultNormalizedValue = 1.0;
-                info.unitId = 0;
-                info.flags = ParameterInfo_::ParameterFlags_::kCanAutomate as i32;
-
-                kResultOk
-            }
-            _ => kInvalidArgument,
-        }
-    }
-
-    unsafe fn getParamStringByValue(
-        &self,
-        id: u32,
-        value_normalized: f64,
-        string: *mut String128,
-    ) -> tresult {
-        let slice = unsafe { &mut *string };
-
-        match id {
-            0 => {
-                let display = value_normalized.to_string();
-                copy_wstring(&display, slice);
-                kResultOk
-            }
-            _ => kInvalidArgument,
-        }
-    }
-
-    unsafe fn getParamValueByString(
-        &self,
-        id: u32,
-        string: *mut TChar,
-        value_normalized: *mut f64,
-    ) -> tresult {
-        match id {
-            0 => {
-                let len = len_wstring(string as *const TChar);
-                if let Ok(string) =
-                    String::from_utf16(slice::from_raw_parts(string as *const u16, len))
-                {
-                    if let Ok(value) = f64::from_str(&string) {
-                        *value_normalized = value;
-                        return kResultOk;
-                    }
-                }
-                kInvalidArgument
-            }
-            _ => kInvalidArgument,
-        }
-    }
-
-    unsafe fn normalizedParamToPlain(&self, id: u32, value_normalized: f64) -> f64 {
-        match id {
-            0 => value_normalized,
-            _ => 0.0,
-        }
-    }
-
-    unsafe fn plainParamToNormalized(&self, id: u32, plain_value: f64) -> f64 {
-        match id {
-            0 => plain_value,
-            _ => 0.0,
-        }
-    }
-
-    unsafe fn getParamNormalized(&self, id: u32) -> f64 {
-        match id {
-            0 => self.gain.get(),
-            _ => 0.0,
-        }
-    }
-
-    unsafe fn setParamNormalized(&self, id: u32, value: f64) -> tresult {
-        match id {
-            0 => {
-                self.gain.set(value);
-                kResultOk
-            }
-            _ => kInvalidArgument,
-        }
-    }
-
-    unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
-        kResultOk
-    }
-
-    unsafe fn createView(&self, _name: *const c_char) -> *mut IPlugView {
-        ptr::null_mut()
-    }
-}
-
-const FACTORY_VENDOR: &str = "OrbitScore Factory Oracle";
-const FACTORY_VERSION: &str = "5.4.9";
-const FACTORY_SDK_VERSION: &str = "VST 3.7.9";
-
-fn class_identity(index: i32) -> Option<(TUID, &'static str)> {
-    match index {
-        0 => Some((GainProcessor::CID, "Audio Module Class")),
-        1 => Some((GainController::CID, "Component Controller Class")),
-        _ => None,
-    }
-}
-
-unsafe fn fill_class_info(index: i32, info: *mut PClassInfo) -> tresult {
-    let Some((cid, category)) = class_identity(index) else {
-        return kInvalidArgument;
-    };
-    let info = &mut *info;
-    info.cid = cid;
-    info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
-    copy_cstring(category, &mut info.category);
-    copy_cstring(PLUGIN_NAME, &mut info.name);
-    kResultOk
-}
-
-unsafe fn fill_class_info2(index: i32, info: *mut PClassInfo2) -> tresult {
-    let Some((cid, category)) = class_identity(index) else {
-        return kInvalidArgument;
-    };
-    let info = &mut *info;
-    info.cid = cid;
-    info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
-    copy_cstring(category, &mut info.category);
-    copy_cstring(PLUGIN_NAME, &mut info.name);
-    info.classFlags = 0;
-    copy_cstring("Fx|Dynamics", &mut info.subCategories);
-    copy_cstring(FACTORY_VENDOR, &mut info.vendor);
-    copy_cstring(FACTORY_VERSION, &mut info.version);
-    copy_cstring(FACTORY_SDK_VERSION, &mut info.sdkVersion);
-    kResultOk
-}
-
-unsafe fn fill_class_info3(index: i32, info: *mut PClassInfoW) -> tresult {
-    let Some((cid, category)) = class_identity(index) else {
-        return kInvalidArgument;
-    };
-    let info = &mut *info;
-    info.cid = cid;
-    info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
-    copy_cstring(category, &mut info.category);
-    copy_wstring("Gain Ω (Factory3 oracle)", &mut info.name);
-    info.classFlags = 0;
-    copy_cstring("Fx|Dynamics", &mut info.subCategories);
-    copy_wstring(FACTORY_VENDOR, &mut info.vendor);
-    copy_wstring(FACTORY_VERSION, &mut info.version);
-    copy_wstring(FACTORY_SDK_VERSION, &mut info.sdkVersion);
-    kResultOk
-}
-
-unsafe fn create_oracle_instance(cid: FIDString, iid: FIDString, obj: *mut *mut c_void) -> tresult {
-    let instance = match *(cid as *const TUID) {
-        GainProcessor::CID => Some(
-            ComWrapper::new(GainProcessor::new())
-                .to_com_ptr::<FUnknown>()
-                .unwrap(),
-        ),
-        GainController::CID => Some(
-            ComWrapper::new(GainController::new())
-                .to_com_ptr::<FUnknown>()
-                .unwrap(),
-        ),
-        _ => None,
-    };
-
-    if let Some(instance) = instance {
-        let ptr = instance.as_ptr();
-        ((*(*ptr).vtbl).queryInterface)(ptr, iid as *mut TUID, obj)
-    } else {
-        kInvalidArgument
-    }
-}
-
-struct FactoryV1;
-struct FactoryV2;
-struct FactoryV3;
-
-impl Class for FactoryV1 {
-    type Interfaces = (IPluginFactory,);
-}
-
-impl Class for FactoryV2 {
-    type Interfaces = (IPluginFactory2,);
-}
-
-impl Class for FactoryV3 {
-    type Interfaces = (IPluginFactory3,);
-}
-
-macro_rules! impl_factory_base {
-    ($factory:ty) => {
-        impl IPluginFactoryTrait for $factory {
-            unsafe fn getFactoryInfo(&self, info: *mut PFactoryInfo) -> tresult {
-                let info = &mut *info;
-                copy_cstring(FACTORY_VENDOR, &mut info.vendor);
-                copy_cstring("https://example.com", &mut info.url);
-                copy_cstring("someone@example.com", &mut info.email);
-                info.flags = PFactoryInfo_::FactoryFlags_::kUnicode as int32;
-                kResultOk
-            }
-
-            unsafe fn countClasses(&self) -> i32 {
-                2
-            }
-
-            unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-                fill_class_info(index, info)
-            }
-
-            unsafe fn createInstance(
-                &self,
-                cid: FIDString,
-                iid: FIDString,
-                obj: *mut *mut c_void,
-            ) -> tresult {
-                // This abort lives inside the oracle's actual COM method. A caller that reaches
-                // createInstance dies before it can report a flag, making disconnected test
-                // wiring impossible to mistake for a successful non-reachability proof.
-                if std::env::var_os("ORBIT_VST3_FACTORY_ABORT_CREATE_INSTANCE").is_some() {
-                    std::process::abort();
-                }
-                create_oracle_instance(cid, iid, obj)
-            }
-        }
-    };
-}
-
-impl_factory_base!(FactoryV1);
-impl_factory_base!(FactoryV2);
-impl_factory_base!(FactoryV3);
-
-impl IPluginFactory2Trait for FactoryV2 {
-    unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        fill_class_info2(index, info)
-    }
-}
-
-impl IPluginFactory2Trait for FactoryV3 {
-    unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        fill_class_info2(index, info)
-    }
-}
-
-impl IPluginFactory3Trait for FactoryV3 {
-    unsafe fn getClassInfoUnicode(&self, index: i32, info: *mut PClassInfoW) -> tresult {
-        fill_class_info3(index, info)
-    }
-
-    unsafe fn setHostContext(&self, _context: *mut FUnknown) -> tresult {
-        kResultOk
-    }
-}
-
-#[cfg(target_os = "windows")]
-#[no_mangle]
-extern "system" fn InitDll() -> bool {
-    true
-}
-
-#[cfg(target_os = "windows")]
-#[no_mangle]
-extern "system" fn ExitDll() -> bool {
-    true
-}
-
-#[cfg(target_os = "macos")]
-#[no_mangle]
-extern "system" fn BundleEntry(_bundle_ref: *mut c_void) -> bool {
-    true
-}
-
-#[cfg(target_os = "macos")]
-#[no_mangle]
-extern "system" fn BundleExit() -> bool {
-    true
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-extern "system" fn ModuleEntry(_library_handle: *mut c_void) -> bool {
-    true
-}
-
-#[cfg(target_os = "linux")]
-#[no_mangle]
-extern "system" fn ModuleExit() -> bool {
-    true
-}
-
-#[no_mangle]
-extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
-    match std::env::var("ORBIT_VST3_FACTORY_ORACLE_LEVEL").as_deref() {
-        Ok("1") => ComWrapper::new(FactoryV1)
-            .to_com_ptr::<IPluginFactory>()
-            .unwrap()
-            .into_raw(),
-        Ok("2") => ComWrapper::new(FactoryV2)
-            .to_com_ptr::<IPluginFactory2>()
-            .unwrap()
-            .upcast::<IPluginFactory>()
-            .into_raw(),
-        _ => ComWrapper::new(FactoryV3)
-            .to_com_ptr::<IPluginFactory3>()
-            .unwrap()
-            .upcast::<IPluginFactory>()
-            .into_raw(),
     }
 }
 

@@ -58,6 +58,11 @@ impl Error for MalformedPreset {}
 /// header の class ID は照合しない: TUID ↔ ASCII 表現はプラットフォームで byte order が
 /// 異なり（COM 互換 swap）、誤検知で正当な preset を弾くリスクが照合の利得を上回る。
 /// 不一致の preset は plugin 自身の setState が拒否する。
+///
+/// SDK より意図的に厳しい点が 2 つある。chunk entry の列が途中で切れていれば container
+/// 全体を malformed とし、0 バイトの `Comp` も拒否する。どちらも「復元できたように見えて
+/// default 音になる」ことを避けるためである。同じ ID の entry が重複した場合は SDK の
+/// `PresetFile::getEntry` と同じく、list の先頭を採用する。
 pub fn parse(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, MalformedPreset> {
     if bytes.len() < 4 || &bytes[0..4] != MAGIC {
         return Ok(None);
@@ -103,12 +108,19 @@ pub fn parse(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, MalformedPrese
             .ok_or_else(|| malformed("chunk data out of bounds"))?;
         let _ = entry_end;
         match id {
-            id if id == COMPONENT_CHUNK => component = Some(&bytes[offset..end]),
-            id if id == CONTROLLER_CHUNK => controller = Some(&bytes[offset..end]),
+            id if id == COMPONENT_CHUNK && component.is_none() => {
+                component = Some(&bytes[offset..end])
+            }
+            id if id == CONTROLLER_CHUNK && controller.is_none() => {
+                controller = Some(&bytes[offset..end])
+            }
             _ => {}
         }
     }
     let component = component.ok_or_else(|| malformed("no 'Comp' (component state) chunk"))?;
+    if component.is_empty() {
+        return Err(malformed("'Comp' (component state) chunk is empty"));
+    }
     Ok(Some(VstPresetChunks {
         component,
         controller,
@@ -268,17 +280,26 @@ mod tests {
         // magic があるのに壊れている場合は raw 扱いに落とさず明示エラー（container ヘッダを
         // setState に流し込む silent 誤動作を防ぐ）。
         let truncated = b"VST3\x01\x00\x00\x00short";
-        assert!(parse(truncated).is_err());
+        assert_eq!(
+            parse(truncated).unwrap_err().to_string(),
+            "malformed .vstpreset: header shorter than 48 bytes"
+        );
 
         // Comp チャンク欠如。
         let no_comp = build_vstpreset(&[(b"Info", b"<xml/>")]);
-        assert!(parse(&no_comp).is_err());
+        assert_eq!(
+            parse(&no_comp).unwrap_err().to_string(),
+            "malformed .vstpreset: no 'Comp' (component state) chunk"
+        );
 
         // chunk list offset が範囲外。
         let mut bad_offset = build_vstpreset(&[(b"Comp", b"x")]);
         let len = bad_offset.len() as i64;
         bad_offset[40..48].copy_from_slice(&(len + 100).to_le_bytes());
-        assert!(parse(&bad_offset).is_err());
+        assert_eq!(
+            parse(&bad_offset).unwrap_err().to_string(),
+            "malformed .vstpreset: chunk-list offset out of bounds"
+        );
 
         // chunk データが範囲外（size がファイル末尾を超える）。
         let comp: &[u8] = b"state";
@@ -286,7 +307,39 @@ mod tests {
         let total_len = bad_size.len() as i64;
         let size_field = bad_size.len() - 8;
         bad_size[size_field..].copy_from_slice(&total_len.to_le_bytes());
-        assert!(parse(&bad_size).is_err());
+        assert_eq!(
+            parse(&bad_size).unwrap_err().to_string(),
+            "malformed .vstpreset: chunk data out of bounds"
+        );
+    }
+
+    #[test]
+    fn duplicate_chunk_ids_use_the_first_entry_like_the_sdk() {
+        let preset = build_vstpreset(&[
+            (b"Comp", b"first-component"),
+            (b"Comp", b"second-component"),
+            (b"Cont", b"first-controller"),
+            (b"Cont", b"second-controller"),
+        ]);
+        let chunks = parse(&preset).unwrap().unwrap();
+        assert_eq!(chunks.component, b"first-component");
+        assert_eq!(chunks.controller, Some(&b"first-controller"[..]));
+    }
+
+    #[test]
+    fn truncated_entry_and_empty_component_are_intentionally_rejected() {
+        let mut truncated_entry = build_vstpreset(&[(b"Comp", b"state")]);
+        truncated_entry.truncate(truncated_entry.len() - 1);
+        assert_eq!(
+            parse(&truncated_entry).unwrap_err().to_string(),
+            "malformed .vstpreset: chunk entry out of bounds"
+        );
+
+        let empty_component = build_vstpreset(&[(b"Comp", b"")]);
+        assert_eq!(
+            parse(&empty_component).unwrap_err().to_string(),
+            "malformed .vstpreset: 'Comp' (component state) chunk is empty"
+        );
     }
 
     // ── #982: 書き出し ─────────────────────────────────────────────────────────

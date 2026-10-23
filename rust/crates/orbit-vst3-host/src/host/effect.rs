@@ -179,7 +179,8 @@ impl Vst3EffectProcessor {
                 _library: library,
                 info: info.clone(),
                 class_id: class.cid,
-                controller_echoes_component: Cell::new(false),
+                controller_echo_match_streak: Cell::new(0),
+                controller_state_failure_notified: Cell::new(false),
             }),
         };
         Ok((processor, info))
