@@ -35,6 +35,14 @@ PR #984〜#986 の `/code:pr-review-team` ラウンド 1（4 名・#984 の差�
   root の判定を「実際に読めるか」で行う形、仕様書の行番号の参照
 - 🔴 **未決**: IM.6 の 4 番目（基準が無いとき、engine が前回の基準を使い続ける）は #966 の owner 決定（基準なし）と食い違う。owner の裁定待ち
 - `npm test`: 2723 passed / 85 skipped（macOS・sandbox 外）
+- **ラウンド 2**（修正の差分だけを 2 名で再レビュー）の指摘を直した:
+  - 🔴 上の修正が持ち込んだ不具合: アクティブなエディタのディレクトリ（またはワークスペースのルート）に改行があると、
+    黙って次の候補へ移って `ok: true` を返していた（= #966 で避けると決めた「見えない状態で基準が決まる」形）。`ok: false` で理由を返す
+  - errno のテストが本物の `evaluateForAgent` の配線を通っていなかった。シンボリックリンクのループ（`ELOOP`）で、
+    本物の `fs.statSync` を想定外の errno で失敗させる形にした（`chmod 000` は root で skip されるテストを増やし、
+    `privileges-skip-ratchet` を落としたので使わない）。配線を戻すと red
+  - 中心が負の数の random-walk（`r-2%3`）の文言のテスト
+  - `npm test`: 2725 passed / 85 skipped
 
 ### fix: address the /code-review findings on this branch (Oct 6, 2026)
 

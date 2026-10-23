@@ -75,13 +75,21 @@ export function resolveEvaluateDocumentDirectory(
 
   if (activeEditor && isOrbitscoreDocument(activeEditor) && activeEditor.scheme === 'file') {
     const activeDirectory = path.dirname(activeEditor.fsPath)
-    if (!/[\r\n]/.test(activeDirectory)) {
-      return { ok: true, documentDirectory: activeDirectory }
+    if (/[\r\n]/.test(activeDirectory)) {
+      return {
+        ok: false,
+        error: 'active OrbitScore editor path must not contain a line break',
+      }
+    }
+    return { ok: true, documentDirectory: activeDirectory }
+  }
+
+  if (workspaceRoot && /[\r\n]/.test(workspaceRoot)) {
+    return {
+      ok: false,
+      error: 'workspace folder path must not contain a line break',
     }
   }
 
-  return {
-    ok: true,
-    documentDirectory: workspaceRoot && !/[\r\n]/.test(workspaceRoot) ? workspaceRoot : null,
-  }
+  return { ok: true, documentDirectory: workspaceRoot ?? null }
 }

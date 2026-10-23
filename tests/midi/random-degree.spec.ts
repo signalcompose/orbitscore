@@ -557,6 +557,12 @@ describe('#967 random-degree dispatch (statistical)', () => {
     )
   })
 
+  it('preserves a negative random-walk center in the chord-definition error', async () => {
+    await expect(evaluate('var c = [r-2%3, 3]')).rejects.toThrow(
+      '和音定義の中では `r-2%3`（random-walk）は使えません。`play()` の中で書いてください。',
+    )
+  })
+
   it('rejects random-only modifiers on a chord ref inside a chord definition, as play() does (#974)', async () => {
     for (const voice of ['m7~0.5', 'm7^r', 'm7@v100']) {
       await expect(evaluate(`var m7 = [1, 3, 5, 7]\nvar c = [${voice}, 9]`)).rejects.toThrow(

@@ -103,14 +103,17 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
     ).toEqual({ ok: true, documentDirectory: '/ws/piece' })
   })
 
-  it('2. 改行を含むアクティブエディタのパスは使わず、workspace へフォールバックする', () => {
+  it('2. 改行を含むアクティブエディタのパスはエラー', () => {
     expect(
       resolveEvaluateDocumentDirectory({
         activeEditor: orbsEditor('/ws/odd\nname/piece.orbs'),
         workspaceRoot: WORKSPACE,
         isFile: existing(),
       }),
-    ).toEqual({ ok: true, documentDirectory: WORKSPACE })
+    ).toEqual({
+      ok: false,
+      error: 'active OrbitScore editor path must not contain a line break',
+    })
   })
 
   it.each([
@@ -136,10 +139,13 @@ describe('resolveEvaluateDocumentDirectory (#966 / IM.6)', () => {
     })
   })
 
-  it('改行を含む workspace root しかなければ送らない（null）', () => {
+  it('3. 改行を含む workspace root はエラー', () => {
     expect(
       resolveEvaluateDocumentDirectory({ workspaceRoot: '/ws/odd\nname', isFile: existing() }),
-    ).toEqual({ ok: true, documentDirectory: null })
+    ).toEqual({
+      ok: false,
+      error: 'workspace folder path must not contain a line break',
+    })
   })
 
   it('document_path の検査が失敗したときは errno を含むエラーを返す', () => {
@@ -221,7 +227,7 @@ describe('evaluateForAgent の配線 (#966)', () => {
     expect(result).toEqual({ ok: true, documentDirectory: path.dirname(piece) })
   })
 
-  it('改行を含むアクティブエディタの基準は送らず、workspace の基準を送って返す', async () => {
+  it('改行を含むアクティブエディタの基準はエラーにして何も送らない', async () => {
     vscodeMock.window.activeTextEditor = {
       document: {
         languageId: 'orbitscore',
@@ -231,17 +237,23 @@ describe('evaluateForAgent の配線 (#966)', () => {
 
     const result = await evaluateForAgent('global.tempo(120)')
 
-    expect(sentDirectory()).toBe(tmpRoot)
-    expect(result).toEqual({ ok: true, documentDirectory: tmpRoot })
+    expect(written).toEqual([])
+    expect(result).toEqual({
+      ok: false,
+      error: 'active OrbitScore editor path must not contain a line break',
+    })
   })
 
-  it('改行を含む workspace root しかなければ基準を送らず null を返す', async () => {
+  it('改行を含む workspace root はエラーにして何も送らない', async () => {
     vscodeMock.workspace.workspaceFolders = [{ uri: { fsPath: `${tmpRoot}\nodd` } }]
 
     const result = await evaluateForAgent('global.tempo(120)')
 
-    expect(sentDirectory()).toBeUndefined()
-    expect(result).toEqual({ ok: true, documentDirectory: null })
+    expect(written).toEqual([])
+    expect(result).toEqual({
+      ok: false,
+      error: 'workspace folder path must not contain a line break',
+    })
   })
 
   it('document_path は前面のエディタより優先される', async () => {
@@ -265,6 +277,23 @@ describe('evaluateForAgent の配線 (#966)', () => {
     const result = await evaluateForAgent('global.tempo(120)', { documentPath: 'missing.orbs' })
 
     expect(result.ok).toBe(false)
+    expect(written).toEqual([])
+  })
+
+  it('document_path の stat が予期しない errno で失敗したら検査エラーを返す', async () => {
+    const loopA = path.join(tmpRoot, 'a')
+    const loopB = path.join(tmpRoot, 'b')
+    fs.symlinkSync('b', loopA)
+    fs.symlinkSync('a', loopB)
+
+    const result = await evaluateForAgent('global.tempo(120)', {
+      documentPath: path.join(loopA, 'piece.orbs'),
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringContaining('could not inspect'),
+    })
     expect(written).toEqual([])
   })
 
