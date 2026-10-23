@@ -469,8 +469,9 @@ pub struct Vst3PluginMain {
     /// 2 回一致した後は controller の `getState` を省く（#982）。ただし、最初の 2 回が偶然
     /// 一致し、その後 editor state だけが変わる plugin は検出できない、という限界は残る。
     pub(crate) controller_echo_match_streak: Cell<u8>,
-    /// controller state 取得失敗の INFO 通知を、この plugin インスタンスで既に出したか。
-    pub(crate) controller_state_failure_notified: Cell<bool>,
+    /// 直前に INFO 通知した controller state 取得失敗。同じ失敗だけを連続抑止し、
+    /// 別の失敗または成功後の再失敗は通知する。
+    pub(crate) last_controller_state_failure: Cell<Option<ControllerStateCaptureFailure>>,
 }
 
 impl Vst3PluginMain {
@@ -500,7 +501,7 @@ impl Vst3PluginMain {
                 capture_controller_state(
                     controller,
                     &self.info.name,
-                    &self.controller_state_failure_notified,
+                    &self.last_controller_state_failure,
                 )
             })
         };
@@ -519,6 +520,9 @@ impl Vst3PluginMain {
                 0
             };
             self.controller_echo_match_streak.set(next_streak);
+            if next_streak >= 2 {
+                eprintln!("{}", controller_state_latched_notice(&self.info.name));
+            }
         }
         let controller_chunk = orbit_vst3_preset::controller_chunk_to_store(
             controller_state.as_deref(),
@@ -715,7 +719,10 @@ mod tests {
 
 #[cfg(test)]
 mod best_effort_notice_tests {
-    use super::{best_effort_state_notice, controller_state_capture_notice};
+    use super::{
+        best_effort_state_notice, controller_state_capture_notice, controller_state_latched_notice,
+        controller_state_stream_notice,
+    };
 
     /// この通知は復元の成功経路で出るので、daemon の stderr router が非エラーと判定できる形で
     /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
@@ -763,5 +770,23 @@ mod best_effort_notice_tests {
             line.contains("without the controller chunk"),
             "notice must say the state is still saved: {line}"
         );
+    }
+
+    #[test]
+    fn controller_state_stream_notice_makes_the_dropped_state_observable() {
+        let line = controller_state_stream_notice("No Stream");
+        assert!(line.starts_with("INFO [orbit-vst3-host] "));
+        assert!(line.contains("No Stream"));
+        assert!(line.contains("MemoryStream exposes no IBStream"));
+        assert!(line.contains("without the controller chunk"));
+    }
+
+    #[test]
+    fn controller_state_latched_notice_identifies_plugin_and_cont_omission() {
+        let line = controller_state_latched_notice("Echo Plugin");
+        assert!(line.starts_with("INFO [orbit-vst3-host] "));
+        assert!(line.contains("Echo Plugin"));
+        assert!(line.contains("same state"));
+        assert!(line.contains("omit the Cont chunk"));
     }
 }

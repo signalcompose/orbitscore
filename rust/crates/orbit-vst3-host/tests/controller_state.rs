@@ -9,6 +9,7 @@ use orbit_vst3_host::{Vst3EffectProcessor, Vst3InstrumentProcessor};
 const SAMPLE_RATE: f64 = 48_000.0;
 const FRAMES: usize = 512;
 const CONTROLLER_STATE: &[u8] = b"ORBIT-CONTROLLER";
+const GAIN_PROCESSOR_CID: &[u8; 32] = b"6E33225254224A00AA69301AF318797D";
 
 fn package_gain_oracle() -> Option<PathBuf> {
     static BUNDLE: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -63,11 +64,16 @@ fn run_scenario(name: &str, controller_mode: &str, single_component: bool) -> Ou
 }
 
 fn assert_scenario_passed(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         output.status.success(),
         "isolated scenario failed\nstdout:\n{}\nstderr:\n{stderr}",
-        String::from_utf8_lossy(&output.stdout)
+        stdout
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "isolated scenario did not run exactly one helper test\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     stderr
 }
@@ -101,6 +107,32 @@ fn controller_get_state_failure_returns_none_and_notifies_once_per_instance() {
 }
 
 #[test]
+fn controller_get_state_failure_notifies_again_when_result_changes() {
+    let output = run_scenario("failure-changing", "failure-changing", false);
+    let stderr = assert_scenario_passed(&output);
+    assert_eq!(
+        stderr
+            .matches("IEditController::getState for plugin")
+            .count(),
+        2,
+        "each distinct consecutive result must be observable: {stderr}"
+    );
+}
+
+#[test]
+fn controller_get_state_failure_notifies_again_after_success() {
+    let output = run_scenario("failure-success-failure", "failure-success-failure", false);
+    let stderr = assert_scenario_passed(&output);
+    assert_eq!(
+        stderr
+            .matches("IEditController::getState for plugin")
+            .count(),
+        2,
+        "a success must clear failure-notice suppression: {stderr}"
+    );
+}
+
+#[test]
 fn controller_get_state_success_returns_some() {
     let output = run_scenario("success", "known", false);
     assert_scenario_passed(&output);
@@ -109,12 +141,25 @@ fn controller_get_state_success_returns_some() {
 #[test]
 fn single_component_latches_only_after_two_consecutive_matches() {
     let output = run_scenario("two-matches", "echo", true);
-    assert_scenario_passed(&output);
+    let stderr = assert_scenario_passed(&output);
+    assert_eq!(
+        stderr
+            .matches("subsequent saves omit the Cont chunk")
+            .count(),
+        1,
+        "the latch transition must be reported once: {stderr}"
+    );
 }
 
 #[test]
 fn single_component_mismatch_resets_the_latch_and_stores_controller_state() {
     let output = run_scenario("match-then-distinct", "echo-then-distinct", true);
+    assert_scenario_passed(&output);
+}
+
+#[test]
+fn single_component_interrupted_matches_do_not_latch() {
+    let output = run_scenario("match-mismatch-match", "echo-interrupted-echo", true);
     assert_scenario_passed(&output);
 }
 
@@ -140,6 +185,7 @@ fn controller_scenario_helper() {
         "round-trip" => {
             let processor = load();
             let state = processor.capture_state().expect("capture state");
+            assert_eq!(&state[8..40], GAIN_PROCESSOR_CID);
             let chunks = orbit_vst3_preset::parse(&state).unwrap().unwrap();
             assert_eq!(chunks.controller, Some(CONTROLLER_STATE));
             drop(processor);
@@ -175,7 +221,7 @@ fn controller_scenario_helper() {
                 assert_eq!(chunks.controller, None);
             }
         }
-        "failure" => {
+        "failure" | "failure-changing" => {
             let processor = load();
             for _ in 0..2 {
                 let state = processor
@@ -187,6 +233,22 @@ fn controller_scenario_helper() {
                         .unwrap()
                         .controller,
                     None
+                );
+            }
+        }
+        "failure-success-failure" => {
+            let processor = load();
+            let expected = [None, Some(CONTROLLER_STATE), None];
+            for expected_controller in expected {
+                let state = processor
+                    .capture_state()
+                    .expect("component-only capture succeeds");
+                assert_eq!(
+                    orbit_vst3_preset::parse(&state)
+                        .unwrap()
+                        .unwrap()
+                        .controller,
+                    expected_controller
                 );
             }
         }
@@ -262,15 +324,36 @@ fn controller_scenario_helper() {
                 3
             );
         }
+        "match-mismatch-match" => {
+            let processor = load();
+            for expected_controller in [None, Some(CONTROLLER_STATE), None, Some(CONTROLLER_STATE)]
+            {
+                let state = processor.capture_state().unwrap();
+                assert_eq!(
+                    orbit_vst3_preset::parse(&state)
+                        .unwrap()
+                        .unwrap()
+                        .controller,
+                    expected_controller
+                );
+            }
+            let trace = std::fs::read_to_string(&trace_path).unwrap();
+            assert_eq!(
+                trace
+                    .lines()
+                    .filter(|line| *line == "controller.getState")
+                    .count(),
+                4,
+                "the fourth save must still call controller.getState"
+            );
+        }
         other => panic!("unknown controller scenario {other}"),
     }
 }
 
 #[test]
 fn raw_effect_state_is_restored_through_apply_state_bytes() {
-    let Some(bundle) = package_gain_oracle() else {
-        return;
-    };
+    let bundle = package_gain_oracle().expect("package gain oracle for raw effect restore");
     let raw = orbit_vst3_gain_oracle::encode_state(0.25);
     let (mut processor, _) =
         Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(&raw)).unwrap();
@@ -287,9 +370,8 @@ fn raw_effect_state_is_restored_through_apply_state_bytes() {
 
 #[test]
 fn raw_instrument_state_is_restored_through_apply_state_bytes() {
-    let Some(bundle) = orbit_vst3_synth_oracle::package_bundle() else {
-        return;
-    };
+    let bundle = orbit_vst3_synth_oracle::package_bundle()
+        .expect("package synth oracle for raw instrument restore");
     let raw = orbit_vst3_synth_oracle::encode_state(7);
     let (mut processor, _) =
         Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(&raw)).unwrap();

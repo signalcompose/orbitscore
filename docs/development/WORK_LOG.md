@@ -100,6 +100,17 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
     synth oracle の state は音高を変えるので RMS では復元漏れを区別できない。必要な手段（state を変える MCP の seam か、
     RMS が変わる controller state 付きの oracle）は別 issue にする
   - macOS 専用の VST3 crate 6 つ: **84 passed / 0 failed / 4 ignored**（sandbox 外）
+  - 実機 E2E の追加は #990 で追跡する
+- **ラウンド 2**（修正の差分だけを 3 名で再レビュー）の指摘を直した:
+  - 🔴 上の修正が持ち込んだもの: controller 用のストリームが作れないとき、通知なしで `None` を返していた（以前の `expect` は panic で気づけた）。
+    INFO で通知する
+  - 「不一致でラッチを数え直す」テストが、数え直さない実装と区別できなかった（一致 → 不一致 → 不一致の並びだった）。
+    一致 → 不一致 → 一致の並びを足し、4 回目の保存でも controller の `getState` が呼ばれることを確かめる（数え直さない変異で red）
+  - 通知は「直前と同じ失敗なら出さない」（結果コードが変わる・成功の後に失敗する、では再び出す）。ラッチが立った時に INFO を 1 回出す
+  - テストが黙って走らない経路を塞いだ（bundle が無いと何もせずに通る・子プロセスの `0 passed`）。effect の header の class ID も照合。
+    Kontakt の計測テストは `Comp` が空でないことと parse できることを assert する
+  - macOS 専用の VST3 crate 6 つ: **90 passed / 0 failed / 4 ignored**。Kontakt 8 の再計測では `Comp` = 4320 バイトが 3 回とも同じ、
+    `Cont` = 0（前回は 4322 / 4319 / 4320 で揺れた。出力は決定論的とは限らない）
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 

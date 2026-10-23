@@ -157,6 +157,10 @@ fn kontakt_captures_state_three_times_and_reports_controller_chunks() {
         let chunks = orbit_vst3_preset::parse(&state)
             .expect("Kontakt capture produced a malformed container")
             .expect("Kontakt capture did not produce a VST3 container");
+        assert!(
+            !chunks.component.is_empty(),
+            "Kontakt capture {attempt} produced an empty Comp chunk"
+        );
         let controller_size = chunks.controller.map_or(0, <[u8]>::len);
         eprintln!(
             "Kontakt capture {attempt}: elapsed={elapsed:?} total={} Comp={} Cont={} bytes",

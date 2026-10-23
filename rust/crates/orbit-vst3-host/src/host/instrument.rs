@@ -5,6 +5,12 @@
 #[allow(unused_imports)]
 use crate::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ControllerStateCaptureFailure {
+    StreamUnavailable,
+    Result(tresult),
+}
+
 pub(crate) fn capture_component_state(
     component: &ComPtr<IComponent>,
 ) -> Result<Vec<u8>, Vst3HostError> {
@@ -36,25 +42,64 @@ pub(crate) fn capture_component_state(
 pub(crate) fn capture_controller_state(
     controller: &ComPtr<IEditController>,
     plugin_name: &str,
-    failure_notified: &Cell<bool>,
+    last_failure: &Cell<Option<ControllerStateCaptureFailure>>,
 ) -> Option<Vec<u8>> {
     let stream_wrapper = ComWrapper::new(MemoryStream::new());
-    let stream = stream_wrapper
-        .to_com_ptr::<IBStream>()
-        .ok_or_else(|| Vst3HostError::State("MemoryStream exposes no IBStream".into()))
-        .ok()?;
+    let stream = controller_state_stream_or_notify(
+        stream_wrapper.to_com_ptr::<IBStream>(),
+        plugin_name,
+        last_failure,
+    )?;
     let result = unsafe { controller.getState(stream.as_ptr()) };
     if result == kNotImplemented {
         return None;
     }
     if !is_ok(result) {
-        if !failure_notified.replace(true) {
-            eprintln!("{}", controller_state_capture_notice(plugin_name, result));
-        }
+        notify_controller_state_failure(
+            plugin_name,
+            ControllerStateCaptureFailure::Result(result),
+            last_failure,
+        );
         return None;
     }
+    last_failure.set(None);
     let bytes = std::mem::take(&mut *stream_wrapper.data.borrow_mut());
     Some(bytes)
+}
+
+fn controller_state_stream_or_notify(
+    stream: Option<ComPtr<IBStream>>,
+    plugin_name: &str,
+    last_failure: &Cell<Option<ControllerStateCaptureFailure>>,
+) -> Option<ComPtr<IBStream>> {
+    if stream.is_none() {
+        notify_controller_state_failure(
+            plugin_name,
+            ControllerStateCaptureFailure::StreamUnavailable,
+            last_failure,
+        );
+    }
+    stream
+}
+
+fn notify_controller_state_failure(
+    plugin_name: &str,
+    failure: ControllerStateCaptureFailure,
+    last_failure: &Cell<Option<ControllerStateCaptureFailure>>,
+) {
+    if last_failure.get() == Some(failure) {
+        return;
+    }
+    let notice = match failure {
+        ControllerStateCaptureFailure::StreamUnavailable => {
+            controller_state_stream_notice(plugin_name)
+        }
+        ControllerStateCaptureFailure::Result(result) => {
+            controller_state_capture_notice(plugin_name, result)
+        }
+    };
+    eprintln!("{notice}");
+    last_failure.set(Some(failure));
 }
 
 /// TUID（`c_char` × 16）をバイト列として読む。`c_char` の符号はプラットフォームで違うので
@@ -240,7 +285,7 @@ impl Vst3InstrumentProcessor {
                     info: info.clone(),
                     class_id: class.cid,
                     controller_echo_match_streak: Cell::new(0),
-                    controller_state_failure_notified: Cell::new(false),
+                    last_controller_state_failure: Cell::new(None),
                 }),
             },
             info,
@@ -423,4 +468,20 @@ pub(crate) struct ControllerHandshake {
     /// controller が component と**同一の COM オブジェクト**のとき true（#603）。
     /// 理由は [`should_terminate_controller`] を参照。
     pub(crate) shared_with_component: bool,
+}
+
+#[cfg(test)]
+mod controller_state_capture_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_stream_is_observable_and_returns_none() {
+        let last_failure = Cell::new(None);
+        let stream = controller_state_stream_or_notify(None, "No Stream", &last_failure);
+        assert!(stream.is_none());
+        assert_eq!(
+            last_failure.get(),
+            Some(ControllerStateCaptureFailure::StreamUnavailable)
+        );
+    }
 }

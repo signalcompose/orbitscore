@@ -180,7 +180,7 @@ impl Vst3EffectProcessor {
                 info: info.clone(),
                 class_id: class.cid,
                 controller_echo_match_streak: Cell::new(0),
-                controller_state_failure_notified: Cell::new(false),
+                last_controller_state_failure: Cell::new(None),
             }),
         };
         Ok((processor, info))
