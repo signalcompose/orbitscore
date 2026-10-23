@@ -298,9 +298,11 @@ AU の原文は *"Hosts saving documents should use this property"*（`fullState
 ホストの取るべき側まで指定している。これは PRJ.5 の「自動 state は1つ / 名前付き再利用は
 規格の preset で」という切り分けの、規格2つ分の裏付けになる。
 
-VST3 には同等の区別が無いため、コンテキスト付き API は**あれば使う任意の改善**として扱い、
-無い場合は `clap_plugin_state` / `IComponent::getState`（VST3 は `IEditController::getState` も併せて取る・
-[CAP.2a](PLUGIN_CAPABILITY_ABSTRACTION_v1.md)）にフォールバックする
+VST3 は `IStreamAttributes` の `kStateType = Project` で用途を伝えられるが、OrbitScore はまだ
+渡していない（SDK の wrapper は渡す一方、JUCE と Ardour も渡さない）。この属性は
+**あれば使う任意の改善**として扱い、無い場合は `clap_plugin_state` / `IComponent::getState`
+（VST3 は 1 バイト以上を返した `IEditController::getState` もバイト比較せず併せて保存し、
+container 復元時は class ID を照合する・[CAP.2a](PLUGIN_CAPABILITY_ABSTRACTION_v1.md)）にフォールバックする
 （形式で挙動を変えないため、フォールバック側を基準の意味論とする）。
 
 ## PRJ.8 LLM 対称の MCP 面

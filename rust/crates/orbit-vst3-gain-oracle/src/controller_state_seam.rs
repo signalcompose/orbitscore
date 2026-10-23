@@ -52,13 +52,7 @@ pub(super) unsafe fn controller_get_state(state: *mut IBStream, gain: f64) -> tr
         Ok("failure-changing") => kInvalidArgument,
         Ok("failure-success-failure") if call == 1 => write_bytes(state, CONTROLLER_STATE),
         Ok("failure-success-failure") => kResultFalse,
-        Ok("echo") => write_bytes(state, &encode_state(gain)),
-        Ok("echo-then-distinct") if call == 0 => write_bytes(state, &encode_state(gain)),
-        Ok("echo-then-distinct") => write_bytes(state, CONTROLLER_STATE),
-        Ok("echo-interrupted-echo") if call == 0 || call == 2 => {
-            write_bytes(state, &encode_state(gain))
-        }
-        Ok("echo-interrupted-echo") => write_bytes(state, CONTROLLER_STATE),
+        Ok("same-as-component") => write_bytes(state, &encode_state(gain)),
         _ => kResultOk,
     }
 }

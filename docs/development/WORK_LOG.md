@@ -124,6 +124,25 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
   - 途中で見つかったこと: 音源の外部ドライブを接続していなかったため、Kontakt が state の読み込み中に**画面に出ないモーダルの
     ダイアログ**（`NSAlert runModal`）を出して止まり、OrbitScore 側には「60 秒たっても child が READY を返さない」としか出なかった。
     main でも同じ（#989 とは無関係）。child の起動が止まった理由を見える形にするのは、ネイティブ版の設計の論点
+- **主要ホストとの突き合わせと仕様の見直し**（2026-10-23・owner の依頼で一次ソースを調査 → advisor と検討 → **owner 承認**・#982 にコメント）:
+  - 一次ソース: Steinberg の dev portal（Persistence / FAQ）と SDK（`vstpresetfile.cpp`・`vstsinglecomponenteffect.h`・`funknown.cpp`）、
+    JUCE・Ardour・Carla のソース、REAPER の形式の解析、Bitwig / PreSonus の DAWproject 仕様（`Vst3Plugin.java`）。
+    Bitwig 自身の `.bwproject` は非公開で確かめられない
+  - 揃っていたもの（変更なし）: `.vstpreset` container で保存（Ardour が同じ形式・DAWproject は「.vstpreset 形式で保存すべき」）、
+    controller の取得失敗は `Comp` だけで保存（JUCE / Ardour）、復元の順序、旧形式の raw も読む
+  - 🔴 **取り下げ**: 単一コンポーネントの重複判定（バイト比較・2 回一致のラッチ）。**調べたホストはどれも無条件に両方を保存**しており前例が無い。
+    SDK の `SingleComponentEffect` は `getState` を `getEditorState` に別名化して両者を分け、nih-plug / iPlug2 / DPF / Kontakt 8 も
+    controller の state は空 → 発動するプラグインが見つからない一方、偶然一致の後にエディタの state を失う偽陽性がある。
+    controller の `getState` が 1 バイト以上を返したら常に `Cont` を付ける。比較・ラッチ・ラッチの通知・oracle の echo 系モードと、
+    それを検査していたテスト 6 本を**機能の取り下げとして削除**した（名前は PR に列挙）。単一コンポーネントでも `Cont` が付くことを確かめる
+    テストを残した（比較を戻す変異で red）
+  - 🔴 **class ID の照合を追加**: 仕様にあった「ASCII 表現はプラットフォームでバイト順が違うので照合しない」は**誤り**だった
+    （ASCII 表現は COM / 非 COM で同じ形。SDK の `loadPreset` と Ardour は不一致なら拒否）。復元のときに大文字小文字を区別せず照合し、
+    不一致なら両方の ID を名指しして読み込みを失敗させる（PH.1 の「黙って鳴らさない」と同じ扱い）。raw は header が無いので照合しない。
+    照合を外す変異で instrument / effect の両テストが red
+  - 未対応として仕様に 1 行: プラグインに「プロジェクトの読み込み」と伝える `kStateType = Project`（JUCE / Ardour も渡さない）
+  - 検証: macOS 専用の VST3 crate 6 つ **88 passed / 0 failed / 4 ignored**・clippy / fmt 緑。840 で #989 が保存した container
+    （ピアノ）を class ID の照合つきで読み込めた（6.0 s）
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 

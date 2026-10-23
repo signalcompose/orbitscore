@@ -1293,7 +1293,9 @@ keys.instrument("Kontakt 8.vst3", "keys.vstpreset")  // 保存済み state で�
   state、さもなくば pluginId（3引数形 `instrument(path, pluginId, statePath)` は明示指定）。
   相対パスは **document directory 基準**で解決する（音源検索パスは使わない — state は
   プロジェクトの資産で、暗黙検索による別プロジェクト同名 state の誤読を避ける）。
-  復元失敗はロード失敗として表面化する（default 音のまま黙って鳴らさない）。daemon respawn
+  container の header にある class ID は読み込む VST3 component の class ID と大文字小文字を
+  区別せず照合し、不一致は復元失敗にする（header のない旧形式 raw は照合しない）。復元失敗は
+  ロード失敗として表面化する（default 音のまま黙って鳴らさない）。daemon respawn
   後の再ロードでも state は再適用される。CLAP は v1 未対応（明示エラー）。
 
 - `.midi(port, ch)` と同型の**シーケンス種別宣言 verb**。宣言したシーケンスは

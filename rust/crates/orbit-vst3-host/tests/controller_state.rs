@@ -139,27 +139,8 @@ fn controller_get_state_success_returns_some() {
 }
 
 #[test]
-fn single_component_latches_only_after_two_consecutive_matches() {
-    let output = run_scenario("two-matches", "echo", true);
-    let stderr = assert_scenario_passed(&output);
-    assert_eq!(
-        stderr
-            .matches("subsequent saves omit the Cont chunk")
-            .count(),
-        1,
-        "the latch transition must be reported once: {stderr}"
-    );
-}
-
-#[test]
-fn single_component_mismatch_resets_the_latch_and_stores_controller_state() {
-    let output = run_scenario("match-then-distinct", "echo-then-distinct", true);
-    assert_scenario_passed(&output);
-}
-
-#[test]
-fn single_component_interrupted_matches_do_not_latch() {
-    let output = run_scenario("match-mismatch-match", "echo-interrupted-echo", true);
+fn single_component_matching_component_state_still_stores_cont_chunk() {
+    let output = run_scenario("single-component-same-state", "same-as-component", true);
     assert_scenario_passed(&output);
 }
 
@@ -252,99 +233,25 @@ fn controller_scenario_helper() {
                 );
             }
         }
-        "two-matches" => {
+        "single-component-same-state" => {
             let processor = load();
-            for expected_controller_calls in [1, 2, 2, 2] {
-                let state = processor.capture_state().expect("capture single component");
-                assert_eq!(
-                    orbit_vst3_preset::parse(&state)
-                        .unwrap()
-                        .unwrap()
-                        .controller,
-                    None
-                );
-                let trace = std::fs::read_to_string(&trace_path).unwrap();
-                assert_eq!(
-                    trace
-                        .lines()
-                        .filter(|line| *line == "controller.getState")
-                        .count(),
-                    expected_controller_calls,
-                    "controller getState count after this save"
-                );
-            }
+            let state = processor.capture_state().expect("capture single component");
+            let chunks = orbit_vst3_preset::parse(&state).unwrap().unwrap();
+            assert_eq!(chunks.controller, Some(chunks.component));
             let trace = std::fs::read_to_string(&trace_path).unwrap();
             assert_eq!(
                 trace
                     .lines()
                     .filter(|line| *line == "component.getState")
                     .count(),
-                4
+                1
             );
             assert_eq!(
                 trace
                     .lines()
                     .filter(|line| *line == "controller.getState")
                     .count(),
-                2
-            );
-        }
-        "match-then-distinct" => {
-            let processor = load();
-            let first = processor.capture_state().unwrap();
-            assert_eq!(
-                orbit_vst3_preset::parse(&first)
-                    .unwrap()
-                    .unwrap()
-                    .controller,
-                None
-            );
-            let second = processor.capture_state().unwrap();
-            assert_eq!(
-                orbit_vst3_preset::parse(&second)
-                    .unwrap()
-                    .unwrap()
-                    .controller,
-                Some(CONTROLLER_STATE)
-            );
-            let third = processor.capture_state().unwrap();
-            assert_eq!(
-                orbit_vst3_preset::parse(&third)
-                    .unwrap()
-                    .unwrap()
-                    .controller,
-                Some(CONTROLLER_STATE)
-            );
-            let trace = std::fs::read_to_string(&trace_path).unwrap();
-            assert_eq!(
-                trace
-                    .lines()
-                    .filter(|line| *line == "controller.getState")
-                    .count(),
-                3
-            );
-        }
-        "match-mismatch-match" => {
-            let processor = load();
-            for expected_controller in [None, Some(CONTROLLER_STATE), None, Some(CONTROLLER_STATE)]
-            {
-                let state = processor.capture_state().unwrap();
-                assert_eq!(
-                    orbit_vst3_preset::parse(&state)
-                        .unwrap()
-                        .unwrap()
-                        .controller,
-                    expected_controller
-                );
-            }
-            let trace = std::fs::read_to_string(&trace_path).unwrap();
-            assert_eq!(
-                trace
-                    .lines()
-                    .filter(|line| *line == "controller.getState")
-                    .count(),
-                4,
-                "the fourth save must still call controller.getState"
+                1
             );
         }
         other => panic!("unknown controller scenario {other}"),
@@ -391,4 +298,63 @@ fn raw_instrument_state_is_restored_through_apply_state_bytes() {
         / (crossings.last().unwrap() - crossings.first().unwrap()) as f64;
     let expected = orbit_vst3_synth_oracle::voice_frequency_hz(69, 7) as f64;
     assert!((measured - expected).abs() / expected < 0.02);
+}
+
+#[test]
+fn effect_container_class_id_match_is_case_insensitive() {
+    let bundle = package_gain_oracle().expect("package gain oracle for class ID restore");
+    let mut state = orbit_vst3_preset::build(
+        &[
+            0x6E, 0x33, 0x22, 0x52, 0x54, 0x22, 0x4A, 0x00, 0xAA, 0x69, 0x30, 0x1A, 0xF3, 0x18,
+            0x79, 0x7D,
+        ],
+        &orbit_vst3_gain_oracle::encode_state(0.25),
+        None,
+    );
+    state[8..40].make_ascii_lowercase();
+    Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(&state))
+        .expect("lowercase spelling of the matching class ID must load");
+}
+
+#[test]
+fn effect_container_for_another_class_reports_both_ids() {
+    let bundle = package_gain_oracle().expect("package gain oracle for class ID rejection");
+    let state = orbit_vst3_preset::build(
+        &[0xAA; 16],
+        &orbit_vst3_gain_oracle::encode_state(0.25),
+        None,
+    );
+    let error = match Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(&state)) {
+        Ok(_) => panic!("another class ID must be rejected"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        "{error}"
+    );
+    assert!(
+        error.contains("6E33225254224A00AA69301AF318797D"),
+        "{error}"
+    );
+}
+
+#[test]
+fn instrument_container_for_another_class_reports_both_ids() {
+    let bundle = orbit_vst3_synth_oracle::package_bundle()
+        .expect("package synth oracle for class ID rejection");
+    let state =
+        orbit_vst3_preset::build(&[0xAA; 16], &orbit_vst3_synth_oracle::encode_state(7), None);
+    let error =
+        match Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(&state)) {
+            Ok(_) => panic!("another class ID must be rejected"),
+            Err(error) => error.to_string(),
+        };
+    assert!(
+        error.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        "{error}"
+    );
+    assert!(
+        error.contains("4D16F7A1C14B4D4DA292B0D8A331C421"),
+        "{error}"
+    );
 }

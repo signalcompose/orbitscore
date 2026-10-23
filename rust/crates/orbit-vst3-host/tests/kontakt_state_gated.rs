@@ -131,9 +131,8 @@ fn kontakt_loads_with_saved_state() {
     eprintln!("(A) state 付き: {elapsed:?} で load 完了");
 }
 
-/// #982: Kontakt の controller state 取得コストと単一コンポーネント latch を実測する。
-/// 3 回目が前 2 回より明確に短ければ latch の傍証になるが、実プラグイン内部の呼び出し回数を
-/// 公開 API から直接は観測できないため、各所要時間と `Cont` の有無・サイズを一次データとして出す。
+/// #982: Kontakt の controller state 取得コストを実測する。
+/// 各保存で component / controller を取得し、所要時間と `Cont` の有無・サイズを一次データとして出す。
 #[test]
 fn kontakt_captures_state_three_times_and_reports_controller_chunks() {
     let Some((bundle, state_path)) = gated_env() else {

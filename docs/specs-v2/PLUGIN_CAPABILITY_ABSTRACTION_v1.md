@@ -55,8 +55,8 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 
 | 能力 | VST3 | CLAP | AU（v1 では非目標） |
 |---|---|---|---|
-| `CAP-STATE-GET` | `IComponent::getState` + `IEditController::getState`（`.vstpreset` の `Comp` / `Cont` chunk・CAP.2a） | `clap_plugin_state.save` | `AUAudioUnit.fullStateForDocument` |
-| `CAP-STATE-SET` | `IComponent::setState` (+ `IEditController::setComponentState`、`Cont` があれば `IEditController::setState`・CAP.2a) | `clap_plugin_state.load` | 同上（同プロパティへ代入） |
+| `CAP-STATE-GET` | `IComponent::getState` + `IEditController::getState`（成功して非空なら常に `.vstpreset` の `Comp` / `Cont` chunk・CAP.2a） | `clap_plugin_state.save` | `AUAudioUnit.fullStateForDocument` |
+| `CAP-STATE-SET` | container の class ID 照合後、`IComponent::setState` (+ `IEditController::setComponentState`、`Cont` があれば `IEditController::setState`・CAP.2a) | `clap_plugin_state.load` | 同上（同プロパティへ代入） |
 | `CAP-STATE-DIRTY` | `IComponentHandler2::setDirty`（+ `performEdit`） | `clap_host_state.mark_dirty` | **—**（CAP.3a） |
 | `CAP-PARAM-LIST` | `IEditController::getParameterCount` / `getParameterInfo` | `clap_plugin_params.count` / `get_info` | `AUAudioUnit.parameterTree` |
 | `CAP-PARAM-GET/SET` | `getParamNormalized` / `setParamNormalized` | `get_value` / パラメータイベント | `AUParameter.value` |
@@ -102,27 +102,34 @@ VST3 はプラグインの state を **component（音を作る側）と control
 
 1. **形式は `.vstpreset` container**（`Comp` は必須、`Cont` は下の 2 の条件で付く）。header の
    class ID は component（processor）の class ID を、SDK の `FUID::toString` と同じ書式で書く
-   （macOS は `COM_COMPATIBLE = 0` なので、16 bytes を先頭から順に大文字 16 進で並べた 32 文字）
+   （macOS の TUID 16 bytes を先頭から順に大文字 16 進で並べた 32 文字）。`FUID::toString` は
+   `COM_COMPATIBLE` の有無に応じて内部表現の読み方を変えるため、Windows と macOS/Linux の
+   どちらでも同じ class ID は同じ 32 文字になる
 2. **`Cont` を付けない場合**:
    - controller が無い
    - `IEditController::getState` が `kNotImplemented` を返す・失敗する・0 バイトを返す。
      失敗のときは INFO の通知を出し、component state だけで保存する
-   - **単一コンポーネント**（controller と component が同じオブジェクト）で、
-     `IEditController::getState` の結果が `Comp` と同じバイト列のとき。同じ実装が 2 つの口で
-     答えているので、付けると復元で全 state の `setState` が 2 回走る（Kontakt 級では読み込みが倍になる）。
-     **2 回続けて一致した**インスタンスでは、3 回目以後の保存で
-     `IEditController::getState` を呼ばない（同じ state を 2 回シリアライズするだけになるため）。
-     一致しない保存があれば回数を 0 へ戻す。ただし、最初の 2 回が偶然一致し、その後
-     editor state だけが変わる plugin は検出できない、という限界は残る
+   `getState` が成功して 1 バイト以上を返した場合は、単一コンポーネントか、`Comp` と同じ
+   バイト列かを問わず常に `Cont` を付ける。偶然一致した時点で省略すると、その後に変化した
+   editor state を黙って失うため、バイト比較・一致回数・ラッチは使わない
 3. **復元は container と raw component chunk（旧形式・先頭が `VST3` でないバイト列）の両方を受け付ける**。
-   #982 より前に保存した state ファイルはそのまま読める
+   #982 より前に保存した state ファイルはそのまま読める。container は header の class ID と
+   読み込む component の class ID を ASCII の大文字小文字を区別せず照合し、不一致なら両方の
+   ID を含むロード失敗にする。raw には header がないため照合しない
 
 **SDK との差**: SDK の `savePreset` は、controller が `kNotImplemented` を返しても空の `Cont` を書き、
 controller の失敗で保存全体を失敗させる。OrbitScore は空の `Cont` を書かず、controller の失敗で
 保存を失敗させない。音を決めるのは component state であり、それを保存できないことは
 controller state を落とすことより悪いため。
 
-復元時に header の class ID は照合しない（`orbit-vst3-preset` の `parse` の doc を参照）。
+**主要ホストとの比較**: SDK の `PresetFile`、JUCE、Ardour、REAPER は component と controller の
+state をバイト比較せず両方保存する。保存形式は Ardour と DAWproject（Bitwig / PreSonus）が
+`.vstpreset` container。復元順序は上記の SDK 順序で、SDK と Ardour は header の class ID が
+対象 component と異なれば読み込みを拒否する。OrbitScore もこの共通部分に揃える。
+
+**未対応**: プラグインへ「プロジェクトの読み込み」と伝える `IStreamAttributes` の
+`PresetAttributes::kStateType = StateType::kProject` は渡していない。SDK の AU wrapper は渡すが、
+JUCE と Ardour は渡していないため、現時点の互換性を損なう既知差ではない。
 
 ## CAP.3a AU に dirty 通知は無い
 
@@ -318,9 +325,13 @@ AU のホスト通知面を全列挙した結果（`AUAudioUnit.h`）:
 | CLAP `mark_dirty` の存在と原文 | `clap/ext/state.h`（free-audio/clap main）/ `clap-sys-0.5.0/src/ext/state.rs` |
 | CLAP GUI のスレッド注記と `closed` | `clap/ext/gui.h` |
 | CLAP state context（preset / duplicate / project） | `clap-sys-0.5.0/src/ext/state_context.rs` |
-| **VST3 の state 保存・復元の手順（`Comp` / `Cont`）と `.vstpreset` の形式**（CAP.2a） | VST3 SDK `public.sdk/source/vst/vstpresetfile.cpp`（`PresetFile::savePreset` / `loadPreset` / `writeHeader` / `writeChunkList` / `restoreControllerState`）・`vstpresetfile.h`（形式図）— steinbergmedia/vst3_public_sdk master（2026-10-06 取得） |
-| `.vstpreset` header の class ID の書式 | VST3 SDK `pluginterfaces/base/funknown.cpp`（`FUID::toString`）・`fplatform.h`（`COM_COMPATIBLE` は Windows だけ 1）— steinbergmedia/vst3_pluginterfaces master（2026-10-06 取得） |
+| **VST3 の state 保存・復元の手順（`Comp` / `Cont`）と `.vstpreset` の形式**（CAP.2a） | VST3 SDK `public.sdk/source/vst/vstpresetfile.cpp:80-157`（`PresetFile::savePreset` / `loadPreset`）・同 `:226-328`（`writeHeader` / `writeChunkList`）・同 `:461-529`（復元）・`vstpresetfile.h:45-66`（形式図）、[Developer Portal: API Documentation / Persistence](https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/API+Documentation/Index.html)、[FAQ: Persistence](https://steinbergmedia.github.io/vst3_dev_portal/pages/FAQ/Persistence.html) — master（2026-10-23 確認） |
+| `.vstpreset` header の class ID の書式と照合 | VST3 SDK `pluginterfaces/base/funknown.cpp:290-305`（`FUID::toString`）・`funknown.h:36-60`（COM / 非 COM の同一 ASCII 表現）・`public.sdk/source/vst/vstpresetfile.cpp:122-157`（`loadPreset` の不一致拒否）— master（2026-10-23 確認） |
 | 単一コンポーネントでも `IEditController::getState` は別の実装にできる（SDK の慣行） | VST3 SDK `public.sdk/source/vst/vstsinglecomponenteffect.h:22-28`（`#define getState getEditorState`） |
+| 主要ホストは component / controller をバイト比較せず保存し、SDK 順で復元する | JUCE `modules/juce_audio_processors/format_types/juce_VST3PluginFormat.cpp:3055-3109`（`VST3PluginInstance::getStateInformation` / `setStateInformation`。現行は `juce_audio_processors_headless/format_types/juce_VST3PluginFormatImpl.h` へ移動）、Ardour `libs/ardour/vst3_plugin.cc:2631-2871`（`VST3PI::save_state` / `load_state`）、REAPER の project state 実データ（component / controller の 2 block）— 2026-10-23 確認 |
+| Ardour の `.vstpreset` 保存と class ID 不一致拒否 | Ardour `libs/ardour/vst3_plugin.cc:915-941`（`.vstpreset` 書き出し）・同 `:2719-2793`（class ID 照合と SDK 順の復元）・同 `:2845-2852`（controller の無条件取得）— master（2026-10-23 確認） |
+| DAWproject の VST3 state 形式 | Bitwig / PreSonus DAWproject [`src/main/java/com/bitwig/dawproject/device/Vst3Plugin.java:5-9`](https://github.com/bitwig/dawproject/blob/main/src/main/java/com/bitwig/dawproject/device/Vst3Plugin.java#L5-L9)（`.vstpreset` で保存） |
+| project state のコンテキスト属性 | VST3 SDK `pluginterfaces/vst/ivstattributes.h`（`PresetAttributes::kStateType` / `StateType::kProject`）・`public.sdk/source/vst/auwrapper/auwrapper.mm`（project 復元時に設定）。JUCE / Ardour の上記復元経路は設定しない |
 | **VST3 `IComponentHandler2::setDirty` の存在と原文** | `vst3-0.3.0/src/bindings.rs:6752`（`IComponentHandler2Vtbl`）/ VST3 SDK `pluginterfaces/vst/ivsteditcontroller.h:311-314` |
 | VST3 のホストコールバック interface の全列挙 | `vst3-0.3.0/src/bindings.rs`: `IComponentHandler`(6545) / `IComponentHandler2`(6750) / `IComponentHandler3`(6937) / `IComponentHandlerBusActivation`(7040) / `IComponentHandlerSystemTime`(7155) / `IUnitHandler`(12989) / `IUnitHandler2`(13126) / `IPlugFrame`(1702) |
 | `RestartFlags` が12個の閉じた列挙であること | `vst3-0.3.0/src/bindings.rs`（`RestartFlags_`） |
@@ -338,3 +349,4 @@ AU のホスト通知面を全列挙した結果（`AUAudioUnit.h`）:
 
 _確立: 2026-07-28（#546 Phase 0 / #547）。改訂は owner 承認を要する。_
 _改訂: 2026-10-06（#982・CAP.2 の VST3 state 行と CAP.2a。owner が #982 の着手を指示）。_
+_改訂: 2026-10-23（PR #989・controller state の重複判定撤回と class ID 照合。owner 承認 2026-10-23）。_

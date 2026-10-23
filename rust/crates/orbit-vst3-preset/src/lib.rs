@@ -28,6 +28,8 @@ const LIST_CHUNK: &[u8; 4] = b"List";
 /// `.vstpreset` container の chunk 参照（[`parse`] の結果）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VstPresetChunks<'a> {
+    /// Container header の class ID。raw state を呼び出し側で組み立てた場合は `None`。
+    pub class_id: Option<&'a [u8; 32]>,
     pub component: &'a [u8],
     pub controller: Option<&'a [u8]>,
 }
@@ -55,9 +57,10 @@ impl Error for MalformedPreset {}
 /// 扱う）。magic が合うのに構造が壊れている場合はエラー（silent に raw 扱いすると
 /// container ヘッダごと setState に流れて plugin 側で不可解に失敗する）。
 ///
-/// header の class ID は照合しない: TUID ↔ ASCII 表現はプラットフォームで byte order が
-/// 異なり（COM 互換 swap）、誤検知で正当な preset を弾くリスクが照合の利得を上回る。
-/// 不一致の preset は plugin 自身の setState が拒否する。
+/// header の class ID は [`VstPresetChunks::class_id`] として返す。SDK の `FUID::toString` は
+/// COM 互換 / 非 COM の内部表現に応じた読み方をするため、同じ TUID の ASCII 表現は
+/// プラットフォーム間で同じになる。復元側は読み込む component の class ID と大文字小文字を
+/// 区別せず照合し、不一致を `setState` より前に拒否する。raw state は `Ok(None)` なので照合しない。
 ///
 /// SDK より意図的に厳しい点が 2 つある。chunk entry の列が途中で切れていれば container
 /// 全体を malformed とし、0 バイトの `Comp` も拒否する。どちらも「復元できたように見えて
@@ -71,6 +74,9 @@ pub fn parse(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, MalformedPrese
     if bytes.len() < HEADER_SIZE {
         return Err(malformed("header shorter than 48 bytes"));
     }
+    let class_id = (&bytes[8..40])
+        .try_into()
+        .expect("the 48-byte header contains a 32-byte class ID");
     let read_i64 = |offset: usize| -> Result<i64, MalformedPreset> {
         let end = offset
             .checked_add(8)
@@ -122,6 +128,7 @@ pub fn parse(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, MalformedPrese
         return Err(malformed("'Comp' (component state) chunk is empty"));
     }
     Ok(Some(VstPresetChunks {
+        class_id: Some(class_id),
         component,
         controller,
     }))
@@ -189,31 +196,10 @@ fn to_i64(value: usize) -> i64 {
 ///
 /// - `controller` が `None`（controller が無い・`getState` が未実装か失敗）→ 書かない
 /// - 0 バイト → 書かない（SDK は空の `Cont` を書くが、復元で空の `setState` を呼ぶだけになる）
-/// - `echoes_component`（単一コンポーネントの controller state が component state と一致）
-///   → 書かない。同じ実装が 2 つの口で答えているので、書くと復元で全 state の `setState` が
-///   2 回走る
-pub fn controller_chunk_to_store(
-    controller: Option<&[u8]>,
-    echoes_component: bool,
-) -> Option<&[u8]> {
-    if echoes_component {
-        return None;
-    }
+/// - 1 バイト以上 → component state と同じバイト列でも書く。controller の editor state を
+///   偶然の一致で失わないため、バイト比較や単一コンポーネントの特別扱いはしない
+pub fn controller_chunk_to_store(controller: Option<&[u8]>) -> Option<&[u8]> {
     controller.filter(|state| !state.is_empty())
-}
-
-/// 単一コンポーネントの plugin が、controller の口でも component state をそのまま返したか。
-///
-/// `true` なら同じ実装が 2 つの口で答えている。plugin の実装は実行中に変わらないので、
-/// host はこれを覚えておけば次の保存から controller の `getState` を省ける
-/// （Kontakt 級では state のシリアライズ 1 回分）。
-pub fn controller_echoes_component(
-    component: &[u8],
-    controller: Option<&[u8]>,
-    controller_is_component: bool,
-) -> bool {
-    controller_is_component
-        && controller.is_some_and(|state| !state.is_empty() && state == component)
 }
 
 #[cfg(test)]
@@ -225,7 +211,7 @@ mod tests {
         let mut out = Vec::new();
         out.extend_from_slice(b"VST3");
         out.extend_from_slice(&1i32.to_le_bytes());
-        out.extend_from_slice(&[b'A'; 32]); // class ID ASCII（parser は照合しない）
+        out.extend_from_slice(&[b'A'; 32]);
         let list_offset_field = out.len();
         out.extend_from_slice(&0i64.to_le_bytes()); // 後で埋める
         let mut entries = Vec::new();
@@ -252,6 +238,7 @@ mod tests {
         let chunks = parse(&preset)
             .expect("well-formed preset parses")
             .expect("VST3 magic is recognized");
+        assert_eq!(chunks.class_id, Some(&[b'A'; 32]));
         assert_eq!(chunks.component, b"component-state");
         assert_eq!(chunks.controller, Some(&b"ctrl"[..]));
     }
@@ -436,52 +423,28 @@ mod tests {
 
     #[test]
     fn no_controller_state_stores_no_cont_chunk() {
-        assert_eq!(controller_chunk_to_store(None, false), None);
-        assert_eq!(controller_chunk_to_store(None, true), None);
+        assert_eq!(controller_chunk_to_store(None), None);
     }
 
     #[test]
     fn an_empty_controller_state_stores_no_cont_chunk() {
-        assert_eq!(controller_chunk_to_store(Some(b""), false), None);
-        assert_eq!(controller_chunk_to_store(Some(b""), true), None);
+        assert_eq!(controller_chunk_to_store(Some(b"")), None);
     }
 
     #[test]
     fn a_separate_controller_state_is_stored_as_is() {
+        assert_eq!(controller_chunk_to_store(Some(b"ctrl")), Some(&b"ctrl"[..]));
+        assert_eq!(controller_chunk_to_store(Some(b"same")), Some(&b"same"[..]));
+    }
+
+    #[test]
+    fn a_non_empty_controller_state_is_always_stored() {
         assert_eq!(
-            controller_chunk_to_store(Some(b"ctrl"), false),
-            Some(&b"ctrl"[..])
+            controller_chunk_to_store(Some(b"same-as-component")),
+            Some(&b"same-as-component"[..])
         );
-        // 別オブジェクトの controller が component と同じバイト列を返しても、それはその
-        // controller が自分で書いた state なので保存する（同一判定は単一コンポーネントだけ）。
         assert_eq!(
-            controller_chunk_to_store(Some(b"same"), false),
-            Some(&b"same"[..])
-        );
-    }
-
-    #[test]
-    fn a_single_component_plugin_echoing_its_component_state_stores_no_cont_chunk() {
-        // 同じ実装が 2 つの口で答えている。付けると復元で setState が 2 回走る。
-        assert_eq!(controller_chunk_to_store(Some(b"same"), true), None);
-    }
-
-    #[test]
-    fn only_a_single_component_plugin_returning_its_component_state_is_an_echo() {
-        assert!(controller_echoes_component(b"same", Some(b"same"), true));
-        assert!(!controller_echoes_component(b"same", Some(b"same"), false));
-        assert!(!controller_echoes_component(b"comp", Some(b"editor"), true));
-        assert!(!controller_echoes_component(b"comp", None, true));
-        // 空同士は「同じ実装」の証拠にならない（何も書かない controller はよくある）。
-        assert!(!controller_echoes_component(b"", Some(b""), true));
-    }
-
-    #[test]
-    fn a_single_component_plugin_with_distinct_editor_state_stores_it() {
-        // SDK の SingleComponentEffect は IEditController::getState を別名
-        // （getEditorState）で実装できる。中身が違えばそれは controller の state。
-        assert_eq!(
-            controller_chunk_to_store(Some(b"editor"), false),
+            controller_chunk_to_store(Some(b"editor")),
             Some(&b"editor"[..])
         );
     }

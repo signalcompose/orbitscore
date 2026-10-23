@@ -465,10 +465,6 @@ pub struct Vst3PluginMain {
     pub(crate) info: LoadedVst3Info,
     /// component（processor）の class ID。保存する `.vstpreset` の header に書く（CAP.2a・#982）。
     pub(crate) class_id: TUID,
-    /// 単一コンポーネントの controller state が component state と連続して一致した回数。
-    /// 2 回一致した後は controller の `getState` を省く（#982）。ただし、最初の 2 回が偶然
-    /// 一致し、その後 editor state だけが変わる plugin は検出できない、という限界は残る。
-    pub(crate) controller_echo_match_streak: Cell<u8>,
     /// 直前に INFO 通知した controller state 取得失敗。同じ失敗だけを連続抑止し、
     /// 別の失敗または成功後の再失敗は通知する。
     pub(crate) last_controller_state_failure: Cell<Option<ControllerStateCaptureFailure>>,
@@ -484,7 +480,7 @@ impl Vst3PluginMain {
     ///
     /// component state が取れない・空なら `Err`（空 state 拒否の規律）。controller state は
     /// 取れなければ付けず、component state だけで保存する（音を決めるのは component 側）。
-    /// どの controller state を付けるかは [`orbit_vst3_preset::controller_chunk_to_store`]。
+    /// controller の `getState` が成功して 1 バイト以上なら常に `Cont` として付ける。
     ///
     /// **スレッド**: home（main）スレッドから呼ぶこと（CAP.5・VST3 の規約）。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
@@ -493,41 +489,15 @@ impl Vst3PluginMain {
             .as_ref()
             .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
         let component_state = capture_component_state(component)?;
-        let controller_echo_latched = self.controller_echo_match_streak.get() >= 2;
-        let controller_state = if controller_echo_latched {
-            None
-        } else {
-            self.controller.as_ref().and_then(|controller| {
-                capture_controller_state(
-                    controller,
-                    &self.info.name,
-                    &self.last_controller_state_failure,
-                )
-            })
-        };
-        // VST3 SDK の単一コンポーネントでは IEditController::getState が getEditorState の
-        // 別名で、component state とは別物になりうる。オブジェクトの同一性だけでは決められ
-        // ないため、実行時に取得したバイト列で判定する（vstsinglecomponenteffect.h）。
-        let controller_echoes_component = orbit_vst3_preset::controller_echoes_component(
-            &component_state,
-            controller_state.as_deref(),
-            self.controller_shared_with_component,
-        );
-        if !controller_echo_latched {
-            let next_streak = if controller_echoes_component {
-                self.controller_echo_match_streak.get().saturating_add(1)
-            } else {
-                0
-            };
-            self.controller_echo_match_streak.set(next_streak);
-            if next_streak >= 2 {
-                eprintln!("{}", controller_state_latched_notice(&self.info.name));
-            }
-        }
-        let controller_chunk = orbit_vst3_preset::controller_chunk_to_store(
-            controller_state.as_deref(),
-            controller_echoes_component,
-        );
+        let controller_state = self.controller.as_ref().and_then(|controller| {
+            capture_controller_state(
+                controller,
+                &self.info.name,
+                &self.last_controller_state_failure,
+            )
+        });
+        let controller_chunk =
+            orbit_vst3_preset::controller_chunk_to_store(controller_state.as_deref());
         Ok(orbit_vst3_preset::build(
             &tuid_bytes(&self.class_id),
             &component_state,
@@ -720,8 +690,7 @@ mod tests {
 #[cfg(test)]
 mod best_effort_notice_tests {
     use super::{
-        best_effort_state_notice, controller_state_capture_notice, controller_state_latched_notice,
-        controller_state_stream_notice,
+        best_effort_state_notice, controller_state_capture_notice, controller_state_stream_notice,
     };
 
     /// この通知は復元の成功経路で出るので、daemon の stderr router が非エラーと判定できる形で
@@ -779,14 +748,5 @@ mod best_effort_notice_tests {
         assert!(line.contains("No Stream"));
         assert!(line.contains("MemoryStream exposes no IBStream"));
         assert!(line.contains("without the controller chunk"));
-    }
-
-    #[test]
-    fn controller_state_latched_notice_identifies_plugin_and_cont_omission() {
-        let line = controller_state_latched_notice("Echo Plugin");
-        assert!(line.starts_with("INFO [orbit-vst3-host] "));
-        assert!(line.contains("Echo Plugin"));
-        assert!(line.contains("same state"));
-        assert!(line.contains("omit the Cont chunk"));
     }
 }

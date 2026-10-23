@@ -38,7 +38,7 @@ pub(crate) fn capture_component_state(
 ///
 /// `kNotImplemented` は「controller に state が無い」なので黙って `None`。それ以外の失敗は
 /// INFO の通知を出して `None`（component state だけで保存は成功させる — 現状より悪くしない）。
-/// 0 バイトや単一コンポーネントでの重複は呼び出し側（`controller_chunk_to_store`）が落とす。
+/// 0 バイトは呼び出し側（`controller_chunk_to_store`）が落とす。
 pub(crate) fn capture_controller_state(
     controller: &ComPtr<IEditController>,
     plugin_name: &str,
@@ -239,7 +239,12 @@ impl Vst3InstrumentProcessor {
         // 「実行中の preset 差し替え」意味論になり、サンプルマップ等の構造的 state を持つ
         // 音源（Kontakt 等）で挙動差が出得る（#542 レビュー F7）。
         if let Some(bytes) = state {
-            apply_state_bytes(&component, controller_handshake.controller.as_ref(), bytes)?;
+            apply_state_bytes(
+                &component,
+                controller_handshake.controller.as_ref(),
+                &class.cid,
+                bytes,
+            )?;
         }
         let active_result = unsafe { component.setActive(1) };
         if !is_ok(active_result) {
@@ -284,7 +289,6 @@ impl Vst3InstrumentProcessor {
                     _library: library,
                     info: info.clone(),
                     class_id: class.cid,
-                    controller_echo_match_streak: Cell::new(0),
                     last_controller_state_failure: Cell::new(None),
                 }),
             },

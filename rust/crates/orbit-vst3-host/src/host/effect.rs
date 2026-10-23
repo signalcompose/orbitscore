@@ -109,7 +109,12 @@ impl Vst3EffectProcessor {
         // instrument と同じ VST3 正準順序: setup 済み・inactive の component へ state を適用し、
         // 音色が確定してから READY に到達できるようにする。
         if let Some(bytes) = state {
-            apply_state_bytes(&component, controller_handshake.controller.as_ref(), bytes)?;
+            apply_state_bytes(
+                &component,
+                controller_handshake.controller.as_ref(),
+                &class.cid,
+                bytes,
+            )?;
         }
         // `is_effect` drives both `process_block`'s overwrite-vs-add-mix branch (used in
         // production by `orbit-vst3-effect-child`) and the probe / two-pass signal check below
@@ -179,7 +184,6 @@ impl Vst3EffectProcessor {
                 _library: library,
                 info: info.clone(),
                 class_id: class.cid,
-                controller_echo_match_streak: Cell::new(0),
                 last_controller_state_failure: Cell::new(None),
             }),
         };
@@ -508,14 +512,30 @@ pub struct Vst3InstrumentProcessor {
 pub(crate) fn apply_state_bytes(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,
+    component_class_id: &TUID,
     bytes: &[u8],
 ) -> Result<(), Vst3HostError> {
     let owned_raw;
     let chunks = match parse(bytes)? {
-        Some(chunks) => chunks,
+        Some(chunks) => {
+            let preset_class_id = chunks
+                .class_id
+                .expect("a parsed container always has a class ID");
+            let component_class_id =
+                orbit_vst3_preset::class_id_ascii(&tuid_bytes(component_class_id));
+            if !preset_class_id.eq_ignore_ascii_case(&component_class_id) {
+                return Err(Vst3HostError::State(format!(
+                    "VST3 preset class ID mismatch: container={}, component={}",
+                    String::from_utf8_lossy(preset_class_id),
+                    String::from_utf8_lossy(&component_class_id)
+                )));
+            }
+            chunks
+        }
         None => {
             // magic 無し = raw component state chunk（自前保存の生 dump 等）。
             owned_raw = VstPresetChunks {
+                class_id: None,
                 component: bytes,
                 controller: None,
             };

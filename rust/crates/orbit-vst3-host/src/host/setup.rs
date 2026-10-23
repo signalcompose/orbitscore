@@ -161,18 +161,6 @@ pub(crate) fn controller_state_stream_notice(plugin_name: &str) -> String {
     )
 }
 
-/// 単一コンポーネントで controller state が component state と 2 回連続で一致し、
-/// 以後の `Cont` 保存を省略する latch が成立したことを通知する。
-pub(crate) fn controller_state_latched_notice(plugin_name: &str) -> String {
-    orbit_child_runtime::notice::child_info(
-        "orbit-vst3-host",
-        format_args!(
-            "plugin {plugin_name:?} returns the same state from its controller and component; \
-             subsequent saves omit the Cont chunk"
-        ),
-    )
-}
-
 /// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 SDK の
 /// `PresetFile::loadPreset` と同じく、① `IComponent::setState`
 /// ② `IEditController::setComponentState` ③ `IEditController::setState`
