@@ -111,6 +111,19 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
     Kontakt の計測テストは `Comp` が空でないことと parse できることを assert する
   - macOS 専用の VST3 crate 6 つ: **90 passed / 0 failed / 4 ignored**。Kontakt 8 の再計測では `Comp` = 4320 バイトが 3 回とも同じ、
     `Cont` = 0（前回は 4322 / 4319 / 4320 で揺れた。出力は決定論的とは限らない）
+- **840（Kontakt 8 × 6・音色を読み込んだ実際の作品）で確認**（2026-10-23・owner の依頼。作品のコピーを `/tmp` に作り、元のファイルには触れていない）:
+  - 流れ: 旧形式（raw）の state で 6 台を読み込み、全層を 30 秒鳴らす → 止めて 6 台を MCP `save_plugin_state` で保存 →
+    エンジンを再起動し、保存した container で読み直して同じものを鳴らす → 2 回のキャプチャを比べる
+  - 保存の所要時間: **39〜207 ms**（state は 0.26〜5.5 MB。mailbox の上限 5 秒に対して十分小さい）
+  - 6 台とも `.vstpreset` container になり、`Comp` は元の raw と同じ大きさ、**`Cont` は無し**（Kontakt の controller は state を返さない）。
+    取得失敗の通知も出ていない
+  - ERROR: 鳴らしている間・保存の間・読み直した後のどれも **0**
+  - RMS: 1 回目 −21.47 dBFS、読み直した 2 回目 −21.32 dBFS（**差 0.15 dB**）→ 保存した state で同じ音色が戻った
+  - 制約: MCP は再生中の保存を拒むので、保存は**止めてから**行った（6 台の Kontakt は読み込まれたまま）。再生中の保存
+    （effect の差し替え時の `save_dropped`）の経路はこの確認では通っていない
+  - 途中で見つかったこと: 音源の外部ドライブを接続していなかったため、Kontakt が state の読み込み中に**画面に出ないモーダルの
+    ダイアログ**（`NSAlert runModal`）を出して止まり、OrbitScore 側には「60 秒たっても child が READY を返さない」としか出なかった。
+    main でも同じ（#989 とは無関係）。child の起動が止まった理由を見える形にするのは、ネイティブ版の設計の論点
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
