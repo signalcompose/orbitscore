@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 4.4.0 (Oct 23, 2026)
+
+**Date**: 2026-10-23 / **ブランチ**: `992-release-4.4.0` / **Issue**: [#992](https://github.com/signalcompose/orbitscore/issues/992)
+
+凍結版（拡張版 OrbitScore）を **4.4.0** として更新する。中身は PR #984〜#986（#964 / #966 / #684 / #974 / #777 / ログの行単位化・クラウドのセッションから手元で引き継ぎ）と PR #989（#982 VST3 の controller state・同じく引き継ぎ）。
+
+- **版の決定**: #966 で MCP `evaluate_orbitscore` に任意の引数 `document_path` が増えた（後方互換の機能追加 = SemVer の minor）。4.3.0 と同じ考え方で 4.4.0（owner の「リリースまで進めて」に main が番号を添えて報告）
+- 現在の版を名乗る箇所を 4.3.0 → 4.4.0: `packages/vscode-extension/package.json` / `CLAUDE.md` ×2 / `README.md` ×3 / `docs/core/INDEX.md` / core spec ×2 / dev サイト 3 章 × ja・en（ADR-002 の本文 17 行目を含む・前回と同じ範囲）。3 章の `:9` の追従履歴 Note に v4.4.0 の 1 文
+- `CHANGELOG.md` に `[4.4.0]` 節と比較リンク
+- 🔴 **追従ルーチンが今回の 4 本を「自己追従」として飛ばしていた**: 判定が head ブランチの接頭辞 `claude/` だけだったため、クラウドのセッションが作った PR（`claude/<ランダムな名前>`）も対象外になっていた（ルーチンの実行ログで確認）。owner の指示で、判定を `claude/docs-sync-` に狭めた（ルーチンの 3 か所の指示文を更新）。飛ばされた分の追従はこの PR で行う:
+  - ユーザーサイト `plugins/instrument.md`（ja / en）: VST3 の state ファイルが `.vstpreset` container（component + controller）になったこと、別のプラグインの state はエラーになること
+  - ユーザーサイト `midi/pitch-dsl.md`（ja / en）: コード変数の定義の中でも名前に修飾子を付けられる（#974）
+  - 仕様・core spec・dev サイトの引用は各 PR の中で直してある
+- 検算: 素の `4.3.0` の残りは、過去の版の記録（CHANGELOG・WORK_LOG・設計 967・P.12.1 の「4.3.0 で実装」など）だけ
+
 ### fix(vst3): save the controller state alongside the component state (#982) (Oct 6, 2026)
 
 **Date**: 2026-10-06 / **ブランチ**: `claude/beautiful-cori-xy9bfk`（セッション指定のブランチ。命名規則 `<issue>-*` から外れる）/ **Issue**: [#982](https://github.com/signalcompose/orbitscore/issues/982)（Epic [#980](https://github.com/signalcompose/orbitscore/issues/980) 束 2）

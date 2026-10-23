@@ -113,6 +113,8 @@ var m7add9 = [m7, 9]         // add a 9th to m7
 var m7omit5 = [m7, -5]       // remove the 5th from m7
 ```
 
+Inside a chord variable's definition, names take modifiers (`.r(0.5)`, `~`, `@v100`, `^r`, and so on) the same way they do in `play()`'s `[ ]` (from 4.4.0, #974; up to 4.3.0 these were parse errors).
+
 ### Stdlib Chords
 
 ```text
