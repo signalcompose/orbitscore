@@ -104,8 +104,18 @@ fn effect_state_round_trip_restores_the_live_gain() {
         .process_stereo(&input_l, &input_r, &mut output_l, &mut output_r, Some(0.25))
         .expect("set observable oracle gain");
     let state = changed.capture_state().expect("capture live effect state");
-    assert_eq!(state, encode_state(0.25));
-    assert_eq!(state.len(), STATE_LEN);
+    // #982: 保存は `.vstpreset` container（CAP.2a）。component chunk が oracle の state そのもの。
+    let chunks = orbit_vst3_preset::parse(&state)
+        .expect("captured state is a well-formed container")
+        .expect("captured state carries the VST3 magic");
+    assert_eq!(chunks.component, encode_state(0.25));
+    assert_eq!(chunks.component.len(), STATE_LEN);
+    // oracle の controller は getState で何も書かない → 空の Cont は付けない（CAP.2a の 2）。
+    assert_eq!(chunks.controller, None);
+    // header の class ID は component（processor）の class ID（CAP.2a の 1）。期待値は
+    // gain oracle の冒頭コメントにある Processor CID `6E332252-54224A00-AA69301A-F318797D` を
+    // SDK `FUID::toString` の書式（区切り無しの大文字 16 進）で書いたもの。
+    assert_eq!(&state[8..40], b"6E33225254224A00AA69301AF318797D");
     drop(changed);
 
     output_l.fill(0.0);
@@ -551,6 +561,11 @@ fn capture_state_returns_exactly_the_oracle_state_length() {
     let captured = processor
         .capture_state()
         .expect("oracle always produces a non-empty chunk");
+    // #982: 保存は `.vstpreset` container。過不足を見るのは component chunk の長さ。
+    let captured = orbit_vst3_preset::parse(&captured)
+        .expect("captured state is a well-formed container")
+        .expect("captured state carries the VST3 magic")
+        .component;
     assert_eq!(
         captured.len(),
         orbit_vst3_synth_oracle::STATE_LEN,

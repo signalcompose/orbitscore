@@ -341,7 +341,7 @@ the macOS file system can be NFD (decomposed combining characters) and would oth
 match the NFC text typed in the editor.
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:91-93
+// packages/engine/src/core/global/plugin-resolver.ts:92-94
 export function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }
@@ -352,7 +352,7 @@ A **format qualifier** like `"vst3/TAL Reverb 4"` and a **vendor qualifier** lik
 known format name (`clap` / `vst3`).
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:115-128
+// packages/engine/src/core/global/plugin-resolver.ts:116-129
 function catalogQualifier(spec: string): CatalogQualifier {
   const slashIndex = spec.indexOf('/')
   const qualifierKey =
@@ -375,7 +375,7 @@ v1 cannot host**. The order is worth remembering, because the diagnostic in §3.
 exactly.
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:157-172
+// packages/engine/src/core/global/plugin-resolver.ts:158-173
   if (candidates.length === 0) {
     throw new Error(
       `No plugin named "${spec}" found in the plugin catalog (${catalogPath}). ${RESCAN_HINT}`,
@@ -400,7 +400,7 @@ picking the first". The `RESCAN_HINT` on not-found is
 the "actionable message including the rescan procedure" that spec PC.2 asks for.
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:174-198
+// packages/engine/src/core/global/plugin-resolver.ts:175-199
   const roleCandidates =
     role === undefined ? candidates : candidates.filter((entry) => entry.roles.includes(role))
   if (role !== undefined && roleCandidates.length === 0) {
@@ -439,7 +439,7 @@ one entry per pluginId, so once the name is fixed the pluginId is fixed too. Tha
 **combining a catalog name with the second `pluginId` argument is an error**.
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:238-260
+// packages/engine/src/core/global/plugin-resolver.ts:239-261
 export function resolvePluginSpec(
   spec: string,
   pluginIdArg: string | undefined,

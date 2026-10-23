@@ -4,6 +4,7 @@
 
 #[allow(unused_imports)]
 use crate::*;
+use orbit_vst3_preset::{parse, VstPresetChunks};
 
 /// Single-threaded-by-default VST3 effect processor: [`Vst3EffectAudio`] + [`Vst3PluginMain`]
 /// の composite。`load` したスレッド上でそのまま使う（従来 API 互換）か、`split()` で
@@ -108,7 +109,12 @@ impl Vst3EffectProcessor {
         // instrument と同じ VST3 正準順序: setup 済み・inactive の component へ state を適用し、
         // 音色が確定してから READY に到達できるようにする。
         if let Some(bytes) = state {
-            apply_state_bytes(&component, controller_handshake.controller.as_ref(), bytes)?;
+            apply_state_bytes(
+                &component,
+                controller_handshake.controller.as_ref(),
+                &class.cid,
+                bytes,
+            )?;
         }
         // `is_effect` drives both `process_block`'s overwrite-vs-add-mix branch (used in
         // production by `orbit-vst3-effect-child`) and the probe / two-pass signal check below
@@ -177,6 +183,8 @@ impl Vst3EffectProcessor {
                 _home_thread: PhantomData,
                 _library: library,
                 info: info.clone(),
+                class_id: class.cid,
+                last_controller_state_failure: Cell::new(None),
             }),
         };
         Ok((processor, info))
@@ -193,7 +201,8 @@ impl Vst3EffectProcessor {
         )
     }
 
-    /// 現在の effect component state を取得する。instrument と同じ空-state拒否規律を使う。
+    /// 現在の effect state を `.vstpreset` container として取得する（CAP.2a・#982）。
+    /// instrument と同じ空-state拒否規律を使う。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
         self.main
             .as_ref()
@@ -503,14 +512,30 @@ pub struct Vst3InstrumentProcessor {
 pub(crate) fn apply_state_bytes(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,
+    component_class_id: &TUID,
     bytes: &[u8],
 ) -> Result<(), Vst3HostError> {
     let owned_raw;
-    let chunks = match parse_vstpreset(bytes)? {
-        Some(chunks) => chunks,
+    let chunks = match parse(bytes)? {
+        Some(chunks) => {
+            let preset_class_id = chunks
+                .class_id
+                .expect("a parsed container always has a class ID");
+            let component_class_id =
+                orbit_vst3_preset::class_id_ascii(&tuid_bytes(component_class_id));
+            if !preset_class_id.eq_ignore_ascii_case(&component_class_id) {
+                return Err(Vst3HostError::State(format!(
+                    "VST3 preset class ID mismatch: container={}, component={}",
+                    String::from_utf8_lossy(preset_class_id),
+                    String::from_utf8_lossy(&component_class_id)
+                )));
+            }
+            chunks
+        }
         None => {
             // magic 無し = raw component state chunk（自前保存の生 dump 等）。
             owned_raw = VstPresetChunks {
+                class_id: None,
                 component: bytes,
                 controller: None,
             };

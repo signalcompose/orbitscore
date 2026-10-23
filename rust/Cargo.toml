@@ -18,6 +18,7 @@ members = [
   "crates/orbit-sandbox-spike",
   "crates/orbit-audio-sandbox",
   "crates/orbit-vst3-host",
+  "crates/orbit-vst3-preset",
   "crates/orbit-vst3-gain-oracle",
   "crates/orbit-vst3-synth-oracle",
   "crates/orbit-plugin-scan",

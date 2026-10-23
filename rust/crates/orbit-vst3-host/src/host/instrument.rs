@@ -1,9 +1,15 @@
 //! VST3 インストゥルメントのプロセッサとオーディオ経路（#888 子 3・orbit-vst3-host）。
 //!
-//! 🔴 **これは純粋な移動である。** `lib.rs` からそのまま移した。本文は 1 行も書き換えていない。
+//! state capture を含む instrument 固有の実装を `lib.rs` から分離している。
 
 #[allow(unused_imports)]
 use crate::*;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ControllerStateCaptureFailure {
+    StreamUnavailable,
+    Result(tresult),
+}
 
 pub(crate) fn capture_component_state(
     component: &ComPtr<IComponent>,
@@ -19,7 +25,7 @@ pub(crate) fn capture_component_state(
             "IComponent::getState failed (tresult {result:#x})"
         )));
     }
-    let bytes = stream_wrapper.data.borrow().clone();
+    let bytes = std::mem::take(&mut *stream_wrapper.data.borrow_mut());
     if bytes.is_empty() {
         return Err(Vst3HostError::State(
             "IComponent::getState produced an empty chunk — refusing to record it as state".into(),
@@ -28,12 +34,86 @@ pub(crate) fn capture_component_state(
     Ok(bytes)
 }
 
+/// #982: controller state を取り出す（CAP.2a）。`None` = 付けない。
+///
+/// `kNotImplemented` は「controller に state が無い」なので黙って `None`。それ以外の失敗は
+/// INFO の通知を出して `None`（component state だけで保存は成功させる — 現状より悪くしない）。
+/// 0 バイトは呼び出し側（`controller_chunk_to_store`）が落とす。
+pub(crate) fn capture_controller_state(
+    controller: &ComPtr<IEditController>,
+    plugin_name: &str,
+    last_failure: &Cell<Option<ControllerStateCaptureFailure>>,
+) -> Option<Vec<u8>> {
+    let stream_wrapper = ComWrapper::new(MemoryStream::new());
+    let stream = controller_state_stream_or_notify(
+        stream_wrapper.to_com_ptr::<IBStream>(),
+        plugin_name,
+        last_failure,
+    )?;
+    let result = unsafe { controller.getState(stream.as_ptr()) };
+    if result == kNotImplemented {
+        return None;
+    }
+    if !is_ok(result) {
+        notify_controller_state_failure(
+            plugin_name,
+            ControllerStateCaptureFailure::Result(result),
+            last_failure,
+        );
+        return None;
+    }
+    last_failure.set(None);
+    let bytes = std::mem::take(&mut *stream_wrapper.data.borrow_mut());
+    Some(bytes)
+}
+
+fn controller_state_stream_or_notify(
+    stream: Option<ComPtr<IBStream>>,
+    plugin_name: &str,
+    last_failure: &Cell<Option<ControllerStateCaptureFailure>>,
+) -> Option<ComPtr<IBStream>> {
+    if stream.is_none() {
+        notify_controller_state_failure(
+            plugin_name,
+            ControllerStateCaptureFailure::StreamUnavailable,
+            last_failure,
+        );
+    }
+    stream
+}
+
+fn notify_controller_state_failure(
+    plugin_name: &str,
+    failure: ControllerStateCaptureFailure,
+    last_failure: &Cell<Option<ControllerStateCaptureFailure>>,
+) {
+    if last_failure.get() == Some(failure) {
+        return;
+    }
+    let notice = match failure {
+        ControllerStateCaptureFailure::StreamUnavailable => {
+            controller_state_stream_notice(plugin_name)
+        }
+        ControllerStateCaptureFailure::Result(result) => {
+            controller_state_capture_notice(plugin_name, result)
+        }
+    };
+    eprintln!("{notice}");
+    last_failure.set(Some(failure));
+}
+
+/// TUID（`c_char` × 16）をバイト列として読む。`c_char` の符号はプラットフォームで違うので
+/// `as u8` でビットをそのまま写す。
+pub(crate) fn tuid_bytes(tuid: &TUID) -> [u8; 16] {
+    tuid.map(|byte| byte as u8)
+}
+
 impl Vst3InstrumentProcessor {
     /// #555: 現在の plugin state を **バイト列として取り出す**（DAW ループの保存側）。
     ///
-    /// VST3 正準の永続化は `IComponent::getState`。ここでは controller chunk を含めず
-    /// component chunk のみを返す — 復元側（`apply_state_chunks`）が magic 無しの
-    /// raw component state を受理する契約なので対称になる。
+    /// #982 から `.vstpreset` container で返す（`Comp` = `IComponent::getState`、取れれば
+    /// `Cont` = `IEditController::getState`・CAP.2a）。復元側（`apply_state_chunks`）は
+    /// container と旧形式の raw component state の両方を受理する。
     ///
     /// **スレッド**: UI/メインスレッドから呼ぶこと（CAP.5・VST3 の規約）。
     /// child のメインループ（現状は audio spin loop・Phase 2 で runloop 化）が呼び出す。
@@ -159,7 +239,12 @@ impl Vst3InstrumentProcessor {
         // 「実行中の preset 差し替え」意味論になり、サンプルマップ等の構造的 state を持つ
         // 音源（Kontakt 等）で挙動差が出得る（#542 レビュー F7）。
         if let Some(bytes) = state {
-            apply_state_bytes(&component, controller_handshake.controller.as_ref(), bytes)?;
+            apply_state_bytes(
+                &component,
+                controller_handshake.controller.as_ref(),
+                &class.cid,
+                bytes,
+            )?;
         }
         let active_result = unsafe { component.setActive(1) };
         if !is_ok(active_result) {
@@ -203,6 +288,8 @@ impl Vst3InstrumentProcessor {
                     _home_thread: PhantomData,
                     _library: library,
                     info: info.clone(),
+                    class_id: class.cid,
+                    last_controller_state_failure: Cell::new(None),
                 }),
             },
             info,
@@ -385,4 +472,20 @@ pub(crate) struct ControllerHandshake {
     /// controller が component と**同一の COM オブジェクト**のとき true（#603）。
     /// 理由は [`should_terminate_controller`] を参照。
     pub(crate) shared_with_component: bool,
+}
+
+#[cfg(test)]
+mod controller_state_capture_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_stream_is_observable_and_returns_none() {
+        let last_failure = Cell::new(None);
+        let stream = controller_state_stream_or_notify(None, "No Stream", &last_failure);
+        assert!(stream.is_none());
+        assert_eq!(
+            last_failure.get(),
+            Some(ControllerStateCaptureFailure::StreamUnavailable)
+        );
+    }
 }

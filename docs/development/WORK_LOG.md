@@ -17,6 +17,135 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(vst3): save the controller state alongside the component state (#982) (Oct 6, 2026)
+
+**Date**: 2026-10-06 / **ブランチ**: `claude/beautiful-cori-xy9bfk`（セッション指定のブランチ。命名規則 `<issue>-*` から外れる）/ **Issue**: [#982](https://github.com/signalcompose/orbitscore/issues/982)（Epic [#980](https://github.com/signalcompose/orbitscore/issues/980) 束 2）
+
+VST3 の state 保存が `IComponent::getState` だけで、controller 側の state を保存していなかった。
+
+- **refactor（振る舞い不変）**: `.vstpreset` の解析を `orbit-vst3-host/src/host/setup.rs` から新しい crate
+  `rust/crates/orbit-vst3-preset` へ移した。`orbit-vst3-host` は crate 全体が `#![cfg(target_os = "macos")]` で、
+  CI（ubuntu）では空 lib になり解析のテストが 1 本も走っていなかった。移した先は依存ゼロの純関数 crate なので
+  `cargo test --workspace` で走る。`orbit-vst3-host` 側は `parse_vstpreset` を `Vst3HostError::State` へ写す
+  薄いラッパにした。エラー文言（`malformed .vstpreset: …`）は移動前と同じで、それを固定するテストを足した。
+  解析のテスト 4 本は `lib.rs` の `mod tests` から新 crate へそのまま移した
+- **docs（仕様を先に改訂・CLAUDE.md 運用規則 6）**: `docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md` の
+  CAP.2 が VST3 の `CAP-STATE-GET` を `IComponent::getState` だけと定義していたので、`IEditController::getState`
+  を加え、保存形式の規定を **CAP.2a** として新設した（`.vstpreset` container・`Cont` を付けない 3 条件・
+  旧形式の raw も読める・SDK との差）。根拠は VST3 SDK の一次ソースを取得して確認した
+  （`vstpresetfile.cpp` の `savePreset` / `loadPreset`、`funknown.cpp` の `FUID::toString`、
+  `fplatform.h` の `COM_COMPATIBLE`、`vstsinglecomponenteffect.h` の `getState` → `getEditorState` の別名化）。
+  一次ソース表に 3 行追加。core spec PH.1 と PROJECT_FILE_SPEC PRJ.7 に 1 文ずつ追従
+  - CAP 仕様の末尾は「改訂は owner 承認を要する」。owner は #982 の着手を指示したが、
+    **仕様の文面そのものは owner の確認を経ていない**ので PR で確認を求める
+- **fix（本体）**: 保存を `.vstpreset` container に変えた（CAP.2a）
+  - `orbit-vst3-preset` に `build` / `class_id_ascii` / `controller_chunk_to_store` /
+    `controller_echoes_component` を追加。テストは実装前に書いて red（未定義でコンパイル不可）を確認した。
+    書き出しは **parser を使わずに手で組んだ期待バイト列**と突き合わせる（往復テストだけだと、書き出しと
+    解析が同じ向きに間違えたときに気づけない）
+  - `Vst3PluginMain` に component の class ID を持たせ、`capture_state` で `IComponent::getState`（必須）と
+    `IEditController::getState`（任意）を取って container にする。controller の失敗は INFO の通知
+    （`controller_state_capture_notice`・ERROR に倒すと E2E の ERROR 件数を壊す）を出し、component だけで保存する
+  - **単一コンポーネント（Kontakt）の重複**: controller の口でも component state を返す plugin は、`Cont` を
+    付けない（復元で全 state の `setState` が 2 回走るため）。さらに一度そう分かったインスタンスは以後
+    controller の `getState` を呼ばない（毎回の保存で数十 MB 級を 2 回シリアライズするのを避ける・
+    `Vst3PluginMain::controller_echoes_component`）。🔴 **Kontakt が実際にどちらの実装かは未確認**
+  - 既存テストの追従（いずれも macOS 専用）: `orbit-vst3-host/tests/offline.rs` 2 本・
+    `orbit-vst3-instrument-child/tests/{mailbox_wiring,save_during_playback}.rs`・
+    `orbit-vst3-effect-child/tests/mailbox_wiring.rs` を「container を解析して `Comp` を照合」に変えた。
+    effect の往復テストには `Cont` が付かないこと（oracle の controller は何も書かない）と header の class ID
+    （oracle 冒頭コメントの Processor CID）の照合を追加
+  - gain oracle に class ID の定数を足そうとしたら `file-size-ratchet`（基準 685 行）を 1 行超えたので取りやめ、
+    期待値はテスト側（`tests/` は計測対象外）に書いた
+- **検証**（この環境は Linux）:
+  - ✅ `cargo test --workspace --locked`（CI と同じ・576 passed / 0 failed）/ `cargo clippy --workspace --all-targets
+    --locked -D warnings` / `cargo fmt --all --check` / `npx vitest run tests/repo tests/docs`（74 passed）
+  - ✅ macOS 向けの型チェック: `rustup target add aarch64-apple-darwin` の上で
+    `cargo clippy --target aarch64-apple-darwin -p orbit-vst3-host -p orbit-vst3-preset -p orbit-vst3-instrument-child
+    -p orbit-vst3-effect-child -p orbit-vst3-gain-oracle --all-targets -D warnings`（`coreaudio-sys` が macOS SDK を
+    要するので daemon と rack child は対象外）
+  - ✅ 手書き変異 3 件（class ID を小文字 16 進 / list offset を +1 / 単一コンポーネント判定の反転）がすべて red
+  - ❌ **未実施**: macOS 専用テストの実行（上記の追従分を含む）・Kontakt の gated テスト・実機 E2E。
+    owner の macOS 環境で回す必要がある
+- **2026-10-23 手元（macOS）で引き継ぎ**（PR #989）:
+  - macOS 専用の VST3 crate 5 つのテストを実行: **67 passed / 0 failed / 4 ignored**（ignored は実プラグイン依存）
+  - `/simplify`（4 観点）の指摘を適用（振る舞いは不変）:
+    - component と controller の state が同じかの全バイト比較を、保存 1 回につき 1 回にした（2 回走っていた）。
+      ラッチの前に、判定を実行時に行う理由（SDK の単一コンポーネントでは `IEditController::getState` が
+      `getEditorState` の別名で、component の state と別物になりうる）をコメントで書いた
+    - state を取り出すときのバッファの丸ごとコピーを `std::mem::take` にした
+    - 呼び出し元が 1 か所の薄いラッパ `parse_vstpreset` を外し、`From<MalformedPreset> for Vst3HostError` にした。
+      エラー文言を固定するテストは `From` の変換を通る形で host crate へ移した
+    - 見送り: テストの「container を解析して `Comp` を取り出す」重複（crate をまたぐので、まとめるとかえって複雑）、
+      通知の文字列を作る関数（隣の既存関数に倣った形）、初回保存で controller の `getState` を 1 回呼ぶこと（静的に判定できない）
+  - 引用のずれ 4 件（core spec PH.1 の 1 行の追記による）を直した（`sites/dev/{,en/}signal-chain/mixer-audio-line.md`）
+- **`/code:pr-review-team` ラウンド 1 と Opus 監査の指摘を適用**（2026-10-23・実装 = Codex・検証 = main）:
+  - 🔴 監査の結論: 保存形式・復元順序・main thread の制約・壊れたファイルの扱いは SDK の一次ソースと一致。ただし
+    **`Cont` を書いて読み戻す経路と、単一コンポーネントの判定・ラッチを、どのテストも一度も通っていなかった**
+    （oracle の controller が 0 バイトを返すため）
+  - gain oracle に controller state の seam（環境変数）を足し、`Cont` の往復・SDK の復元順序・取得の 3 分岐
+    （`kNotImplemented` / 失敗 / 成功）・単一コンポーネントを固定（`tests/controller_state.rs`）。
+    `Cont` を捨てる・1 回でラッチする・通知を抑える、の 3 つの変異がそれぞれ red
+  - ラッチを「**2 回続けて一致したら**」に変えた（レビュアー 4 者が「1 回の偶然の一致でエディタの state を失う」と指摘）
+  - 取得失敗の INFO 通知をインスタンスごとに 1 回にし、プラグイン名を入れた
+  - instrument のテストでも header の class ID を照合。旧形式（raw）を実際の復元経路で読むテスト
+  - parse の重複 chunk を SDK と同じ先勝ちに。途中で切れた entry と 0 バイトの `Comp` は意図的に拒否（doc に明記）
+  - probe の class ID の書式を `orbit_vst3_preset::class_id_ascii` に統一。gain oracle を分割（行数のラチェットの基準から外れた）
+  - **Kontakt 8 の実測**（手元の state ファイル・gated テスト `kontakt_captures_state_three_times_and_reports_controller_chunks`）:
+    3 回の capture で `Comp` = 4322 / 4319 / 4320 バイト、**`Cont` = 0**、所要時間は 0.1〜0.2 ms。
+    → Kontakt の controller は state を返さない（二重シリアライズの懸念は Kontakt では起きない）。
+    **`Comp` のサイズが毎回わずかに違う**（出力が決定論的でない）ので、仮に echo するプラグインでも、バイト比較では一致せず
+    ラッチは立たない（監査 I-2 の指摘どおり。害は「毎回取る」側に倒れるだけ）
+  - 見送り: 実機 E2E「保存 → 再起動 → 同じ音」。DSL / MCP にロード後の VST3 の state を変える手段が無く、
+    synth oracle の state は音高を変えるので RMS では復元漏れを区別できない。必要な手段（state を変える MCP の seam か、
+    RMS が変わる controller state 付きの oracle）は別 issue にする
+  - macOS 専用の VST3 crate 6 つ: **84 passed / 0 failed / 4 ignored**（sandbox 外）
+  - 実機 E2E の追加は #990 で追跡する
+- **ラウンド 2**（修正の差分だけを 3 名で再レビュー）の指摘を直した:
+  - 🔴 上の修正が持ち込んだもの: controller 用のストリームが作れないとき、通知なしで `None` を返していた（以前の `expect` は panic で気づけた）。
+    INFO で通知する
+  - 「不一致でラッチを数え直す」テストが、数え直さない実装と区別できなかった（一致 → 不一致 → 不一致の並びだった）。
+    一致 → 不一致 → 一致の並びを足し、4 回目の保存でも controller の `getState` が呼ばれることを確かめる（数え直さない変異で red）
+  - 通知は「直前と同じ失敗なら出さない」（結果コードが変わる・成功の後に失敗する、では再び出す）。ラッチが立った時に INFO を 1 回出す
+  - テストが黙って走らない経路を塞いだ（bundle が無いと何もせずに通る・子プロセスの `0 passed`）。effect の header の class ID も照合。
+    Kontakt の計測テストは `Comp` が空でないことと parse できることを assert する
+  - macOS 専用の VST3 crate 6 つ: **90 passed / 0 failed / 4 ignored**。Kontakt 8 の再計測では `Comp` = 4320 バイトが 3 回とも同じ、
+    `Cont` = 0（前回は 4322 / 4319 / 4320 で揺れた。出力は決定論的とは限らない）
+- **840（Kontakt 8 × 6・音色を読み込んだ実際の作品）で確認**（2026-10-23・owner の依頼。作品のコピーを `/tmp` に作り、元のファイルには触れていない）:
+  - 流れ: 旧形式（raw）の state で 6 台を読み込み、全層を 30 秒鳴らす → 止めて 6 台を MCP `save_plugin_state` で保存 →
+    エンジンを再起動し、保存した container で読み直して同じものを鳴らす → 2 回のキャプチャを比べる
+  - 保存の所要時間: **39〜207 ms**（state は 0.26〜5.5 MB。mailbox の上限 5 秒に対して十分小さい）
+  - 6 台とも `.vstpreset` container になり、`Comp` は元の raw と同じ大きさ、**`Cont` は無し**（Kontakt の controller は state を返さない）。
+    取得失敗の通知も出ていない
+  - ERROR: 鳴らしている間・保存の間・読み直した後のどれも **0**
+  - RMS: 1 回目 −21.47 dBFS、読み直した 2 回目 −21.32 dBFS（**差 0.15 dB**）→ 保存した state で同じ音色が戻った
+  - 制約: MCP は再生中の保存を拒むので、保存は**止めてから**行った（6 台の Kontakt は読み込まれたまま）。再生中の保存
+    （effect の差し替え時の `save_dropped`）の経路はこの確認では通っていない
+  - 途中で見つかったこと: 音源の外部ドライブを接続していなかったため、Kontakt が state の読み込み中に**画面に出ないモーダルの
+    ダイアログ**（`NSAlert runModal`）を出して止まり、OrbitScore 側には「60 秒たっても child が READY を返さない」としか出なかった。
+    main でも同じ（#989 とは無関係）。child の起動が止まった理由を見える形にするのは、ネイティブ版の設計の論点
+- **主要ホストとの突き合わせと仕様の見直し**（2026-10-23・owner の依頼で一次ソースを調査 → advisor と検討 → **owner 承認**・#982 にコメント）:
+  - 一次ソース: Steinberg の dev portal（Persistence / FAQ）と SDK（`vstpresetfile.cpp`・`vstsinglecomponenteffect.h`・`funknown.cpp`）、
+    JUCE・Ardour・Carla のソース、REAPER の形式の解析、Bitwig / PreSonus の DAWproject 仕様（`Vst3Plugin.java`）。
+    Bitwig 自身の `.bwproject` は非公開で確かめられない
+  - 揃っていたもの（変更なし）: `.vstpreset` container で保存（Ardour が同じ形式・DAWproject は「.vstpreset 形式で保存すべき」）、
+    controller の取得失敗は `Comp` だけで保存（JUCE / Ardour）、復元の順序、旧形式の raw も読む
+  - 🔴 **取り下げ**: 単一コンポーネントの重複判定（バイト比較・2 回一致のラッチ）。**調べたホストはどれも無条件に両方を保存**しており前例が無い。
+    SDK の `SingleComponentEffect` は `getState` を `getEditorState` に別名化して両者を分け、nih-plug / iPlug2 / DPF / Kontakt 8 も
+    controller の state は空 → 発動するプラグインが見つからない一方、偶然一致の後にエディタの state を失う偽陽性がある。
+    controller の `getState` が 1 バイト以上を返したら常に `Cont` を付ける。比較・ラッチ・ラッチの通知・oracle の echo 系モードと、
+    それを検査していたテスト 6 本を**機能の取り下げとして削除**した（名前は PR に列挙）。単一コンポーネントでも `Cont` が付くことを確かめる
+    テストを残した（比較を戻す変異で red）
+  - 🔴 **class ID の照合を追加**: 仕様にあった「ASCII 表現はプラットフォームでバイト順が違うので照合しない」は**誤り**だった
+    （ASCII 表現は COM / 非 COM で同じ形。SDK の `loadPreset` と Ardour は不一致なら拒否）。復元のときに大文字小文字を区別せず照合し、
+    不一致なら両方の ID を名指しして読み込みを失敗させる（PH.1 の「黙って鳴らさない」と同じ扱い）。raw は header が無いので照合しない。
+    照合を外す変異で instrument / effect の両テストが red
+  - 未対応として仕様に 1 行: プラグインに「プロジェクトの読み込み」と伝える `kStateType = Project`（JUCE / Ardour も渡さない）
+  - 検証: macOS 専用の VST3 crate 6 つ **88 passed / 0 failed / 4 ignored**・clippy / fmt 緑。840 で #989 が保存した container
+    （ピアノ）を class ID の照合つきで読み込めた（6.0 s）
+  - 修正の差分だけの再レビュー（1 名）: Important 0。Minor 1 件（版をまたいで class ID を変えたプラグインの旧 ID の container を読む
+    別名〔SDK の `otherClassIDArray`〕が無い）は、CAP.2a に**既知の制約**として 1 文書いた
+  - 実機ゲート（`1b0be318`）: `npm test` 2659 passed・gated E2E **52/52**・cold install 2/2
 ### fix: apply the pr-review-team round 1 and audit findings to the stack (Oct 23, 2026)
 
 **Date**: 2026-10-23 / **ブランチ**: `claude/affectionate-cori-hulchp`（stack の先端・PR #986 の head）/ 手元（macOS）で引き継ぎ

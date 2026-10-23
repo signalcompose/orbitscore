@@ -15,7 +15,6 @@
     "rust/crates/orbit-effect-rack-child/src/lib.rs": 714,
     "rust/crates/orbit-effect-rack-child/src/macos.rs": 529,
     "rust/crates/orbit-sandbox-spike/src/bin/sandbox-host.rs": 629,
-    "rust/crates/orbit-vst3-gain-oracle/src/lib.rs": 685,
     "rust/crates/orbit-vst3-synth-oracle/src/lib.rs": 693
   },
   "threshold": 500

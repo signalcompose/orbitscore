@@ -1,0 +1,18 @@
+# orbit-vst3-preset — VST3 `.vstpreset` container の読み書き（純関数・全プラットフォーム）。
+#
+# orbit-vst3-host は crate 全体が macOS 専用（`#![cfg(target_os = "macos")]`）なので、CI（ubuntu）では
+# 空 lib になりテストが 1 本も走らない。ファイル形式の読み書きは COM にも CoreFoundation にも
+# 依存しない純関数なので、ここへ切り出して CI でテストする（#982）。
+[package]
+name = "orbit-vst3-preset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Read and write the VST3 .vstpreset container (pure, platform-independent)"
+publish = false
+
+[lib]
+name = "orbit_vst3_preset"
+path = "src/lib.rs"

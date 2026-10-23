@@ -1,9 +1,10 @@
 //! プラグインのセットアップ（controller 接続・preset・バス構成）（#888 子 3・orbit-vst3-host）。
 //!
-//! 🔴 **これは純粋な移動である。** `lib.rs` からそのまま移した。本文は 1 行も書き換えていない。
+//! controller 接続と state 復元をまとめた host setup 実装。
 
 #[allow(unused_imports)]
 use crate::*;
+use orbit_vst3_preset::VstPresetChunks;
 
 pub(crate) fn connect_controller(
     factory: &ComPtr<IPluginFactory>,
@@ -118,89 +119,6 @@ pub(crate) fn connect_controller(
     })
 }
 
-/// #540 P2: `.vstpreset` container の chunk 参照（`parse_vstpreset` の結果）。
-pub(crate) struct VstPresetChunks<'a> {
-    pub(crate) component: &'a [u8],
-    pub(crate) controller: Option<&'a [u8]>,
-}
-
-/// `.vstpreset` container を解析する（Steinberg "VST 3 Preset File Format"）。
-///
-/// レイアウト: header 48 bytes = magic `VST3`(4) + version i32 LE(4) + class ID ASCII(32) +
-/// chunk-list offset i64 LE(8)。chunk list = magic `List`(4) + count i32 LE(4) +
-/// count × { chunk ID(4) + offset i64 LE(8) + size i64 LE(8) }。`Comp` = component state・
-/// `Cont` = controller state・`Info` はメタデータ（無視）。
-///
-/// 先頭 magic が `VST3` でなければ `Ok(None)`（呼び出し側は raw component state chunk として
-/// 扱う）。magic が合うのに構造が壊れている場合はエラー（silent に raw 扱いすると
-/// container ヘッダごと setState に流れて plugin 側で不可解に失敗する）。
-///
-/// header の class ID は照合しない: TUID ↔ ASCII 表現はプラットフォームで byte order が
-/// 異なり（COM 互換 swap）、誤検知で正当な preset を弾くリスクが照合の利得を上回る。
-/// 不一致の preset は plugin 自身の setState が拒否する。
-pub(crate) fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3HostError> {
-    if bytes.len() < 4 || &bytes[0..4] != b"VST3" {
-        return Ok(None);
-    }
-    let malformed = |reason: &str| Vst3HostError::State(format!("malformed .vstpreset: {reason}"));
-    if bytes.len() < 48 {
-        return Err(malformed("header shorter than 48 bytes"));
-    }
-    let read_i64 = |offset: usize| -> Result<i64, Vst3HostError> {
-        let end = offset
-            .checked_add(8)
-            .filter(|&end| end <= bytes.len())
-            .ok_or_else(|| malformed("integer field out of bounds"))?;
-        Ok(i64::from_le_bytes(bytes[offset..end].try_into().unwrap()))
-    };
-    let list_offset =
-        usize::try_from(read_i64(40)?).map_err(|_| malformed("negative chunk-list offset"))?;
-    let list_end = list_offset
-        .checked_add(8)
-        .filter(|&end| end <= bytes.len())
-        .ok_or_else(|| malformed("chunk-list offset out of bounds"))?;
-    if &bytes[list_offset..list_offset + 4] != b"List" {
-        return Err(malformed("chunk list magic is not 'List'"));
-    }
-    let count = i32::from_le_bytes(bytes[list_offset + 4..list_end].try_into().unwrap());
-    let count = usize::try_from(count).map_err(|_| malformed("negative chunk count"))?;
-    let mut component: Option<&[u8]> = None;
-    let mut controller: Option<&[u8]> = None;
-    for index in 0..count {
-        let entry = list_end + index * 20;
-        let entry_end = entry
-            .checked_add(20)
-            .filter(|&end| end <= bytes.len())
-            .ok_or_else(|| malformed("chunk entry out of bounds"))?;
-        let id = &bytes[entry..entry + 4];
-        let offset = usize::try_from(read_i64(entry + 4)?)
-            .map_err(|_| malformed("negative chunk offset"))?;
-        let size =
-            usize::try_from(read_i64(entry + 12)?).map_err(|_| malformed("negative chunk size"))?;
-        let end = offset
-            .checked_add(size)
-            .filter(|&end| end <= bytes.len())
-            .ok_or_else(|| malformed("chunk data out of bounds"))?;
-        let _ = entry_end;
-        match id {
-            b"Comp" => component = Some(&bytes[offset..end]),
-            b"Cont" => controller = Some(&bytes[offset..end]),
-            _ => {}
-        }
-    }
-    let component = component.ok_or_else(|| malformed("no 'Comp' (component state) chunk"))?;
-    Ok(Some(VstPresetChunks {
-        component,
-        controller,
-    }))
-}
-
-/// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 公式 FAQ
-/// (Persistence): ① `IComponent::setState` ② `IEditController::setComponentState`
-/// ③ `IEditController::setState`（controller chunk がある場合のみ）。
-///
-/// ① の失敗は音色が復元されていないことを意味するのでハードエラー。②③ は GUI/表示側の
-/// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
 /// state 復元の **成功経路**で出す best-effort 通知の文言。
 ///
 /// 呼び出し元はどちらも `Ok(())` を返す経路にあり、**復元そのものは成功している**
@@ -216,6 +134,40 @@ pub(crate) fn best_effort_state_notice(what: &str, result: i32) -> String {
     )
 }
 
+/// #982: controller state を取れなかったときの通知（CAP.2a）。保存そのものは component state
+/// だけで成功するので、エラーではなく level トークン付きの情報にする（規約は
+/// `orbit_child_runtime::notice`）。
+pub(crate) fn controller_state_capture_notice(plugin_name: &str, result: i32) -> String {
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-host",
+        format_args!(
+            "IEditController::getState for plugin {plugin_name:?} returned {result:#x} \
+             (best-effort; the state is saved \
+             without the controller chunk)"
+        ),
+    )
+}
+
+/// controller state 用の stream を作れなかったときも、tresult 失敗と同じ INFO 経路で
+/// component state だけを保存したことを可視化する。
+pub(crate) fn controller_state_stream_notice(plugin_name: &str) -> String {
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-host",
+        format_args!(
+            "IEditController::getState for plugin {plugin_name:?} was skipped because the host \
+             MemoryStream exposes no IBStream (best-effort; the state is saved without the \
+             controller chunk)"
+        ),
+    )
+}
+
+/// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 SDK の
+/// `PresetFile::loadPreset` と同じく、① `IComponent::setState`
+/// ② `IEditController::setComponentState` ③ `IEditController::setState`
+/// （controller chunk がある場合のみ）。
+///
+/// ① の失敗は音色が復元されていないことを意味するのでハードエラー。②③ は GUI/表示側の
+/// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
 pub(crate) fn apply_state_chunks(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,

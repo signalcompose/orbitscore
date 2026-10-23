@@ -81,7 +81,8 @@ export function isPluginPathSpec(spec: string): boolean {
 
 /**
  * `seq.instrument()` の第2引数が保存済み state ファイル（音色）かの判別（#540 P2）。
- * `.vstpreset`（Steinberg 標準 container）と `.state`（raw component chunk）のみ。
+ * `.vstpreset` と `.state` のみ。.state の内容は VST3 では Steinberg 形式の container
+ * （旧ファイルの raw component chunk も読める）、CLAP では従来どおり raw state blob。
  * `isPluginPathSpec` と同じ「spec 文字列の種別判別はここに集約する」方針で同居させる。
  */
 export function isStateFileSpec(value: string): boolean {

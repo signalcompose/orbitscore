@@ -337,7 +337,7 @@ flowchart TD
 由来の NFD（結合文字が分解された形）と、エディタで打った NFC が一致しなくなるのを防ぐためです。
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:91-93
+// packages/engine/src/core/global/plugin-resolver.ts:92-94
 export function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }
@@ -347,7 +347,7 @@ export function normalizeCatalogKey(value: string): string {
 **vendor 修飾**は、最初の `/` より前が既知 format 名（`clap` / `vst3`）かどうかで分かれます。
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:115-128
+// packages/engine/src/core/global/plugin-resolver.ts:116-129
 function catalogQualifier(spec: string): CatalogQualifier {
   const slashIndex = spec.indexOf('/')
   const qualifierKey =
@@ -369,7 +369,7 @@ function catalogQualifier(spec: string): CatalogQualifier {
 順序は後述の診断（§3.4）がそのまま鏡写しにするので、覚えておく価値があります。
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:157-172
+// packages/engine/src/core/global/plugin-resolver.ts:158-173
   if (candidates.length === 0) {
     throw new Error(
       `No plugin named "${spec}" found in the plugin catalog (${catalogPath}). ${RESCAN_HINT}`,
@@ -393,7 +393,7 @@ function catalogQualifier(spec: string): CatalogQualifier {
 で、spec PC.2 の「rescan 手順を含む actionable メッセージ」に当たります。
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:174-198
+// packages/engine/src/core/global/plugin-resolver.ts:175-199
   const roleCandidates =
     role === undefined ? candidates : candidates.filter((entry) => entry.roles.includes(role))
   if (role !== undefined && roleCandidates.length === 0) {
@@ -433,7 +433,7 @@ PH-1 の時点では effect が CLAP のみだったのですが、VST3 effect�
 第 2 引数 `pluginId` の併用はエラー**になります。
 
 ```typescript
-// packages/engine/src/core/global/plugin-resolver.ts:238-260
+// packages/engine/src/core/global/plugin-resolver.ts:239-261
 export function resolvePluginSpec(
   spec: string,
   pluginIdArg: string | undefined,

@@ -92,6 +92,12 @@ pub enum Vst3HostError {
     State(String),
 }
 
+impl From<orbit_vst3_preset::MalformedPreset> for Vst3HostError {
+    fn from(error: orbit_vst3_preset::MalformedPreset) -> Self {
+        Self::State(error.to_string())
+    }
+}
+
 impl Display for Vst3HostError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -457,6 +463,11 @@ pub struct Vst3PluginMain {
     pub(crate) _home_thread: PhantomData<Rc<()>>,
     pub(crate) _library: LoadedLibrary,
     pub(crate) info: LoadedVst3Info,
+    /// component（processor）の class ID。保存する `.vstpreset` の header に書く（CAP.2a・#982）。
+    pub(crate) class_id: TUID,
+    /// 直前に INFO 通知した controller state 取得失敗。同じ失敗だけを連続抑止し、
+    /// 別の失敗または成功後の再失敗は通知する。
+    pub(crate) last_controller_state_failure: Cell<Option<ControllerStateCaptureFailure>>,
 }
 
 impl Vst3PluginMain {
@@ -465,7 +476,11 @@ impl Vst3PluginMain {
         &mut self.ui_endpoint
     }
 
-    /// 現在の component state を取得する（空 state 拒否の規律込み）。
+    /// 現在の state を `.vstpreset` container として取得する（CAP.2a・#982）。
+    ///
+    /// component state が取れない・空なら `Err`（空 state 拒否の規律）。controller state は
+    /// 取れなければ付けず、component state だけで保存する（音を決めるのは component 側）。
+    /// controller の `getState` が成功して 1 バイト以上なら常に `Cont` として付ける。
     ///
     /// **スレッド**: home（main）スレッドから呼ぶこと（CAP.5・VST3 の規約）。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
@@ -473,7 +488,21 @@ impl Vst3PluginMain {
             .component
             .as_ref()
             .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
-        capture_component_state(component)
+        let component_state = capture_component_state(component)?;
+        let controller_state = self.controller.as_ref().and_then(|controller| {
+            capture_controller_state(
+                controller,
+                &self.info.name,
+                &self.last_controller_state_failure,
+            )
+        });
+        let controller_chunk =
+            orbit_vst3_preset::controller_chunk_to_store(controller_state.as_deref());
+        Ok(orbit_vst3_preset::build(
+            &tuid_bytes(&self.class_id),
+            &component_state,
+            controller_chunk,
+        ))
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
@@ -643,105 +672,26 @@ mod tests {
         assert!(!is_ok(kNotImplemented));
     }
 
-    // ── #540 P2: .vstpreset parser ───────────────────────────────────────────────
-
-    /// 合成 .vstpreset を組み立てる（header 48B + データ + chunk list）。
-    fn build_vstpreset(chunks: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(b"VST3");
-        out.extend_from_slice(&1i32.to_le_bytes());
-        out.extend_from_slice(&[b'A'; 32]); // class ID ASCII（parser は照合しない）
-        let list_offset_field = out.len();
-        out.extend_from_slice(&0i64.to_le_bytes()); // 後で埋める
-        let mut entries = Vec::new();
-        for (id, data) in chunks {
-            let offset = out.len() as i64;
-            out.extend_from_slice(data);
-            entries.push((**id, offset, data.len() as i64));
-        }
-        let list_offset = out.len() as i64;
-        out.extend_from_slice(b"List");
-        out.extend_from_slice(&(entries.len() as i32).to_le_bytes());
-        for (id, offset, size) in entries {
-            out.extend_from_slice(&id);
-            out.extend_from_slice(&offset.to_le_bytes());
-            out.extend_from_slice(&size.to_le_bytes());
-        }
-        out[list_offset_field..list_offset_field + 8].copy_from_slice(&list_offset.to_le_bytes());
-        out
-    }
-
+    /// `MalformedPreset` から host のエラー型へ変換しても、移動前の文言をそのまま保つ。
     #[test]
-    fn vstpreset_extracts_comp_and_cont_chunks() {
-        let preset = build_vstpreset(&[(b"Comp", b"component-state"), (b"Cont", b"ctrl")]);
-        let chunks = parse_vstpreset(&preset)
-            .expect("well-formed preset parses")
-            .expect("VST3 magic is recognized");
-        assert_eq!(chunks.component, b"component-state");
-        assert_eq!(chunks.controller, Some(&b"ctrl"[..]));
-    }
-
-    #[test]
-    fn vstpreset_without_cont_chunk_has_no_controller_state() {
-        let preset = build_vstpreset(&[(b"Comp", b"component-only"), (b"Info", b"<xml/>")]);
-        let chunks = parse_vstpreset(&preset)
-            .expect("well-formed preset parses")
-            .expect("VST3 magic is recognized");
-        assert_eq!(chunks.component, b"component-only");
-        assert_eq!(chunks.controller, None);
-    }
-
-    #[test]
-    fn non_vstpreset_bytes_fall_back_to_raw_state() {
-        // magic 無し = raw component state（呼び出し側がそのまま setState へ流す契約）。
-        assert!(parse_vstpreset(b"OPAQ raw plugin state blob")
-            .expect("raw bytes are not an error")
-            .is_none());
-        assert!(parse_vstpreset(b"").expect("empty is raw").is_none());
-    }
-
-    #[test]
-    fn vstpreset_with_magic_but_broken_structure_is_an_error_not_raw() {
-        // magic があるのに壊れている場合は raw 扱いに落とさず明示エラー（container ヘッダを
-        // setState に流し込む silent 誤動作を防ぐ）。
-        let truncated = b"VST3\x01\x00\x00\x00short";
-        assert!(matches!(
-            parse_vstpreset(truncated),
-            Err(Vst3HostError::State(_))
-        ));
-
-        // Comp チャンク欠如。
-        let no_comp = build_vstpreset(&[(b"Info", b"<xml/>")]);
-        assert!(matches!(
-            parse_vstpreset(&no_comp),
-            Err(Vst3HostError::State(_))
-        ));
-
-        // chunk list offset が範囲外。
-        let mut bad_offset = build_vstpreset(&[(b"Comp", b"x")]);
-        let len = bad_offset.len() as i64;
-        bad_offset[40..48].copy_from_slice(&(len + 100).to_le_bytes());
-        assert!(matches!(
-            parse_vstpreset(&bad_offset),
-            Err(Vst3HostError::State(_))
-        ));
-
-        // chunk データが範囲外（size がファイル末尾を超える）。
-        let comp: &[u8] = b"state";
-        let mut bad_size = build_vstpreset(&[(b"Comp", comp)]);
-        let total_len = bad_size.len() as i64;
-        let size_field = bad_size.len() - 8;
-        bad_size[size_field..].copy_from_slice(&total_len.to_le_bytes());
-        assert!(matches!(
-            parse_vstpreset(&bad_size),
-            Err(Vst3HostError::State(_))
-        ));
+    fn malformed_message_keeps_the_pre_move_wording_through_from() {
+        let malformed = orbit_vst3_preset::parse(b"VST3\x01\x00\x00\x00short")
+            .expect_err("truncated header is malformed");
+        let Vst3HostError::State(message) = Vst3HostError::from(malformed) else {
+            panic!("MalformedPreset must convert to Vst3HostError::State");
+        };
+        assert_eq!(
+            message,
+            "malformed .vstpreset: header shorter than 48 bytes"
+        );
     }
 }
 
 #[cfg(test)]
 mod best_effort_notice_tests {
-    use super::best_effort_state_notice;
+    use super::{
+        best_effort_state_notice, controller_state_capture_notice, controller_state_stream_notice,
+    };
 
     /// この通知は復元の成功経路で出るので、daemon の stderr router が非エラーと判定できる形で
     /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
@@ -766,5 +716,37 @@ mod best_effort_notice_tests {
                 "notice must say the restore itself succeeded: {line}"
             );
         }
+    }
+
+    /// #982: controller state を取れなくても保存は component state だけで成功する（CAP.2a）。
+    /// ERROR に倒れると E2E の ERROR 件数（ヘルスシグナル）を壊すので、復元側と同じ規約で出す。
+    #[test]
+    fn controller_state_capture_notice_declares_a_non_error_level_token() {
+        let line = controller_state_capture_notice("Orbit Test Synth", 0x5);
+        assert!(
+            line.starts_with("INFO [orbit-vst3-host] "),
+            "notice must declare a non-error level token and the host tag: {line}"
+        );
+        assert!(
+            line.contains("IEditController::getState") && line.contains("0x5"),
+            "notice must name the call and its result: {line}"
+        );
+        assert!(
+            line.contains("Orbit Test Synth"),
+            "notice must identify the affected plugin: {line}"
+        );
+        assert!(
+            line.contains("without the controller chunk"),
+            "notice must say the state is still saved: {line}"
+        );
+    }
+
+    #[test]
+    fn controller_state_stream_notice_makes_the_dropped_state_observable() {
+        let line = controller_state_stream_notice("No Stream");
+        assert!(line.starts_with("INFO [orbit-vst3-host] "));
+        assert!(line.contains("No Stream"));
+        assert!(line.contains("MemoryStream exposes no IBStream"));
+        assert!(line.contains("without the controller chunk"));
     }
 }
