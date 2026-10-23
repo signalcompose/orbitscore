@@ -4,6 +4,7 @@
 
 #[allow(unused_imports)]
 use crate::*;
+use orbit_vst3_preset::VstPresetChunks;
 
 pub(crate) fn connect_controller(
     factory: &ComPtr<IPluginFactory>,
@@ -116,15 +117,6 @@ pub(crate) fn connect_controller(
         component_handler: Some(component_handler),
         shared_with_component: false,
     })
-}
-
-/// #540 P2: `.vstpreset` container の chunk 参照（`parse_vstpreset` の結果）。
-pub(crate) use orbit_vst3_preset::VstPresetChunks;
-
-/// `.vstpreset` container を解析する。形式の扱いは全プラットフォームでテストできるよう
-/// [`orbit_vst3_preset::parse`] に置いた（#982）。ここは host のエラー型へ写すだけ。
-pub(crate) fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3HostError> {
-    orbit_vst3_preset::parse(bytes).map_err(|error| Vst3HostError::State(error.to_string()))
 }
 
 /// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 公式 FAQ

@@ -19,7 +19,7 @@ pub(crate) fn capture_component_state(
             "IComponent::getState failed (tresult {result:#x})"
         )));
     }
-    let bytes = stream_wrapper.data.borrow().clone();
+    let bytes = std::mem::take(&mut *stream_wrapper.data.borrow_mut());
     if bytes.is_empty() {
         return Err(Vst3HostError::State(
             "IComponent::getState produced an empty chunk — refusing to record it as state".into(),
@@ -46,7 +46,7 @@ pub(crate) fn capture_controller_state(controller: &ComPtr<IEditController>) -> 
         eprintln!("{}", controller_state_capture_notice(result));
         return None;
     }
-    let bytes = stream_wrapper.data.borrow().clone();
+    let bytes = std::mem::take(&mut *stream_wrapper.data.borrow_mut());
     Some(bytes)
 }
 

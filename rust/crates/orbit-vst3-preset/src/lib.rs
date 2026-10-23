@@ -177,14 +177,14 @@ fn to_i64(value: usize) -> i64 {
 ///
 /// - `controller` が `None`（controller が無い・`getState` が未実装か失敗）→ 書かない
 /// - 0 バイト → 書かない（SDK は空の `Cont` を書くが、復元で空の `setState` を呼ぶだけになる）
-/// - `controller_is_component`（単一コンポーネント）で `component` と同じバイト列 → 書かない。
-///   同じ実装が 2 つの口で答えているので、書くと復元で全 state の `setState` が 2 回走る
-pub fn controller_chunk_to_store<'a>(
-    component: &[u8],
-    controller: Option<&'a [u8]>,
-    controller_is_component: bool,
-) -> Option<&'a [u8]> {
-    if controller_echoes_component(component, controller, controller_is_component) {
+/// - `echoes_component`（単一コンポーネントの controller state が component state と一致）
+///   → 書かない。同じ実装が 2 つの口で答えているので、書くと復元で全 state の `setState` が
+///   2 回走る
+pub fn controller_chunk_to_store(
+    controller: Option<&[u8]>,
+    echoes_component: bool,
+) -> Option<&[u8]> {
+    if echoes_component {
         return None;
     }
     controller.filter(|state| !state.is_empty())
@@ -383,26 +383,26 @@ mod tests {
 
     #[test]
     fn no_controller_state_stores_no_cont_chunk() {
-        assert_eq!(controller_chunk_to_store(b"comp", None, false), None);
-        assert_eq!(controller_chunk_to_store(b"comp", None, true), None);
+        assert_eq!(controller_chunk_to_store(None, false), None);
+        assert_eq!(controller_chunk_to_store(None, true), None);
     }
 
     #[test]
     fn an_empty_controller_state_stores_no_cont_chunk() {
-        assert_eq!(controller_chunk_to_store(b"comp", Some(b""), false), None);
-        assert_eq!(controller_chunk_to_store(b"comp", Some(b""), true), None);
+        assert_eq!(controller_chunk_to_store(Some(b""), false), None);
+        assert_eq!(controller_chunk_to_store(Some(b""), true), None);
     }
 
     #[test]
     fn a_separate_controller_state_is_stored_as_is() {
         assert_eq!(
-            controller_chunk_to_store(b"comp", Some(b"ctrl"), false),
+            controller_chunk_to_store(Some(b"ctrl"), false),
             Some(&b"ctrl"[..])
         );
         // 別オブジェクトの controller が component と同じバイト列を返しても、それはその
         // controller が自分で書いた state なので保存する（同一判定は単一コンポーネントだけ）。
         assert_eq!(
-            controller_chunk_to_store(b"same", Some(b"same"), false),
+            controller_chunk_to_store(Some(b"same"), false),
             Some(&b"same"[..])
         );
     }
@@ -410,10 +410,7 @@ mod tests {
     #[test]
     fn a_single_component_plugin_echoing_its_component_state_stores_no_cont_chunk() {
         // 同じ実装が 2 つの口で答えている。付けると復元で setState が 2 回走る。
-        assert_eq!(
-            controller_chunk_to_store(b"same", Some(b"same"), true),
-            None
-        );
+        assert_eq!(controller_chunk_to_store(Some(b"same"), true), None);
     }
 
     #[test]
@@ -431,19 +428,8 @@ mod tests {
         // SDK の SingleComponentEffect は IEditController::getState を別名
         // （getEditorState）で実装できる。中身が違えばそれは controller の state。
         assert_eq!(
-            controller_chunk_to_store(b"comp", Some(b"editor"), true),
+            controller_chunk_to_store(Some(b"editor"), false),
             Some(&b"editor"[..])
-        );
-    }
-
-    /// host 側（`orbit-vst3-host`）はこの文言を `Vst3HostError::State` にそのまま載せる。
-    /// 移動前と同じ文言であることを固定する（ログ・E2E が文言で照合しうるため）。
-    #[test]
-    fn malformed_message_keeps_the_pre_move_wording() {
-        let error = parse(b"VST3\x01\x00\x00\x00short").expect_err("truncated header is malformed");
-        assert_eq!(
-            error.to_string(),
-            "malformed .vstpreset: header shorter than 48 bytes"
         );
     }
 }

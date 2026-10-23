@@ -4,6 +4,7 @@
 
 #[allow(unused_imports)]
 use crate::*;
+use orbit_vst3_preset::{parse, VstPresetChunks};
 
 /// Single-threaded-by-default VST3 effect processor: [`Vst3EffectAudio`] + [`Vst3PluginMain`]
 /// の composite。`load` したスレッド上でそのまま使う（従来 API 互換）か、`split()` で
@@ -509,7 +510,7 @@ pub(crate) fn apply_state_bytes(
     bytes: &[u8],
 ) -> Result<(), Vst3HostError> {
     let owned_raw;
-    let chunks = match parse_vstpreset(bytes)? {
+    let chunks = match parse(bytes)? {
         Some(chunks) => chunks,
         None => {
             // magic 無し = raw component state chunk（自前保存の生 dump 等）。

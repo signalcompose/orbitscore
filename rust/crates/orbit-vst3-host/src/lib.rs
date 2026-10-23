@@ -92,6 +92,12 @@ pub enum Vst3HostError {
     State(String),
 }
 
+impl From<orbit_vst3_preset::MalformedPreset> for Vst3HostError {
+    fn from(error: orbit_vst3_preset::MalformedPreset) -> Self {
+        Self::State(error.to_string())
+    }
+}
+
 impl Display for Vst3HostError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -489,17 +495,20 @@ impl Vst3PluginMain {
         } else {
             self.controller.as_ref().and_then(capture_controller_state)
         };
-        if orbit_vst3_preset::controller_echoes_component(
+        // VST3 SDK の単一コンポーネントでは IEditController::getState が getEditorState の
+        // 別名で、component state とは別物になりうる。オブジェクトの同一性だけでは決められ
+        // ないため、実行時に取得したバイト列で判定する（vstsinglecomponenteffect.h）。
+        let controller_echoes_component = orbit_vst3_preset::controller_echoes_component(
             &component_state,
             controller_state.as_deref(),
             self.controller_shared_with_component,
-        ) {
+        );
+        if controller_echoes_component {
             self.controller_echoes_component.set(true);
         }
         let controller_chunk = orbit_vst3_preset::controller_chunk_to_store(
-            &component_state,
             controller_state.as_deref(),
-            self.controller_shared_with_component,
+            controller_echoes_component,
         );
         Ok(orbit_vst3_preset::build(
             &tuid_bytes(&self.class_id),
@@ -673,6 +682,20 @@ mod tests {
     fn is_ok_treats_result_false_and_not_implemented_as_failure() {
         assert!(!is_ok(kResultFalse));
         assert!(!is_ok(kNotImplemented));
+    }
+
+    /// `MalformedPreset` から host のエラー型へ変換しても、移動前の文言をそのまま保つ。
+    #[test]
+    fn malformed_message_keeps_the_pre_move_wording_through_from() {
+        let malformed = orbit_vst3_preset::parse(b"VST3\x01\x00\x00\x00short")
+            .expect_err("truncated header is malformed");
+        let Vst3HostError::State(message) = Vst3HostError::from(malformed) else {
+            panic!("MalformedPreset must convert to Vst3HostError::State");
+        };
+        assert_eq!(
+            message,
+            "malformed .vstpreset: header shorter than 48 bytes"
+        );
     }
 }
 

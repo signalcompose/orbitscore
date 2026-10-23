@@ -67,6 +67,17 @@ VST3 の state 保存が `IComponent::getState` だけで、controller 側の st
   - ✅ 手書き変異 3 件（class ID を小文字 16 進 / list offset を +1 / 単一コンポーネント判定の反転）がすべて red
   - ❌ **未実施**: macOS 専用テストの実行（上記の追従分を含む）・Kontakt の gated テスト・実機 E2E。
     owner の macOS 環境で回す必要がある
+- **2026-10-23 手元（macOS）で引き継ぎ**（PR #989）:
+  - macOS 専用の VST3 crate 5 つのテストを実行: **67 passed / 0 failed / 4 ignored**（ignored は実プラグイン依存）
+  - `/simplify`（4 観点）の指摘を適用（振る舞いは不変）:
+    - component と controller の state が同じかの全バイト比較を、保存 1 回につき 1 回にした（2 回走っていた）。
+      ラッチの前に、判定を実行時に行う理由（SDK の単一コンポーネントでは `IEditController::getState` が
+      `getEditorState` の別名で、component の state と別物になりうる）をコメントで書いた
+    - state を取り出すときのバッファの丸ごとコピーを `std::mem::take` にした
+    - 呼び出し元が 1 か所の薄いラッパ `parse_vstpreset` を外し、`From<MalformedPreset> for Vst3HostError` にした。
+      エラー文言を固定するテストは `From` の変換を通る形で host crate へ移した
+    - 見送り: テストの「container を解析して `Comp` を取り出す」重複（crate をまたぐので、まとめるとかえって複雑）、
+      通知の文字列を作る関数（隣の既存関数に倣った形）、初回保存で controller の `getState` を 1 回呼ぶこと（静的に判定できない）
 
 ### docs: follow the 4.3.0 release into the specs (Oct 4, 2026)
 
