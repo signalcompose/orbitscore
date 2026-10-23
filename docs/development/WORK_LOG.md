@@ -58,7 +58,7 @@ PR #984〜#986 の `/code:pr-review-team` ラウンド 1（4 名・#984 の差�
   - `npm test`: 2733 passed / 86 skipped
   - 修正の差分だけの再レビュー（1 名）で Important 1 件: `writeCodeToEngine` が改行を含む基準を「送らない（`undefined`）」にしていた。
     送らないと REPL は前回の基準を使い続ける（= 上で禁じた形）。「基準なし（`null`）」として空のメタ行を送るよう main が直した
-    （1 行・テストの期待値を合わせて変更。旧の行に戻すと red）
+    （1 行・テストの期待値を合わせて変更。旧の行に戻すと red）。コメント 2 行の追加でずれた dev サイトの引用 4 件を直した（着地先は同じ行）
 
 ### fix: address the /code-review findings on this branch (Oct 6, 2026)
 

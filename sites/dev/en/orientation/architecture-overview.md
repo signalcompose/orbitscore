@@ -194,7 +194,7 @@ The two env vars added here enter the engine process. The process tree continues
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:699-700
+// packages/vscode-extension/src/engine-process.ts:701-702
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```

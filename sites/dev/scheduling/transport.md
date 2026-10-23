@@ -287,7 +287,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 `Cmd+Enter` を押すと、VS Code extension はカーソル位置のブロック (または選択範囲) のテキストだけを stdin に書き込みます。
 
 ```typescript
-// packages/vscode-extension/src/engine-process.ts:699-699
+// packages/vscode-extension/src/engine-process.ts:701-701
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
