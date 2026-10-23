@@ -17,6 +17,32 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: record that PR #993 (4.4.0 release) needed no follow-up (Oct 23, 2026)
+
+**Date**: 2026-10-23 / **ブランチ**: `claude/docs-sync-pr993` / **追従元**: PR [#993](https://github.com/signalcompose/orbitscore/pull/993)（merge commit `7410dcb`・head `f77191e`）
+
+リリース PR #993（拡張 4.3.0 → **4.4.0**）の追従。**ドキュメントの追従は 0 件**だった
+（#993 自身がリリース PR であり、版表記・CHANGELOG・ユーザーサイトをすべて同じ PR で更新している）。
+本エントリは、追従を検討した記録と、追従できなかった E2E の穴を残すために置く。
+
+- **分類**: #993 の差分 17 ファイルのうち、実装は `packages/vscode-extension/package.json` の
+  `version` フィールド 1 行だけ。`rust/` と `packages/engine/` の差分は無いので、
+  DSL / ランタイムの挙動は変わっていない → 仕様・dev サイトへ追従すべき挙動の変化は無い
+- **版表記の検算**（#993 の主目的なので独立に確認した）: 素の `4.3.0` が残るのは過去の版の記録だけ
+  （`CHANGELOG.md` / `WORK_LOG.md` / `docs/design/967-random-pitch-design.md` /
+  core spec P.12.1 の「implemented in 4.3.0」/ `sites/dev/decisions/adr-002-dsl-v3-pivot.md:236` の
+  「4.3.0 で出荷」/ `sites/user/**` 4 ファイルの「4.3.0 まではパースエラー」「4.3.0 以前に保存した state」）。
+  **現在の版を名乗る箇所で 4.3.0 のまま残っているものは無い**
+- **ユーザーサイトも追従済み**: `sites/user/` で版を名乗るファイルは #993 が触れた 4 本
+  （`midi/pitch-dsl.md` / `plugins/instrument.md` × ja・en）だけで、他に古い版を名乗る箇所は無い
+- **specs-v2 と core spec の食い違いは無かった**: #974 の挙動は
+  `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md:315` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1197` が
+  同じ内容で記述している
+- **E2E の穴は PR 本文に書き出した**（直していない）: #982 の `.vstpreset` container と
+  class ID 照合、#974 の `~` / `@v` / `^r` と名指しエラー 3 形。いずれも実機 gated が必要で、
+  この環境（Linux・`ORBIT_GATED_ORBITSTUDIO` 無し）では skip されて緑になるため書かない
+- 検証: `npm run docs:build`（user / dev とも成功）・`npm run docs:check` 996 verified / 0 failed
+
 ### chore(release): bump the extension to 4.4.0 (Oct 23, 2026)
 
 **Date**: 2026-10-23 / **ブランチ**: `992-release-4.4.0` / **Issue**: [#992](https://github.com/signalcompose/orbitscore/issues/992)
