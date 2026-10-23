@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): revise the OrbitStudio design against 4.4.0 and fix the session protocol shape (Oct 23, 2026)
+
+**Date**: 2026-10-23 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+OrbitStudio（ネイティブ版）の設計 848 を、拡張 4.4.0（main `7410dcb0`）と外部参照の調査に合わせて改訂した。層 2（`packages/session`）の実装をクラウドのセッションに出すために、**プロトコルの形（一方通行の判断 N-1）をここで確定させる**のが目的。9/18 の改訂（`848-native-design-revised`・main に未マージ）は main から大きく遅れていたので、main から切り直したブランチに cherry-pick してから直した。
+
+- **進め方**: main が審査（再測・所見 6 件）→ 外部参照の調査（Bitwig / SuperCollider / Sonic Pi / MCP 仕様 / MCP Inspector の CVE / Jupyter / VS Code server / Monaco × WKWebView × IME）→ advisor と方針を決定 → 起案は fresh subagent → main が本文と引用を読んで受け入れ
+- **崩れていた前提**: 比較元 `1276ab1f` は 09-18 ではなく 09-14 の 4.2.0 マージ / 「4.2.0 で凍結・以後 bug fix のみ」（4.3.0・4.4.0 が owner の個別例外で出た）/ MCP ツールは 26 ではなく 28（`registerTool(` の字面の grep は 24 しか出さない）/ 「docs は `.vsix` に同梱されていない」（4.2.1 から偽）/ #757 は凍結版で閉じた
+- **プロトコルの形**: `session.evaluate` は状態を持たない（`documentDirectory: string | null` を毎回必須・凍結版の三値は stdio の REPL の副産物）/ `evalId` はサーバが振る / `transport.step` に省略可能な `source` / `log.line` に `level`・`kind` / `docs.*` に `site` / `engine.start` に `hostBundleId`。**評価の単位（#987 Q2）は wire に焼かず §14 (22)**、実装の既定は凍結版と同じ意味論
+- 🔴 **セキュリティの結論を反転**: 旧 §4.4・§11「`/mcp` が無認証だから `/rpc` にも付けない」を撤回し、`/rpc` と `/mcp` の両方にトークン + Origin 検証（Host 許可リストは残す）。現行 `/mcp` は MCP 仕様 2025-11-25 の MUST（Origin 検証）を満たしておらず、WebSocket は CORS の対象外なので Origin を見ない `/rpc` は任意の Web ページから届く。新設 §4.7（脅威モデル）・D-10・F-13
+- **ライフサイクル**: F-1 に機構（stdin の EOF が主・`--parent-pid` が補助。daemon 側は engine 線への申し送り）/ F-12（層 2 だけが落ちた時の回復）を新設 / ハーネスがトークンを知る経路（`ORBITSCORE_SESSION_TOKEN_FILE` → `--token-file`）
+- **完了条件**: D-1 の基準を v4.4.0（gated 56 `it`・`PARITY_BASELINE_TAG` の 1 か所から読む）/ D-6 を Monaco の既知 issue の再現手順に / D-9 は 4.2.1 の同梱の引き継ぎに
+- **§14 に 4 件追加**: (22) 評価の単位 / (23) LLM へのトークンの渡し方 / (24) `.orbs` を 2 つ開いた時の共有 / (25) F-12 の自動再評価とプラグイン状態の喪失の伝え方
+- 計画に束ごとの「実行環境」（Linux で完結 / macOS 実機が要る）の列を足した。地図の現在地を 4.4.0 に合わせた
+- 出荷済み 4.4.0 の `/mcp` と daemon も Origin を検査していない（daemon は `accept_async` にヘッダ検査なし）。issue にするかは owner 判断待ち
+
+Part of #848
+
+---
+
 ### chore(release): bump the extension to 4.4.0 (Oct 23, 2026)
 
 **Date**: 2026-10-23 / **ブランチ**: `992-release-4.4.0` / **Issue**: [#992](https://github.com/signalcompose/orbitscore/issues/992)
@@ -1071,6 +1091,61 @@ Docs パネル（WebView）と `get_dev_doc` は cold install で死んでいた
 `sites/` のコード引用に触れていないため `docs:check` の対象差分は無い。
 
 Part of #948
+
+---
+
+### docs(design): land the revised OrbitStudio design and the new docs-structure design (Sep 18, 2026)
+
+**Date**: 2026-09-18 / **ブランチ**: `848-native-design-revised` / **Issue**: #848
+
+Fable 起案の改訂版 4 本（計 **1,592 行**）を配置する。🔴 **main による審査はこれから**
+（owner 指示により **#948 の用語統一を先に完了させてから**設計の議論に入る）。
+
+| ファイル | 行数 | |
+|---|---|---|
+| `docs/design/848-native-orbitstudio-design.md` | 659 | 改訂（初版 577）。**§2b 改訂判定表**を新設 |
+| `docs/design/848-docs-structure-design.md` | **380** | 🆕 **新設**（文書の保持構造・Q1〜Q4） |
+| `docs/planning/IMPLEMENTATION_PLAN_NATIVE.md` | 241 | 改訂 |
+| `docs/planning/NATIVE_DEVELOPMENT_MAP.md` | 312 | 改訂 |
+
+初版は PR [#849](https://github.com/signalcompose/orbitscore/pull/849)（`848-native-design`
+`1bd65b80`）に残る。**そのブランチは main から 277 コミット遅れ**ていたので、
+main から切り直した。
+
+#### なぜ改訂が要ったか
+
+初版は **2026-09-11 の main `229d6387`** を根拠に書かれており、その後 #887 / #888 の
+リファクタリングで §2「現在地」の表が古くなっていた。特に「**21 モジュールのうち `vscode` を
+import するのは 2 本だけ・残り 19 本はそのまま層 2 へ移せる**」が §3 の結論の土台だった。
+
+#### 主要な発見（main が実測で検算済み）
+
+| 発見 | 出典 |
+|---|---|
+| 依存は **15 本 4,409 行 / pure 26 本 6,062 行**。ただし**依存の行数は 08-30 の 4,405 からほぼ不変** — #887 は依存コードを `extension.ts` から 14 ファイルへ**配った**だけ | `grep -rl "from 'vscode'"` |
+| 🔴 **W-22「同梱 node」が失効**。#878 以降 engine は `spawn(process.execPath, …, {ELECTRON_RUN_AS_NODE:'1'})` | `engine-process.ts:407` |
+| 🔴 **cold install で Docs パネル / `get_dev_doc` が動かない**。`.vsix` に `sites/` は同梱されないのにパス解決がモノレポ前提。**この経路の gated E2E は 0 本** | `mcp-server.ts:137-138` / `.vscodeignore` / `grep get_dev_doc tests/e2e/` |
+| 「実装依存 / 非依存」は **1 軸ではなく 2 軸**（軸 A = host 表面・段落粒度 / 軸 B = 可用性・機能粒度） | 別冊 §2 |
+
+#### 🔴 main のブリーフに誤りが 2 件あった
+
+Fable が検算で発見した。どちらも main が調査報告を**検算せずに転記**したもの:
+
+1. 「MCP 層 `mcp-*.ts` **9 ファイルは完全に vscode 非依存**」→ 誤り。9 本目
+   `mcp-register-command.ts:12` が `import * as vscode`（`:159` で `showQuickPick`）。
+   非依存は **8 本**
+2. 「`*-bridge.ts` は **6 本**」→ **5 本**（`playhead-decorations.ts` はブリッジではない）
+
+調査報告の**要約と列挙が食い違っていた**（列挙は正しく、要約が誤っていた）。
+**列挙が一次情報で、要約は二次**である。
+
+#### 裁定待ち
+
+owner 裁定が要る項目が **7 件**（同梱範囲・可用性の表記法・凍結スナップショットの要否・
+ルーチンのトリガー・リリース後の更新経路など。すべて Fable の推奨つき）。
+#948 の完了後に整理して上げる。
+
+Part of #848
 
 ---
 
