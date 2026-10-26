@@ -26,6 +26,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **D-4**（`tests/protocol/surface-coverage.spec.ts`）: `gui` を持つメソッドは `mcp` も持つ。`x-mcp-tools` の和集合 = 凍結版の 28 本
 - **`protocol/LICENSE`** = Apache-2.0 の全文（一方通行 N-14）。sha256 を spec で固定。`protocol/` は npm workspace の `@orbitscore/protocol`（`license: Apache-2.0`）にし、層 2 は型を `@orbitscore/protocol/gen/ts/...` から読む
 - 設計 §5.9 に、スキーマを書いた時に補ったもの 7 件（`x-surfaces` の語彙・attach の版と MAJOR だけの拒否・`didOpen` の `version` ほか）を owner の確認待ちとして記録
+- ルートの `package.json` の workspaces に `protocol` を足して行がずれたので、dev サイトの引用 4 か所（`package.json:19` / `:20-21`）を `check-citations.mjs --fix` で直し、着地先（`test` と `pretest:e2e:gated` の行）を目で確かめた
 
 Part of #1001
 

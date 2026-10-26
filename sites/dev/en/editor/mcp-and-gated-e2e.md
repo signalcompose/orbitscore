@@ -617,7 +617,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 And as a remedy one step stronger than the guard, the choice was made to **remove the manual step altogether**.
 
 ```jsonc
-// package.json:20-21
+// package.json:21-22
     "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build && bash scripts/install-engine-deps.sh",
     "test:e2e:gated": "ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir tests --config vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true e2e/orbitstudio-mcp-gated",
 ```
