@@ -16,7 +16,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
 import {
+  advancePatternGeneration,
   setHostOutput,
+  type EnginePatternEvent,
   type EngineStepEvent,
 } from '../../../packages/engine/src/audio/engine-backend'
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
@@ -507,6 +509,7 @@ describe('RustEnginePlayer with mock daemon', () => {
       warn: () => {},
       error: () => {},
       step: (event) => steps.push(event),
+      pattern: () => {},
     })
     try {
       const p = await boot()
@@ -520,6 +523,38 @@ describe('RustEnginePlayer with mock daemon', () => {
       ])
       expect(steps.every((s) => Number.isSafeInteger(s.atEpochMs))).toBe(true)
       expect(lines.some((l) => l.includes('[STEP]'))).toBe(false)
+    } finally {
+      setHostOutput(null)
+    }
+  })
+
+  it('step はスケジュールした時点の世代を持つ — 後の play() で付け替わらない (#1022 設計 997 D-P1)', async () => {
+    const steps: EngineStepEvent[] = []
+    const patterns: EnginePatternEvent[] = []
+    setHostOutput({
+      log: () => {},
+      warn: () => {},
+      error: () => {},
+      step: (event) => steps.push(event),
+      pattern: (event) => patterns.push(event),
+    })
+    try {
+      const p = await boot()
+      advancePatternGeneration('seqA')
+      p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', undefined, '0')
+      advancePatternGeneration('seqA')
+      p.scheduleStepMarker(10, 'seqA', '1', 0)
+      p.scheduleEvent('/audio/kick.wav', 20, 0, 0, 'seqB', undefined, '0')
+      p.start()
+      await waitFor(() => steps.length >= 3)
+      const [first, second] = patterns.map((event) => event.generation)
+      expect(second).toBeGreaterThan(first!)
+      expect(steps.map((s) => `${s.seq} ${s.argPath}@${s.generation}`).sort()).toEqual([
+        `seqA 0@${first}`,
+        `seqA 1@${second}`,
+        // パターンを置いていないシーケンスの step は世代を持たない（層 2 は source を null にする）。
+        'seqB 0@undefined',
+      ])
     } finally {
       setHostOutput(null)
     }

@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): fill transport.step.source from engine pattern generations (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d4-step-source`（`1022-d3-output-port` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d4・設計 997 D-P1 / D-P2・#987・台帳 P-04 の層 2 の側）
+
+- engine: `play()` がパターンを置くたびに**世代番号**を振る（`audio/engine-backend.ts` の `advancePatternGeneration`・engine 全体で 1 本の単調な数・名前の無いシーケンスは振らない）。出力の口に `pattern({seq, generation})` を足した（**既定の口は何も書かない** — 凍結版の REPL・`orbitscore play` の出力は変わらない）。`state-manager.ts` の `setPlayPattern` が呼ぶので、`tempo()` などの再計算では進まない
+- step には**スケジュールした時点の**世代を付ける（audio は `enqueue()`、MIDI は `scheduleStepMarker()` がその時点の `patternGenerationOf` を読む）。スケジュールはその時点のパターンから同期的に作るので、`play()` の前にスケジュール済みの step は前の世代で鳴る（設計 997 §4.4 の 4.）。既定の口の `[STEP]` 行には世代を出さない（§4.7 の「書式に足すと凍結版の文法が読めるか」の確認は不要になった）
+- 🔴 世代を `TimedEvent` に載せてスケジューラの引数で運ぶ形も考えたが、`rust-engine-player.ts`（baseline 1223）と `sequence.ts`（1361）はファイルの大きさのラチェットで 1 行も増やせず、引数を足すと prettier の折り返しで 30 行近く増える。engine に新しいファイルも足せない（設計 §4.5.1）ので、境界のモジュールに「いまの世代」を置いてスケジュールの時点で読む形にした。`rust-engine-player.ts` は `enqueue` の `if` を 1 行にして差し引き 0 行
+- 層 2: `step-sources.ts`（新）が `(seq, generation) → 文の範囲` を覚える（シーケンスごとに最新 8 世代）。`SessionCore` は `execute()` の `onStatement` で実行中の文を持ち、その間に届いた `pattern` をその文へ対応づける。**文書から来た評価（`target` あり）の文だけ**が対象で、MCP のコード片と import 先の文・文の実行の外で置かれたパターンは `source: null`（スキーマの説明どおり）。`transport.step` は `{seq, argPath, atEpochMs, source}` だけを流す（世代は wire に出さない）
+- 文書の座標（D-P2）: `resolveSelectionBlock` が `code` の各行の始まる文書の位置（`lines`）も返す（subject-block は離れた行を繋ぐので `target.range` からは戻らない）。`editor.runSelection` はこれを `evaluate` に渡し、`session.evaluate` に直接 `target.range` が来た時は、同期済みの写しの同じ版のその範囲のテキスト（の trim）が `code` の時だけ写す。違えば写さずログに 1 行（設計 997 §4.6）。`StepSource.document` と診断の `documentRange` をこれで埋める
+- 凍結版とのパリティ（`editor-parity.spec.ts`）は `{code, range}` を比べるように期待値を更新（`lines` は層 2 だけが持つ）
+- 設計 997 §4.4 の 3.「`play(…)` の呼び出しの範囲」をスキーマの `StepSource` どおり「`play(…)` を含む文の範囲」に訂正し、実装の決定（番号の振り方・スケジュール時点で読む・既定の行を変えない）を追記。設計 848 §5.3.6 に「層 2 は `source` を埋める」を追記。dev 学習サイトの引用（12 ブロックの中身・42 件の行）を新しいソースへ写し、`[STEP]` の節に世代番号の段落を足した（日英）
+- テスト: engine 4 本（採番と host への通知・既定の行は変わらない・audio の step はスケジュール時点の世代・MIDI の step は `play()` の差し替えで付け替わらない・`tempo()` で進まない）、層 2 は `tests/session/step-source.spec.ts`（新）10 本（対応表・座標の写し・V-7 の切り替え・離れた行の subject-block・MCP / import / 世代なし / 実行の外は null・`target.range` のテキストと版が違えば写さない・runSelection の診断が文書の座標を持つ）
+- 変異 26 種: 25 が red、1 つ（実行の後に実行中の文を消さない）は `executing` が先に null になるので到達しない同値な変異
+
 ### feat(engine): add the host output port and stop capturing the console in layer 2 (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1022-d3-output-port`（`1022-d5-strict-parser` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d3・台帳 P-07）

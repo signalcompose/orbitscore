@@ -73,7 +73,7 @@ The strategy OrbitScore takes is a look-ahead approach: **schedule events a litt
 Each element of the event queue is represented by a type called `ScheduledPlay`. The Rust path's version is flatter than the SC version: there is no nested `options`, and the chop slice information is grouped into `slice`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-200
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-202
 /** lean scheduler が保持する 1 発音イベント。 */
 export interface ScheduledPlay {
   /** 再生開始時刻（`startTime` からの相対 ms）。 */
@@ -100,6 +100,8 @@ export interface ScheduledPlay {
    * observational フィールド。timing / 音響には一切影響しない。
    */
   argPath?: string
+  /** 設計 997 D-P1: スケジュールした時点のパターンの世代（`enqueue` が付ける・step に載せる）。 */
+  generation?: number
   /**
    * #390: 休符 (0) スロットの marker-only イベント。daemon への dispatch は行わず、
    * 発火タイミングで `[STEP]` だけを出す（filepath は空文字）。
@@ -179,7 +181,7 @@ export interface ScheduledPlay {
 `scheduleEvent()` pushes a new event onto the queue, and the Rust version delegates to an internal `enqueue()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1480-1496
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1482-1498
   scheduleEvent(
     filepath: string,
     time: number,
@@ -200,13 +202,11 @@ export interface ScheduledPlay {
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1635-1641
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1637-1641
   private enqueue(play: ScheduledPlay): void {
-    this.scheduledPlays.push(play)
+    this.scheduledPlays.push({ ...play, generation: patternGenerationOf(play.sequenceName) })
     this.scheduledPlays.sort((a, b) => a.time - b.time)
-    if (play.sequenceName) {
-      this.liveSequences.add(play.sequenceName)
-    }
+    if (play.sequenceName) this.liveSequences.add(play.sequenceName)
   }
 ```
 
@@ -226,7 +226,7 @@ flowchart LR
 When the scheduler starts, `setInterval(callback, POLL_INTERVAL_MS)` is launched. The constants are grouped near the top of the file.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-335
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:332-337
 const DEFAULT_LOOKAHEAD_SEC = 0.05
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
@@ -238,7 +238,7 @@ const MAX_DRIFT_MS = 1000
 Every 1 ms it checks the queue and dispatches events whose time has come.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1548-1565
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1550-1567
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -327,7 +327,7 @@ The point is "absolute latency is a constant shift = musically irrelevant." Ever
 This scheme brings a new problem: "mapping TS's `Date.now()` to the daemon's transport clock." The daemon reports its own `now_sec` in a 1 Hz `StreamStats`, and the TS side accumulates those as anchors. With #389 mechanism B, the single anchor was replaced by a **least-squares fit over the last 30 samples** (`ANCHOR_WINDOW`, `fitAnchorSamples()`). `daemonNowSec()`, called on the dispatch hot path, evaluates that fit in O(1).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1796-1802
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1797-1803
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -372,7 +372,7 @@ In this design, the act of "scheduling (bulk push)," the act of "executing (poll
 When you stop a sequence, or when you evaluate a new pattern with `Cmd+Enter`, you need to cancel the events remaining on the existing queue. `clearSequenceEvents()` plays this role. The Rust version became very short.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1612-1620
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1614-1622
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter((p) => p.sequenceName !== sequenceName)
     // 集合から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
@@ -409,7 +409,7 @@ The SC version's `clearSequenceEvents()` (`event-scheduler.ts:440-462`) has the 
 What actually sends to the daemon is `executePlayback()`. Several protective mechanisms are lined up in series here. The respawn-related comment at the top of the function is long, so the quote starts from the guards themselves.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1669-1713
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1670-1714
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -490,7 +490,7 @@ Let's read them in order.
 `emitStepMarker()` prints to stdout a machine-readable line for the live playhead, with which the editor extension highlights the `play()` arguments.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1661
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1662
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -507,6 +507,7 @@ Let's read them in order.
         seq: play.sequenceName,
         argPath: play.argPath,
         atEpochMs: Math.round(this.startTime + play.time),
+        generation: play.generation,
       })
     }
   }
@@ -517,11 +518,13 @@ The design point is that the timestamp is the **grid time** (`startTime + play.t
 The story of #654 (2026-08-30, WORK_LOG 6.421) is interesting. #390 had been wired only on the audio path, so the playhead never moved at all for `instrument()` / `midi()` sequences. The fix was to add a `scheduleStepMarker()` to `MidiScheduler` that enqueues a marker with the same grammar.
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:173-178
+// packages/engine/src/midi/midi-scheduler.ts:173-180
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
+    // 設計 997 D-P1: 世代はスケジュールした時点で読む（鳴る時点ではない）。
+    const generation = patternGenerationOf(owner)
     this.enqueue(time, owner, () => {
-      host.step({ seq: owner, argPath, atEpochMs })
+      host.step({ seq: owner, argPath, atEpochMs, generation })
     })
   }
 ```
@@ -529,6 +532,8 @@ The story of #654 (2026-08-30, WORK_LOG 6.421) is interesting. #390 had been wir
 Both the audio side and the MIDI side stamp the "grid time," so the playheads of different layers can be compared — that is the judgement recorded in the WORK_LOG. Note that `[STEP]` lines are filtered out of the output channel in normal mode, so observing them on a real machine requires starting with `debug: true` (WORK_LOG 6.421).
 
 Since 2026-10 (#1022) the marker leaves the engine as a structured event, `host.step({ seq, argPath, atEpochMs })`, rather than a string assembled for `console.log` (`engine-backend.ts:79-99`). The default output still writes `[STEP] <seq> <argPath> <atEpochMs>` to stdout, so the frozen extension's `parseStepLine()` is unchanged. Layer 2 of the native app (`packages/session`) swaps the output with `setHostOutput()` and receives the event without going through a string.
+
+N1-d4 (#1022) then added a **generation number** that increases monotonically across the whole engine each time `play()` sets a pattern (`host.pattern`), and each step carries the generation **at the time it was scheduled** (`enqueue()` and `scheduleStepMarker()` read it then). Steps scheduled before a `play()` keep sounding with the previous generation, so layer 2 can tell which statement's `play()` is sounding from the generation that arrived while it was executing that statement (design 997 D-P1). The default output's `[STEP]` line does not include the generation.
 
 ## Gain Conversion: dB → amplitude
 
@@ -566,7 +571,7 @@ Note that only the sequence gain is converted here. The master gain (`global.gai
 `stop()` halts the interval; `stopAll()` additionally empties the queue and stops the daemon-side voices too.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1567-1594
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1569-1596
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)

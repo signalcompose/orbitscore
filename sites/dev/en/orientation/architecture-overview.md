@@ -362,7 +362,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `RustEnginePlayer` is the boundary on the engine side. Its `boot()` calls `DaemonClient.start()` and then establishes the transport clock anchor.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:580-587
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:582-589
   async boot(outputDevice?: string): Promise<void> {
     await this.daemon.start({
       daemonPath: this.daemonPath,

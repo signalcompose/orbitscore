@@ -54,11 +54,21 @@ export interface AudioEngineBackend extends Scheduler {
   isPluginActive?(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean
 }
 
-/** engine が鳴らした step（`[STEP] <seq> <argPath> <atEpochMs>` の中身）。 */
+/**
+ * engine が鳴らした step（`[STEP] <seq> <argPath> <atEpochMs>` の中身）。`generation` は鳴った
+ * パターンの世代（`host.pattern` が出した番号・スケジュールした時点で付く）。既定の口の行には出さない。
+ */
 export interface EngineStepEvent {
   seq: string
   argPath: string
   atEpochMs: number
+  generation?: number
+}
+
+/** シーケンスのパターンが `play()` で変わった。`generation` は engine 全体で単調に増える（設計 997 D-P1）。 */
+export interface EnginePatternEvent {
+  seq: string
+  generation: number
 }
 
 /**
@@ -74,6 +84,7 @@ export interface HostOutput {
   warn(...args: unknown[]): void
   error(...args: unknown[]): void
   step(event: EngineStepEvent): void
+  pattern(event: EnginePatternEvent): void
 }
 
 const consoleOutput: HostOutput = {
@@ -81,6 +92,8 @@ const consoleOutput: HostOutput = {
   warn: (...args) => console.warn(...args),
   error: (...args) => console.error(...args),
   step: ({ seq, argPath, atEpochMs }) => console.log(`[STEP] ${seq} ${argPath} ${atEpochMs}`),
+  // 凍結版の REPL・`orbitscore play` が書く行は変えない（世代は層 2 だけが使う）。
+  pattern: () => {},
 }
 
 let currentOutput: HostOutput = consoleOutput
@@ -91,9 +104,32 @@ export const host: HostOutput = {
   warn: (...args) => currentOutput.warn(...args),
   error: (...args) => currentOutput.error(...args),
   step: (event) => currentOutput.step(event),
+  pattern: (event) => currentOutput.pattern(event),
 }
 
 /** host が出力の口を差し込む。`null` で既定（console）に戻す。 */
 export function setHostOutput(output: HostOutput | null): void {
   currentOutput = output ?? consoleOutput
+}
+
+let lastPatternGeneration = 0
+const patternGenerations = new Map<string, number>()
+
+/**
+ * `play()` がパターンを置いた時に呼ぶ: シーケンスに新しい世代を振り、host へ `pattern` で知らせる
+ * （設計 997 D-P1・#987）。名前の無いシーケンスは step を出さないので振らない。
+ */
+export function advancePatternGeneration(seq: string): void {
+  if (!seq) return
+  const generation = ++lastPatternGeneration
+  patternGenerations.set(seq, generation)
+  host.pattern({ seq, generation })
+}
+
+/**
+ * いま置かれているパターンの世代。step を**スケジュールする時点で**読んで step に付ける — スケジュールは
+ * その時点のパターンから同期的に作るので、`play()` の前にスケジュール済みの step は前の世代のまま鳴る。
+ */
+export function patternGenerationOf(seq: string): number | undefined {
+  return patternGenerations.get(seq)
 }

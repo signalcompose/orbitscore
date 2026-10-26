@@ -447,16 +447,20 @@ describe('engine output port (P-07 · #1022 replaced the console capture)', () =
   it('formats engine output like console and splits it into non-empty lines per stream', () => {
     const lines: string[] = []
     const steps: unknown[] = []
+    const patterns: unknown[] = []
     const output = createHostOutput({
       line: (stream, text) => lines.push(`${stream}:${text}`),
       step: (event) => steps.push(event),
+      pattern: (event) => patterns.push(event),
     })
     output.log('a %s', 'b', '\n\nc')
     output.warn('w')
     output.error({ x: 1 })
-    output.step({ seq: 'kick', argPath: '0', atEpochMs: 5 })
+    output.step({ seq: 'kick', argPath: '0', atEpochMs: 5, generation: 2 })
+    output.pattern({ seq: 'kick', generation: 3 })
     expect(lines).toEqual(['stdout:a b ', 'stdout:c', 'stderr:w', 'stderr:{ x: 1 }'])
-    expect(steps).toEqual([{ seq: 'kick', argPath: '0', atEpochMs: 5 }])
+    expect(steps).toEqual([{ seq: 'kick', argPath: '0', atEpochMs: 5, generation: 2 }])
+    expect(patterns).toEqual([{ seq: 'kick', generation: 3 }])
   })
 
   it('a session attaches to the engine host output and gives it back to console on dispose', async () => {

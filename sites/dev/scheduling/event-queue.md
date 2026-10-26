@@ -73,7 +73,7 @@ OrbitScore が取る戦略は、**音を鳴らす直前ではなく、少し先�
 イベントキューの各要素は `ScheduledPlay` という型で表現されています。Rust 経路の版は SC 版より平たい構造で、`options` の入れ子がなく、chop の slice 情報を `slice` にまとめて持ちます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-200
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-202
 /** lean scheduler が保持する 1 発音イベント。 */
 export interface ScheduledPlay {
   /** 再生開始時刻（`startTime` からの相対 ms）。 */
@@ -100,6 +100,8 @@ export interface ScheduledPlay {
    * observational フィールド。timing / 音響には一切影響しない。
    */
   argPath?: string
+  /** 設計 997 D-P1: スケジュールした時点のパターンの世代（`enqueue` が付ける・step に載せる）。 */
+  generation?: number
   /**
    * #390: 休符 (0) スロットの marker-only イベント。daemon への dispatch は行わず、
    * 発火タイミングで `[STEP]` だけを出す（filepath は空文字）。
@@ -179,7 +181,7 @@ export interface ScheduledPlay {
 新しいイベントをキューに積むのは `scheduleEvent()` で、Rust 版は内部の `enqueue()` に委譲します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1480-1496
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1482-1498
   scheduleEvent(
     filepath: string,
     time: number,
@@ -200,13 +202,11 @@ export interface ScheduledPlay {
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1635-1641
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1637-1641
   private enqueue(play: ScheduledPlay): void {
-    this.scheduledPlays.push(play)
+    this.scheduledPlays.push({ ...play, generation: patternGenerationOf(play.sequenceName) })
     this.scheduledPlays.sort((a, b) => a.time - b.time)
-    if (play.sequenceName) {
-      this.liveSequences.add(play.sequenceName)
-    }
+    if (play.sequenceName) this.liveSequences.add(play.sequenceName)
   }
 ```
 
@@ -226,7 +226,7 @@ flowchart LR
 スケジューラーを起動すると `setInterval(callback, POLL_INTERVAL_MS)` が始動します。定数はファイル上部にまとまっています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-335
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:332-337
 const DEFAULT_LOOKAHEAD_SEC = 0.05
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
@@ -238,7 +238,7 @@ const MAX_DRIFT_MS = 1000
 1ms ごとにキューを確認し、時刻が来たイベントを dispatch します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1548-1565
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1550-1567
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -327,7 +327,7 @@ poll がイベントを検出した時点で、Rust 版は「今すぐ鳴らせ�
 この方式には「TS の `Date.now()` と daemon の transport clock を対応づける」という新しい問題が伴います。daemon は 1Hz の `StreamStats` で自分の `now_sec` を報告し、TS 側はそれを anchor として蓄積します。#389 の機構 B で、単一 anchor から **直近 30 サンプルの最小二乗フィット**に変わりました (`ANCHOR_WINDOW`、`fitAnchorSamples()`)。dispatch のホットパスで呼ばれる `daemonNowSec()` は、そのフィットを O(1) で評価します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1796-1802
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1797-1803
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -372,7 +372,7 @@ sequenceDiagram
 シーケンスを停止したり、`Cmd+Enter` で新しいパターンを評価した場合、既存のキューに残っているイベントをキャンセルする必要があります。`clearSequenceEvents()` がその役割を担います。Rust 版はとても短くなりました。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1612-1620
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1614-1622
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter((p) => p.sequenceName !== sequenceName)
     // 集合から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
@@ -409,7 +409,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 実際に daemon へ送るのは `executePlayback()` です。ここには複数の保護機構が直列に並んでいます。関数冒頭の respawn 関連のコメントは長いので、ガードの本体から引用します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1669-1713
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1670-1714
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -490,7 +490,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `emitStepMarker()` は、エディタ拡張が `play()` の引数をハイライトする live playhead のための、機械可読な 1 行を stdout に出します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1661
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1662
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -507,6 +507,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
         seq: play.sequenceName,
         argPath: play.argPath,
         atEpochMs: Math.round(this.startTime + play.time),
+        generation: play.generation,
       })
     }
   }
@@ -517,11 +518,13 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 面白いのは #654 (2026-08-30、WORK_LOG 6.421) の経緯です。#390 は audio 経路にしか配線されておらず、`instrument()` / `midi()` シーケンスでは playhead がまったく動きませんでした。修正は `MidiScheduler` に同じ文法のマーカーを積む `scheduleStepMarker()` を足すことでした。
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:173-178
+// packages/engine/src/midi/midi-scheduler.ts:173-180
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
+    // 設計 997 D-P1: 世代はスケジュールした時点で読む（鳴る時点ではない）。
+    const generation = patternGenerationOf(owner)
     this.enqueue(time, owner, () => {
-      host.step({ seq: owner, argPath, atEpochMs })
+      host.step({ seq: owner, argPath, atEpochMs, generation })
     })
   }
 ```
@@ -529,6 +532,8 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 audio 側と MIDI 側の両方が「グリッド時刻」を打つので、層どうしの playhead を比べられる、というのが WORK_LOG に書かれた判断です。なお `[STEP]` 行は通常モードでは output channel からフィルタされるので、実機で観測するには `debug: true` で起動する必要があります (WORK_LOG 6.421)。
 
 2026-10 (#1022) 以降、マーカーは `console.log` に組み立てた文字列ではなく、`host.step({ seq, argPath, atEpochMs })` という構造化イベントとして出ます (`engine-backend.ts:79-99`)。既定の出力先は従来どおり `[STEP] <seq> <argPath> <atEpochMs>` を stdout に書くので、凍結版の拡張の `parseStepLine()` は何も変わりません。ネイティブ版の層 2 (`packages/session`) は `setHostOutput()` で出力先を差し替え、文字列を経由せずにイベントを受け取ります。
+
+さらに N1-d4 (#1022) で、`play()` がパターンを置くたびに engine 全体で単調に増える**世代番号**が振られ (`host.pattern`)、step には**スケジュールした時点の**世代が付くようになりました (`enqueue()` と `scheduleStepMarker()` がその時点の値を読みます)。`play()` の前にスケジュール済みの step は前の世代のまま鳴るので、層 2 は「どの文の `play()` が鳴っているか」を、文を 1 つずつ実行している間に届いた世代から決められます (設計 997 D-P1)。既定の出力先の `[STEP]` 行には世代を出しません。
 
 ## ゲインの変換: dB → amplitude
 
@@ -566,7 +571,7 @@ $$
 `stop()` はインターバルを止め、`stopAll()` はさらにキューを空にして daemon 側の発音も止めます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1567-1594
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1569-1596
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)

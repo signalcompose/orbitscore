@@ -1369,7 +1369,7 @@ is optional, so nothing happens on the SC backend. The essential point of
 `RustEnginePlayer.setGlobalGain` is "record the intent first, regardless of the daemon's state".
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1317-1329
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1319-1331
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。

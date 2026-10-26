@@ -3,12 +3,13 @@
  * （設計 848 台帳 P-07・束 S-eval #1022 の N1-d3）。
  *
  * engine は人間向けのログ行を `host.log` / `warn` / `error`（`console` と同じ引数）で、鳴った step を
- * `host.step` で出す。層 2 は `setHostOutput` でここの受け手を差し込み、ログ行は `log.line` の分類へ、
- * step は `transport.step` へ回す。process の console は横取りしない（段階 1 の P-07 の横取りを置き換えた）。
+ * `host.step` で、`play()` が置いたパターンの世代を `host.pattern` で出す。層 2 は `setHostOutput` でここの
+ * 受け手を差し込み、ログ行は `log.line` の分類へ、step は `transport.step` へ、世代は step の出どころの
+ * 対応づけ（`step-sources.ts`・設計 997 D-P1）へ回す。process の console は横取りしない（段階 1 の P-07 の横取りを置き換えた）。
  */
 import util from 'node:util'
 
-import type { HostOutput } from '@orbitscore/engine/dist/audio/engine-backend'
+import type { EnginePatternEvent, HostOutput } from '@orbitscore/engine/dist/audio/engine-backend'
 
 import type { OutputStream } from './log-classify'
 
@@ -16,12 +17,18 @@ export interface StepEvent {
   seq: string
   argPath: string
   atEpochMs: number
+  /** 鳴ったパターンの世代（設計 997 D-P1）。口を通らずに書かれた `[STEP]` の行には無い。 */
+  generation?: number
 }
+
+export type PatternEvent = EnginePatternEvent
 
 export interface EngineOutputHandlers {
   /** 空でない 1 行ずつ（`log` は stdout・`warn` / `error` は stderr。Node の console と同じ振り分け）。 */
   line(stream: OutputStream, text: string): void
   step(event: StepEvent): void
+  /** `play()` がパターンを置いた（世代が進んだ）。 */
+  pattern(event: PatternEvent): void
 }
 
 /** engine の `host` に差し込む受け手。引数は `console` と同じ規則（`util.format`）で 1 本の文字列にする。 */
@@ -38,6 +45,7 @@ export function createHostOutput(handlers: EngineOutputHandlers): HostOutput {
     warn: lines('stderr'),
     error: lines('stderr'),
     step: (event) => handlers.step(event),
+    pattern: (event) => handlers.pattern(event),
   }
 }
 

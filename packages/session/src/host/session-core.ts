@@ -10,7 +10,7 @@
 import crypto from 'node:crypto'
 
 import { setHostOutput } from '@orbitscore/engine/dist/audio/engine-backend'
-import type { ParsedRequest } from '@orbitscore/engine/dist/parser/audio-parser'
+import type { ParsedEntry, ParsedRequest } from '@orbitscore/engine/dist/parser/audio-parser'
 
 import {
   createEvaluationIntake,
@@ -27,7 +27,13 @@ import type { PluginUiResult } from '../mcp/mcp-types'
 import { RpcError, PROTOCOL_VERSION } from '../rpc/protocol'
 import type { AttachedClient, NotificationHandler, RequestHandler } from '../rpc/server'
 
-import { createHostOutput, parseStepLine, transportChange, type StepEvent } from './engine-output'
+import {
+  createHostOutput,
+  parseStepLine,
+  transportChange,
+  type PatternEvent,
+  type StepEvent,
+} from './engine-output'
 import type { DocsSites } from './docs-sites'
 import {
   DocumentStore,
@@ -43,7 +49,8 @@ import { audioMethods, docsMethods, pluginMethods, type Layer2MethodDeps } from 
 import { registerMcp, type RegisterMcpDeps, type RegisterMcpParams } from './mcp-registration'
 import { classifyEngineLine, classifySessionLine, type OutputStream } from './log-classify'
 import { LogHub, type LogLineNotification } from './log-hub'
-import { oneBasedCursor, resolveSelectionBlock } from './selection-block'
+import { contiguousCodeLines, oneBasedCursor, resolveSelectionBlock } from './selection-block'
+import { StepSources, toDocumentRange, type CodeLineMap } from './step-sources'
 
 export interface EvaluateTarget {
   uri: string
@@ -111,6 +118,14 @@ export class SessionCore {
   private playing = false
   /** いま `execute()` の中にいる評価の帰属（console の行に `evalId` を付けるため）。 */
   private executing: IntakeContext | null = null
+  /** いま実行している文（その間に置かれたパターンはこの文のもの・設計 997 D-P1）。 */
+  private executingEntry: ParsedEntry | null = null
+  /**
+   * 処理中の評価のうち文書から来たもの（`target` あり）。値は `code` → 文書の写し（写せない時は null）。
+   * 文書の外（MCP のコード片）の評価は載らないので、その文が置いたパターンの step は source を持たない。
+   */
+  private readonly places = new Map<string, CodeLineMap | null>()
+  private readonly stepSources = new StepSources()
   private engineOutputAttached = false
   readonly handlers: Readonly<Record<string, RequestHandler>>
   readonly notificationHandlers: Readonly<Record<string, NotificationHandler>>
@@ -137,6 +152,7 @@ export class SessionCore {
         createHostOutput({
           line: (stream, text) => this.onEngineLine(stream, text),
           step: (event) => this.onEngineStep(event),
+          pattern: (event) => this.onEnginePattern(event),
         }),
       )
       this.engineOutputAttached = true
@@ -278,6 +294,7 @@ export class SessionCore {
         target: { uri: snapshot.uri, version: snapshot.version, range: block.range },
       },
       client,
+      { uri: snapshot.uri, version: snapshot.version, lines: block.lines },
     )
     if (source === 'agent') await this.collapseAgentSelection(snapshot)
     return { ok: true, message: 'selection executed' }
@@ -443,8 +460,27 @@ export class SessionCore {
 
   /** engine が鳴らした step。ring には凍結版と同じ `[STEP]` の行で残す（debug の時に読める）。 */
   onEngineStep(step: StepEvent): void {
-    this.logs.recordStep(`[STEP] ${step.seq} ${step.argPath} ${step.atEpochMs}`)
-    this.options.broadcast('transport.step', { ...step, source: null })
+    const { seq, argPath, atEpochMs } = step
+    this.logs.recordStep(`[STEP] ${seq} ${argPath} ${atEpochMs}`)
+    const source = this.stepSources.sourceOf(seq, step.generation)
+    this.options.broadcast('transport.step', { seq, argPath, atEpochMs, source })
+  }
+
+  /**
+   * engine がパターンを置いた（設計 997 D-P1）。文の実行中に置かれたものだけをその文へ対応づける。
+   * import 先の文と文書の外（MCP）の評価の文は source を持たない（D-P2・スキーマの説明どおり）。
+   */
+  onEnginePattern(event: PatternEvent): void {
+    const entry = this.executingEntry
+    const evalId = this.executing?.evalId
+    if (!entry || entry.kind === 'file_import' || !evalId || !this.places.has(evalId)) return
+    const map = this.places.get(evalId)
+    const document = map ? toDocumentRange(map, entry.span) : undefined
+    this.stepSources.remember(event.seq, event.generation, {
+      evalId,
+      ...entry.span,
+      ...(document ? { document } : {}),
+    })
   }
 
   /** 帰属を覚えた評価の `target`（`.orbslog` の `sourceFile` への写しは設計 §5.3.1 (a)）。 */
@@ -452,22 +488,49 @@ export class SessionCore {
     return this.targets.get(evalId)
   }
 
-  async evaluate(params: EvaluateParams, client: AttachedClient) {
+  /**
+   * `session.evaluate`。`codeLines` は `editor.runSelection` が展開した時に作った `code` → 文書の写し
+   * （wire からは来ない）。無ければ `target` の範囲のテキストが `code` の時だけ写す（設計 997 §4.6）。
+   */
+  async evaluate(params: EvaluateParams, client: AttachedClient, codeLines?: CodeLineMap) {
     if (!this.options.engine.running) {
       throw new RpcError('ENGINE_NOT_RUNNING', 'engine is not running — start the engine first')
     }
     const evalId = crypto.randomBytes(9).toString('base64url')
-    if (params.target) this.remember(evalId, params.target)
-    const outcome = await this.intake.evaluate(
-      { code: params.code, documentDirectory: params.documentDirectory, source: params.source },
-      { evalId, clientId: client.clientId },
-    )
-    return {
-      ok: outcome.ok,
-      evalId,
-      diagnostics: outcome.diagnostics,
-      documentDirectory: outcome.documentDirectory,
+    const map = params.target ? (codeLines ?? this.codeLinesOf(params.target, params.code)) : null
+    if (params.target) {
+      this.remember(evalId, params.target)
+      this.places.set(evalId, map)
     }
+    try {
+      const outcome = await this.intake.evaluate(
+        { code: params.code, documentDirectory: params.documentDirectory, source: params.source },
+        { evalId, clientId: client.clientId },
+      )
+      const diagnostics = outcome.diagnostics.map((diagnostic) => {
+        const documentRange = map && diagnostic.range && toDocumentRange(map, diagnostic.range)
+        return documentRange ? { ...diagnostic, documentRange } : diagnostic
+      })
+      return { ok: outcome.ok, evalId, diagnostics, documentDirectory: outcome.documentDirectory }
+    } finally {
+      this.places.delete(evalId)
+    }
+  }
+
+  /** `target` の範囲の同期済みのテキストが `code` なら、その写し。違えば写さず、ログに 1 行残す。 */
+  private codeLinesOf(target: EvaluateTarget, code: string): CodeLineMap | null {
+    if (!target.range || target.version === undefined) return null
+    const document = this.documents.get(target.uri)
+    const lines =
+      document?.version === target.version
+        ? contiguousCodeLines(document.text, target.range, code)
+        : undefined
+    if (lines) return { uri: target.uri, version: target.version, lines }
+    this.sessionLog(
+      'warn',
+      `[session] the evaluated code is not the text of ${target.uri} (version ${target.version}) at the target range — positions are not mapped to the document`,
+    )
+    return null
   }
 
   async getState() {
@@ -497,9 +560,16 @@ export class SessionCore {
     if (!interpreter) throw new Error('engine is not running — start the engine first')
     this.executing = context
     try {
-      return await interpreter.executeStatements(request, options, hooks)
+      return await interpreter.executeStatements(request, options, {
+        onStatement: (index) => {
+          this.executingEntry = request.entries[index] ?? null
+          hooks.onStatement(index)
+        },
+        onFailure: hooks.onFailure,
+      })
     } finally {
       this.executing = null
+      this.executingEntry = null
     }
   }
 

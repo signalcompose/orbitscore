@@ -1,4 +1,4 @@
-import { host } from '../audio/engine-backend'
+import { host, patternGenerationOf } from '../audio/engine-backend'
 
 import { MidiOutput } from './midi-output'
 
@@ -172,8 +172,10 @@ export class MidiScheduler {
    */
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
+    // 設計 997 D-P1: 世代はスケジュールした時点で読む（鳴る時点ではない）。
+    const generation = patternGenerationOf(owner)
     this.enqueue(time, owner, () => {
-      host.step({ seq: owner, argPath, atEpochMs })
+      host.step({ seq: owner, argPath, atEpochMs, generation })
     })
   }
 

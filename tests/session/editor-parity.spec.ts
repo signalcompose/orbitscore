@@ -177,7 +177,9 @@ describe('run selection picks the same code and range as the frozen runSelection
   })
 
   it.each(CASES)('$name', async ({ text, selection }) => {
-    expect(resolveSelectionBlock(text, selection)).toEqual(await frozenBlock(text, selection))
+    // `lines`（code → 文書の写し・#1022）は層 2 だけが持つ。凍結版と比べるのは評価するテキストと範囲。
+    const { code, range } = resolveSelectionBlock(text, selection)
+    expect({ code, range }).toEqual(await frozenBlock(text, selection))
   })
 })
 

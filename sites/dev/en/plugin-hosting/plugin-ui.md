@@ -870,7 +870,7 @@ that landed in #474 P4b (2026-07-31); it creates no new save mechanism and merel
 existing save flow from the event.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:655-683
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:657-685
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -930,7 +930,7 @@ TS separately waits for the `UI_CLOSED_DONE` event frame. Moreover, it registers
 the daemon side, so DONE can overtake the ack.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:886-900
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:888-902
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -955,7 +955,7 @@ and "save completed" is never falsely returned (main's mutation verification in 
 found this hole and added a test).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:333-334
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```

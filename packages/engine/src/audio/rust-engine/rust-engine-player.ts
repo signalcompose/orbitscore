@@ -37,7 +37,7 @@
  */
 
 import { gainDbToAmplitude } from '../audio-gain-utils'
-import { host, type AudioEngineBackend } from '../engine-backend'
+import { host, patternGenerationOf, type AudioEngineBackend } from '../engine-backend'
 import type {
   AudioDevice,
   EffectChainApplyRequest,
@@ -192,6 +192,8 @@ export interface ScheduledPlay {
    * observational フィールド。timing / 音響には一切影響しない。
    */
   argPath?: string
+  /** 設計 997 D-P1: スケジュールした時点のパターンの世代（`enqueue` が付ける・step に載せる）。 */
+  generation?: number
   /**
    * #390: 休符 (0) スロットの marker-only イベント。daemon への dispatch は行わず、
    * 発火タイミングで `[STEP]` だけを出す（filepath は空文字）。
@@ -1633,11 +1635,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   // --- internals ---
 
   private enqueue(play: ScheduledPlay): void {
-    this.scheduledPlays.push(play)
+    this.scheduledPlays.push({ ...play, generation: patternGenerationOf(play.sequenceName) })
     this.scheduledPlays.sort((a, b) => a.time - b.time)
-    if (play.sequenceName) {
-      this.liveSequences.add(play.sequenceName)
-    }
+    if (play.sequenceName) this.liveSequences.add(play.sequenceName)
   }
 
   /**
@@ -1656,6 +1656,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         seq: play.sequenceName,
         argPath: play.argPath,
         atEpochMs: Math.round(this.startTime + play.time),
+        generation: play.generation,
       })
     }
   }

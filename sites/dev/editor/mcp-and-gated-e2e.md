@@ -1295,13 +1295,14 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1661
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1662
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       host.step({
         seq: play.sequenceName,
         argPath: play.argPath,
         atEpochMs: Math.round(this.startTime + play.time),
+        generation: play.generation,
       })
     }
   }
@@ -1310,11 +1311,13 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ここで `#654` の話になります。WORK_LOG 6.421 によると、SIGMUS 用の新曲（7 層）を実機で鳴らしたところ、`audio()` の gong 1 層だけが playhead を刻み、Kontakt の 6 層は静止したままでした。退行ではなく **最初から片翼**だった — `[STEP]` を出すのは audio 経路だけで、MIDI 側は `sequence.ts` の Stage C で `argPath` を捨てていたのです。修正は TS のみで、`MidiScheduler` に marker 専用のアクションを積む口を足しました。
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:173-178
+// packages/engine/src/midi/midi-scheduler.ts:173-180
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
+    // 設計 997 D-P1: 世代はスケジュールした時点で読む（鳴る時点ではない）。
+    const generation = patternGenerationOf(owner)
     this.enqueue(time, owner, () => {
-      host.step({ seq: owner, argPath, atEpochMs })
+      host.step({ seq: owner, argPath, atEpochMs, generation })
     })
   }
 ```
