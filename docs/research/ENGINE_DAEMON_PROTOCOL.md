@@ -59,6 +59,9 @@ daemon が起動中に失敗した場合（audio device 取得失敗、port bind
 
 - `127.0.0.1` のみ bind（外部接続拒否）
 - トークン認証なし（localhost 前提）
+- **`Origin` ヘッダのあるハンドシェイクは 403 で拒否する**（#996）。ブラウザは WebSocket の
+  ハンドシェイクに必ず `Origin` を付けるので、任意の Web ページからの接続を締め出せる。client
+  （Node の `ws`）は `Origin` を付けない。値は見ない（`null` も拒否）
 - 将来的にリモート対応する場合は別 protocol version で token ベース認証を追加
 
 ### 2.3 エンコーディング

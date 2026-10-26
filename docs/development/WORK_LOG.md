@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): reject WebSocket handshakes that carry an Origin header (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu-996`（#999 の上に積む） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
+
+設計 848 §4.7 の脅威モデルで見つかった、出荷済み 4.4.0 の daemon の穴の 1 つ目。
+
+- daemon の accept を `accept_hdr_async` にし、`Origin` ヘッダのあるハンドシェイクを 403 で拒否する（値は見ない・`null` も拒否）。WebSocket のハンドシェイクには CORS の preflight が無く、daemon は `LoadPlugin { path }` を受け付けるので、ブラウザからの接続を通さない。ブラウザは必ず Origin を付け（RFC 6455 §4.1）、daemon の client（engine の `ws`）は付けない。repo 内の WebSocket client は engine と Rust テストの 2 つだけで、どちらも Origin を付けないことを確認した
+- 戻り値の型は tungstenite の `Callback` が決めているので `clippy::result_large_err` を理由つきで allow
+- テスト（`tests/handshake_origin.rs`）: 3 種の Origin（`https://…` / `null` / `http://127.0.0.1:…`）が 403 になり、拒否の後も accept loop が次の接続を受ける / Origin の無い接続は 101 で通り handshake フレームを受け取る。`accept_async` に戻す変異で red になることを確認
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` §2.2 に規則を追記。dev 学習サイトの `server.rs` の引用を再アンカー
+
+Part of #996
+
+---
+
 ### fix(deps): bump tokio past RUSTSEC-2026-0386 so cargo-deny passes again (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu` / **Issue**: [#999](https://github.com/signalcompose/orbitscore/issues/999)

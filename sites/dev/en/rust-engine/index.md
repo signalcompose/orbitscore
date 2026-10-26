@@ -379,7 +379,7 @@ a capturable `hardware` dispatch (mixing being disallowed by design), which cont
 hands off to `session::run`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/server.rs:24-70
+// rust/crates/orbit-audio-daemon/src/server.rs:26-72
 /// accept loop。各接続ごとに新タスクを spawn し、[`session::run`] で処理する。
 ///
 /// accept エラーはすべて永続化し得るため、短い backoff を挟んで tight spin を防ぐ。
