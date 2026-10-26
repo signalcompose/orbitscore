@@ -137,7 +137,7 @@ export type MethodChain      = { method: string; args: any[]; invocation?: 'bare
 |---|---|---|---|
 | (a) | core spec `:1225-1226`「`output(数値)` / `output("名前")` は midi で**素通り**（#644 で診断予定）」 | 一致 | 表の `warn` 行として**実装で表現**する（予定を消す） |
 | (b) | core spec `:941` `seq.root(1)` … `:953`「**`seq.root()` は numeric-degree-only**（`seq.root(1)`, `seq.root(b6)`）」 | 🔴 **`seq.root(b6)` も動かない**。`b6` は `parseArgument` → ACCIDENTAL → `parsePitch()`（`parse-expression.ts:478-488`）で `PlayPitch` オブジェクトになり、`Sequence.root(degree: number)`（`:906-920`）の `Number.isInteger` を通らない。そもそも signature に alteration が無い | **新規の乖離**（#280 の派生・§7.1） |
-| (c) | `specs-v2/PITCH_DSL_SPEC_v1.1.md:160` `seq.root(C)` | 拒否（#280） | specs-v2 が古い。core spec `:953` は既に実装側へ倒してある（**#280 の裁定は片方の spec にだけ入っている**） |
+| (c) | `specs-v2/PITCH_DSL_SPEC_v1.1.md:166` `seq.root(C)` | 拒否（#280） | specs-v2 が古い。core spec `:959` は既に実装側へ倒してある（**#280 の裁定は片方の spec にだけ入っている**） |
 | (d) | core spec §3「Slice-to-Slot Fitting」 | ✅ 済（#665 B'・`ee782327`） | — |
 
 ### 3.4 型と signature（貼れる形）
@@ -418,8 +418,8 @@ function resolveAudioFilePath(audioFilePath: string, sequenceName: string): stri
 | 事実 | 根拠 |
 |---|---|
 | `seq.root(C)` は runtime 拒否 | `sequence.ts:911-919` / `parse-expression.ts:809-813` |
-| **core spec は既に実装側へ倒してある**（`:953`「numeric-degree-only」・「Using a note name at seq level is an error (#280)」） | `INSTRUCTION_ORBITSCORE_DSL.md:953-955` |
-| **specs-v2 は倒していない**（`seq.root(C) // シーケンス既定のピッチコンテキスト`） | `PITCH_DSL_SPEC_v1.1.md:160` |
+| **core spec は既に実装側へ倒してある**（`:959`「numeric-degree-only」・「Using a note name at seq level is an error (#280)」） | `INSTRUCTION_ORBITSCORE_DSL.md:959-961` |
+| **specs-v2 は倒していない**（`seq.root(C) // シーケンス既定のピッチコンテキスト`） | `PITCH_DSL_SPEC_v1.1.md:166` |
 | 🔴 core spec 自身の例 `seq.root(b6)` も**動かない**（§3.3 (b)） | `parse-expression.ts:478-488` → `sequence.ts:911` |
 
 **#280 は「どちらに倒すか owner 判断」（地図 §4.F）だが、core spec は既に片方へ倒れている。**

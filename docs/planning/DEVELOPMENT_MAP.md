@@ -424,7 +424,7 @@ part 指定の DSL は #647（unit）と同じ語彙になるため **#647 と�
 | 問い | 答え | 根拠 |
 |---|---|---|
 | (1) #649 は master を「ライン」として扱っているか | **扱っている。** §2.3「バス / マスターも同じ記法（owner 確定: 案 A）」— `global.effect([...])` は seq と**同じ資格**。ただし master は同時に**合流点**でもあり、「全部が合流した後」という位置の意味は「**マスターという受け皿が持つ**」と書く。つまり master = **受け皿（合流点）+ その後ろのライン**。**ラインの終端が何を指すか（デバイス）は #649 に書かれていない** | `649-audio-line-design.md` §2.3 / §4「バス / マスターに gain が無い → チェーンに書ける」 |
-| (1') spec 側の先行決定 | **SC.2.1 は既に宛先を 1 つの軸に載せている**（2026-07-18 制定・当時未実装）: `var master = mix.output(1, 2)` = 「物理出力チャンネル対（出力エンドポイント）。複数宣言でマルチアウト」/ 決定 #78「**`master` は出力エンドポイント専用の予約名**」/ 規範 (4)「バス自身もレシーバ: プラグインチェーン・出力先指定を持てる」。**owner のスケッチは SC.2.1 の宣言モデルと同じ方向** | `SIGNAL_CHAIN_DSL_SPEC_v1.md:15, 57, 63, 67` |
+| (1') spec 側の先行決定 | **SC.2.1 は既に宛先を 1 つの軸に載せている**（2026-07-18 制定・当時未実装）: `var master = mix.output(1, 2)` = 「物理出力チャンネル対（出力エンドポイント）。複数宣言でマルチアウト」/ 決定 #78「**`master` は出力エンドポイント専用の予約名**」/ 規範 (4)「バス自身もレシーバ: プラグインチェーン・出力先指定を持てる」。**owner のスケッチは SC.2.1 の宣言モデルと同じ方向** | `SIGNAL_CHAIN_DSL_SPEC_v1.md:21, 63, 69, 73` |
 | (2) `global.gain()` は専用の「マスターフェーダー」概念か | **違う。** §2.4「`seq.gain()` / `global.gain()` は**チェーン末尾の `Gain` の糖衣**」。要素の 1 つ。専用概念は #649 の時点で既に無い | §2.4 / §4 |
 | (3) DSL で `output("master")` と書けるか | **文字列形では書けない（今日）。** `seq.output("master")` は `resolveSumBus` に一致せず（`mixer-manager.ts:263` が sum/aux 名 `master` を拒否）、**LinkAudio チャンネル名として記録される**（`sequence.ts:376-412` の文字列分岐）。**wire には予約語がある**（MX.2「`SetBusRouting` の `output` に `"master"` → sum への出力先指定を解除して master へ戻す」）。**SC.4 のチェーン形 `.master`** は `runtime.ts:285-291` が暗黙 output ノード `[1,2]` に解決するが、output エンドポイントは「receiver surface を持たない（#484 D4 が足す）」とコメントされており、**ルーティングまで通るかは未確認** ❓ | `sequence.ts:350-412` / `mixer-manager.ts:263-265` / MX.2 / `runtime.ts:285-300` |
 | (4) `output` を書かない時の既定 | **master。** `_sumOutputBus` が未設定なら `setBusRouting(bus, undefined, sends)`（`sequence.ts:527-529`）= MX.2「省略は既存の出力先を保持」で native の既定 `BusTarget::Master`（範囲外整数 → Master・#643 §5.4）。#649 §10.4 も既定ストリップ `[ラック → gain → pan → sends → output]` を「今日の挙動」として置く。**`output` が明示要素になっても、書かない時は暗黙の `output("master", through: false, db: 0)` とすれば互換は保てる**（案） | `sequence.ts:527-529, 546` / MX.2 / #643 §5.4 / #649 §10.4 |
@@ -549,7 +549,7 @@ kick.effect(comp).output(stems, thru: true).output(master, db: -6)   // comp 後
 var kit = instrument("Battery", outs: { "kick": bd, "snare": sd, "oh": cue })
 ```
 
-`outs:` は spec に既にある（`SIGNAL_CHAIN_DSL_SPEC_v1.md:122`「ポート→バス割り当て」）。**値の型を増やさずに**バス・物理アウト・render を一様に指せる。
+`outs:` は spec に既にある（`SIGNAL_CHAIN_DSL_SPEC_v1.md:128`「ポート→バス割り当て」）。**値の型を増やさずに**バス・物理アウト・render を一様に指せる。
 
 **残る未決（owner・§9）**: プレースホルダの語彙（`%v` / `%d` / `%n`）/ 3ch 以上を 1 ファイルに書く形（main は**作らない**を推す）。
 

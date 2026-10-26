@@ -519,7 +519,7 @@ PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integrat
 | 同 | §3.1 | 「`code` 粒度 = `execute()` 単位」→「**editor 経路はフレーム単位（1 選択 = 1 レコード）**・生 stdin は行単位・CLI play はファイル」。「editor は untitled フォールバック」→「`//#sourceFile` で伝達」。「単一 GLOBAL 前提」→ 削除（§5）|
 | 同 | §4 | `--score-dir` / `--until` v1 の意味（REPL 引き継ぎ）/ `--verify` v1 = capture 比較・イベント列比較は未実装 / `logVersion` 拒否 |
 | 同 | §8 | (3) は未決のまま。(2) プリアンブル保持期間は「直前の stop 以降」を実装が採っている（`:118-121` `preamble` は stop で消えないが start で drain）と明記 |
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:62-64` | session log 節 | 「dormant by default」→ 「**OrbitScore では既定 on（設定 `orbitscore.sessionLog`）・CLI は `ORBITSCORE_SESSION_LOG=1`**」（§13 (2) の裁定後に CLI 側を更新）|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:68-70` | session log 節 | 「dormant by default」→ 「**OrbitScore では既定 on（設定 `orbitscore.sessionLog`）・CLI は `ORBITSCORE_SESSION_LOG=1`**」（§13 (2) の裁定後に CLI 側を更新）|
 | `docs/design/611-output-line-design.md` §3.9 | フレーム | 「REPL メタ行群に追加」→「**PR-L2 で入る同じフレームを使う**」に差し替え |
 
 ---

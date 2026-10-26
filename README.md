@@ -489,6 +489,8 @@ Packaged binary products (Steam, App Store, Gumroad, etc.) are distributed under
 
 Commercial licensing inquiries: license@signalcompose.com
 
+Copyright (c) 2026 Signal compose Inc.
+
 ### Implementing the OrbitScore DSL
 
 The DSL specification documents stay under this license. Separately, the language they define may be implemented by anyone:
@@ -513,8 +515,6 @@ The machine-readable definitions of the language — the files editors and other
 - [`packages/vscode-extension/language-configuration.json`](packages/vscode-extension/language-configuration.json) (comment and bracket settings)
 
 The session protocol definitions for OrbitStudio (the native macOS app), which will be added under `protocol/`, will be licensed under the Apache License 2.0 and carry their own `LICENSE`.
-
-Copyright (c) 2026 Signal compose Inc.
 
 ## Contributing
 
