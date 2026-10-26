@@ -140,7 +140,7 @@ describe('the ready line (design 848 §4.4)', () => {
       ready: true,
       socket: path.join(tmp, 'run', 'session.sock'),
       port: null,
-      protocol_version: '1.0',
+      protocol_version: '1.1',
       token: null,
     })
   })

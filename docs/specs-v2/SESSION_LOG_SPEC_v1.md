@@ -77,6 +77,7 @@ L1 writer の初版(#229)は以下を確定スコープとする。いずれも�
 
 - **writer は opt-in(既定 inert)**: 実エントリ(CLI play / REPL / 拡張)でのみ writer を装着する。ユニットテストが叩く `Global`/`Sequence` 構築経路では writer は不在で、`global.start()` は**ファイルを生成しない**(既存テスト群の汚染防止)。
 - **`code` 粒度 = `execute()` 単位**: REPL/editor 経路はパース成立した単位(独立にパース可能なら文ごと)、CLI play はファイル全体が 1 レコード。1 選択 = 1 レコードにする selection-atomic framing は protocol 追加が要るため follow-up(細粒度でも因果記録としては有効)。
+  - **改訂（2026-10-26・#997 / #1022・ネイティブ版の層 2）**: OrbitStudio の層 2 では **評価の要求 1 つ = 1 レコード**（`code` = 要求の `code` 全体。選択・⌘Enter の subject-block・MCP のコード片のどれでも同じ）。要求は 1 度にパースされ、文はソースの順に実行される（`docs/design/997-evaluation-model-design.md` §4.1 D-U3）。構文エラーで何も実行しなかった要求と、文が 1 つも無い要求はレコードを出さない。凍結版の REPL / 拡張版（4.4.0）は上の旧規則のまま
 - **命名/`sourceFile`**: CLI 経路は `.orbs` パスを持つので basename 命名・`sourceFile` が完全に機能する。editor 経路は現状エンジンへファイル名を渡さない(`setDocumentDirectory` はディレクトリのみ)ため v1 は `untitled.<timestamp>.orbslog` フォールバック。editor からのファイル名伝達(ログに混じらない制御チャネル)は follow-up。
 - **`effect` 範囲**: v1 は **LOOP 起動**の解決済み境界のみ `nextQuantizedTime` で算出。走行中ループへの `play()` 差し替え・`tempo/beat/length` の次サイクル遅延は `effect:null`(follow-up)。replay は `transport` 駆動で再 quantize するため再現性に影響せず、`effect` は可読性/検証の補助に留まる。
 - **tempo の二重記録**: v1 は `start`/`stop` のみ `transport` レコード化。`tempo` 変更は `eval` レコードとして残す(上の例に一致)。`tempo` の `transport` 二重記録は follow-up。

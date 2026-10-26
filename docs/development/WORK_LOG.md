@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): adopt the #997 recommendations and specify the evaluation unit (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d0-docs`（`997-evaluation-model-design` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d0）
+
+- owner「推奨でとりあえず進めて」（2026-10-26）で設計 997 §9 の Q-1〜Q-6 を推奨どおりに採用した。記録は設計 997 §0 の 8 と §9 の「採用」
+- 実装の前に一次ソースで確かめ直し、D-E3 の記述を訂正した: `;` を捨てているのはパーサではなく**トークナイザ**の「Skip unknown characters」。`;` 以外の文字（`!` `?` `$` や英字でない文字）も同じ経路で黙って捨てられている → **Q-7**（推奨 A = `;` を除いて構文エラー）を足し、Q-3 と同じ類として採用（owner 未見・独立したコミットにする）。追跡されている `.orbs` 127 本でこの種の文字に頼るものは 0
+- spec を先に直した（運用規則 6）: `INSTRUCTION_ORBITSCORE_DSL.md` に「評価の単位」（host ごとの区切り方・OrbitStudio の規則 E-1〜E-7）/ `SESSION_LOG_SPEC_v1.md` §3.1 に「層 2 では要求 1 つ = 1 レコード」/ 設計 848 §5.3.1 に #997 の答え
+- プロトコル 1.1（MINOR・追加のみ）: 評価の診断に省略可能な `range` / `documentRange`、`StepSource` に省略可能な `document`（共通の `DocumentRange`）。TS を生成し直した。版を名指す既存テスト 3 件の期待値を 1.1 に更新
+- spec に節を足して行がずれたので、dev 学習サイトの引用 4 か所を `check-citations.mjs --fix` で付け直した（中身は同じ）
+
 ### docs(design): draft the evaluation model for the native line (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `997-evaluation-model-design`（`1017-c3-reverse-requests` の上・docs だけの draft）/ **Issue**: [#997](https://github.com/signalcompose/orbitscore/issues/997)（計画 §7.1 の C-12）

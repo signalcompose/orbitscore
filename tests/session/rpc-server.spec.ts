@@ -230,7 +230,7 @@ describe('handshake and dispatch (design 848 §5.2)', () => {
     const { socketPath } = await start()
     const client = await RpcTestClient.uds(socketPath)
     expect(await client.hello).toEqual({
-      protocol_version: '1.0',
+      protocol_version: '1.1',
       session_version: '0.0.1-test',
       capabilities: [],
     })

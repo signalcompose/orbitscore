@@ -15,8 +15,8 @@ const methods = Object.entries(schema['x-methods'])
 const vocabulary = Object.keys(schema['x-surface-vocabulary'])
 
 describe('session protocol v1 — method catalog shape', () => {
-  it('declares the protocol version 1.0', () => {
-    expect(schema['x-protocol-version']).toBe('1.0')
+  it('declares the protocol version 1.1 (1.1 = optional diagnostic ranges and StepSource.document · #1022)', () => {
+    expect(schema['x-protocol-version']).toBe('1.1')
   })
 
   it('every method names a direction, a kind and only known surfaces', () => {
