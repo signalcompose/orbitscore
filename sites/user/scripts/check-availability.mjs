@@ -315,7 +315,7 @@ function checkAvailabilityLines(ch) {
         ch.rel,
         i + 1,
         'AV-SYNTAX',
-        `a ${ch.lang} chapter uses \`${other.anchor.trim()}\` — use \`${grammar.anchor.trim()}\``,
+        `this ${ch.lang} chapter uses \`${other.anchor.trim()}\` — use \`${grammar.anchor.trim()}\``,
       )
       return
     }
@@ -453,14 +453,15 @@ for (const [rel, ja] of facts) {
         `en/${rel}`,
         1,
         'AV-I18N',
-        `${what} differ from the ja chapter (ja ${a} / en ${b}) — update the translation`,
+        `${what}: ja ${a} / en ${b} — the translation must match the ja chapter`,
       )
   }
 }
 
+const byPlace = (a, b) => a.rel.localeCompare(b.rel) || a.line - b.line
 const print = (tag, f) => console.log(`${tag} ${f.rel}:${f.line}  [${f.rule}] ${f.message}`)
-warnings.forEach((f) => print('WARN', f))
-errors.forEach((f) => print('FAIL', f))
+warnings.sort(byPlace).forEach((f) => print('WARN', f))
+errors.sort(byPlace).forEach((f) => print('FAIL', f))
 const ja = chapters.filter((c) => c.lang === 'ja').length
 console.log(
   `\n${chapters.length} chapter(s) checked (ja ${ja} / en ${chapters.length - ja}), ` +
