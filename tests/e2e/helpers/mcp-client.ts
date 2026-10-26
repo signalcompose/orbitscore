@@ -1,4 +1,6 @@
+import type { ChildProcess } from 'child_process'
 import * as http from 'http'
+import * as readline from 'readline'
 
 /**
  * Minimal raw JSON-RPC / MCP Streamable HTTP client shared by the OrbitScore
@@ -7,6 +9,9 @@ import * as http from 'http'
  * `packages/vscode-extension/src/mcp-server.ts` the same way `mcp-server.spec.ts`
  * does, just against a real extension host process instead of an in-process
  * stub.
+ *
+ * `StdioMcpClient`（下）は同じ形の呼び出しを、中継 `orbitscore relay` の stdio で行う
+ * （設計 848 §10.2 の `headless` / `native` ターゲット）。シナリオは `McpClient` の型のまま使える。
  */
 
 export interface RawResponse {
@@ -106,6 +111,76 @@ export class McpClient {
       },
       { sessionId: this.sessionId },
     )
+    const body = res.json as
+      | { result?: { content?: Array<{ text?: string }>; isError?: boolean } }
+      | undefined
+    return {
+      isError: body?.result?.isError === true,
+      text: body?.result?.content?.[0]?.text ?? '',
+      raw: res,
+    }
+  }
+}
+
+/**
+ * 中継（`cli.js relay`）の stdio で話す MCP クライアント（設計 848 §10.2）。利用者と同じ経路で、
+ * ハーネスはトークンを知らない（中継は UDS で層 2 に繋ぐ）。
+ *
+ * 1 行 1 メッセージの JSON-RPC（MCP の stdio transport）。`raw` は HTTP の形に合わせて
+ * `{status: 200, headers: {}, json: <応答>}` を入れる（シナリオが `raw.json` を読む所があるため）。
+ */
+export class StdioMcpClient extends McpClient {
+  private readonly waiting = new Map<number, (message: unknown) => void>()
+  private requestId = 1
+
+  constructor(readonly relay: ChildProcess) {
+    super(0)
+    readline.createInterface({ input: relay.stdout! }).on('line', (line) => {
+      let message: { id?: number }
+      try {
+        message = JSON.parse(line)
+      } catch {
+        return // 中継は stdout に MCP のフレームしか書かない（RL-7）。読めない行は無視する
+      }
+      if (typeof message.id === 'number') {
+        this.waiting.get(message.id)?.(message)
+        this.waiting.delete(message.id)
+      }
+    })
+  }
+
+  private send(body: Record<string, unknown>): Promise<RawResponse> {
+    const id = this.requestId++
+    return new Promise<RawResponse>((resolve, reject) => {
+      if (!this.relay.stdin?.writable) {
+        reject(new Error('relay stdin is not writable — the relay exited'))
+        return
+      }
+      this.waiting.set(id, (json) => resolve({ status: 200, headers: {}, json }))
+      this.relay.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, ...body })}\n`)
+    })
+  }
+
+  override async initialize(): Promise<RawResponse> {
+    return this.send({
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'orbitstudio-gated-e2e', version: '0.0.1' },
+      },
+    })
+  }
+
+  override async initialized(): Promise<RawResponse> {
+    this.relay.stdin?.write(
+      `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
+    )
+    return { status: 200, headers: {}, json: undefined }
+  }
+
+  override async call(name: string, args: Record<string, unknown> = {}): Promise<ToolCallResult> {
+    const res = await this.send({ method: 'tools/call', params: { name, arguments: args } })
     const body = res.json as
       | { result?: { content?: Array<{ text?: string }>; isError?: boolean } }
       | undefined
