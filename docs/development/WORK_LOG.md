@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): record the owner's rulings on the OrbitStudio design (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+設計 848 の owner 裁定待ち 27 件を、owner 向けの裁定シート（artifact・db に選択と意見を保存）で問い、返ってきた裁定を設計・計画・地図・別冊に記録した。設計の中身は起案し直していない（裁定の記録と、その直接の帰結だけ）。
+
+- **裁定済み 20 件**: 設計 §14.0 に owner の意見を原文で記録。🔴 **(5) 自動更新は推奨 A と異なり B（第 1 リリースに含める・既定で有効・opt-out）** → 設計 §9.3・計画 N4・地図を改訂。(6) は A に owner の条件（クラウドの作業は手元で引き継いでゲート・tag 時の GitHub は頻度とコストで決める）。(8) は「1 クライアントが複数の document を持つ」を §5.4 に明記。(20) は条件つき（拡張版の読者が OrbitStudio の記述を自分の手順として読まないこと）で、別冊 §3.4 の見直しが残る
+- **4.4.0 の Origin 未検証**は owner が A（issue を 1 本）を選び **#996** に起票（daemon の Origin 拒否 + 親の死を知る機構・engine 線。拡張の `/mcp` は記録だけ）
+- **説明待ち 7 件**（裁定はこれから）: §4.7 の反転（owner の懸念「ライブ中にトークンが切れて使えなくなると困る」）/ §4.5.1 の写し / (22) 評価の単位（owner は行・ブロック・意味の単位と `@import` をまたぐ評価を求めた）/ (23) / (3) / (7) / (9)
+- **全体への意見**（「VSIX 版にあまり引っ張られることなく…過去の資産が後々邪魔をすることがないようにしてほしい」）は、設計の背骨（拡張版とのパリティを完了条件に置く）との関係を owner に確認中
+
+Part of #848
+
+---
+
 ### docs(design): revise the OrbitStudio design against 4.4.0 and fix the session protocol shape (Oct 23, 2026)
 
 **Date**: 2026-10-23 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
