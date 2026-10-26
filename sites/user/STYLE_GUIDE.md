@@ -126,7 +126,7 @@ DSL の説明本文は 1 本のまま書きます。配布線ごとに本文を�
 
 ### lint — `npm run docs:check`
 
-`sites/user/scripts/check-availability.mjs` が全章（ja / en）を検査し、違反があれば red にします。`npm run docs:check`（CI の `Check doc citations`）から走ります。
+`sites/user/scripts/check-availability.mjs` が全章（ja / en）を検査し、違反があれば red にします。`npm run docs:check`（CI の user サイト可用性 lint を含む段）から走ります。
 
 | 規則 | red の条件 |
 |---|---|
@@ -204,7 +204,7 @@ en（`sites/user/en/`）は `> **Availability**:` で同じ 5 形です。
 - 版は semver の 3 桁（`4.2.0`）。配布線の語は上の 2 つだけです
 - 行の**次は必ず空行**にします（続けて文を書くと、その文が引用の中に取り込まれます）
 - **可用性の行が無い機能は、両方の配布線で使えるもの**として読みます。行は配布線で違いがある機能にだけ置きます
-- `未リリース（<配布線>）` は暫定値です。リリースの bump PR で版番号に置き換え、`grep -rn "未リリース（OrbitStudio）" sites docs` が 0 件になることを確かめます（リリースの preflight は `check-availability.mjs --release` で落とします）
+- `未リリース（<配布線>）` は暫定値です。リリースの bump PR で版番号に置き換え、`node sites/user/scripts/check-availability.mjs --release` が green になることを確かめます。`verify-app.sh` / `release-app.yml` の preflight にこの検査を入れるのは予定です（設計 848 §6.4）
 - 5 形で書けない場合は、**STYLE_GUIDE と lint を同じ PR で直してから**書きます（自由文で書くと grep で拾えなくなります）
 - 既存の自由文の版表記（`#883 / DSL 2.0`・`v3.0 以降` など）は本文として残してかまいません。可用性の正本は行の方です
 

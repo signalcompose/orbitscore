@@ -317,7 +317,7 @@ OrbitStudio.app/Contents/Resources/docs/
 ### 7.3 推奨 = T-A の具体
 
 1. ルーチンの手順に足す 1 行: **「新しく書く機能の見出し直下に `> **対応**: 未リリース（<線>）— main にマージ済み・次のリリースから` を必ず置く。線は PR が触ったパスで決める（`packages/vscode-extension/**` だけなら拡張版、それ以外は OrbitStudio）」**
-2. リリース bump PR（例: `chore(release): bump OrbitStudio to 0.2.0`）の手順に足す 1 行: **`grep -rn "未リリース（OrbitStudio）" sites docs` を全件置換し、0 件を検算する**（番号固定・形非依存）。`verify-app.sh` が最後の砦（§6.4）
+2. リリース bump PR（例: `chore(release): bump OrbitStudio to 0.2.0`）の手順に足す 1 行: **未リリースの行を全件置換し、`node sites/user/scripts/check-availability.mjs --release` が green になることを検算する**（固定文法の全 5 形を検査）。`verify-app.sh` への組み込みが最後の砦になる予定（§6.4）
 3. **公開サイトに未リリースが載る**のは今日と同じ（`main` deploy）。マーカーが付く分だけ**改善**する（読者は「まだ無い」と分かる）。V-D（凍結スナップショット）を足せば凍結版の読者には見えなくなる
 4. en の追従: ルーチンは ja / en を同時に書く（`sites/dev/STYLE_GUIDE.md:300-305` の規則を user にも適用済み・`TRANSLATION_STATUS.md`）。マーカーは `> **Availability**:` で同時に置く。lint が ja / en の件数差を検出（§5.4）
 

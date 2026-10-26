@@ -46,7 +46,7 @@
  *   node sites/user/scripts/check-availability.mjs --release   # AV-UNRELEASED is an error
  *   node sites/user/scripts/check-availability.mjs --root <dir> # lint another site root (tests)
  *
- * Exit code 1 when any error is found.
+ * Exit code 1 when any lint error is found; exit code 2 for invalid usage.
  */
 
 import fs from 'node:fs'
@@ -56,10 +56,37 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const defaultSiteRoot = path.resolve(here, '..')
 
-const argv = process.argv.slice(2)
-const release = argv.includes('--release')
-const rootIndex = argv.indexOf('--root')
-const siteRoot = rootIndex === -1 ? defaultSiteRoot : path.resolve(argv[rootIndex + 1])
+const usage = 'Usage: check-availability.mjs [--release] [--root <dir>]'
+
+function parseArgs(argv) {
+  let release = false
+  let root = null
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--release') {
+      if (release) throw new Error('`--release` was specified more than once')
+      release = true
+    } else if (arg === '--root') {
+      if (root !== null) throw new Error('`--root` was specified more than once')
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--'))
+        throw new Error('`--root` requires a directory')
+      root = argv[++i]
+    } else {
+      throw new Error(`unknown argument: ${arg}`)
+    }
+  }
+  return { release, siteRoot: root === null ? defaultSiteRoot : path.resolve(root) }
+}
+
+let options = null
+let argumentError = null
+try {
+  options = parseArgs(process.argv.slice(2))
+} catch (error) {
+  argumentError = error.message
+}
+const release = options?.release ?? false
+const siteRoot = options?.siteRoot ?? defaultSiteRoot
 
 const HOST_VALUES = ['both', 'app', 'ext', 'both+split']
 const SCOPED_HOSTS = new Set(['both', 'both+split'])
@@ -149,11 +176,11 @@ for (const lang of Object.values(AVAILABILITY)) {
   lang.formRes = lang.forms.map((f) => new RegExp(`^${f}$`))
 }
 
-/** Anything that looks like an availability anchor, including near misses. */
-const ANCHOR_LIKE_RE = /\*\*(対応|Availability)\*\*\s*[:：]/
+/** A line-leading availability anchor, including its supported near-miss shapes. */
+const ANCHOR_LIKE_RE = /^\s{0,3}(?:>\s*)?(?:\*\*\s*)?(?:対応|Availability)\s*(?:\*\*|[:：])/
 const HEADING_RE = /^(#{1,6})\s+\S/
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
-const HOST_MARKER_LIKE_RE = /^<!--\s*host\s*:/
+const HOST_MARKER_LIKE_RE = /<!--\s*host\s*:/
 const HOST_MARKER_RE = /^<!-- host: (ext|app) -->$/
 const PARALLEL_ORBITSTUDIO_RE = /^\s*- \*\*OrbitStudio\*\*:/
 const ORBITSTUDIO_RE = /orbitstudio/i
@@ -173,22 +200,29 @@ const OLD_LABEL_RE = /^\s*- \*\*(拡張版|Extension)\*\*:/
 const SKIP_DIRS = new Set(['node_modules', '.vitepress', 'public', 'scripts'])
 const SKIP_FILES = new Set(['STYLE_GUIDE.md', 'README.md'])
 
+const errors = []
+const warnings = []
+const report = (list, rel, line, rule, message) => list.push({ rel, line, rule, message })
+
 function walk(dir, out) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue
-    const full = path.join(dir, entry.name)
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name)
+    const entry = fs.lstatSync(full)
+    const rel = path.relative(siteRoot, full).split(path.sep).join('/')
+    const atSiteRoot = !rel.includes('/')
+    if (atSiteRoot && name.startsWith('.')) continue
+    if (entry.isSymbolicLink()) {
+      report(errors, rel, 1, 'AV-HOST', 'symbolic links are not allowed in the chapter tree')
+      continue
+    }
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(full, out)
-    } else if (entry.name.endsWith('.md') && !SKIP_FILES.has(entry.name)) {
+      if (!(atSiteRoot && SKIP_DIRS.has(name))) walk(full, out)
+    } else if (name.endsWith('.md') && !(atSiteRoot && SKIP_FILES.has(name))) {
       out.push(full)
     }
   }
   return out
 }
-
-const errors = []
-const warnings = []
-const report = (list, rel, line, rule, message) => list.push({ rel, line, rule, message })
 
 /** Parse one chapter into the facts the rules need. */
 function readChapter(full) {
@@ -203,12 +237,30 @@ function readChapter(full) {
   const hosts = []
   for (let i = 1; i < fmEnd; i++) {
     const m = /^host:\s*(.*?)\s*$/.exec(lines[i])
-    if (m) hosts.push({ value: m[1], line: i + 1 })
+    if (m) {
+      let value = m[1].replace(/\s+#.*$/, '').trim()
+      if (
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'")))
+      ) {
+        value = value.slice(1, -1).trim()
+      }
+      hosts.push({ value, line: i + 1 })
+    }
   }
 
   // Classify body lines once; code-fence contents are text, not structure.
   const kinds = new Array(lines.length).fill('frontmatter')
+  for (let i = 0; i <= fmEnd; i++) {
+    if (HOST_MARKER_LIKE_RE.test(lines[i])) {
+      kinds[i] = 'frontmatter-marker'
+    } else if (ANCHOR_LIKE_RE.test(lines[i])) {
+      kinds[i] = 'anchor'
+    }
+  }
   let fence = null
+  let fenceLine = 0
   for (let i = fmEnd + 1; i < lines.length; i++) {
     const line = lines[i]
     const f = FENCE_RE.exec(line)
@@ -221,12 +273,17 @@ function readChapter(full) {
     }
     if (f) {
       fence = f[1]
+      fenceLine = i + 1
       kinds[i] = 'code'
-    } else if (HEADING_RE.test(line)) kinds[i] = 'heading'
+    } else if (HOST_MARKER_LIKE_RE.test(line) && !HOST_MARKER_RE.test(line)) kinds[i] = 'bad-marker'
+    else if (HOST_MARKER_RE.test(line)) kinds[i] = 'marker'
+    else if (HEADING_RE.test(line)) kinds[i] = 'heading'
     else if (line.trim() === '') kinds[i] = 'blank'
-    else if (HOST_MARKER_LIKE_RE.test(line)) kinds[i] = 'marker'
     else if (ANCHOR_LIKE_RE.test(line)) kinds[i] = 'anchor'
     else kinds[i] = 'text'
+  }
+  if (fence) {
+    report(errors, rel, fenceLine, 'AV-SYNTAX', 'unterminated code fence')
   }
   return { rel, lang, lines, kinds, hosts, hasFrontmatter: fmEnd > 0 }
 }
@@ -281,9 +338,19 @@ function checkHost(ch) {
 function checkMarkers(ch, host) {
   let count = 0
   ch.kinds.forEach((kind, i) => {
-    if (kind !== 'marker') return
+    if (kind !== 'marker' && kind !== 'bad-marker' && kind !== 'frontmatter-marker') return
     count++
-    if (!HOST_MARKER_RE.test(ch.lines[i])) {
+    if (kind === 'frontmatter-marker') {
+      report(
+        errors,
+        ch.rel,
+        i + 1,
+        'AV-HOST',
+        'split-section marker is only allowed in the body, right after a heading',
+      )
+      return
+    }
+    if (kind === 'bad-marker') {
       report(
         errors,
         ch.rel,
@@ -291,7 +358,9 @@ function checkMarkers(ch, host) {
         'AV-HOST',
         'split-section marker must be exactly `<!-- host: ext -->` or `<!-- host: app -->`',
       )
-    } else if (host !== 'both+split') {
+      return
+    }
+    if (host !== 'both+split') {
       report(
         errors,
         ch.rel,
@@ -320,7 +389,7 @@ function checkAvailabilityLines(ch) {
   ch.kinds.forEach((kind, i) => {
     if (kind !== 'anchor') return
     count++
-    const line = ch.lines[i].replace(/\s+$/, '')
+    const line = ch.lines[i]
     if (line.startsWith(other.anchor)) {
       report(
         errors,
@@ -329,9 +398,7 @@ function checkAvailabilityLines(ch) {
         'AV-SYNTAX',
         `this ${ch.lang} chapter uses \`${other.anchor.trim()}\` — use \`${grammar.anchor.trim()}\``,
       )
-      return
-    }
-    if (!line.startsWith(grammar.anchor)) {
+    } else if (!line.startsWith(grammar.anchor)) {
       report(
         errors,
         ch.rel,
@@ -339,17 +406,17 @@ function checkAvailabilityLines(ch) {
         'AV-SYNTAX',
         `the anchor must be exactly \`${grammar.anchor.trim()}\` at the start of the line (half-width colon, then one space)`,
       )
-      return
-    }
-    const rest = line.slice(grammar.anchor.length)
-    if (!grammar.formRes.some((re) => re.test(rest))) {
-      report(
-        errors,
-        ch.rel,
-        i + 1,
-        'AV-SYNTAX',
-        `not one of the five fixed forms (STYLE_GUIDE.md「可用性表記」): ${rest}`,
-      )
+    } else {
+      const rest = line.slice(grammar.anchor.length)
+      if (!grammar.formRes.some((re) => re.test(rest))) {
+        report(
+          errors,
+          ch.rel,
+          i + 1,
+          'AV-SYNTAX',
+          `not one of the five fixed forms (STYLE_GUIDE.md「可用性表記」): ${rest}`,
+        )
+      }
     }
     if (i + 1 < ch.lines.length && ch.kinds[i + 1] !== 'blank') {
       report(
@@ -374,7 +441,7 @@ function checkAvailabilityLines(ch) {
         'an availability line goes right under the heading of its feature (one line per feature)',
       )
     }
-    if (rest.startsWith(grammar.unreleased)) {
+    if (line.includes(AVAILABILITY.ja.unreleased) || line.includes(AVAILABILITY.en.unreleased)) {
       report(
         release ? errors : warnings,
         ch.rel,
@@ -430,56 +497,84 @@ function checkTerms(ch) {
   })
 }
 
-const chapters = walk(siteRoot, []).sort().map(readChapter)
-const facts = new Map()
-for (const ch of chapters) {
-  const host = checkHost(ch)
-  const markers = checkMarkers(ch, host)
-  const anchors = checkAvailabilityLines(ch)
-  checkHostScope(ch, host)
-  checkTerms(ch)
-  facts.set(ch.rel, { host: ch.hosts[0]?.value ?? null, anchors, markers })
-}
+if (argumentError) {
+  console.error(`Usage error: ${argumentError}\n${usage}`)
+  process.exitCode = 2
+} else {
+  let chapters = []
+  try {
+    chapters = walk(siteRoot, []).sort().map(readChapter)
+  } catch (error) {
+    console.error(`Usage error: cannot read --root ${siteRoot}: ${error.message}\n${usage}`)
+    process.exitCode = 2
+  }
 
-for (const rel of HOST_MISSING_BASELINE) {
-  if (!facts.has(rel))
-    report(
-      errors,
-      rel,
-      1,
-      'AV-HOST',
-      'listed in HOST_MISSING_BASELINE but no such chapter — remove the entry',
-    )
-}
-
-for (const [rel, ja] of facts) {
-  if (rel.startsWith('en/')) continue
-  const en = facts.get(`en/${rel}`)
-  if (!en) continue
-  const pairs = [
-    ['host', ja.host, en.host],
-    ['availability lines', ja.anchors, en.anchors],
-    ['split-section markers', ja.markers, en.markers],
-  ]
-  for (const [what, a, b] of pairs) {
-    if (a !== b)
+  if (process.exitCode !== 2) {
+    if (chapters.length === 0) {
       report(
         errors,
-        `en/${rel}`,
-        1,
-        'AV-I18N',
-        `${what}: ja ${a} / en ${b} — the translation must match the ja chapter`,
+        '.',
+        0,
+        'AV-SYNTAX',
+        '対象の章が見つかりません。章の置き場が動いた可能性があります',
       )
+    }
+
+    const facts = new Map()
+    for (const ch of chapters) {
+      const host = checkHost(ch)
+      const markers = checkMarkers(ch, host)
+      const anchors = checkAvailabilityLines(ch)
+      checkHostScope(ch, host)
+      checkTerms(ch)
+      facts.set(ch.rel, { host: ch.hosts[0]?.value ?? null, anchors, markers })
+    }
+
+    for (const rel of HOST_MISSING_BASELINE) {
+      if (!facts.has(rel))
+        report(
+          errors,
+          rel,
+          1,
+          'AV-HOST',
+          'listed in HOST_MISSING_BASELINE but no such chapter — remove the entry',
+        )
+    }
+
+    for (const [rel, ja] of facts) {
+      if (rel.startsWith('en/')) continue
+      const en = facts.get(`en/${rel}`)
+      if (!en) continue
+      const pairs = [
+        ['host', ja.host, en.host],
+        ['availability lines', ja.anchors, en.anchors],
+        ['split-section markers', ja.markers, en.markers],
+      ]
+      for (const [what, a, b] of pairs) {
+        if (a !== b)
+          report(
+            errors,
+            `en/${rel}`,
+            1,
+            'AV-I18N',
+            `${what}: ja ${a} / en ${b} — the translation must match the ja chapter`,
+          )
+      }
+    }
+
+    const byPlace = (a, b) => a.rel.localeCompare(b.rel) || a.line - b.line
+    const print = (tag, f) => console.log(`${tag} ${f.rel}:${f.line}  [${f.rule}] ${f.message}`)
+    warnings.sort(byPlace).forEach((f) => print('WARN', f))
+    errors.sort(byPlace).forEach((f) => print('FAIL', f))
+    const ja = chapters.filter((c) => c.lang === 'ja').length
+    const exempt = chapters.filter(
+      (ch) => HOST_MISSING_BASELINE.includes(ch.rel) && ch.hosts.length === 0,
+    ).length
+    console.log(
+      `\n${chapters.length} chapter(s) checked (ja ${ja} / en ${chapters.length - ja}), ` +
+        `${errors.length} error(s), ${warnings.length} warning(s)${release ? ' [--release]' : ''}`,
+    )
+    console.log(`${exempt} chapter(s) exempt from host-dependent rules via HOST_MISSING_BASELINE`)
+    process.exitCode = errors.length > 0 ? 1 : 0
   }
 }
-
-const byPlace = (a, b) => a.rel.localeCompare(b.rel) || a.line - b.line
-const print = (tag, f) => console.log(`${tag} ${f.rel}:${f.line}  [${f.rule}] ${f.message}`)
-warnings.sort(byPlace).forEach((f) => print('WARN', f))
-errors.sort(byPlace).forEach((f) => print('FAIL', f))
-const ja = chapters.filter((c) => c.lang === 'ja').length
-console.log(
-  `\n${chapters.length} chapter(s) checked (ja ${ja} / en ${chapters.length - ja}), ` +
-    `${errors.length} error(s), ${warnings.length} warning(s)${release ? ' [--release]' : ''}`,
-)
-process.exit(errors.length > 0 ? 1 : 0)
