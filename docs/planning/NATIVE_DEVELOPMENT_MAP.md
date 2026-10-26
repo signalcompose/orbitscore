@@ -155,7 +155,7 @@
 | N1 S-editor | 🧱 | 何も変わらない。エディタが繋がった時の診断・補完・⌘Enter の中身が層 2 に揃う |
 | N1 S-eval（10-26） | 🎵 | **評価の区切り方が #997 の評価のかたちになる**（区切りの単位・途中のエラー・`@import` をまたぐ評価）。正しい DSL の音は変わらない。凍結版の「バグ的な振る舞い」（#965 / #620 / #695 ほか）が直る |
 | N2 A-skeleton | 🎵 | **`OrbitStudio.app` を開き、`.orbs` を書いて ⌘Enter で音が出て playhead が動く**。日本語が打てる。保存・タブ・設定はまだ無い |
-| N3 A-document | 👀 | 開く・保存・自動保存・タブ・最近使った書類・環境設定が使える |
+| N3 A-document | 👀 | フォルダをプロジェクトとして開ける・開く・保存・自動保存・タブ・最近使った書類・環境設定が使える |
 | N3 A-panels | 👀 | デバイス選択・engine の起動停止・ログ・プラグインカタログ・**同梱 docs（オフライン）**がアプリの中で見える。右クリックでその 1 つのプラグイン UI が開く。flash と playhead の色が設定できる |
 | N3 A-parity | 🎵 | **拡張でできたことが全部アプリでできる**（台帳が緑）。LLM がアプリと同じセッションに入って同じ譜面を評価できる |
 | N4 R-app | 👀 | 署名・公証済み `.dmg` を GitHub Releases から落として、node が無い Mac でも開いて音が出る |
@@ -196,7 +196,7 @@
 |---|---|---|---|
 | N0-a Monaco + IME（改訂 10-23: D-6 の再現手順・Monaco の版の固定）+ WebView の配信元ごとの Origin の実測 + ATS の要否 | 設計 §1.2 D-6・§1.3・§7.3 / 計画 N0 | ○・🔴 **最大の未知数** | — |
 | N2 walking skeleton（1 窓・Monaco・音・playhead・IME） | 設計 §1.3 / 計画 A-skeleton | ○ | S-editor・N0-a |
-| N3 `NSDocument`・タブ・メニュー・環境設定 | 設計 §7.1・§7.4 / 計画 A-document | ○ | A-skeleton |
+| N3 `NSDocument`・プロジェクトの窓・タブ・メニュー・環境設定 | 設計 §7.1・§7.4・§7.5 / 計画 A-document | ○ | A-skeleton |
 | N3 パネル（Engine / Log / Catalog / Docs）・flash・status | 設計 §7.4 / 計画 A-panels | ○（`engine-view.ts` / `playhead.ts` / `log-ring.ts` は pure で再利用可） | A-document |
 | N3 パリティ台帳の完走（D-1〜D-5） | 設計 §1.2 / 計画 A-parity | ○ | A-panels |
 | GUI = DSL テキストの編集面（#681・旧地図 §4.N） | 旧地図 §4.N | ○（#681 の (1) 落とし方は**アプリ線でも未決のまま**。最初の実例 #664 は engine 線） | #681 |
