@@ -25,8 +25,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 - **仕様書の本文はルートのライセンスのまま**（© Signal compose）。SPDX・`LICENSES/`・LICENSE と CONTRIBUTING の例外の記述は main の状態に戻した
 - **実装の許諾**（案・未確定）: 仕様書 3 本（`INSTRUCTION_ORBITSCORE_DSL.md` / `PITCH_DSL_SPEC_v1.1.md` / `SIGNAL_CHAIN_DSL_SPEC_v1.md`）のタイトルの直下と README の License 節に、同じ文面の引用ブロック（英文 + 和文・英文が優先）。「文法と意味に沿った実装を、誰でも Apache License 2.0 の条件（第 3 条の特許の許諾を含む）で作り・使い・配布してよい。仕様書の本文の許諾ではない」。🔴 文面は法的な文書なので、確定は専門家か license@signalcompose.com の確認の後
-- **機械が読む言語の定義**（`syntaxes/orbitscore-audio.tmLanguage.json`・`language-configuration.json` など）は Apache-2.0 の候補として PR に列挙しただけ（確定は owner）
-- **検査** `tests/docs/dsl-implementation-grant.spec.ts`（12 件）: `docs/core/` と `docs/specs-v2/` の全文書の分類（未分類が増えたら red）/ 仕様書のタイトルの直下に節がある / 4 か所の文面が一致 / 仕様書の本文（節の外）に Apache の表記が無い / ほかの文書に節や Apache の SPDX が無い / README の一覧 / ルートの LICENSE が仕様書を切り出していない / `protocol/` が現れたら LICENSE が触れていること。節を消す・1 か所だけ文面を変える・SPDX を戻す・未分類の仕様書を足す・対象外に節を写す・README の一覧から消す、の 6 通りで red を確認
+- **機械が読む言語の定義**: owner の「一旦推奨で」（同日）で、推奨した 2 つ（`packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json`・`packages/vscode-extension/language-configuration.json`）を Apache-2.0 にした。JSON はコメントを持てないので REUSE の慣習の `<file>.license` に SPDX を置き、ルートの `LICENSE` に例外の節、README に一覧、`CONTRIBUTING.md` に貢献の扱い、`LICENSES/Apache-2.0.txt` に全文（sha256 `cfc7749b…`）。境界の 2 つ（`dsl-method-catalog.ts`・`dsl-surface.ts`）は対象外
+- **検査** `tests/docs/dsl-implementation-grant.spec.ts`（20 件。言語の定義の 8 件を含む: 文法ファイルの全件分類・`.license`・LICENSE と README の一覧・全文の sha256）: `docs/core/` と `docs/specs-v2/` の全文書の分類（未分類が増えたら red）/ 仕様書のタイトルの直下に節がある / 4 か所の文面が一致 / 仕様書の本文（節の外）に Apache の表記が無い / ほかの文書に節や Apache の SPDX が無い / README の一覧 / ルートの LICENSE が仕様書を切り出していない / `protocol/` が現れたら LICENSE が触れていること。節を消す・1 か所だけ文面を変える・SPDX を戻す・未分類の仕様書を足す・対象外に節を写す・README の一覧から消す、の 6 通りで red を確認
 - 節を足して行がずれた分、dev サイトの機械検証の引用 4 本を `check-citations.mjs --fix` で +6 し（着地先は同じ行）、ずれる前に正しかった散文の参照 `SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47`（SC.1）の ja / en を `42-53` にした
 
 Closes #998

@@ -3,6 +3,23 @@ Signal compose Source-Available License v1.0
 Copyright (c) 2026 Signal compose Inc.
 
 ================================================================================
+EXCEPTION: MACHINE-READABLE LANGUAGE DEFINITIONS (APACHE LICENSE 2.0 ONLY)
+================================================================================
+
+The following files describe the OrbitScore DSL to editors and other tools
+(its syntax highlighting grammar and its editor language settings). They are
+licensed under the Apache License, Version 2.0 only (SPDX-License-Identifier:
+Apache-2.0), without the Commons Clause, the Fair Revenue Clause, or any other
+additional condition of this license:
+
+- packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json
+- packages/vscode-extension/language-configuration.json
+
+Each of these files has a companion file with the same name plus ".license"
+that carries the notice "SPDX-License-Identifier: Apache-2.0". The full text of
+the Apache License 2.0 is in LICENSES/Apache-2.0.txt.
+
+================================================================================
 WHY THIS LICENSE
 ================================================================================
 

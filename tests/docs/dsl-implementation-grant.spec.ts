@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -27,6 +28,13 @@ import { describe, expect, it } from 'vitest'
  * | 節の欠落・4 か所の文面の食い違い・本文への Apache-2.0 の表記 | 節を 1 本消す / 1 か所だけ文面を直す | ✅ |
  * | 2 つのディレクトリの外に置いた仕様書 | `docs/design/` に DSL の文法を書いた | ❌ |
  * | **分類そのものの誤り・文面の法的な妥当性** | DSL の仕様書を `NOT_DSL_SPEC` に入れた | ❌（レビューと専門家の確認） |
+ *
+ * ## 機械が読む言語の定義（Apache-2.0）
+ *
+ * owner の「一旦推奨で」（2026-10-26）で、#1003 が推奨した 2 つ（TextMate 文法と
+ * language-configuration）を Apache-2.0 にした。JSON はコメントを持てないので、表記は REUSE の慣習の
+ * 「`<file>.license`」に置き、ルートの LICENSE の例外の節と README の一覧と揃える。新しい
+ * `*.tmLanguage.json` / `language-configuration*.json` を足したら、分類の表に足すまで red になる。
  */
 const repoRoot = path.resolve(__dirname, '../..')
 
@@ -68,6 +76,54 @@ const GRANT_ANCHOR = '> **実装の許諾 / Implementation grant**'
 const SPDX_APACHE_NOTICE = /^<!--\s*SPDX-License-Identifier:\s*Apache-2\.0\s*-->\s*$/m
 
 const read = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), 'utf8')
+
+/** Apache-2.0 だけで提供する、機械が読む言語の定義。値は中身。 */
+const LANGUAGE_DEFINITIONS: Record<string, string> = {
+  'packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json':
+    'TextMate 文法（構文ハイライト）',
+  'packages/vscode-extension/language-configuration.json': 'コメント記号・括弧の対応',
+}
+
+/** 各定義の隣の `<file>.license` の中身（REUSE の慣習）。 */
+const SIDECAR = [
+  'SPDX-FileCopyrightText: 2026 Signal compose Inc.',
+  'SPDX-License-Identifier: Apache-2.0',
+  '',
+].join('\n')
+
+/** apache.org の `LICENSE-2.0.txt`（2026-10-26 に取得）の sha256。全文を 1 文字でも変えたら red。 */
+const APACHE_TEXT_SHA256 = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
+
+/** 言語の定義に当たるファイル名。ここに当たるのに表に無いものは red。 */
+const LANGUAGE_DEFINITION_NAME = /(\.tmLanguage\.json|^language-configuration.*\.json)$/
+
+const walkFiles = (dir: string, out: string[] = []): string[] => {
+  for (const e of fs.readdirSync(path.join(repoRoot, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${e.name}`
+    if (e.isDirectory()) {
+      if (['node_modules', 'dist', 'out', 'target', '.vscode-test'].includes(e.name)) continue
+      walkFiles(rel, out)
+    } else {
+      out.push(rel)
+    }
+  }
+  return out
+}
+
+/** ルートの LICENSE の「EXCEPTION: MACHINE-READABLE LANGUAGE DEFINITIONS」の節の一覧。 */
+function licenseDefinitionList(): string[] {
+  const lines = read('LICENSE').split('\n')
+  const start = lines.findIndex((l) =>
+    l.startsWith('EXCEPTION: MACHINE-READABLE LANGUAGE DEFINITIONS'),
+  )
+  if (start === -1) return []
+  const body: string[] = []
+  for (const l of lines.slice(start + 2)) {
+    if (l.startsWith('====')) break
+    body.push(l)
+  }
+  return body.filter((l) => l.startsWith('- ')).map((l) => l.slice(2).trim())
+}
 
 const listMarkdown = (dir: string): string[] =>
   fs
@@ -197,6 +253,57 @@ describe('DSL implementation grant (#998)', () => {
   it('does not carve the specification documents out of the root LICENSE', () => {
     const license = read('LICENSE')
     for (const rel of Object.keys(DSL_SPECS)) expect(license).not.toContain(rel)
+  })
+
+  describe('machine-readable language definitions (Apache-2.0)', () => {
+    it('classifies every grammar and language-configuration file in packages/', () => {
+      const found = walkFiles('packages').filter((rel) =>
+        LANGUAGE_DEFINITION_NAME.test(path.basename(rel)),
+      )
+      expect(
+        sorted(found),
+        '言語の定義に当たるファイルが表と違います。Apache-2.0 にするなら LANGUAGE_DEFINITIONS に足し、\n' +
+          '`<file>.license`・LICENSE の例外の節・README の一覧も同じ PR で直す',
+      ).toEqual(sorted(Object.keys(LANGUAGE_DEFINITIONS)))
+    })
+
+    it.each(Object.keys(LANGUAGE_DEFINITIONS))('%s has its Apache-2.0 .license file', (rel) => {
+      expect(
+        fs.existsSync(path.join(repoRoot, `${rel}.license`)),
+        `${rel}.license がありません`,
+      ).toBe(true)
+      expect(read(`${rel}.license`)).toBe(SIDECAR)
+    })
+
+    it('has no other .license file', () => {
+      const sidecars = walkFiles('packages').filter((rel) => rel.endsWith('.license'))
+      expect(sorted(sidecars)).toEqual(
+        sorted(Object.keys(LANGUAGE_DEFINITIONS).map((r) => `${r}.license`)),
+      )
+    })
+
+    it('lists the same files in the root LICENSE exception', () => {
+      expect(sorted(licenseDefinitionList())).toEqual(sorted(Object.keys(LANGUAGE_DEFINITIONS)))
+    })
+
+    it('lists the same files in the README License section', () => {
+      const listed = readmeLicenseSection().flatMap((l) => {
+        const m = /^- \[`([^`]+)`\]\(([^)]+)\) \(.+\)$/.exec(l)
+        if (!m) return []
+        expect(m[2], `README のリンク先が表示と違います: ${l}`).toBe(m[1])
+        return [m[1]]
+      })
+      expect(sorted(listed)).toEqual(sorted(Object.keys(LANGUAGE_DEFINITIONS)))
+    })
+
+    it('ships the unmodified Apache License 2.0 text', () => {
+      const text = fs.readFileSync(path.join(repoRoot, 'LICENSES/Apache-2.0.txt'))
+      expect(crypto.createHash('sha256').update(text).digest('hex')).toBe(APACHE_TEXT_SHA256)
+    })
+
+    it('tells contributors that these files are Apache-2.0', () => {
+      expect(read('CONTRIBUTING.md')).toContain('Apache License 2.0 only')
+    })
   })
 
   it('names protocol/ in the root LICENSE once protocol/ exists', () => {
