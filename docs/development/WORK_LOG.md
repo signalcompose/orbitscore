@@ -25,12 +25,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 - bans / licenses / sources は `Cargo.lock` と `deny.toml` だけで結果が決まるが、advisories は実行した日の RustSec DB でも決まる。全 PR で advisories を回すと、勧告 1 件で全 PR の赤がその PR の責任でなくなる（#801 と同じクラス）
 - `rust-ci.yml` の `license / dependency gate` は `cargo deny check bans licenses sources` に（job 名は据え置き・GPL 隔離のゲートはそのまま全 PR で止める）
-- 新しい `rust-advisories.yml`: `cargo deny check advisories` を、依存を変える PR（`rust/Cargo.lock` / `rust/Cargo.toml` / `rust/**/Cargo.toml` / `rust/deny.toml`）・毎日の main（21:23 UTC = 06:23 JST）・workflow_dispatch で回す。このファイル自身は paths に入れない（ワークフローを直すだけの PR が main の既存の勧告で赤くなるのも同じ衝突のため）
+- 新しい `rust-advisories.yml`: `cargo deny check advisories` を、依存を変える PR（`rust/Cargo.lock` / `rust/Cargo.toml` / `rust/**/Cargo.toml` / `rust/deny.toml`）・このワークフロー自身を変える PR・毎日の main（21:23 UTC = 06:23 JST）・workflow_dispatch で回す。毎日の失敗は `rust-advisory` ラベルの追跡 issue に通知する
 - 根拠: cargo-deny-action の README が "Recommended pipeline if using advisories, to avoid sudden breakages" として advisories を分けている（あちらは continue-on-error。ここは無関係な PR で回さない形）
-- 確認: 2 つのワークフローを YAML として読み、トリガと実行コマンドを確かめた。cargo-deny の手元実行はこの環境では許可されず未実施。🔴 未実施: マージ後の workflow_dispatch で、#1002 より前の main では RUSTSEC-2026-0386 で赤になること（= 検出が生きていること）
+- 確認: 2 つのワークフローを YAML として読み、トリガと実行コマンドを確かめた。`cargo deny check bans licenses sources` は手元で通過。🔴 未実施: マージ後の workflow_dispatch で、#1002 より前の main では RUSTSEC-2026-0386 で赤になること（= 検出が生きていること）
 - 束の統合ブランチから切った小 PR は、統合ブランチに main が入るまで旧ワークフローで走る（pull_request は merge ref のワークフローを使う）
 
-Closes #1030
+Part of #1030
+
+#1030 はマージ後に `workflow_dispatch` で新しいワークフローを回し、勧告のある main で赤・#1002 の後で緑になることを確かめてから閉じる。
 
 ---
 

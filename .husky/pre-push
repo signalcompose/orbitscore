@@ -10,7 +10,9 @@
 #   - Clippy (default)   : cargo clippy --workspace --all-targets --locked -- -D warnings
 #   - Clippy (clap-host) : cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings
 #   - Clippy (outproc)   : cargo clippy -p orbit-audio-daemon --features outproc-effect --all-targets --locked -- -D warnings
-#   - license/dep gate   : cargo deny check（cargo-deny 未インストール時は skip = fail-open）
+#   - license/dep gate   : cargo deny check bans licenses sources
+#   - advisory gate      : cargo deny check advisories（依存入力を変える push のみ）
+#                         cargo-deny 未インストール時は両方 skip = fail-open
 # cargo test は実行時間が長いため対象外（CI で非ゲートテストを検証・MVP・必要なら follow-on）。
 #
 # 🔴 引用チェック（`npm run docs:check`）も同じ理由でここに置く（#889）。dev サイトの引用は
@@ -26,10 +28,11 @@ is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
 
 die() { echo "[pre-push] ✗ $1"; exit 1; }
 
-# push 対象に rust/ の変更が含まれるか stdin で判定。
 # git は pre-push の stdin に各 ref 1 行ずつ「<local_ref> <local_oid> <remote_ref> <remote_oid>」を渡す
 # （ref 名は使わないので _ で読み捨てる）。
-rust_in_push() {
+# 第 1 引数の matcher 関数に一致する変更が push 対象に含まれるか stdin で判定する。
+paths_in_push() {
+  matcher=$1
   while read -r _ local_oid _ remote_oid; do
     is_zero "$local_oid" && continue   # ブランチ削除 push はスキップ
     if is_zero "$remote_oid"; then
@@ -37,7 +40,7 @@ rust_in_push() {
       # default branch 名違い等）場合は skip せず fail-closed でチェックを走らせる
       # ── ここで skip すると rust 失敗が CI に出てメール源になるため（silent-failure review）。
       base=$(git rev-parse --verify --quiet origin/main) || {
-        echo "[pre-push] origin/main を解決できません — 新規ブランチを安全側でチェック対象にします。"
+        echo "[pre-push] origin/main を解決できません — 新規ブランチを安全側でチェック対象にします。" >&2
         return 0
       }
       range="$base..$local_oid"
@@ -46,12 +49,24 @@ rust_in_push() {
     fi
     # git diff 失敗時は空出力 → fail-open（hook のバグで正規 push をブロックしない・CI が backstop）。
     # 新規ブランチの base 不在は上で fail-closed 済。ここは git diff が稀に失敗する場合向け。
-    git diff --name-only "$range" 2>/dev/null | grep -q '^rust/' && return 0
+    git diff --name-only "$range" 2>/dev/null | "$matcher" && return 0
   done
   return 1
 }
 
-# 🔴 引用チェックは **rust ゲートより前**（この後の `rust_in_push || exit 0` で素通りするし、
+rust_paths_changed() { grep -q '^rust/'; }
+
+# GitHub Actions の rust-advisories.yml の paths と同期する。
+advisory_input_paths_changed() {
+  grep -Eq '^rust/(Cargo\.lock|Cargo\.toml|deny\.toml|.+/Cargo\.toml)$'
+}
+
+push_refs=$(mktemp "${TMPDIR:-/tmp}/orbitscore-pre-push.XXXXXX") ||
+  die "cannot create temporary file for push refs."
+trap 'rm -f "$push_refs"' 0 HUP INT TERM
+cat >"$push_refs"
+
+# 🔴 引用チェックは **rust ゲートより前**（この後の paths 判定で素通りするし、
 # その先は `cd rust` している）。引用は code に接地しているので、**rust を 1 行も触らない push でも
 # 壊れる** — 実際 2026-09-12 に TS を 1 行畳んだだけで 74 件落ちた。CI の code-review ジョブの
 # 「Check doc citations」と同じコマンドを、ここで先回りする。
@@ -61,7 +76,12 @@ npm run docs:check ||
   die "docs:check failed — 'cd sites/dev && node scripts/check-citations.mjs --fix' の後、着地先を目視で照合してから push すること。"
 echo "[pre-push] ✓ doc citations verified."
 
-rust_in_push || exit 0
+paths_in_push rust_paths_changed <"$push_refs" || exit 0
+
+run_advisories=false
+if paths_in_push advisory_input_paths_changed <"$push_refs"; then
+  run_advisories=true
+fi
 
 echo "[pre-push] rust/ changed — running Rust CI checks…"
 cd rust || die "cannot cd into rust/"
@@ -79,10 +99,16 @@ cargo clippy -p orbit-audio-daemon --features outproc-effect --all-targets --loc
 # （fail-open＝hook が全 rust push をブロックしない・CI が backstop）。成功バナーは実際に
 # 走ったチェックだけを表記する（deny skip 時に「全部通った」と誤認させない・silent-failure review）。
 if command -v cargo-deny >/dev/null 2>&1; then
-  cargo deny check || die "cargo deny check failed."
-  echo "[pre-push] ✓ Rust checks passed (fmt + clippy + cargo-deny)."
+  cargo deny check bans licenses sources ||
+    die "cargo deny check bans licenses sources failed."
+  if [ "$run_advisories" = true ]; then
+    cargo deny check advisories || die "cargo deny check advisories failed."
+    echo "[pre-push] ✓ Rust checks passed (fmt + clippy + cargo-deny, including advisories)."
+  else
+    echo "[pre-push] advisory inputs unchanged — skipping cargo deny check advisories."
+    echo "[pre-push] ✓ Rust checks passed (fmt + clippy + cargo-deny bans/licenses/sources)."
+  fi
 else
-  echo "[pre-push] cargo-deny not installed — skipping (CI の license/dependency gate で検査される)"
+  echo "[pre-push] cargo-deny not installed — skipping (CI の license/dependency gate と、依存変更時の advisory gate で検査される)"
   echo "[pre-push] ✓ fmt + clippy passed (cargo-deny は未実行 — CI が backstop)."
 fi
-
