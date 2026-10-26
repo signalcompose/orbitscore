@@ -23,7 +23,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 user サイトを拡張版と OrbitStudio の両方に向けた 1 本の文書として保つための、可用性表記の文法と lint を入れた（別冊 `848-docs-structure-design.md` §3.4・§5・裁定 (16) A）。章への書き込みは次の PR（D-②）。
 
-- **文法**: `sites/user/STYLE_GUIDE.md` に「可用性表記」の節 — frontmatter `host:`（`both` / `app` / `ext` / `both+split`・必須）・分割節の印 `<!-- host: ext|app -->`（見出しの次の行）・段落の併記（`- **拡張版**:` / `- **OrbitStudio**:`）・可用性の行（`> **対応**:` / `> **Availability**:` の固定 5 形）。用語集に `拡張版` → `Extension` などを足した
+- **文法**: `sites/user/STYLE_GUIDE.md` に「可用性表記」の節 — frontmatter `host:`（`both` / `app` / `ext` / `both+split`・必須）・分割節の印 `<!-- host: ext|app -->`（見出しの次の行）・段落の併記（`- **OrbitScore**:` / `- **OrbitStudio**:`）・可用性の行（`> **対応**:` / `> **Availability**:` の固定 5 形）。配布線の名前は owner の指定（拡張版 = **OrbitScore** / DSL = **OrbitScore DSL** / ネイティブ版 = **OrbitStudio**・ja / en 共通）。最初は `拡張版` / `Extension` で書いたので、旧い名前の併記の行は `AV-TERM` で red にした
 - **lint** `sites/user/scripts/check-availability.mjs` を `npm run docs:check` に連結（CI の `Check doc citations` で走る）。規則 `AV-HOST` / `AV-SYNTAX` / `AV-PLACE` / `AV-UNRELEASED`（`--release` で red）/ `AV-I18N` / **`AV-HOST-SCOPE`**（owner (20) の条件・台帳 P-13）/ `AV-TERM`
 - **設計との差 2 点**（別冊を同じ PR で改訂）: AV-HOST-SCOPE を `both+split` の章にも掛けた / 分割節の印を見出しの**次の行**に置く（見出しの行に置くと VitePress が `aria-label` に印の文字列を入れることを `createMarkdownRenderer` で確かめた）
 - **暫定**: 章にはまだ `host:` が無いので、lint の `HOST_MISSING_BASELINE`（42 章）で許し、D-② がこの一覧ごと消す。一覧は減らす方向にしか通らない（`host:` を持った章が残っていても、無い章が増えても red）

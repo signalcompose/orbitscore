@@ -132,23 +132,29 @@ describe('check-availability.mjs', () => {
   describe('AV-SYNTAX', () => {
     const under = (line: string) => `## 機能\n\n${line}\n\n本文`
     it.each([
-      ['a two-digit version', '> **対応**: 拡張版 4.2 以降 / OrbitStudio 0.1.0 以降'],
-      ['a misspelled line name', '> **対応**: Orbit Studio 0.2.0 以降（拡張版には入りません）'],
-      ['the lines in the other order', '> **対応**: OrbitStudio 0.1.0 以降 / 拡張版 4.2.0 以降'],
-      ['a free-form sentence', '> **対応**: 拡張版でだけ動きます'],
-      ['a full-width colon', '> **対応**： 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
-      ['a missing blockquote marker', '**対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['a two-digit version', '> **対応**: OrbitScore 4.2 以降 / OrbitStudio 0.1.0 以降'],
+      [
+        'a misspelled line name',
+        '> **対応**: Orbit Studio 0.2.0 以降（OrbitScore には入りません）',
+      ],
+      [
+        'the lines in the other order',
+        '> **対応**: OrbitStudio 0.1.0 以降 / OrbitScore 4.2.0 以降',
+      ],
+      ['a free-form sentence', '> **対応**: OrbitScore でだけ動きます'],
+      ['a full-width colon', '> **対応**： OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['a missing blockquote marker', '**対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
     ])('rejects %s', (_label, line) => {
       expectRed(lint({ 'a.md': chapter('both', under(line)) }), 'AV-SYNTAX', 'a.md:11')
     })
 
     it('rejects the ja anchor in an en chapter', () => {
-      const line = '> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降'
+      const line = '> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'
       expectRed(lint({ 'en/a.md': chapter('both', under(line)) }), 'AV-SYNTAX', 'en/a.md:11')
     })
 
     it('rejects a text line right after the availability line (it would join the blockquote)', () => {
-      const body = '## 機能\n\n> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降\n本文'
+      const body = '## 機能\n\n> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降\n本文'
       expectRed(lint({ 'a.md': chapter('both', body) }), 'AV-SYNTAX', 'a.md:12')
     })
 
@@ -159,12 +165,12 @@ describe('check-availability.mjs', () => {
 
   describe('AV-PLACE', () => {
     it('rejects an availability line that is not right under a heading', () => {
-      const body = '## 機能\n\n本文\n\n> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降\n'
+      const body = '## 機能\n\n本文\n\n> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降\n'
       expectRed(lint({ 'a.md': chapter('both', body) }), 'AV-PLACE', 'a.md:13')
     })
 
     it('rejects a second availability line under the same heading', () => {
-      const line = '> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降'
+      const line = '> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'
       expectRed(
         lint({ 'a.md': chapter('both', `## 機能\n\n${line}\n\n${line}\n`) }),
         'AV-PLACE',
@@ -174,7 +180,7 @@ describe('check-availability.mjs', () => {
 
     it('accepts an availability line after a split-section marker', () => {
       const body =
-        '## アプリで開く\n<!-- host: app -->\n\n> **対応**: OrbitStudio 0.2.0 以降（拡張版には入りません）\n\n手順'
+        '## アプリで開く\n<!-- host: app -->\n\n> **対応**: OrbitStudio 0.2.0 以降（OrbitScore には入りません）\n\n手順'
       expectGreen(lint({ 'a.md': chapter('both+split', body) }))
     })
   })
@@ -204,7 +210,7 @@ describe('check-availability.mjs', () => {
     })
 
     it('rejects a different number of availability lines between ja and en', () => {
-      const ja = '## 機能\n\n> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降\n\n本文'
+      const ja = '## 機能\n\n> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降\n\n本文'
       expectRed(
         lint({ 'a.md': chapter('both', ja), 'en/a.md': chapter('both', '## Feature\n\ntext') }),
         'AV-I18N',
@@ -216,7 +222,7 @@ describe('check-availability.mjs', () => {
   describe('AV-HOST-SCOPE', () => {
     it.each([
       ['a body line', 'OrbitStudio では Catalog パネルから再スキャンします。', 'a.md:9'],
-      ['a 拡張版 parallel line', '- **拡張版**: OrbitStudio と同じ手順です', 'a.md:9'],
+      ['an OrbitScore parallel line', '- **OrbitScore**: OrbitStudio と同じ手順です', 'a.md:9'],
       ['a lower-case identifier', '`ORBITSTUDIO_RUNTIME_DIR` を設定します', 'a.md:9'],
       ['a code block', '```text\n// OrbitStudio ではここが違う\n```', 'a.md:10'],
     ])('rejects OrbitStudio in %s of a both chapter', (_label, body, where) => {
@@ -249,8 +255,8 @@ describe('check-availability.mjs', () => {
         `::: tip\n- **${ext}**: コマンドパレット\n- **OrbitStudio**: Catalog パネル\n:::`
       expectGreen(
         lint({
-          'a.md': chapter('both', tip('拡張版')),
-          'en/a.md': chapter('both', tip('Extension')),
+          'a.md': chapter('both', tip('OrbitScore')),
+          'en/a.md': chapter('both', tip('OrbitScore')),
         }),
       )
     })
@@ -259,7 +265,7 @@ describe('check-availability.mjs', () => {
       const body = [
         '## 機能',
         '',
-        '> **対応**: 拡張版 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）',
+        '> **対応**: OrbitScore 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）',
         '',
         'OrbitStudio では既定値が違います。',
         '',
@@ -274,7 +280,7 @@ describe('check-availability.mjs', () => {
       const body = [
         '## 機能',
         '',
-        '> **対応**: OrbitStudio 0.2.0 以降（拡張版には入りません）',
+        '> **対応**: OrbitStudio 0.2.0 以降（OrbitScore には入りません）',
         '',
         'OrbitStudio だけの機能です。',
         '',
@@ -287,7 +293,7 @@ describe('check-availability.mjs', () => {
 
     it('does not treat an availability line without OrbitStudio as scoping the section', () => {
       const body =
-        '## 修正\n\n> **対応**: 未リリース（拡張版 4.2.1）— 凍結版の bug fix\n\nOrbitStudio には既に入っています。'
+        '## 修正\n\n> **対応**: 未リリース（OrbitScore 4.2.1）— 凍結版の bug fix\n\nOrbitStudio には既に入っています。'
       expectRed(lint({ 'a.md': chapter('both', body) }), 'AV-HOST-SCOPE', 'a.md:13')
     })
 
@@ -314,6 +320,13 @@ describe('check-availability.mjs', () => {
   })
 
   describe('AV-TERM', () => {
+    it.each([
+      ['a.md', '::: tip\n- **拡張版**: コマンドパレット\n:::', 'a.md:10'],
+      ['en/a.md', '::: tip\n- **Extension**: Command Palette\n:::', 'en/a.md:10'],
+    ])('rejects the old label for the extension line (%s)', (rel, body, where) => {
+      expectRed(lint({ [rel]: chapter('both', body) }), 'AV-TERM', where)
+    })
+
     it('rejects calling the extension "OrbitStudio（凍結版）"', () => {
       expectRed(
         lint({ 'a.md': chapter('ext', 'OrbitStudio（凍結版・現 4.2.0）') }),

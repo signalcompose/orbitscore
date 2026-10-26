@@ -147,7 +147,7 @@ dev サイトは読者が開発者で、`verified-against`（commit）が既に�
 
 ```markdown
 ::: tip カタログ名が候補に出ないとき
-- **拡張版**: コマンドパレットから **OrbitScore: Rescan Plugin Catalog** を実行します
+- **OrbitScore**: コマンドパレットから **OrbitScore: Rescan Plugin Catalog** を実行します
 - **OrbitStudio**: Catalog パネルの **Rescan** を押します（`rescan_plugins` と同じ）
 :::
 ```
@@ -196,15 +196,15 @@ DSL の説明本文は触らない。併記は **`::: tip` / `::: warning` の�
 ### 5.2 文法（1 行・固定）
 
 ```
-> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降
-> **対応**: OrbitStudio 0.2.0 以降（拡張版には入りません）
-> **対応**: 拡張版 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）
+> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降
+> **対応**: OrbitStudio 0.2.0 以降（OrbitScore には入りません）
+> **対応**: OrbitScore 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）
 > **対応**: 未リリース（OrbitStudio）— main にマージ済み・次のリリースから
-> **対応**: 未リリース（拡張版 4.2.1）— 凍結版の bug fix
+> **対応**: 未リリース（OrbitScore 4.2.1）— 凍結版の bug fix
 ```
 
 - 行頭 `> **対応**:` を**唯一のアンカー**にする（形を仮定した grep をしない・memory `version-sweep-fix-the-number-not-the-shape`）
-- 配布線は `拡張版` / `OrbitStudio` の 2 語だけ。版は semver の 3 桁
+- 配布線は `OrbitScore` / `OrbitStudio` の 2 語だけ（改訂 10-26: owner の指定で `拡張版` → `OrbitScore`。ja / en 共通）。版は semver の 3 桁
 - **`未リリース（<線>）` は暫定値**。リリース bump PR がその線の版番号に置換する（§7.3）。en は `> **Availability**:` で同じ規則（`sites/user/en`）
 - 置く場所: **機能の見出しの直下**（章頭ではない。1 章に複数の機能があるため）。章全体が 1 つの機能なら章頭
 
@@ -391,3 +391,4 @@ OrbitStudio.app/Contents/Resources/docs/
 | 2026-10-26 | §10 の 7 件を owner が裁定（全件 A・(20) は条件つき）。§10 の冒頭に記録（審査: main） |
 | 2026-10-26（第 2 回） | 改訂（起案: fresh subagent / 審査: main）。本体の暫定物の台帳（本体 §1.4）に合わせて 3 か所: (20) の条件を lint の規則 **AV-HOST-SCOPE** で強制する（§3.4・§5.4・台帳 P-13）/ 09-18 の暫定行の撤回を台帳 P-12 に載せ、リリースの preflight で検査する（§7.4）/ `未リリース` マーカーは既存の仕組み（§5.4・§6.4）のまま台帳 P-11 に記録。§10 の (20) の「未着手」はこれで仕組みが決まった（書き換え自体は docs の連続 PR ①・②） |
 | 2026-10-26（docs の連続 PR ①） | 実装（`sites/user/scripts/check-availability.mjs`・`sites/user/STYLE_GUIDE.md`）に合わせて 2 か所: §5.4 の AV-HOST-SCOPE を `both+split` の章にも掛ける / §6.3 の分割節の印を「見出しの次の行」に置く。en の 5 形と規則 ID の一覧は STYLE_GUIDE を正本にした |
+| 2026-10-26（docs の連続 PR ①・owner の指定） | 配布線の名前を owner の指定（拡張版 = OrbitScore / DSL = OrbitScore DSL / ネイティブ版 = OrbitStudio）に合わせ、§3.4 の例と §5.2 の固定文法の `拡張版` を `OrbitScore` にした。本書の散文の「拡張版」は設計の用語として残す |
