@@ -6,7 +6,7 @@ verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-06 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-06 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。 2026-10-26 に、#996（PR [#1007](https://github.com/signalcompose/orbitscore/pull/1007)）で daemon 側に入った同名の機構への相互参照を `ParentWatch` の節へ 1 つ足しました（他の節は 2026-09-06 時点の読みのままです）。
 
 # RE-2. OOP children と shm transport
 
@@ -513,6 +513,27 @@ pub unsafe fn child_should_quit(
 
 git 履歴上、`parent_watch.rs` は 1 コミット（`a0449b8 fix(sandbox): add parent-liveness watchdog
 to VST3/CLAP child processes`）で追加されました。
+
+### daemon 側にも同じ関心の兄弟がある（#996）
+
+2026-10-26 に、daemon 自身にも同じ関心のモジュールが入りました（`orbit-audio-daemon` の
+`parent_watch.rs`）。そちらが見るのは daemon の親、つまり engine の死です。名前も狙いもよく似て
+いるのに、**child 側のこの `ParentWatch` を共有してはいません**。理由はモジュールの冒頭に 1 文で
+書かれています。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/parent_watch.rs:9-12
+//! - **補助 = 親 PID**（[`PARENT_PID_ARG`]）: 書き端を別のプロセスが握ったまま（fd の継承）親だけが
+//!   死ぬと EOF は来ない。その形を周期的な `getppid()` で拾う（child 側の
+//!   `orbit_audio_sandbox::ParentWatch` と同じ判定）
+//! `orbit_audio_sandbox::ParentWatch` は構築時の `getppid()` しか記録せず engine 指定の期待 PID（daemon 起動前に死んだ engine の検知）を扱えず、sandbox 自体も daemon では `outproc-*` feature の optional 依存なので使わない。
+```
+
+つまり (1) `orbit_audio_sandbox::ParentWatch` は構築時の `getppid()` しか記録しないので、engine が
+`--parent-pid` で渡す「期待する親 PID」（daemon の起動より前に engine が死んでいた形）を扱えない、
+(2) `orbit-audio-sandbox` 自体が daemon では `outproc-*` feature の optional 依存で、feature 構成に
+よっては居ない、という 2 点です。daemon 側の作り（主 = stdin の EOF・補助 = 親 PID）は
+[RE-1](/rust-engine/) の「親（engine）の死を daemon 自身が知る」節で扱います。
 
 ## Try it: 親死亡時に child が自発的に exit することを実証する
 

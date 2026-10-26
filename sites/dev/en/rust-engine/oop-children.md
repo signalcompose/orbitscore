@@ -6,7 +6,7 @@ verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time. On 2026-10-26 one cross-reference was added to the `ParentWatch` section, pointing at the mechanism of the same name added on the daemon side by #996 (PR [#1007](https://github.com/signalcompose/orbitscore/pull/1007)); every other section is still the reading as of 2026-09-06.
 
 # RE-2. OOP Children and the Shared-Memory Transport
 
@@ -534,6 +534,29 @@ pub unsafe fn child_should_quit(
 
 Per git history, `parent_watch.rs` was added in a single commit (`a0449b8 fix(sandbox): add
 parent-liveness watchdog to VST3/CLAP child processes`).
+
+### A sibling with the same concern exists on the daemon side (#996)
+
+On 2026-10-26 a module with the same concern was added to the daemon itself
+(`parent_watch.rs` in `orbit-audio-daemon`). What it watches is the daemon's parent, that is, the
+death of the engine. The name and the aim look much alike, and yet **it does not share this
+child-side `ParentWatch`**. The reason is written in one sentence at the top of the module.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/parent_watch.rs:9-12
+//! - **補助 = 親 PID**（[`PARENT_PID_ARG`]）: 書き端を別のプロセスが握ったまま（fd の継承）親だけが
+//!   死ぬと EOF は来ない。その形を周期的な `getppid()` で拾う（child 側の
+//!   `orbit_audio_sandbox::ParentWatch` と同じ判定）
+//! `orbit_audio_sandbox::ParentWatch` は構築時の `getppid()` しか記録せず engine 指定の期待 PID（daemon 起動前に死んだ engine の検知）を扱えず、sandbox 自体も daemon では `outproc-*` feature の optional 依存なので使わない。
+```
+
+So there are two points: (1) `orbit_audio_sandbox::ParentWatch` records only the `getppid()` taken at
+construction, so it cannot handle the "expected parent PID" the engine passes via `--parent-pid` (the
+shape where the engine died before the daemon started), and (2) `orbit-audio-sandbox` is itself an
+optional dependency of the daemon behind the `outproc-*` features, so it is absent in some feature
+configurations. How the daemon side is built (primary = EOF on stdin, auxiliary = the parent PID) is
+covered in the "The daemon learning of its parent's (the engine's) death by itself" section of
+[RE-1](/en/rust-engine/).
 
 ## Try it: verify a child self-exits when its parent dies
 
