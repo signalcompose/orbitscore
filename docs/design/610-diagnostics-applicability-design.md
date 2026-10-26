@@ -647,7 +647,7 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 
 | spec | 節 | 改訂 |
 |---|---|---|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | 新設（PH.4 の表 `:1337-1341` の位置） | 🔴 **適用可否の表**を §3.3 の形で本文に置く。今の表は「midi × instrument」の 2 列 3 行だけで、audio 列も `hold` 系の行も無い。「素通り（#644 で診断予定）」→「**素通り（エディタが Warning）**」 |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | 新設（PH.1 の表 `:1337-1341` の位置） | 🔴 **適用可否の表**を §3.3 の形で本文に置く。今の表は「midi × instrument」の 2 列 3 行だけで、audio 列も `hold` 系の行も無い。「素通り（#644 で診断予定）」→「**素通り（エディタが Warning）**」 |
 | 同 | `:1018-1020`（P.5） | `seq.root(b6)` を例から**外す**（§3.3 (b)・実装が受けない）。または #15 (2) の裁定で実装側を直す |
 | 同 | §8.1.2（LinkAudio strict mode） | 「`.output()` 未設定は**ハードエラー**」→「**エディタが Error・実行時は無音でスキップしてログに出す**」（#645） |
 | `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` | `:168` | `seq.root(C)` を core spec `:1018-1020` と揃える（**2 つの spec が違うことを言っている**のが今の状態） |
