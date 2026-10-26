@@ -98,6 +98,7 @@ async function startSession(engine: FakeEngine, workspaceRoot: string | null = '
     workspaceRoot,
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => rpc?.editorClient() !== null && rpc?.editorClient() !== undefined,
+    requestEditor: (method, params) => rpc!.requestEditor(method, params),
     captureConsole: false,
   })
   rpc = await startRpcServer({

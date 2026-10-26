@@ -2,10 +2,10 @@
  * 層 2 の真実を持つもの（設計 848 §3 の「2 セッション」の行）: engine・評価の受付口・log ring・
  * transport の状態・クライアントの一覧。RPC サーバに渡すメソッドの実装もここに置く。
  *
- * このビルドが実装しているメソッド: `session.*`・`engine.*`・`audio.*`・`plugin.*`（`openUiAtCursor` を
- * 除く）・`docs.*`（後の 3 群は `layer2-methods.ts`）・`editor.did*` と `editor.getState` /
- * `getDocumentText`（同期済みの写しから）。残り（`editor.complete` / `getDiagnostics` と逆方向の
- * `editor.*`・`plugin.openUiAtCursor`）は束 S-editor の後続の小 PR が足す（台帳 P-19）。
+ * v1 のスキーマの C→S のメソッドをすべて実装する: `session.*`・`engine.*`・`audio.*` / `plugin.*` /
+ * `docs.*`（`layer2-methods.ts`）・`editor.did*` と `editor.getState` / `getDocumentText` /
+ * `complete` / `getDiagnostics`（同期済みの写しから）・逆方向の `editor.*`（エディタへ転送・
+ * `runSelection` は選択だけを聞いて層 2 が評価する）・`plugin.openUiAtCursor`（同期済みの選択から）。
  */
 import crypto from 'node:crypto'
 
@@ -17,7 +17,10 @@ import {
   type IntakeContext,
   type IntakeExecuteOptions,
 } from '../eval/evaluation-intake'
-import { LanguageServices, type DiagnosticEntry } from '../language/language-services'
+import { LanguageServices, shimDocument, type DiagnosticEntry } from '../language/language-services'
+import { openPluginUiAtCursor } from '../language/plugin-ui-at-cursor'
+import { withPluginUiOpener } from '../language/plugin-ui-shim'
+import type { PluginUiResult } from '../mcp/mcp-types'
 import { RpcError, PROTOCOL_VERSION } from '../rpc/protocol'
 import type { AttachedClient, NotificationHandler, RequestHandler } from '../rpc/server'
 
@@ -27,6 +30,7 @@ import {
   DocumentStore,
   editorStateOf,
   documentPath,
+  inferLanguageId,
   type Position,
   type Range,
   type TextChange,
@@ -36,6 +40,7 @@ import { audioMethods, docsMethods, pluginMethods, type Layer2MethodDeps } from 
 import { registerMcp, type RegisterMcpDeps, type RegisterMcpParams } from './mcp-registration'
 import { classifyEngineLine, classifySessionLine, type OutputStream } from './log-classify'
 import { LogHub, type LogLineNotification } from './log-hub'
+import { oneBasedCursor, resolveSelectionBlock } from './selection-block'
 
 export interface EvaluateTarget {
   uri: string
@@ -58,6 +63,11 @@ export interface SessionCoreOptions {
   broadcast(method: string, params: unknown): void
   /** クライアントの一覧（`session.getState` の `editorAttached` のため）。 */
   editorAttached(): boolean
+  /**
+   * エディタのクライアントへ逆方向のリクエストを送る口（RPC サーバの `requestEditor`・§5.4）。
+   * エディタが無い・答えない・切れた時は、サーバが `NO_EDITOR_ATTACHED` / `EDITOR_TIMEOUT` で拒む。
+   */
+  requestEditor(method: string, params: unknown): Promise<unknown>
   /** `session.shutdown` を受けた時（CLI が畳む経路へ回す）。 */
   onShutdownRequested?(): void
   /** console の横取り（テストでは false にして偽の console を渡す）。 */
@@ -73,6 +83,18 @@ export interface SessionCoreOptions {
 
 /** 評価の帰属を覚えておく件数の上限（`evalId` → `target`）。 */
 const TARGET_MEMORY = 256
+
+/** エディタが `editor.runSelection` で返す選択の位置（スキーマの `SelectionSnapshot`）。 */
+interface SelectionSnapshot {
+  uri: string
+  version: number
+  range: Range
+  documentDirectory: string | null
+}
+
+/** 凍結版 `runSelectionForAgent`（`run-selection.ts`）と同じ文言。 */
+const NO_ORBITSCORE_EDITOR = 'no active OrbitScore editor — open an .orbs file first'
+const ENGINE_NOT_RUNNING_MESSAGE = 'engine is not running — start the engine first'
 
 export class SessionCore {
   readonly logs: LogHub
@@ -133,6 +155,7 @@ export class SessionCore {
       docs: options.docs ?? { user: null, dev: null },
       log: (level, text) => this.sessionLog(level, text),
     }
+    const plugin = pluginMethods(layer2)
     this.handlers = {
       'session.evaluate': (params: EvaluateParams, client: AttachedClient) =>
         this.evaluate(params, client),
@@ -159,8 +182,18 @@ export class SessionCore {
           ? { path: documentPath(active.uri), text: active.text }
           : { path: null, text: null }
       },
+      ...this.editorRequests(),
       ...audioMethods(layer2),
-      ...pluginMethods(layer2),
+      ...plugin,
+      'plugin.openUiAtCursor': (_params: Record<string, never>, client: AttachedClient) =>
+        withPluginUiOpener(
+          (receiver, index, expectedName) =>
+            plugin['plugin.openUi']!(
+              { receiver, index, ...(expectedName === undefined ? {} : { expectedName }) },
+              client,
+            ) as Promise<PluginUiResult>,
+          () => openPluginUiAtCursor(this.pluginCursorEditor()),
+        ),
       ...docsMethods(layer2),
     }
     this.notificationHandlers = this.editorNotifications()
@@ -175,6 +208,102 @@ export class SessionCore {
       )
     }
     return this.documents
+  }
+
+  /**
+   * 逆方向の `editor.*`（§5.3.4・§5.4）: 中継から届いた同名のメソッドを、エディタのクライアントへ
+   * そのまま転送する（スキーマの `x-editor-request: same`）。結果の中身はエディタが作る。
+   */
+  private editorRequests(): Record<string, RequestHandler> {
+    const forward = (method: string) => (params: unknown) =>
+      this.options.requestEditor(method, params)
+    return {
+      'editor.openFile': forward('editor.openFile'),
+      'editor.setSelection': forward('editor.setSelection'),
+      'editor.editReplace': forward('editor.editReplace'),
+      'editor.configureFlash': forward('editor.configureFlash'),
+      'editor.saveFile': async (params: Record<string, never>) => {
+        // 頼んだ時点の版を保存済みにする（答えが来るまでに入った変更を「保存済み」と言わない）。
+        const active = this.documents.active()
+        const version = active?.version
+        const result = (await this.options.requestEditor('editor.saveFile', params)) as {
+          ok: boolean
+        }
+        if (result.ok && active) this.documents.markSaved(active.uri, version)
+        return result
+      },
+      'editor.runSelection': (_params: Record<string, never>, client: AttachedClient) =>
+        this.runSelection(client),
+    }
+  }
+
+  /**
+   * `editor.runSelection`（§5.4）: エディタには選択の位置だけを聞き、評価する範囲（subject-block）は
+   * 層 2 が同期済みの写しから決めて評価する。検査の順と文言は凍結版 `runSelectionForAgent` と同じ。
+   */
+  private async runSelection(client: AttachedClient) {
+    const active = this.requireEditor().active()
+    if (!active || inferLanguageId(active.uri) !== 'orbitscore') {
+      return { ok: false, error: NO_ORBITSCORE_EDITOR }
+    }
+    if (!this.options.engine.running) return { ok: false, error: ENGINE_NOT_RUNNING_MESSAGE }
+    const snapshot = (await this.options.requestEditor(
+      'editor.runSelection',
+      {},
+    )) as SelectionSnapshot
+    const document = this.documents.get(snapshot.uri)
+    if (!document || document.version !== snapshot.version) {
+      // 通知と答えは同じ接続で順に届くので、ここに来るのは同期の欠陥。古い写しを評価しない。
+      const have = document ? `version ${document.version}` : 'no copy'
+      return {
+        ok: false,
+        error: `the editor selection is on version ${snapshot.version} of ${snapshot.uri}, but layer 2 has ${have} — the document sync fell behind`,
+      }
+    }
+    const block = resolveSelectionBlock(document.text, snapshot.range)
+    const source = client.capabilities.has('editor') ? 'human' : 'agent'
+    await this.evaluate(
+      {
+        code: block.code,
+        documentDirectory: snapshot.documentDirectory,
+        source,
+        target: { uri: snapshot.uri, version: snapshot.version, range: block.range },
+      },
+      client,
+    )
+    if (source === 'agent') await this.collapseAgentSelection(snapshot)
+    return { ok: true, message: 'selection executed' }
+  }
+
+  /**
+   * LLM が走らせた後に選択をカーソルへ畳む（凍結版の #390: `set_selection` が残した選択が playhead の
+   * 強調を覆う）。人の ⌘Enter では畳まない。畳めなくても評価は済んでいるので、失敗はログに残すだけ。
+   */
+  private async collapseAgentSelection(snapshot: SelectionSnapshot): Promise<void> {
+    const { start, end } = snapshot.range
+    if (start.line === end.line && start.character === end.character) return
+    const cursor = this.documents.get(snapshot.uri)?.cursor ?? end
+    try {
+      await this.options.requestEditor('editor.setSelection', oneBasedCursor(cursor))
+    } catch (error) {
+      this.sessionLog('warn', `[session] could not collapse the agent selection: ${String(error)}`)
+    }
+  }
+
+  /**
+   * `plugin.openUiAtCursor`（§5.3.3）に渡すエディタ: 同期済みの前面の文書と選択（`anchor` は選択の
+   * カーソルでない側の端）。エディタが付いていなければ `NO_EDITOR_ATTACHED`、前面の文書が無ければ
+   * 写しが凍結版と同じ文言で断る。
+   */
+  private pluginCursorEditor() {
+    const active = this.requireEditor().active()
+    if (!active) return undefined
+    const { start, end } = active.selection
+    const cursorAtEnd = active.cursor.line === end.line && active.cursor.character === end.character
+    return {
+      document: shimDocument(active),
+      selection: { active: active.cursor, anchor: cursorAtEnd ? start : end },
+    }
   }
 
   /**

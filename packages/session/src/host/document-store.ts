@@ -156,10 +156,10 @@ export class DocumentStore {
     this.activeUri = uri
   }
 
-  /** 保存できたことを層 2 が知った時（`editor.saveFile` の成功）。 */
-  markSaved(uri: string): void {
+  /** 保存できたことを層 2 が知った時（`editor.saveFile` の成功）。`version` を省けば今の版。 */
+  markSaved(uri: string, version?: number): void {
     const document = this.documents.get(uri)
-    if (document) document.savedVersion = document.version
+    if (document) document.savedVersion = version ?? document.version
   }
 
   /** エディタのクライアントが離れた時（写しは全部消える・F-12 で再送される）。 */

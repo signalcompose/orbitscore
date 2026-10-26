@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): forward the reverse editor requests and resolve run selection in layer 2 (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1017-c3-reverse-requests`（`1017-c2-language-services` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1017](https://github.com/signalcompose/orbitscore/issues/1017)（束 S-editor・計画 §7.1 の C-11 = N1-c3）
+
+- RPC サーバに**層 2 → エディタの逆方向のリクエスト**（`requestEditor`）: `id` で答えを突き合わせ、`x-editor-request` の params / result をスキーマで検査する。エディタが無ければ `NO_EDITOR_ATTACHED`、期限（置き値 10 秒・台帳 P-08 の行に追記）までに答えなければ `EDITOR_TIMEOUT`、答える前に切れれば `NO_EDITOR_ATTACHED`、形の違う答えは `INTERNAL_ERROR`（理由はログ）。黙らない（§5.4）
+- `SessionCore`: `editor.openFile` / `setSelection` / `editReplace` / `saveFile` / `configureFlash` をエディタへ転送（`saveFile` が成功したら、**頼んだ時点の版**を保存済みにする = 答えの前に入った変更は dirty のまま）
+- `editor.runSelection`: エディタには選択の位置（`SelectionSnapshot`）だけを聞き、評価する範囲は層 2 の `host/selection-block.ts`（凍結版 `getLineSubject` と範囲の決め方の書き直し）で決めて `session.evaluate` と同じ経路で評価する。検査の順と文言は凍結版 `runSelectionForAgent` と同じ。LLM の実行では選択をカーソルへ畳む（凍結版 #390）。写しの版と選択の版が違えば評価しない
+- `plugin.openUiAtCursor`: 凍結版 `plugin-ui-at-cursor.ts` を写し（import の差し替え + VS Code のコマンドの境界の関数を除く）、**同期済みの選択**から組んだエディタを渡して `plugin.openUi` を呼ぶ（§5.3.3）。engine への口は `language/plugin-ui-shim.ts`（台帳 P-25）
+- **凍結版との突き合わせ**（`editor-parity.spec.ts`）: 凍結版の `runSelection` を mock で走らせて engine へ書いたテキストと flash の範囲を 16 通り、`openPluginUiAtCursor` の戻り値と engine への引数を 12 通り比べる
+- **台帳 P-19 を閉じた**: v1 の C→S のメソッドがすべて層 2 のハンドラを持つ（`session-core-methods.spec.ts` がスキーマのファイルと突き合わせる）。サーバの「未実装」の分岐と中継の「`METHOD_NOT_FOUND` もエディタ無し」の分岐から印を外した（前者は「このサーバにハンドラが無い」に言い換え、後者は消した = 既存テストの期待値を「投げ直す」に更新）
+- F-12: 層 2 を起動し直してエディタが document を送り直すと、`session.getState` / `editor.getState` が元と同じになり `run_selection` が通る（`editor-reverse.spec.ts`）
+- 判明（PR に提案）: v1 に**評価した範囲をエディタへ伝える口が無い**（凍結版は runSelection が自分で flash した。層 2 が subject-block を決めるので、エディタは flash する範囲を知らない）
+
 ### feat(session): run the frozen completion and diagnostics in layer 2 behind a vscode-shaped shim (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1017-c2-language-services`（`1017-c1-document-sync` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1017](https://github.com/signalcompose/orbitscore/issues/1017)（束 S-editor・計画 §7.1 の C-11 = N1-c2 の前半）

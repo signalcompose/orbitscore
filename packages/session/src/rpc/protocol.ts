@@ -115,3 +115,34 @@ export function notificationProblem(method: string, params: unknown): string | n
   const validate = validatorFor(ref)
   return validate(params) ? null : describe(validate.errors)
 }
+
+/**
+ * 層 2 がエディタのクライアントへ送る逆方向のリクエスト（`x-editor-request`・設計 §5.4）の形。
+ * `same` はメソッド自身の params / result と同じ。
+ */
+function editorRequestShape(method: string): { params?: string; result?: string } | null {
+  const spec = METHODS[method]
+  const shape = spec?.['x-editor-request']
+  if (!spec || !shape) return null
+  return shape === 'same'
+    ? { params: spec.params?.$ref, result: spec.result?.$ref }
+    : { params: shape.params.$ref, result: shape.result.$ref }
+}
+
+/** 層 2 がエディタへ送る params が `x-editor-request` の params に合うか。合わなければ理由。 */
+export function editorParamsProblem(method: string, params: unknown): string | null {
+  const shape = editorRequestShape(method)
+  if (!shape) return `${method} has no editor request`
+  if (!shape.params) return null
+  const validate = validatorFor(shape.params)
+  return validate(params) ? null : describe(validate.errors)
+}
+
+/** エディタが返した結果が `x-editor-request` の result に合うか。合わなければ理由。 */
+export function editorResultProblem(method: string, result: unknown): string | null {
+  const shape = editorRequestShape(method)
+  if (!shape) return `${method} has no editor request`
+  if (!shape.result) return null
+  const validate = validatorFor(shape.result)
+  return validate(result) ? null : describe(validate.errors)
+}

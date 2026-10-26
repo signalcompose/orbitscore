@@ -104,6 +104,7 @@ async function startSession(engine: FakeEngine, docs?: DocsSites) {
     workspaceRoot: '/ws',
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => false,
+    requestEditor: (method, params) => rpc!.requestEditor(method, params),
     captureConsole: false,
     docs,
   })

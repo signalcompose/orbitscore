@@ -1,0 +1,35 @@
+@@ -1,15 +1,15 @@
+ /** Resolve and open exactly the plugin instance named under the editor cursor (#939). */
+-import * as vscode from 'vscode'
++import type { PluginUiAtCursorResult } from '../mcp/mcp-types'
+ 
+-import { pluginUiForAgent } from './agent-handlers'
+-import { outputChannel } from './extension-state'
+-import type { PluginUiAtCursorResult } from './mcp-types'
++import * as vscode from './vscode-shim'
++import { outputChannel } from './extension-state-shim'
+ import {
+   findCatalogSpecSites,
+   isStateFileSpec,
+   normalizePluginInstanceNameForGuard,
+   type CatalogSpecSite,
+ } from './plugin-name-diagnostics'
++import { pluginUiForAgent } from './plugin-ui-shim'
+ 
+ export const OPEN_PLUGIN_UI_AT_CURSOR_COMMAND = 'orbitscore.openPluginUiAtCursor'
+ 
+@@ -181,14 +181,6 @@
+   }
+ }
+ 
+-/** MCP handler: deliberately cross the registered command boundary. */
+-export async function openPluginUiAtCursorForAgent(): Promise<PluginUiAtCursorResult> {
+-  const result = await vscode.commands.executeCommand<PluginUiAtCursorResult>(
+-    OPEN_PLUGIN_UI_AT_CURSOR_COMMAND,
+-  )
+-  return result
+-}
+-
+ function reportFailure(message: string, code?: string, details?: unknown): PluginUiAtCursorResult {
+   const visible = `OrbitScore: ${message}`
+   void vscode.window.showErrorMessage(visible)

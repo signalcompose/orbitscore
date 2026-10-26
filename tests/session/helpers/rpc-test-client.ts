@@ -9,8 +9,18 @@ export interface RpcResponse {
   error?: { code: number; message: string; data?: { code: string; detail?: string } }
 }
 
+/** 層 2 からの逆方向のリクエストへの答え方。`undefined` を返せば答えない（期限切れの検査）。 */
+export type EditorAnswer = (
+  method: string,
+  params: any,
+) => { result: unknown } | { error: { code: number; message: string } } | undefined
+
 export class RpcTestClient {
   readonly notifications: Array<{ method: string; params: any }> = []
+  /** 層 2 から届いた逆方向のリクエスト（届いた順）。 */
+  readonly editorRequests: Array<{ id: string; method: string; params: any }> = []
+  /** 逆方向のリクエストに答える関数（無ければ答えない）。 */
+  answer: EditorAnswer | null = null
   readonly closed: Promise<{ code: number; reason: string }>
   private nextId = 1
   private readonly pending = new Map<number, (response: RpcResponse) => void>()
@@ -23,7 +33,11 @@ export class RpcTestClient {
     ws.on('message', (data) => {
       const message = JSON.parse(data.toString())
       if (message.method === 'session.hello') this.helloResolve(message.params)
-      if (message.method)
+      if (message.method && message.id !== undefined) {
+        this.editorRequests.push({ id: message.id, method: message.method, params: message.params })
+        const reply = this.answer?.(message.method, message.params)
+        if (reply) this.ws.send(JSON.stringify({ jsonrpc: '2.0', id: message.id, ...reply }))
+      } else if (message.method)
         this.notifications.push({ method: message.method, params: message.params })
       else this.pending.get(message.id)?.(message)
     })

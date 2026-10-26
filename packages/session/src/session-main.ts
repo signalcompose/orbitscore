@@ -261,6 +261,10 @@ export async function startSession(argv: readonly string[], io: SessionIo): Prom
       }
     },
     editorAttached: () => server?.editorClient() != null,
+    requestEditor: (method, params) =>
+      server
+        ? server.requestEditor(method, params)
+        : Promise.reject(new Error('the RPC server is not listening yet')),
     onShutdownRequested: () => setImmediate(() => requestShutdown('session.shutdown')),
   })
 
