@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): add the orbitscore relay (stdio MCP server) and session.registerMcp (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1011-b2-relay`（`1011-b1b-mcp-tools` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-7 = N1-b2）
+
+- **中継** `cli.js relay [--runtime-dir]`（`packages/session/src/relay/relay-main.ts`）: stdio の MCP サーバ。ツール層は C-6 の `buildServer` + RPC ハンドラ。RPC 1 回ごとにソケットへ繋ぎ（RL-3）、届かなければ 100 / 250 / 500 ms の待ちで繋ぎ直してから「OrbitStudio is not running (or is restarting)」（待ちは置き値 → 台帳 P-08 に印）。送った後に切れたら再送せず「unknown whether it ran」（RL-4）、MAJOR 違いは「updated — reconnect orbitstudio with /mcp」（RL-5）。終了は stdin の EOF と SIGINT / SIGTERM だけ（RL-1・RL-7）
+- **`session.registerMcp`**（`host/mcp-registration.ts`）: user scope は `claude mcp add --transport stdio --scope user orbitstudio -- <スタブ>`、project scope は `.mcp.json` の `mcpServers.orbitstudio` に `${HOME}/…` の stdio の行（凍結版の `orbitscore` の行は残す）。**鍵もポートも書かない**。`port` は受け取るが使わず、応答で伝える（§6.1 の裁定による例外）。スタブの置き場は §6.3 の提案のまま → 台帳 **P-22** を新設
+- 検査: 中継のプロセス（7 件: 上流なしの 28 本と `server/discover` の即答・`kill -9` の後も PID が同じで次が通る・再送しない・MAJOR 違い・stdout は MCP のフレームだけ・SIGINT から 100 ms 以内・stdin の EOF・中継越しの `register_mcp_server`）/ RPC 1 回分の規則（5 件）/ 登録の形（9 件・`claude` CLI は差し替え）
+
+Part of #1011
+
+---
+
 ### feat(session): move the MCP tool layer into layer 2 and back its handlers with the session RPC (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1011-b1b-mcp-tools`（`1011-b1-layer2-methods` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-6 = N1-b1 の後半）

@@ -85,6 +85,8 @@ async function startHarness(
     editorAttached: () => false,
     captureConsole: false,
     docs: resolveDocsSites(options.docsDirs ?? []),
+    // 🔴 本物の `claude` CLI を決して呼ばない（呼ぶと利用者の ~/.claude.json に登録が残る）。
+    registerMcp: { execFile: claudeNotInstalled },
   })
   rpc = await startRpcServer({
     socketPath: socket.socketPath,
@@ -108,6 +110,13 @@ async function startHarness(
 }
 
 const text = (result: { content: Array<{ text: string }> }) => result.content[0]!.text
+
+/** `which claude` が失敗する execFile（登録の検査で CLI に届かないことを保証する）。 */
+const claudeNotInstalled = ((file: string, _args: string[], ...rest: unknown[]) => {
+  const callback = rest.at(-1) as (error: Error | null, stdout: string, stderr: string) => void
+  callback(new Error(`${file}: not available in tests`), '', '')
+  return undefined as never
+}) as unknown as typeof import('node:child_process').execFile
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orbs-mcp-'))
@@ -400,12 +409,30 @@ describe('the other tools through layer 2 (design 848 §6 / D-4)', () => {
     for (const [tool, args] of [
       ['open_file', { path: '/ws/a.orbs' }],
       ['get_editor_state', {}],
-      ['register_mcp_server', { scope: 'user' }],
     ] as const) {
       const result = await harness.mcp.call(tool, args)
       expect(result.isError, tool).toBe(true)
       expect(text(result), tool).toMatch(/^error: /)
     }
+  })
+})
+
+describe('register_mcp_server through layer 2 (design 848 §6.3)', () => {
+  it('reaches session.registerMcp; the claude CLI is never run from tests', async () => {
+    const harness = await startHarness()
+    expect(await harness.mcp.call('register_mcp_server', { scope: 'user', port: 1 })).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'error: claude CLI not found on PATH — install the Claude Code CLI, or use Project scope (.mcp.json) instead',
+        },
+      ],
+      isError: true,
+    })
+    expect(harness.calls.at(-1)).toEqual({
+      method: 'session.registerMcp',
+      params: { scope: 'user', port: 1 },
+    })
   })
 })
 
