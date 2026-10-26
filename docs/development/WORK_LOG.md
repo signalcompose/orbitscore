@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): run the frozen completion and diagnostics in layer 2 behind a vscode-shaped shim (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1017-c2-language-services`（`1017-c1-document-sync` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1017](https://github.com/signalcompose/orbitscore/issues/1017)（束 S-editor・計画 §7.1 の C-11 = N1-c2 の前半）
+
+- 凍結版の言語機能 8 本を `packages/session/src/language/` へ写した（`diagnostics-analysis` / `dsl-completion-context` / `dsl-method-catalog` はそのまま、`plugin-catalog-completion` / `plugin-name-diagnostics` は import のパス、`completion-context` / `diagnostics-provider` / `dsl-providers` は `vscode` と `extension-state` を shim に差し替え）。差は `frozen-copies` のパッチが固定する
+- `language/vscode-shim.ts`: 写しが触る名前だけを持つ器（値を入れて持つだけ・描画も UI も無い）→ 台帳 **P-25** を新設（拡張版の退役で層 2 の形へ書き直す）
+- `language/language-services.ts`: 同期済みの写しを VS Code の文書の形に見せ、3 つの補完 provider を登録の順に呼ぶ（明示的に補完を呼んだ時と同じ）・`updateDiagnostics` の結果を凍結版 `getDiagnosticsForAgent` と同じ形（1 始まり・重さの名前・code）に直す
+- `SessionCore`: `editor.didOpen` / `didChange` で診断を計算して `editor.diagnostics` を送る（計算の間に版が進んだら古い結果は送らない）・`didClose` で空を送ってマーカーを消す・`editor.getDiagnostics`（パスを渡せば必ず 1 件・渡さなければ診断のある文書だけ・エディタが無ければ空）・`editor.complete`
+- **凍結版との突き合わせ**（`language-parity.spec.ts`）: 凍結版の本体を vitest の `vscode` の mock で走らせ、同じ文書で診断 7 件・補完 8 件を比べる。mock が持たない `workspace.findFiles` / `fs` を使う `import` の補完は層 2 の側だけで確かめた
+- 判明: v1 のスキーマに **hover と quick fix（output-missing の修正）のメソッドが無い**（凍結版の `registerHoverProvider` / `registerOutputCodeActionProvider`）。設計 §5.7 の列挙からも漏れていた（PR に提案）
+
+Part of #1017
+
+---
+
 ### feat(session): sync the editor's documents into layer 2 and answer editor state from the copy (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1017-c1-document-sync`（統合ブランチ `1017-session-editor` の最初の小 PR・draft）/ **Issue**: [#1017](https://github.com/signalcompose/orbitscore/issues/1017)（束 S-editor・計画 §7.1 の C-10 / C-11 = N1-c1）

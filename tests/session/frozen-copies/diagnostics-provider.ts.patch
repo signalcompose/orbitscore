@@ -1,0 +1,19 @@
+@@ -6,8 +6,9 @@
+  * その結果を `vscode.DiagnosticCollection` へ写す配線である（設計 §4.1）。
+  */
+ 
+-import * as vscode from 'vscode'
++import { loadPluginCatalog } from '../plugin-catalog-reader'
+ 
++import * as vscode from './vscode-shim'
+ import {
+   analyzeAudioPathOrdering,
+   analyzeEmptyOutputArg,
+@@ -16,7 +17,6 @@
+   analyzeOutputWithoutLinkAudio,
+ } from './diagnostics-analysis'
+ import { analyzeUnknownPluginNames } from './plugin-name-diagnostics'
+-import { loadPluginCatalog } from './plugin-catalog-reader'
+ 
+ export async function updateDiagnostics(
+   document: vscode.TextDocument,

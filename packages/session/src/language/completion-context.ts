@@ -1,0 +1,290 @@
+import * as vscode from './vscode-shim'
+
+/**
+ * Tracks what methods have been called in a chain
+ */
+interface MethodChainContext {
+  hasAudio: boolean
+  hasChop: boolean
+  hasPlay: boolean
+  hasBeat: boolean
+  hasLength: boolean
+  hasTempo: boolean
+  hasRun: boolean
+  hasOutput: boolean
+  hasLinkAudio: boolean
+  hasQuantize: boolean
+  lastMethod: string
+}
+
+/**
+ * Analyzes the current method chain to determine context
+ */
+export function analyzeMethodChain(lineText: string, position: number): MethodChainContext {
+  const context: MethodChainContext = {
+    hasAudio: false,
+    hasChop: false,
+    hasPlay: false,
+    hasBeat: false,
+    hasLength: false,
+    hasTempo: false,
+    hasRun: false,
+    hasOutput: false,
+    hasLinkAudio: false,
+    hasQuantize: false,
+    lastMethod: '',
+  }
+
+  // Extract the chain up to current position
+  const textBeforeCursor = lineText.substring(0, position)
+
+  // Find the start of the current statement/chain
+  let chainStart = textBeforeCursor.lastIndexOf('var ')
+  if (chainStart === -1) {
+    chainStart = textBeforeCursor.lastIndexOf('init ')
+  }
+  if (chainStart === -1) {
+    chainStart = 0
+  }
+
+  const chainText = textBeforeCursor.substring(chainStart)
+
+  // Check for methods in the chain
+  if (chainText.includes('.audio(')) {
+    context.hasAudio = true
+  }
+  if (chainText.includes('.chop(')) {
+    context.hasChop = true
+  }
+  if (chainText.includes('.play(')) {
+    context.hasPlay = true
+  }
+  if (chainText.includes('.beat(')) {
+    context.hasBeat = true
+  }
+  if (chainText.includes('.length(')) {
+    context.hasLength = true
+  }
+  if (chainText.includes('.tempo(')) {
+    context.hasTempo = true
+  }
+  if (chainText.includes('.run(')) {
+    context.hasRun = true
+  }
+  if (chainText.includes('.output(')) {
+    context.hasOutput = true
+  }
+  if (chainText.includes('.linkAudio(')) {
+    context.hasLinkAudio = true
+  }
+  if (chainText.includes('.quantize(')) {
+    context.hasQuantize = true
+  }
+
+  // Find the last method before the cursor
+  const methodMatch = chainText.match(/\.(\w+)\([^)]*\)(?!.*\.\w+\([^)]*\))/)
+  if (methodMatch && methodMatch[1]) {
+    context.lastMethod = methodMatch[1]
+  }
+
+  return context
+}
+
+/**
+ * Get appropriate completions based on context
+ */
+export function getContextualCompletions(
+  context: MethodChainContext,
+  isGlobal: boolean = false,
+): vscode.CompletionItem[] {
+  const completions: vscode.CompletionItem[] = []
+
+  if (isGlobal) {
+    // Global object completions
+    if (!context.hasTempo) {
+      completions.push(createCompletion('tempo', 'Set global tempo', 'tempo(${1:120})'))
+    }
+    if (!context.hasBeat) {
+      completions.push(createCompletion('beat', 'Set time signature', 'beat(${1:4} by ${2:4})'))
+    }
+    if (!context.hasQuantize) {
+      completions.push(
+        createCompletion(
+          'quantize',
+          'Set launch quantize for LOOP() and play() updates. Values: "off" | "beat" | "bar" | "2bar" | "4bar" | "8bar". Default "bar".',
+          'quantize("${1|bar,2bar,4bar,8bar,beat,off|}")',
+        ),
+      )
+    }
+    completions.push(
+      createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'),
+    )
+    completions.push(createCompletion('gain', 'Set master volume in dB', 'gain(${1:0})'))
+    completions.push(
+      createCompletion(
+        'compressor',
+        'Add compressor effect',
+        'compressor(${1:0.5}, ${2:0.5}, ${3:0.01}, ${4:0.1}, ${5:1.0}, ${6:true})',
+      ),
+    )
+    completions.push(
+      createCompletion('limiter', 'Add limiter effect', 'limiter(${1:0.99}, ${2:0.01}, ${3:true})'),
+    )
+    completions.push(
+      createCompletion(
+        'normalizer',
+        'Add normalizer effect',
+        'normalizer(${1:1.0}, ${2:0.01}, ${3:true})',
+      ),
+    )
+    completions.push(createCompletion('effect', 'Add an effect plugin', 'effect("${1}")'))
+    completions.push(
+      createCompletion('instrument', 'Add an instrument plugin', 'instrument("${1}")'),
+    )
+    completions.push(createCompletion('output', 'Route output to a bus', 'output("${1:bus}")'))
+    completions.push(createCompletion('sum', 'Create or select a sum bus', 'sum("${1:name}")'))
+    completions.push(createCompletion('aux', 'Create or select an aux bus', 'aux("${1:name}")'))
+
+    // LinkAudio output mode (once-per-file, mutually exclusive with hardware out)
+    if (!context.hasLinkAudio) {
+      completions.push(
+        createCompletion(
+          'linkAudio',
+          'Enable Ableton Link Audio output mode (once-per-file). Optional target sample rate; auto-detect with 48000 fallback when omitted.',
+          'linkAudio(${1:48000})',
+        ),
+      )
+    }
+
+    // Transport commands always available
+    completions.push(createCompletion('run', 'Start all sequences', 'run()'))
+    completions.push(createCompletion('loop', 'Loop all sequences', 'loop()'))
+    completions.push(createCompletion('stop', 'Stop all sequences', 'stop()'))
+  } else {
+    // Sequence object completions
+
+    // Configuration methods (can be called anytime)
+    if (!context.hasBeat) {
+      completions.push(createCompletion('beat', 'Set sequence meter', 'beat(${1:4} by ${2:4})'))
+    }
+    if (!context.hasLength) {
+      completions.push(createCompletion('length', 'Set loop length in bars', 'length(${1:1})'))
+    }
+    if (!context.hasTempo) {
+      completions.push(createCompletion('tempo', 'Set independent tempo', 'tempo(${1:120})'))
+    }
+
+    // Audio loading (usually first, but can be called anytime)
+    if (!context.hasAudio) {
+      completions.push(
+        createCompletion('audio', 'Load audio file', 'audio("${1:path/to/file.wav}")'),
+      )
+    }
+
+    // After audio is loaded
+    if (context.hasAudio) {
+      if (!context.hasChop) {
+        completions.push(createCompletion('chop', 'Slice audio into n parts', 'chop(${1:8})'))
+      }
+      if (!context.hasPlay) {
+        completions.push(
+          createCompletion('play', 'Define playback pattern', 'play(${1:1, 0, 1, 0})'),
+        )
+      }
+      // .output() is meaningful once audio is bound; suggest from this point
+      // forward as well as after .play() (handled below). Keeping the
+      // suggestion idempotent — the !hasOutput guard avoids duplicates.
+      if (!context.hasOutput) {
+        completions.push(
+          createCompletion(
+            'output',
+            'Bind this sequence to a Link Audio channel name (requires global.linkAudio()). Sequences sharing a name are summed by the SC plugin.',
+            'output("${1:channel-name}")',
+          ),
+        )
+      }
+    }
+
+    // After play is defined
+    if (context.hasPlay) {
+      completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
+      completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
+      if (!context.hasQuantize) {
+        completions.push(
+          createCompletion(
+            'quantize',
+            'Override the global launch quantize for this sequence. Values: "off" | "beat" | "bar" | "2bar" | "4bar" | "8bar".',
+            'quantize("${1|bar,2bar,4bar,8bar,beat,off|}")',
+          ),
+        )
+      }
+
+      // Future features (planned, see GitHub issue #213):
+      // - fixpitch(): Pitch shift in semitones (planned)
+      // - time(): Time stretch factor (planned)
+    }
+
+    // Transport commands (usually at the end)
+    if (context.hasAudio || context.hasPlay) {
+      completions.push(createCompletion('run', 'Start this sequence', 'run()'))
+      completions.push(createCompletion('loop', 'Loop this sequence', 'loop()'))
+      completions.push(createCompletion('stop', 'Stop this sequence', 'stop()'))
+      completions.push(createCompletion('mute', 'Mute this sequence', 'mute()'))
+      completions.push(createCompletion('unmute', 'Unmute this sequence', 'unmute()'))
+    }
+  }
+
+  // Sort by relevance/typical order
+  return sortCompletionsByRelevance(completions, context)
+}
+
+/**
+ * Create a completion item
+ */
+function createCompletion(
+  label: string,
+  documentation: string,
+  insertText: string,
+): vscode.CompletionItem {
+  const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Method)
+  item.documentation = new vscode.MarkdownString(documentation)
+  item.insertText = new vscode.SnippetString(insertText)
+  return item
+}
+
+/**
+ * Sort completions by typical usage order
+ */
+function sortCompletionsByRelevance(
+  completions: vscode.CompletionItem[],
+  context: MethodChainContext,
+): vscode.CompletionItem[] {
+  const order: { [key: string]: number } = {}
+
+  // Define typical order based on context
+  if (!context.hasAudio) {
+    // If no audio yet, prioritize audio loading
+    order['audio'] = 1
+    order['beat'] = 2
+    order['length'] = 3
+    order['tempo'] = 4
+  } else if (context.hasAudio && !context.hasPlay) {
+    // After audio, suggest chop or play
+    order['chop'] = 1
+    order['play'] = 2
+    order['beat'] = 3
+    order['length'] = 4
+  } else if (context.hasPlay && !context.hasRun) {
+    // After play, suggest transport commands
+    order['run'] = 1
+    order['loop'] = 2
+    order['mute'] = 3
+    // Future: fixpitch and time (requires granular synthesis implementation)
+  }
+
+  return completions.sort((a, b) => {
+    const orderA = order[a.label as string] || 99
+    const orderB = order[b.label as string] || 99
+    return orderA - orderB
+  })
+}

@@ -1,0 +1,9 @@
+@@ -13,7 +13,7 @@
+  * prefix so far, and `filterCatalogEntries` narrows by that prefix.
+  */
+ 
+-import type { PluginCatalogEntry } from './plugin-catalog-reader'
++import type { PluginCatalogEntry } from '../plugin-catalog-reader'
+ 
+ export type PluginVerb = 'effect' | 'instrument'
+ 

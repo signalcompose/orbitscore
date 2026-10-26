@@ -1,0 +1,12 @@
+@@ -21,9 +21,10 @@
+ 
+ import * as path from 'path'
+ 
++import type { PluginCatalogEntry } from '../plugin-catalog-reader'
++
+ import { collectDerivedMixerBuses, type DiagnosticIssue } from './diagnostics-analysis'
+ import { normalizeCatalogKey } from './plugin-catalog-completion'
+-import type { PluginCatalogEntry } from './plugin-catalog-reader'
+ 
+ /** Structural words that carry the enclosing verb's role into a nested region. */
+ const STRUCTURAL_WORDS = new Set(['layer', 'chain'])

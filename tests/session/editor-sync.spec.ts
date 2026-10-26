@@ -12,99 +12,40 @@ import { pathToFileURL } from 'node:url'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { EngineHost, type EngineInterpreter } from '../../packages/session/src/host/engine-host'
-import { SessionCore } from '../../packages/session/src/host/session-core'
 import { buildServer } from '../../packages/session/src/mcp/build-server'
 import {
   createRpcDocsSource,
   createRpcToolHandlers,
   type SessionCall,
 } from '../../packages/session/src/mcp/rpc-tool-handlers'
-import { connectSession, type SessionConnection } from '../../packages/session/src/rpc/client'
-import {
-  claimSocketPath,
-  prepareRuntimeDir,
-  resolveSocketPath,
-} from '../../packages/session/src/rpc/runtime-dir'
-import { startRpcServer, type RpcServer } from '../../packages/session/src/rpc/server'
+import { connectSession } from '../../packages/session/src/rpc/client'
 
+import { flush, startEditorSession, type EditorSession } from './helpers/editor-session'
 import { connectMcp, type McpTestClient } from './helpers/mcp-test-client'
 import { RpcTestClient } from './helpers/rpc-test-client'
 
 let tmp: string
-let server: RpcServer | null
-let core: SessionCore | null
+let session: EditorSession | null
+let core: EditorSession['core'] | null
 let socketPath: string
-const closers: Array<() => unknown> = []
 
 async function startSession(workspaceRoot: string | null = null): Promise<void> {
-  const interpreter = {
-    boot: async () => {},
-    execute: async () => {},
-    getGlobals: () => [{ stop: () => {}, saveAllPluginStates: async () => ({}) }],
-    audioEngine: { quit: async () => {}, getDaemonStatus: async () => ({}) },
-  } as unknown as EngineInterpreter
-  const dir = path.join(tmp, 'run')
-  prepareRuntimeDir(dir)
-  const socket = resolveSocketPath(dir)
-  if (!socket.ok) throw new Error(socket.reason)
-  await claimSocketPath(socket.socketPath)
-  socketPath = socket.socketPath
-  const host = new EngineHost({
-    createInterpreter: () => interpreter,
-    env: {},
-    sessionLogCwd: tmp,
-    sessionLogEnabled: false,
-    log: (level, text) => core?.sessionLog(level, text),
-  })
-  let rpc: RpcServer | null = null
-  core = new SessionCore({
-    engine: host,
-    workspaceRoot,
-    broadcast: (method, params) => rpc?.broadcast(method, params),
-    editorAttached: () => rpc?.editorClient() != null,
-    captureConsole: false,
-  })
-  // session-main.ts と同じ配線（通知と、クライアントが離れた時）。
-  rpc = await startRpcServer({
-    socketPath,
-    sessionVersion: 'test',
-    handlers: core.handlers,
-    notificationHandlers: core.notificationHandlers,
-    onDetach: (client) => core!.onClientDetached(client),
-    log: (level, text) => core!.sessionLog(level, text),
-  })
-  server = rpc
+  session = await startEditorSession(tmp, workspaceRoot)
+  core = session.core
+  socketPath = session.socketPath
 }
 
-async function editorClient(): Promise<RpcTestClient> {
-  const client = await RpcTestClient.uds(socketPath)
-  expect((await client.attach({ capabilities: ['editor'] })).result).toBeDefined()
-  closers.push(() => client.close())
-  return client
-}
-
-async function agent(): Promise<SessionConnection> {
-  const connection = await connectSession(socketPath, { client: { name: 'agent', version: '0' } })
-  closers.push(() => connection.close())
-  return connection
-}
-
-/** 通知は答えが無いので、同じ接続の往復で「届いた後」を作る。 */
-async function flush(client: RpcTestClient): Promise<void> {
-  await client.request('session.getLog', { lines: 1 })
-}
+const editorClient = () => session!.editorClient()
+const agent = () => session!.agent()
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orbs-edsync-'))
-  server = null
+  session = null
   core = null
 })
 
 afterEach(async () => {
-  for (const close of closers.splice(0)) await close()
-  core?.dispose()
-  await server?.close()
+  await session?.close()
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -188,7 +129,6 @@ describe('document sync (design 848 §5.5)', () => {
     await editorClient()
     const observer = await RpcTestClient.uds(socketPath)
     await observer.attach()
-    closers.push(() => observer.close())
     observer.notify('editor.didOpen', {
       uri: 'file:///ws/x.orbs',
       version: 1,
@@ -203,6 +143,7 @@ describe('document sync (design 848 §5.5)', () => {
     expect(log.lines.join('\n')).toContain(
       'editor.didOpen from a client without the editor capability',
     )
+    observer.close()
   })
 
   it('forgets the documents when the editor client leaves, and takes them back when it re-sends (F-12)', async () => {

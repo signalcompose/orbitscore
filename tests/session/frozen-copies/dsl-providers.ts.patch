@@ -1,0 +1,25 @@
+@@ -9,8 +9,9 @@
+ 
+ import * as path from 'path'
+ 
+-import * as vscode from 'vscode'
++import { loadPluginCatalog } from '../plugin-catalog-reader'
+ 
++import * as vscode from './vscode-shim'
+ import { analyzeMethodChain, getContextualCompletions } from './completion-context'
+ import { analyzeMissingOutput, missingOutputQuickFixEdit } from './diagnostics-analysis'
+ import {
+@@ -28,8 +29,11 @@
+   filterCatalogEntries,
+   RACK_SCAN_MAX_LINES,
+ } from './plugin-catalog-completion'
+-import { loadPluginCatalog } from './plugin-catalog-reader'
+-import { outputChannel, pluginCatalogHintShown, setPluginCatalogHintShown } from './extension-state'
++import {
++  outputChannel,
++  pluginCatalogHintShown,
++  setPluginCatalogHintShown,
++} from './extension-state-shim'
+ 
+ /**
+  * 補完プロバイダの登録（#495）。
