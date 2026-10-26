@@ -163,7 +163,8 @@ export const LEDGER: readonly LedgerEntry[] = [
     deadline: { kind: 'ext-retire' },
     state: 'open',
     markerless:
-      'リポジトリの各所（release.yml・user サイトの拡張版の行・ハーネスの vscode ターゲット）にあり、' +
+      'リポジトリの各所（release.yml・user サイトの拡張版の行・ハーネスの vscode ターゲット・' +
+      '凍結版から写したモジュールの一覧 tests/session/frozen-copies.ts と、それを読む 2 つの spec）にあり、' +
       '退役の PR で packages/vscode-extension/ が消えた時に検査 5 が開いた行を red にする',
     bundle: '退役（時期は owner）',
   },
@@ -299,6 +300,22 @@ export const LEDGER: readonly LedgerEntry[] = [
     deadline: { kind: 'release-1' },
     state: 'open',
     bundle: 'S-rpc（N1-a2）→ S-mcp / S-editor',
+  },
+  {
+    id: 'P-20',
+    title:
+      'audio.selectDevice の選択を層 2 のメモリにだけ持つ（凍結版は設定に書いて次の起動へ持ち越した・持ち主が未決）',
+    deadline: { kind: 'release-1' },
+    state: 'open',
+    bundle: 'S-mcp（N1-b1）→ A-panels（環境設定）',
+  },
+  {
+    id: 'P-21',
+    title:
+      'docs の応答の CSP が置き値（script-src は VitePress のインラインスクリプトを見て N2 で決める）',
+    deadline: { kind: 'release-1' },
+    state: 'open',
+    bundle: 'S-mcp（N1-b1）→ N2',
   },
 ]
 

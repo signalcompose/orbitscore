@@ -4,6 +4,8 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { FROZEN_COPIES } from '../session/frozen-copies'
+
 /**
  * 分割で作った子モジュールの module doc が、実際の可視性変更と一致していることを検査する
  * （#888・設計 `docs/design/888-file-size-ratchet-design.md` §14）。
@@ -206,6 +208,20 @@ const KNOWN_SHARED_DOCS: ReadonlyArray<readonly [string, string]> = [
   ['rust/crates/orbit-clap-host/src/effect.rs', 'rust/crates/orbit-clap-host/src/instrument.rs'],
 ]
 
+/**
+ * 凍結版から層 2 へ写したモジュール（設計 848 §4.5.1）とその原本の組。
+ *
+ * 写しは原本と**一致することが強制されている**（`tests/session/frozen-copies.spec.ts`）ので、
+ * doc が同じなのは「別のファイルの doc を貼った」欠陥ではない。外すのは**写しと原本の組だけ**で、
+ * 写しが第三のファイルと doc を共有すれば従来どおり red になる。
+ */
+// PROVISIONAL(P-09): 拡張版の退役で原本が消えれば組は作られない。その時にこの除外も消す。
+const COPY_OF = new Map(FROZEN_COPIES.map(({ copy, original }) => [copy, original]))
+
+function withoutFrozenCopies(files: Set<string>): Set<string> {
+  return new Set([...files].filter((file) => !files.has(COPY_OF.get(file) ?? '')))
+}
+
 describe('doc ブロックがコピペされていないこと（#887 で実際に起きた欠陥）', () => {
   const sources = listAllMeasuredSources()
 
@@ -230,6 +246,7 @@ describe('doc ブロックがコピペされていないこと（#887 で実際�
     const actual = [
       ...new Set(
         [...byDoc.values()]
+          .map(withoutFrozenCopies)
           .filter((files) => files.size > 1)
           .map((files) => [...files].sort().join(' + ')),
       ),

@@ -28,7 +28,10 @@ export interface StartEngineParams {
 }
 
 /** 層 2 が engine に求める面（テストでは偽物を渡す）。 */
-export type EngineInterpreter = Pick<InterpreterV2, 'execute' | 'boot' | 'getGlobals'> & {
+export type EngineInterpreter = Pick<
+  InterpreterV2,
+  'execute' | 'boot' | 'getGlobals' | 'savePluginState' | 'openPluginUi' | 'closePluginUi'
+> & {
   readonly audioEngine: Pick<AudioEngineBackend, 'quit' | 'getDaemonStatus' | 'selectAudioDevice'>
   enableSessionLog?(options: { cwd: string }): void
 }
@@ -57,6 +60,11 @@ export class EngineHost {
   private starting: Promise<CommandResult> | null = null
   private debugMode = false
   private readonly env: NodeJS.ProcessEnv
+  /**
+   * 選択中のデバイス（`''` = システムの既定）。起動した・切り替えたデバイスで、停止しても残す
+   * （凍結版の設定 `orbitscore.audioDevice` が停止で消えないのと同じ・`audio.selectDevice`）。
+   */
+  audioDevice = ''
 
   constructor(private readonly deps: EngineHostDeps) {
     this.env = deps.env ?? process.env
@@ -121,6 +129,7 @@ export class EngineHost {
     }
     this.interpreter = interpreter
     this.debugMode = params.debug === true
+    this.audioDevice = params.audioDevice ?? ''
     return {
       ok: true,
       message: params.captureWav

@@ -2,9 +2,10 @@
  * 層 2 の真実を持つもの（設計 848 §3 の「2 セッション」の行）: engine・評価の受付口・log ring・
  * transport の状態・クライアントの一覧。RPC サーバに渡すメソッドの実装もここに置く。
  *
- * このビルドが実装しているメソッド: `session.evaluate` / `session.getState` / `session.getLog` /
- * `session.shutdown` / `engine.start` / `engine.stop` / `engine.getState`。それ以外（audio・plugin・
- * editor・docs・`session.registerMcp`）は束 S-mcp と S-editor が足す（台帳 P-19）。
+ * このビルドが実装しているメソッド: `session.*`（`registerMcp` を除く）・`engine.*`・`audio.*`・
+ * `plugin.*`（`openUiAtCursor` を除く）・`docs.*`（後の 3 群は `layer2-methods.ts`）。残り
+ * （`editor.*`・`plugin.openUiAtCursor`・`session.registerMcp`）は束 S-mcp の中継と S-editor が足す
+ * （台帳 P-19）。
  */
 import crypto from 'node:crypto'
 
@@ -20,7 +21,9 @@ import { RpcError, PROTOCOL_VERSION } from '../rpc/protocol'
 import type { AttachedClient, RequestHandler } from '../rpc/server'
 
 import { captureConsole, parseStepLine, transportChange } from './console-capture'
+import type { DocsSites } from './docs-sites'
 import type { EngineHost, StartEngineParams } from './engine-host'
+import { audioMethods, docsMethods, pluginMethods, type Layer2MethodDeps } from './layer2-methods'
 import { classifyEngineLine, classifySessionLine, type OutputStream } from './log-classify'
 import { LogHub, type LogLineNotification } from './log-hub'
 
@@ -52,6 +55,8 @@ export interface SessionCoreOptions {
   /** headless の CLI で、横取りした行を元の console にも書くか。 */
   consolePassthrough?: boolean
   stallReportMs?: number
+  /** `--docs-dir` から決めた docs の在りか（既定は両方なし）。 */
+  docs?: DocsSites
 }
 
 /** 評価の帰属を覚えておく件数の上限（`evalId` → `target`）。 */
@@ -65,6 +70,7 @@ export class SessionCore {
   /** いま `execute()` の中にいる評価の帰属（console の行に `evalId` を付けるため）。 */
   private executing: IntakeContext | null = null
   private releaseConsole: (() => void) | null = null
+  readonly handlers: Readonly<Record<string, RequestHandler>>
 
   constructor(private readonly options: SessionCoreOptions) {
     this.logs = new LogHub(
@@ -82,6 +88,44 @@ export class SessionCore {
       this.releaseConsole = captureConsole((stream, text) => this.onEngineLine(stream, text), {
         passthrough: options.consolePassthrough,
       })
+    }
+    const startEngine = async (params: StartEngineParams) => {
+      const result = await options.engine.start(params)
+      if (result.ok) await this.broadcastEngineState()
+      return result
+    }
+    const stopEngine = async () => {
+      const result = await options.engine.stop()
+      if (this.playing) {
+        this.playing = false
+        options.broadcast('transport.state', { playing: false })
+      }
+      await this.broadcastEngineState()
+      return result
+    }
+    const layer2: Layer2MethodDeps = {
+      engine: options.engine,
+      startEngine,
+      stopEngine,
+      transportPlaying: () => this.playing,
+      docs: options.docs ?? { user: null, dev: null },
+      log: (level, text) => this.sessionLog(level, text),
+    }
+    this.handlers = {
+      'session.evaluate': (params: EvaluateParams, client: AttachedClient) =>
+        this.evaluate(params, client),
+      'session.getState': () => this.getState(),
+      'session.getLog': (params: { lines?: number }) => ({ lines: this.logs.select(params.lines) }),
+      'session.shutdown': () => {
+        options.onShutdownRequested?.()
+        return {}
+      },
+      'engine.start': startEngine,
+      'engine.stop': stopEngine,
+      'engine.getState': () => options.engine.getState(),
+      ...audioMethods(layer2),
+      ...pluginMethods(layer2),
+      ...docsMethods(layer2),
     }
   }
 
@@ -115,32 +159,6 @@ export class SessionCore {
   /** 帰属を覚えた評価の `target`（`.orbslog` の `sourceFile` への写しは設計 §5.3.1 (a)）。 */
   targetOf(evalId: string): EvaluateTarget | undefined {
     return this.targets.get(evalId)
-  }
-
-  readonly handlers: Readonly<Record<string, RequestHandler>> = {
-    'session.evaluate': (params: EvaluateParams, client: AttachedClient) =>
-      this.evaluate(params, client),
-    'session.getState': () => this.getState(),
-    'session.getLog': (params: { lines?: number }) => ({ lines: this.logs.select(params.lines) }),
-    'session.shutdown': () => {
-      this.options.onShutdownRequested?.()
-      return {}
-    },
-    'engine.start': async (params: StartEngineParams) => {
-      const result = await this.options.engine.start(params)
-      if (result.ok) await this.broadcastEngineState()
-      return result
-    },
-    'engine.stop': async () => {
-      const result = await this.options.engine.stop()
-      if (this.playing) {
-        this.playing = false
-        this.options.broadcast('transport.state', { playing: false })
-      }
-      await this.broadcastEngineState()
-      return result
-    },
-    'engine.getState': () => this.options.engine.getState(),
   }
 
   async evaluate(params: EvaluateParams, client: AttachedClient) {

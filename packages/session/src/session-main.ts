@@ -22,8 +22,10 @@ import path from 'node:path'
 import { shouldEnableSessionLog } from '@orbitscore/engine/dist/cli/session-log-gate'
 import { InterpreterV2 } from '@orbitscore/engine/dist/interpreter/interpreter-v2'
 
+import { resolveDocsSites } from './host/docs-sites'
 import { EngineHost, type EngineInterpreter } from './host/engine-host'
 import { SessionCore } from './host/session-core'
+import { serveDocs } from './rpc/docs-http'
 import { generateToken } from './rpc/http-guard'
 import { PROTOCOL_VERSION } from './rpc/protocol'
 import {
@@ -245,9 +247,11 @@ export async function startSession(argv: readonly string[], io: SessionIo): Prom
     sessionLogEnabled: shouldEnableSessionLog(io.env),
     log: (level, text) => core.sessionLog(level, text),
   })
+  const docs = resolveDocsSites(args.docsDirs)
   const core: SessionCore = new SessionCore({
     engine,
     workspaceRoot: args.workspaceRoot ?? null,
+    docs,
     broadcast: (method, params) => {
       server?.broadcast(method, params)
       // 人が headless を端末で動かした時に見えるように、debug でない行は stderr にも写す。
@@ -267,7 +271,9 @@ export async function startSession(argv: readonly string[], io: SessionIo): Prom
       sessionVersion: io.sessionVersion,
       handlers: core.handlers,
       log: (level, text) => core.sessionLog(level, text),
-      tcpHttp: (request, response, port) => serveApp(args.webDir, request, response, port),
+      tcpHttp: (request, response, port) =>
+        serveDocs(docs, request, response, port, (level, text) => core.sessionLog(level, text)) ||
+        serveApp(args.webDir, request, response, port),
     })
   } catch (error) {
     core.dispose()
