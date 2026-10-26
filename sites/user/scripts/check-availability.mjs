@@ -20,14 +20,18 @@
  *   AV-SYNTAX      every `> **対応**:` (ja) / `> **Availability**:` (en) line is
  *                  one of the five fixed forms, uses its chapter's language,
  *                  and is followed by a blank line (a following text line would
- *                  be pulled into the blockquote). Near misses (full-width
- *                  colon, missing `>`) are errors, so a grep on the anchor
- *                  finds every line.
+ *                  be pulled into the blockquote). Near misses (see
+ *                  isAnchorCandidate: list items, nested quotes, indentation,
+ *                  a colon inside the bold, a missing colon, the bold label in
+ *                  mid-line, any case) are errors, so a grep on the anchor
+ *                  finds every line. So are an unterminated code fence, a BOM,
+ *                  CR line endings and a chapter or directory that cannot be read.
  *   AV-PLACE       an availability line directly follows a heading (or the
  *                  heading's split-section marker) — one line per feature.
- *   AV-UNRELEASED  `未リリース（…）` / `Unreleased (…)`. A warning normally (main
- *                  may carry unreleased features); an error with --release
- *                  (the release preflight).
+ *   AV-UNRELEASED  `未リリース（…）` / `Unreleased (…)` on any line outside code
+ *                  (frontmatter and prose too — the lint is the only release
+ *                  gate for it). A warning normally (main may carry unreleased
+ *                  features); an error with --release (the release preflight).
  *   AV-I18N        a ja chapter and its en translation have the same `host`,
  *                  the same number of availability lines and of split-section
  *                  markers.
@@ -46,7 +50,8 @@
  *   node sites/user/scripts/check-availability.mjs --release   # AV-UNRELEASED is an error
  *   node sites/user/scripts/check-availability.mjs --root <dir> # lint another site root (tests)
  *
- * Exit code 1 when any lint error is found; exit code 2 for invalid usage.
+ * Exit code 1 when any lint error is found; exit code 2 for invalid usage
+ * (bad arguments, or a --root that is not a readable directory).
  */
 
 import fs from 'node:fs'
@@ -176,11 +181,43 @@ for (const lang of Object.values(AVAILABILITY)) {
   lang.formRes = lang.forms.map((f) => new RegExp(`^${f}$`))
 }
 
-/** A line-leading availability anchor, including its supported near-miss shapes. */
-const ANCHOR_LIKE_RE = /^\s{0,3}(?:>\s*)?(?:\*\*\s*)?(?:対応|Availability)\s*(?:\*\*|[:：])/
+/**
+ * Availability-line candidates, near misses included. Only the exact anchor at
+ * column 0 followed by one of the five forms is valid; every other candidate is
+ * an AV-SYNTAX error, so a grep on the anchor finds every line. A line is a
+ * candidate when
+ *   (a) after its container prefix (indentation, any number of `>`, list
+ *       markers) it starts with the label — emphasised or not — and a colon
+ *       (`**対応**:`, `**対応:**`, `対応:`, `- **Availability**:`, `>> *対応*:`),
+ *   (b) it is a blockquote whose emphasised label is followed by a space or the
+ *       end of the line (`> **対応** OrbitScore …` — the colon is missing), or
+ *   (c) anywhere in the line, the bold label carries a colon inside or right
+ *       after it (`本文 **対応**: …`).
+ * Prose that merely contains the word is not a candidate: `入力 -> 対応表`,
+ * `<b>対応</b>`, `**対応**していない`, `Availability of plugins varies.`
+ */
+const LABEL = String.raw`(?:対応|availability)`
+const CONTAINER = String.raw`^\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+)*`
+const LEADING_LABEL_COLON_RE = new RegExp(
+  String.raw`${CONTAINER}(?:[*_]{1,2}\s*)?${LABEL}\s*(?:[*_]{1,2}\s*)?[:：]`,
+  'i',
+)
+const QUOTED_LABEL_NO_COLON_RE = new RegExp(
+  String.raw`^\s*(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)*[*_]{1,2}\s*${LABEL}\s*[*_]{1,2}(?:\s|$)`,
+  'i',
+)
+const BOLD_LABEL_COLON_RE = new RegExp(
+  String.raw`\*\*\s*${LABEL}\s*(?:[:：]\s*\*\*|\*\*\s*[:：])`,
+  'i',
+)
+const isAnchorCandidate = (line) =>
+  LEADING_LABEL_COLON_RE.test(line) ||
+  QUOTED_LABEL_NO_COLON_RE.test(line) ||
+  BOLD_LABEL_COLON_RE.test(line)
 const HEADING_RE = /^(#{1,6})\s+\S/
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
-const HOST_MARKER_LIKE_RE = /<!--\s*host\s*:/
+/** Anything that tries to be a split-section marker (any case, with or without a colon). */
+const HOST_MARKER_LIKE_RE = /<!--\s*host\b/i
 const HOST_MARKER_RE = /^<!-- host: (ext|app) -->$/
 const PARALLEL_ORBITSTUDIO_RE = /^\s*- \*\*OrbitStudio\*\*:/
 const ORBITSTUDIO_RE = /orbitstudio/i
@@ -204,11 +241,27 @@ const errors = []
 const warnings = []
 const report = (list, rel, line, rule, message) => list.push({ rel, line, rule, message })
 
+const relOf = (full) => path.relative(siteRoot, full).split(path.sep).join('/') || '.'
+
 function walk(dir, out) {
-  for (const name of fs.readdirSync(dir)) {
+  let names
+  try {
+    names = fs.readdirSync(dir)
+  } catch (error) {
+    // A directory we cannot read hides its chapters: a lint error, not a usage error.
+    report(
+      errors,
+      relOf(dir),
+      1,
+      'AV-SYNTAX',
+      `cannot read the directory: ${error.code ?? error.message}`,
+    )
+    return out
+  }
+  for (const name of names) {
     const full = path.join(dir, name)
     const entry = fs.lstatSync(full)
-    const rel = path.relative(siteRoot, full).split(path.sep).join('/')
+    const rel = relOf(full)
     const atSiteRoot = !rel.includes('/')
     if (atSiteRoot && name.startsWith('.')) continue
     if (entry.isSymbolicLink()) {
@@ -224,11 +277,39 @@ function walk(dir, out) {
   return out
 }
 
-/** Parse one chapter into the facts the rules need. */
-function readChapter(full) {
-  const rel = path.relative(siteRoot, full).split(path.sep).join('/')
+/**
+ * Parse one chapter into the facts the rules need. A BOM or CR line endings
+ * would make the frontmatter and anchor checks fail with a misleading message
+ * (`frontmatter has no host:` with `host:` right there), so they are reported
+ * by name and then normalised for the remaining checks.
+ */
+function readChapter(full, raw) {
+  const rel = relOf(full)
   const lang = rel.startsWith('en/') ? 'en' : 'ja'
-  const lines = fs.readFileSync(full, 'utf8').split('\n')
+  let text = raw
+  if (text.startsWith('﻿')) {
+    report(
+      errors,
+      rel,
+      1,
+      'AV-SYNTAX',
+      'the file starts with a byte-order mark — save it as UTF-8 without BOM',
+    )
+    text = text.slice(1)
+  }
+  const cr = text.indexOf('\r')
+  if (cr !== -1) {
+    const line = text.slice(0, cr).split('\n').length
+    report(
+      errors,
+      rel,
+      line,
+      'AV-SYNTAX',
+      'CRLF (or CR) line endings — save the file with LF line endings',
+    )
+    text = text.replace(/\r\n?/g, '\n')
+  }
+  const lines = text.split('\n')
 
   let fmEnd = -1
   if (lines[0] === '---') {
@@ -255,7 +336,7 @@ function readChapter(full) {
   for (let i = 0; i <= fmEnd; i++) {
     if (HOST_MARKER_LIKE_RE.test(lines[i])) {
       kinds[i] = 'frontmatter-marker'
-    } else if (ANCHOR_LIKE_RE.test(lines[i])) {
+    } else if (isAnchorCandidate(lines[i])) {
       kinds[i] = 'anchor'
     }
   }
@@ -279,7 +360,7 @@ function readChapter(full) {
     else if (HOST_MARKER_RE.test(line)) kinds[i] = 'marker'
     else if (HEADING_RE.test(line)) kinds[i] = 'heading'
     else if (line.trim() === '') kinds[i] = 'blank'
-    else if (ANCHOR_LIKE_RE.test(line)) kinds[i] = 'anchor'
+    else if (isAnchorCandidate(line)) kinds[i] = 'anchor'
     else kinds[i] = 'text'
   }
   if (fence) {
@@ -389,7 +470,10 @@ function checkAvailabilityLines(ch) {
   ch.kinds.forEach((kind, i) => {
     if (kind !== 'anchor') return
     count++
-    const line = ch.lines[i]
+    const line = ch.lines[i].replace(/\s+$/, '')
+    if (line !== ch.lines[i]) {
+      report(errors, ch.rel, i + 1, 'AV-SYNTAX', 'trailing whitespace after the availability line')
+    }
     if (line.startsWith(other.anchor)) {
       report(
         errors,
@@ -441,19 +525,31 @@ function checkAvailabilityLines(ch) {
         'an availability line goes right under the heading of its feature (one line per feature)',
       )
     }
-    if (line.includes(AVAILABILITY.ja.unreleased) || line.includes(AVAILABILITY.en.unreleased)) {
-      report(
-        release ? errors : warnings,
-        ch.rel,
-        i + 1,
-        'AV-UNRELEASED',
-        release
-          ? 'unreleased marker at release time — replace it with the version'
-          : 'unreleased marker (fine on main; the release preflight turns this into an error)',
-      )
-    }
   })
   return count
+}
+
+/**
+ * Every unreleased marker, wherever it sits (frontmatter and body; not code).
+ * The lint is the only release gate for this — the docs no longer carry a grep
+ * for it — so a marker in prose or in a malformed line must count too.
+ */
+function checkUnreleased(ch) {
+  ch.lines.forEach((line, i) => {
+    if (ch.kinds[i] === 'code') return
+    if (!line.includes(AVAILABILITY.ja.unreleased) && !line.includes(AVAILABILITY.en.unreleased))
+      return
+    const where = ch.kinds[i] === 'anchor' ? '' : ' outside an availability line'
+    report(
+      release ? errors : warnings,
+      ch.rel,
+      i + 1,
+      'AV-UNRELEASED',
+      release
+        ? `unreleased marker${where} at release time — replace it with the version`
+        : `unreleased marker${where} (fine on main; the release preflight turns this into an error)`,
+    )
+  })
 }
 
 function checkHostScope(ch, host) {
@@ -501,12 +597,36 @@ if (argumentError) {
   console.error(`Usage error: ${argumentError}\n${usage}`)
   process.exitCode = 2
 } else {
-  let chapters = []
+  // Only a --root that is not a readable directory is a usage error (exit 2).
+  // A chapter or subdirectory we cannot read is a lint finding (exit 1) and the
+  // other chapters are still checked; anything else is a bug and must crash.
+  let rootError = null
   try {
-    chapters = walk(siteRoot, []).sort().map(readChapter)
+    if (!fs.statSync(siteRoot).isDirectory()) rootError = 'not a directory'
   } catch (error) {
-    console.error(`Usage error: cannot read --root ${siteRoot}: ${error.message}\n${usage}`)
+    rootError = error.code ?? error.message
+  }
+  const chapters = []
+  if (rootError) {
+    console.error(`Usage error: cannot read --root ${siteRoot}: ${rootError}\n${usage}`)
     process.exitCode = 2
+  } else {
+    for (const full of walk(siteRoot, []).sort()) {
+      let raw
+      try {
+        raw = fs.readFileSync(full, 'utf8')
+      } catch (error) {
+        report(
+          errors,
+          relOf(full),
+          1,
+          'AV-SYNTAX',
+          `cannot read the chapter: ${error.code ?? error.message}`,
+        )
+        continue
+      }
+      chapters.push(readChapter(full, raw))
+    }
   }
 
   if (process.exitCode !== 2) {
@@ -525,6 +645,7 @@ if (argumentError) {
       const host = checkHost(ch)
       const markers = checkMarkers(ch, host)
       const anchors = checkAvailabilityLines(ch)
+      checkUnreleased(ch)
       checkHostScope(ch, host)
       checkTerms(ch)
       facts.set(ch.rel, { host: ch.hosts[0]?.value ?? null, anchors, markers })

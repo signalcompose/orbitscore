@@ -27,11 +27,14 @@ user サイトを拡張版と OrbitStudio の両方に向けた 1 本の文書�
 - **lint** `sites/user/scripts/check-availability.mjs` を `npm run docs:check` に連結（CI の `Check doc citations` で走る）。規則 `AV-HOST` / `AV-SYNTAX` / `AV-PLACE` / `AV-UNRELEASED`（`--release` で red）/ `AV-I18N` / **`AV-HOST-SCOPE`**（owner (20) の条件・台帳 P-13）/ `AV-TERM`
 - **設計との差 2 点**（別冊を同じ PR で改訂）: AV-HOST-SCOPE を `both+split` の章にも掛けた / 分割節の印を見出しの**次の行**に置く（見出しの行に置くと VitePress が `aria-label` に印の文字列を入れることを `createMarkdownRenderer` で確かめた）
 - **暫定**: 章にはまだ `host:` が無いので、lint の `HOST_MISSING_BASELINE`（42 章）で許し、D-② がこの一覧ごと消す。一覧は減らす方向にしか通らない（`host:` を持った章が残っていても、無い章が増えても red）
-- **テスト** `tests/docs/check-availability.spec.ts`（82 件）: 一時ディレクトリに章を作り `--root` で lint を走らせる。STYLE_GUIDE の 5 形 × 2 言語がそのまま通ることも検査する（文書と lint の二重管理を作らない）。lint 側を壊した変異でも各検査が red になることを確認
+- **テスト** `tests/docs/check-availability.spec.ts`（124 件）: 一時ディレクトリに章を作り `--root` で lint を走らせる。STYLE_GUIDE の 5 形 × 2 言語がそのまま通ることも検査する（文書と lint の二重管理を作らない）。lint 側を壊した変異でも各検査が red になることを確認
 - **レビュー反映**: 対象 0 件、可用性アンカーの near miss、未閉鎖 code fence、見出し内の分割印を loud に失敗させ、10 形すべての否定例と `--release` の 4 件を固定した
 - `host:` の YAML コメント・引用符、厳密な引数解析、直下だけの除外、symlink directory の拒否、`HOST_MISSING_BASELINE` の免除件数表示を追加した
 - 判定のテストは `FAIL <file>:<line>  [<rule>]` を 1 文字列として比較し、`a.md:1` が `a.md:12` に誤一致しない形にした
 - **レビュー第 2 ラウンド**: near miss を行頭だけに絞って本文中の「対応」/ `Availability` の誤検出を解消し、frontmatter 内の分割印と、通常・壊れた symlink を `AV-HOST` で拒否するようにした
+- **レビュー第 3 ラウンド（main が直接修正）**: 第 2 ラウンドで near miss を「行頭の 1 つの `>`」に絞りすぎ、R1 では赤だった `- **対応**:`・`1. **対応**:`・`>> **対応**:`・文中の `**対応**:`・小文字の `availability` などが黙って通っていた（同じ箇所が Codex で 2 回落ちたので main が直した。原因は main の R2 の依頼文「行頭の形だけ」）。候補を (a) 容器（字下げ・`>` の繰り返し・リスト記号）を剥がした行頭のラベル + コロン (b) 引用の中の強調したラベル + 空白（コロンの欠落）(c) 行のどこでも太字のラベル + コロン、の 3 つにし、`対応表`・`**対応**していない`・`Availability of plugins` は候補にしない
+- `未リリース（` / `Unreleased (` はコードの外の全行（frontmatter・本文の文章）で探す（文書から grep を外したので lint が唯一の砦）。分割の印の候補は大小・コロンの有無を問わない（`<!-- Host: ext -->` などが黙って通っていた）。`--root` が読めない時だけ exit 2、章やディレクトリが読めない時は lint の誤り（exit 1・他の章も検査を続ける）。BOM・CRLF・可用性の行の末尾の空白は原因を名指しする
+- テストは 82 → 124 件。各形のすべての枠を 1 つずつ崩す（版を 2 桁に・語を 1 つ消す）変種を生成して全部が AV-SYNTAX になることを確かめる。主要な 6 つの修正を 1 つずつ戻して、それぞれ対応するテストが赤になることを確かめた。#1006 の章（`git archive` で取り出したもの）にも当てて 0 エラー
 - `.husky/pre-push` の失敗文言に可用性表記の lint を足した
 
 Part of #848

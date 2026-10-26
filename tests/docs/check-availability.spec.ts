@@ -211,6 +211,35 @@ describe('check-availability.mjs', () => {
       )
     })
 
+    it.each([
+      ['an upper-case Host', '<!-- Host: ext -->'],
+      ['a missing colon', '<!-- host ext -->'],
+      ['an equals sign', '<!-- host=ext -->'],
+    ])('rejects a split-section marker with %s', (_label, marker) => {
+      expectRed(
+        lint({ 'a.md': chapter('both+split', `## VS Code で開く\n${marker}\n\n手順`) }),
+        'AV-HOST',
+        'a.md:10',
+      )
+    })
+
+    it('rejects a near-miss split-section marker in a both chapter too', () => {
+      expectRed(
+        lint({ 'a.md': chapter('both', '## アプリで開く\n<!-- Host: app -->\n\n手順') }),
+        'AV-HOST',
+        'a.md:10',
+      )
+    })
+
+    it('skips dot entries only at the site root', () => {
+      expectGreen(lint({ 'a.md': chapter('both', 'x'), '.hidden/x.md': 'not a chapter' }))
+      expectRed(
+        lint({ 'a.md': chapter('both', 'x'), 'guide/.draft.md': 'not a chapter' }),
+        'AV-HOST',
+        'guide/.draft.md:1',
+      )
+    })
+
     it('only excludes SKIP_DIRS and SKIP_FILES at the site root', () => {
       expectGreen(
         lint({
@@ -297,9 +326,93 @@ describe('check-availability.mjs', () => {
       expectGreen(lint({ 'a.md': chapter('both', line) }))
     })
 
-    it('does not treat text before a valid form as a line-leading anchor', () => {
-      const line = 'x> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'
-      expectGreen(lint({ 'a.md': chapter('app', under(line)) }))
+    // R2: 行頭だけに絞った修正で、R1 では赤だったこれらの形が黙って通っていた。
+    it.each([
+      [
+        'text before the bold anchor',
+        'x> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      ['a list item', '- **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['a numbered list item', '1. **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['a nested blockquote', '>> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      [
+        'a spaced nested blockquote',
+        '> > **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      ['a four-space indent', '    **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['a two-space indent', '  > **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['the anchor in mid-line', '本文 **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      ['a single-star emphasis', '> *対応*: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'],
+      [
+        'an unreleased form in a list item',
+        '- **対応**: 未リリース（OrbitStudio）— main にマージ済み・次のリリースから',
+      ],
+    ])('rejects a near miss: %s', (_label, line) => {
+      expectRed(lint({ 'a.md': chapter('app', under(line)) }), 'AV-SYNTAX', 'a.md:11')
+    })
+
+    it.each([
+      [
+        'a lower-case label',
+        '> **availability**: OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later',
+      ],
+      [
+        'a list item',
+        '- **Availability**: OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later',
+      ],
+    ])('rejects an en near miss: %s', (_label, line) => {
+      expectRed(lint({ 'en/a.md': chapter('app', under(line)) }), 'AV-SYNTAX', 'en/a.md:11')
+    })
+
+    it.each([
+      ['a line that starts with a word', '対応表を以下に示します。'],
+      ['a line that starts with Availability', 'Availability of plugins varies.'],
+      ['a bold word that runs into the sentence', '**対応**していないプラグインもあります。'],
+      ['a blockquote that starts with a word', '> 対応表は次のとおりです。'],
+    ])('does not mistake prose for an availability anchor: %s', (_label, line) => {
+      expectGreen(lint({ 'a.md': chapter('app', line) }))
+    })
+
+    it.each([
+      [
+        'text between the anchor and the form',
+        'a.md',
+        '> **対応**: x OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        'two spaces after the colon',
+        'a.md',
+        '> **対応**:  OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        'text between the en anchor and the form',
+        'en/a.md',
+        '> **Availability**: x OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later',
+      ],
+    ])('rejects %s', (_label, rel, line) => {
+      expectRed(lint({ [rel]: chapter('app', under(line)) }), 'AV-SYNTAX', `${rel}:11`)
+    })
+
+    it('names trailing whitespace after an availability line', () => {
+      const line = '> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降  '
+      const r = lint({ 'a.md': chapter('app', under(line)) })
+      expectRed(r, 'AV-SYNTAX', 'a.md:11')
+      expect(r.out).toContain('trailing whitespace after the availability line')
+      expect(r.out).not.toContain('not one of the five fixed forms')
+    })
+
+    it('rejects an availability-like key in the frontmatter', () => {
+      const r = lint({ 'a.md': chapter('app', 'x', 'availability: OrbitStudio 0.2.0\n') })
+      expectRed(r, 'AV-SYNTAX', 'a.md:4')
+    })
+
+    it('still checks the blank line and the place for an anchor in the other language', () => {
+      const body =
+        '本文\n\n> **Availability**: OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later\n本文'
+      const r = lint({ 'a.md': chapter('app', body) })
+      expectRed(r, 'AV-SYNTAX', 'a.md:11')
+      expectRed(r, 'AV-SYNTAX', 'a.md:12')
+      expectRed(r, 'AV-PLACE', 'a.md:11')
     })
 
     it.each([
@@ -359,6 +472,52 @@ describe('check-availability.mjs', () => {
       expectRed(lint({ [rel]: chapter('app', under(line)) }), 'AV-SYNTAX', `${rel}:11`)
     })
 
+    // 各形のすべての枠を 1 つずつ崩す（版を 2 桁に・語を 1 つ消す）。どれも AV-SYNTAX になる。
+    it.each([
+      [
+        'ja',
+        'a.md',
+        '> **対応**: ',
+        [
+          'OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+          'OrbitStudio 0.2.0 以降（OrbitScore には入りません）',
+          'OrbitScore 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）',
+          '未リリース（OrbitStudio）— main にマージ済み・次のリリースから',
+          '未リリース（OrbitScore 4.2.1）— 凍結版の bug fix',
+        ],
+      ],
+      [
+        'en',
+        'en/a.md',
+        '> **Availability**: ',
+        [
+          'OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later',
+          'OrbitStudio 0.2.0 and later (not in OrbitScore)',
+          'OrbitScore 4.2.0 and later (behaves differently in OrbitStudio from 0.1.0 — see below)',
+          'Unreleased (OrbitStudio) — merged to main, ships in the next release',
+          'Unreleased (OrbitScore 4.2.1) — bug fix for the frozen line',
+        ],
+      ],
+    ] as const)('rejects every one-slot break of the %s forms', (_lang, rel, anchor, forms) => {
+      const variants: string[] = []
+      for (const form of forms) {
+        const versions = [...form.matchAll(/\d+\.\d+\.\d+/g)]
+        for (const v of versions) {
+          const at = v.index ?? 0
+          variants.push(form.slice(0, at) + '1.2' + form.slice(at + v[0].length))
+        }
+        const tokens = form.split(' ')
+        tokens.forEach((_t, i) => variants.push(tokens.filter((_u, j) => j !== i).join(' ')))
+      }
+      const body = variants.map((rest, k) => `## f${k}\n\n${anchor}${rest}\n\ntext`).join('\n\n')
+      const r = lint({ [rel]: chapter('app', body) })
+      expect(r.status, r.out).toBe(1)
+      const keys = findingKeys(r.out)
+      variants.forEach((rest, k) =>
+        expect(keys, `${anchor}${rest}`).toContain(`FAIL ${rel}:${11 + 6 * k}  [AV-SYNTAX]`),
+      )
+    })
+
     it('rejects the ja anchor in an en chapter', () => {
       const line = '> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降'
       expectRed(lint({ 'en/a.md': chapter('both', under(line)) }), 'AV-SYNTAX', 'en/a.md:11')
@@ -371,6 +530,21 @@ describe('check-availability.mjs', () => {
 
     it('ignores availability-like lines inside a code block', () => {
       expectGreen(lint({ 'a.md': chapter('ext', '```markdown\n> **対応**: なんでも\n```') }))
+    })
+
+    it.each([
+      ['a tilde fence holding a backtick line', '~~~\n> **対応**: x\n```\n> **対応**: y\n~~~'],
+      ['a four-backtick fence holding a three-backtick line', '````\n```\n> **対応**: x\n````'],
+    ])('keeps the code block open until its own closer: %s', (_label, body) => {
+      expectGreen(lint({ 'a.md': chapter('ext', body) }))
+    })
+
+    it('does not close a code block with a fence that carries text', () => {
+      expectRed(
+        lint({ 'a.md': chapter('ext', '```\n> **対応**: x\n``` not a closer') }),
+        'AV-SYNTAX',
+        'a.md:9',
+      )
     })
 
     it('rejects an unterminated code fence', () => {
@@ -457,6 +631,33 @@ describe('check-availability.mjs', () => {
       expect(failureKeys.filter((key) => key.startsWith('FAIL en/a.md:'))).toHaveLength(2)
     })
 
+    it('finds an unreleased marker in prose (the docs no longer carry a grep for it)', () => {
+      const files = { 'a.md': chapter('app', 'この機能は未リリース（OrbitStudio）です。') }
+      const normal = lint(files)
+      expectGreen(normal)
+      expect(findingKeys(normal.out)).toContain('WARN a.md:9  [AV-UNRELEASED]')
+      expectRed(lint(files, '--release'), 'AV-UNRELEASED', 'a.md:9')
+    })
+
+    it('finds an unreleased marker in the frontmatter and in the other language', () => {
+      const files = {
+        'en/a.md': chapter(
+          'app',
+          'Unreleased (OrbitStudio) and 未リリース（OrbitStudio）',
+          'description: Unreleased (OrbitStudio)\n',
+        ),
+      }
+      const r = lint(files, '--release')
+      expectRed(r, 'AV-UNRELEASED', 'en/a.md:4')
+      expectRed(r, 'AV-UNRELEASED', 'en/a.md:10')
+    })
+
+    it('does not look inside code blocks for unreleased markers', () => {
+      expectGreen(
+        lint({ 'a.md': chapter('app', '```text\n未リリース（OrbitStudio）\n```') }, '--release'),
+      )
+    })
+
     it('still checks a malformed availability anchor for unreleased content', () => {
       const malformed =
         '## 機能\n\n> **対応:** 未リリース（OrbitStudio）— main にマージ済み・次のリリースから\n\n本文'
@@ -488,6 +689,16 @@ describe('check-availability.mjs', () => {
       const ja = '## 機能\n\n> 対応: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降\n\n本文'
       const r = lint({ 'a.md': chapter('app', ja), 'en/a.md': chapter('app', 'text') })
       expectRed(r, 'AV-SYNTAX', 'a.md:11')
+      expectRed(r, 'AV-I18N', 'en/a.md:1')
+    })
+
+    it('counts near-miss split-section markers for the ja/en comparison', () => {
+      const ja = '## 手順\n<!-- Host: ext -->\n\n本文'
+      const r = lint({
+        'a.md': chapter('both+split', ja),
+        'en/a.md': chapter('both+split', 'text'),
+      })
+      expectRed(r, 'AV-HOST', 'a.md:10')
       expectRed(r, 'AV-I18N', 'en/a.md:1')
     })
 
@@ -632,6 +843,71 @@ describe('check-availability.mjs', () => {
       expect(r.status, r.out).toBe(2)
       expect(r.out).toContain('Usage error: unknown argument: --relese')
       expect(r.out).toContain('Usage: check-availability.mjs [--release] [--root <dir>]')
+    })
+
+    it.each([
+      [
+        'a duplicated --release',
+        ['--release', '--release'],
+        '`--release` was specified more than once',
+      ],
+      [
+        'a duplicated --root',
+        ['--root', '/tmp', '--root', '/tmp'],
+        '`--root` was specified more than once',
+      ],
+      ['--root followed by a flag', ['--root', '--release'], '`--root` requires a directory'],
+    ])('rejects %s with exit code 2', (_label, args, message) => {
+      const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' })
+      const out = `${r.stdout}${r.stderr}`
+      expect(r.status, out).toBe(2)
+      expect(out).toContain(`Usage error: ${message}`)
+    })
+
+    it('rejects a --root that does not exist or is not a directory with exit code 2', () => {
+      const missing = spawnSync(
+        process.execPath,
+        [SCRIPT, '--root', path.join(os.tmpdir(), 'orb-availability-missing-dir')],
+        { encoding: 'utf8' },
+      )
+      expect(missing.status, missing.stderr).toBe(2)
+      expect(missing.stderr).toContain('Usage error: cannot read --root')
+      const r = lintWithSetup((root) =>
+        fs.writeFileSync(path.join(root, 'a.md'), chapter('both', 'x')),
+      )
+      expect(r.status, r.out).toBe(0)
+      const fileRoot = spawnSync(process.execPath, [SCRIPT, '--root', SCRIPT], { encoding: 'utf8' })
+      expect(fileRoot.status, fileRoot.stderr).toBe(2)
+      expect(fileRoot.stderr).toContain('not a directory')
+    })
+
+    it.skipIf(process.getuid?.() === 0)(
+      'reports an unreadable chapter as a lint error and still checks the others',
+      () => {
+        const r = lintWithSetup((root) => {
+          fs.writeFileSync(path.join(root, 'a.md'), chapter('both', 'x'))
+          fs.writeFileSync(path.join(root, 'b.md'), chapter('vscode', 'x'))
+          fs.chmodSync(path.join(root, 'a.md'), 0o000)
+        })
+        expectRed(r, 'AV-SYNTAX', 'a.md:1')
+        expect(r.out).toContain('cannot read the chapter: EACCES')
+        expectRed(r, 'AV-HOST', 'b.md:4')
+        expect(r.out).not.toContain('Usage error')
+      },
+    )
+
+    it('names a byte-order mark instead of reporting a missing host:', () => {
+      const r = lint({ 'a.md': `\uFEFF${chapter('both', 'x')}` })
+      expectRed(r, 'AV-SYNTAX', 'a.md:1')
+      expect(r.out).toContain('byte-order mark')
+      expect(r.out).not.toContain('frontmatter has no')
+    })
+
+    it('names CRLF line endings instead of reporting a missing host:', () => {
+      const r = lint({ 'a.md': chapter('both', 'x').replace(/\n/g, '\r\n') })
+      expectRed(r, 'AV-SYNTAX', 'a.md:1')
+      expect(r.out).toContain('CRLF')
+      expect(r.out).not.toContain('frontmatter has no')
     })
 
     it('rejects --root without a value with exit code 2', () => {
