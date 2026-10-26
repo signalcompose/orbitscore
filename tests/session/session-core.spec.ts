@@ -23,6 +23,7 @@ import {
 } from '../../packages/session/src/rpc/runtime-dir'
 import { startRpcServer, type RpcServer } from '../../packages/session/src/rpc/server'
 
+import { fakeExecuteStatements } from './helpers/fake-execute-statements'
 import { RpcTestClient } from './helpers/rpc-test-client'
 
 interface FakeEngine {
@@ -50,15 +51,14 @@ function fakeInterpreter(
       calls.push(`boot ${device ?? '(default)'}`)
       if (options.failBoot) throw new Error('daemon exited before ready')
     },
-    execute: async (_ir: unknown, opts: { source?: string }) => {
-      const source = opts.source ?? ''
+    executeStatements: fakeExecuteStatements(async (source) => {
       if (options.slowOn && source.includes(options.slowOn)) {
         await new Promise<void>((resolve) => {
           release = resolve
         })
       }
       executed.push(source)
-    },
+    }),
     getGlobals: () => [global],
     audioEngine: {
       quit: async () => {
@@ -280,10 +280,14 @@ describe('engine output → log.line / transport.step / transport.state (P-07)',
 
   it('attributes engine lines printed during an evaluation to its evalId and client', async () => {
     const engine = fakeInterpreter()
-    const original = engine.interpreter.execute
-    ;(engine.interpreter as { execute: unknown }).execute = async (ir: unknown, opts: never) => {
+    const original = engine.interpreter.executeStatements
+    ;(engine.interpreter as { executeStatements: unknown }).executeStatements = async (
+      request: never,
+      opts: never,
+      hooks: never,
+    ) => {
       core!.onEngineLine('stdout', '🎚️ kick: play=[1,0] (next cycle)')
-      return (original as (a: unknown, b: never) => Promise<void>)(ir, opts)
+      return (original as (a: never, b: never, c: never) => Promise<unknown>)(request, opts, hooks)
     }
     const { socketPath } = await startSession(engine)
     const client = await attached(socketPath)

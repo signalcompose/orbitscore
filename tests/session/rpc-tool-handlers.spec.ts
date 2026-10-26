@@ -35,6 +35,7 @@ import {
 } from '../../packages/session/src/rpc/runtime-dir'
 import { startRpcServer, type RpcServer } from '../../packages/session/src/rpc/server'
 
+import { fakeExecuteStatements } from './helpers/fake-execute-statements'
 import { connectMcp, type McpTestClient } from './helpers/mcp-test-client'
 
 let tmp: string
@@ -56,9 +57,9 @@ async function startHarness(
   const executed: string[] = []
   const interpreter = {
     boot: async () => {},
-    execute: async (_ir: unknown, opts: { source?: string }) => {
-      executed.push(opts.source ?? '')
-    },
+    executeStatements: fakeExecuteStatements((text) => {
+      executed.push(text)
+    }),
     getGlobals: () => [{ stop: () => {}, saveAllPluginStates: async () => ({}) }],
     audioEngine: {
       quit: async () => {},

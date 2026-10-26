@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): replace the evaluation intake with the #997 model (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d1-intake`（`1022-d0-docs` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d1 + N1-d2）
+
+- engine（既存のファイルに足した・新しいファイルは足さない）:
+  - `audio-parser.ts`: 文の走査を `forEachStatement` に切り出し（`parse()` の結果は不変）、`parseAudioDSLWithSpans` を追加（文をソースの順に範囲つきで返す・LSP と同じ行の規則・構文エラーは同じ文言で位置つきの `DslSyntaxError`。位置は文言の `at line, column` → 入力の終端 → 読んでいた文の先頭の順で決める）
+  - `interpreter-v2.ts`: `executeStatements` を追加（ソースの順に 1 文ずつ・実行時エラーはその文だけ・import の失敗は残りを止める・記録 1 件・`onStatement` / `onFailure`）。記録とフックの装着を `execute()` と共通の helper に切り出した（`execute()` の振る舞いは不変）
+- 層 2 の受付口（`evaluation-intake.ts`）を置き換えた: 1 度に読み、構文エラーなら何も実行せずバッチも開かない、文が無ければ何もしない、1 要求 = 1 バッチ。診断に 1.1 の `range`。実行時エラーは失敗したその時にログへ（凍結版と同じ順）。滞留の報告は実行中の文と後ろで待つ要求の数。**台帳 P-01 を閉じた**
+- 差分テストを「**違いの記録**」に書き換えた（N1-d2 を同じ PR に入れた — 受付口を置き換えると段階 1 の「一致」が落ちるため）。凍結版との差 13 件を、実測した観測（両側）と設計 997 §6 の番号つきで持つ。一覧に無い差・観測の違いは red。設計 997 §6.1 に実測から V-21〜V-24 を足した
+- 既存テストは消さずに期待値を新しい意味論へ更新（`evaluation-intake.spec.ts` の全件・偽の interpreter 5 か所を `executeStatements` へ・`session-core.spec.ts` の包み直し）。新しいテスト: `tests/parser/parse-with-spans.spec.ts` 9 本・`tests/interpreter/execute-statements.spec.ts` 7 本・受付口の「エンジンの想定外の失敗でもバッチを閉じる」1 本。台帳の spec の 2 件は「今ある足場の例」として P-01 を名指していたので P-07 に替えた（P-01 の印が消えたことも確かめる）
+- engine の行がずれたので dev 学習サイトの引用 8 か所を付け直した（6 か所は `--fix` で着地先を目で照合、パーサの走査の抜粋 2 か所は新しいコードに差し替えて `forEachStatement` / `parseAudioDSLWithSpans` を 1 文で説明）
+- 変異 8 件ですべて red（import の失敗で止めない / 最初の失敗で止める / 文ごとに記録 / 宣言を前へ寄せる / onFailure を無視 / パースの前にバッチ / 列を 1 始まり / 文が無くても実行）
+
 ### docs(spec): adopt the #997 recommendations and specify the evaluation unit (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1022-d0-docs`（`997-evaluation-model-design` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d0）

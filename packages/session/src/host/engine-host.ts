@@ -30,7 +30,7 @@ export interface StartEngineParams {
 /** 層 2 が engine に求める面（テストでは偽物を渡す）。 */
 export type EngineInterpreter = Pick<
   InterpreterV2,
-  'execute' | 'boot' | 'getGlobals' | 'savePluginState' | 'openPluginUi' | 'closePluginUi'
+  'executeStatements' | 'boot' | 'getGlobals' | 'savePluginState' | 'openPluginUi' | 'closePluginUi'
 > & {
   readonly audioEngine: Pick<AudioEngineBackend, 'quit' | 'getDaemonStatus' | 'selectAudioDevice'>
   enableSessionLog?(options: { cwd: string }): void

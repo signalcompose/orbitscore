@@ -8,7 +8,7 @@
 
 import * as path from 'path'
 
-import { AudioIR } from '../parser/audio-parser'
+import type { AudioIR, ParsedRequest } from '../parser/audio-parser'
 import { createAudioEngine } from '../audio/create-audio-engine'
 import { AudioEngineBackend } from '../audio/engine-backend'
 import { Global } from '../core/global'
@@ -153,20 +153,12 @@ export class InterpreterV2 {
     // (installSessionHooks). Guarded by `sessionLog` so the engine test suite
     // (which never enables it) is unaffected.
     this.state.currentSourceFile = options?.sourceFile ?? null
-    if (this.state.sessionLog && options?.source !== undefined) {
-      const g = this.state.currentGlobal
-      // §3.1 v1: `effect` is stamped for LOOP launches only (other quantized
-      // swaps are follow-up; replay re-quantizes regardless).
-      const hasLoop = ir.statements.some((s) => s.type === 'transport' && s.command === 'loop')
-      this.state.sessionLog.recordEval({
-        code: options.source,
-        wall: this.wallMs(),
-        transport: g?.getTransportPosition() ?? null,
-        effect: hasLoop ? (g?.getQuantizedEffectPosition() ?? null) : null,
-        sourceFile: this.state.currentSourceFile,
-        evalSource: options?.evalSource ?? 'human',
-      })
-    }
+    // §3.1 v1: `effect` is stamped for LOOP launches only (other quantized
+    // swaps are follow-up; replay re-quantizes regardless).
+    this.recordEval(
+      options,
+      ir.statements.some((s) => s.type === 'transport' && s.command === 'loop'),
+    )
 
     // Ensure the audio engine is booted
     await this.ensureBooted()
@@ -204,10 +196,7 @@ export class InterpreterV2 {
     // so a start/stop in a later eval logs against that eval's context.
     // v1 (§3.1) assumes a SINGLE global per session — a second `init GLOBAL`
     // would not get hooked, so its transport would go unlogged (out of v1 scope).
-    if (this.state.sessionLog && this.state.currentGlobal && !this.sessionHooksInstalled) {
-      this.installSessionHooks(this.state.currentGlobal)
-      this.sessionHooksInstalled = true
-    }
+    this.installSessionHooksOnce()
 
     // Set documentDirectory on global so audioPath() / audio() can resolve relative paths.
     // An explicit empty string clears a previous REPL base (#966 / IM.6).
@@ -227,6 +216,130 @@ export class InterpreterV2 {
         continue
       }
       await processStatement(statement, this.state)
+    }
+  }
+
+  /**
+   * OrbitStudio の層 2 の評価の入口（spec「評価の単位」E-3〜E-6・#997 / #1022）: 範囲つきで読んだ文を
+   * **ソースの順に 1 つずつ**実行する。`execute()` と違い、宣言を前へ寄せず、実行時エラーはその文だけを
+   * 失敗にして残りを続ける（file import の失敗だけは残りを止める・E-5）。`.orbslog` の記録は 1 件。
+   *
+   * 基準ディレクトリは文ごとに設定し直す（凍結版の REPL が 1 行ごとの `execute()` でしていたのと同じ）。
+   * `hooks.onStatement` は各文の実行の直前に、`hooks.onFailure` は文が失敗したその時に呼ぶ（層 2 が
+   * 「いまどの文か」を知り、失敗を凍結版と同じ順でログへ出すため）。
+   *
+   * @returns 失敗した文（`index` は `request.entries` の添字）。空ならすべて成功
+   */
+  async executeStatements(
+    request: ParsedRequest,
+    options: {
+      documentDirectory?: string
+      source?: string
+      sourceFile?: string | null
+      evalSource?: EvalSource
+    } = {},
+    hooks: {
+      onStatement?(index: number): void
+      onFailure?(index: number, message: string): void
+    } = {},
+  ): Promise<Array<{ index: number; message: string }>> {
+    const { entries } = request
+    this.state.currentSourceFile = options.sourceFile ?? null
+    this.recordEval(
+      options,
+      entries.some(
+        (e) => e.kind === 'statement' && e.node.type === 'transport' && e.node.command === 'loop',
+      ),
+    )
+    await this.ensureBooted()
+
+    const failures: Array<{ index: number; message: string }> = []
+    const fail = (index: number, error: unknown): typeof failures => {
+      const message = error instanceof Error ? error.message : String(error)
+      failures.push({ index, message })
+      hooks.onFailure?.(index, message)
+      return failures
+    }
+    const imports = entries.flatMap((entry, index) =>
+      entry.kind === 'file_import' ? [{ node: entry.node, index }] : [],
+    )
+    if (imports.length > 0) {
+      const baseDir = options.sourceFile
+        ? path.dirname(path.resolve(options.sourceFile))
+        : options.documentDirectory
+      if (!baseDir) {
+        return fail(
+          imports[0]!.index,
+          'import: cannot resolve the base directory — no source file or document directory (IM.6).',
+        )
+      }
+      // import が 1 つでも失敗したら、その要求の残りは実行しない（E-5）。
+      let current = imports[0]!.index
+      try {
+        const ctx = createImportContext(options.sourceFile)
+        for (const { node, index } of imports) {
+          current = index
+          hooks.onStatement?.(index)
+          await processFileImports([node], baseDir, this.state, ctx)
+        }
+      } catch (error) {
+        return fail(current, error)
+      } finally {
+        // execute() と同じ: 成功・失敗を問わず基準を entry 側へ戻す（IM.4）。
+        this.state.currentGlobal?.setDocumentDirectory(options.documentDirectory ?? baseDir)
+      }
+    }
+
+    for (const [index, entry] of entries.entries()) {
+      if (entry.kind === 'file_import') continue
+      hooks.onStatement?.(index)
+      try {
+        if (options.documentDirectory !== undefined) {
+          this.state.currentGlobal?.setDocumentDirectory(options.documentDirectory)
+        }
+        if (entry.kind === 'global_init') {
+          await processGlobalInit(entry.node, this.state)
+          this.installSessionHooksOnce()
+          if (options.documentDirectory !== undefined) {
+            this.state.currentGlobal?.setDocumentDirectory(options.documentDirectory)
+          }
+        } else if (entry.kind === 'seq_init') {
+          await processSequenceInit(entry.node, this.state)
+        } else {
+          await processStatement(entry.node, this.state)
+        }
+      } catch (error) {
+        fail(index, error)
+      }
+    }
+    return failures
+  }
+
+  /** §L1 (#229): 評価を 1 件記録する（`execute()` / `executeStatements()` の共通）。 */
+  private recordEval(
+    options: { source?: string; evalSource?: EvalSource } | undefined,
+    hasLoop: boolean,
+  ): void {
+    if (!this.state.sessionLog || options?.source === undefined) return
+    const g = this.state.currentGlobal
+    this.state.sessionLog.recordEval({
+      code: options.source,
+      wall: this.wallMs(),
+      transport: g?.getTransportPosition() ?? null,
+      effect: hasLoop ? (g?.getQuantizedEffectPosition() ?? null) : null,
+      sourceFile: this.state.currentSourceFile ?? null,
+      evalSource: options?.evalSource ?? 'human',
+    })
+  }
+
+  /**
+   * §L1: install the session-log transport hooks on the global ONCE, when it
+   * first exists. v1 (§3.1) assumes a SINGLE global per session.
+   */
+  private installSessionHooksOnce(): void {
+    if (this.state.sessionLog && this.state.currentGlobal && !this.sessionHooksInstalled) {
+      this.installSessionHooks(this.state.currentGlobal)
+      this.sessionHooksInstalled = true
     }
   }
 

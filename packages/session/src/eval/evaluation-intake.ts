@@ -1,48 +1,35 @@
 /**
- * 評価の受付口 — 段階 1 の足場（設計 848 §4.5.1・台帳 P-01）。
+ * 評価の受付口 — #997 の評価のかたち（設計 997 §4・spec「評価の単位」E-1〜E-6・束 S-eval #1022）。
  *
- * PROVISIONAL(P-01): 凍結版 `packages/engine/src/cli/repl-mode.ts` の `createReplSession`
- * （行を溜めてパースし、入力の終端で終わった時だけ未完として溜め、空行 2 連で強制実行する）の
- * **写し**である。#997 の評価のかたち（束 S-eval）で置き換わり、このモジュールごと消える。
- * それまでは凍結版との差分テスト（`tests/session/eval-intake-parity.spec.ts`・台帳 P-02）が
- * 一致を守る。凍結版に bug fix が入って差分テストが red になったら、同じ PR でここを直す。
+ * 1 回の要求（`session.evaluate`）を次の順で処理する:
  *
- * 🔴 写す相手は凍結版の **MCP の評価の経路**（`agent-handlers.ts` の `evaluateForAgent`）が
- * engine の stdin に流す行の列である:
+ * 1. **1 度に読む**（E-1）: `code` 全体を engine の `parseAudioDSLWithSpans` で読み、文の列（ソースの順・
+ *    範囲つき）にする。空行は文を切らず、行頭の `.` は前の文のチェーンの続き
+ * 2. **構文エラーなら何も実行しない**（E-2・Q-1 = A）: 診断は位置つき（`range` = 要求の `code` の座標）
+ * 3. **1 まとまりで実行する**（E-6）: `AudioLine` のバッチを 1 回開き、engine の `executeStatements` に
+ *    文の列を渡す（ソースの順・実行時エラーはその文だけ・import の失敗は残りを止める = E-3〜E-5）。
+ *    `.orbslog` の記録は 1 件
  *
- * ```
- * //#evalBegin                     → batch.begin()
- * //#documentDirectory <dir>|空    → 要求の documentDirectory（毎回必須・null は空文字）
- * <code の各行>                    → handleCodeLine()（凍結版の handleLine の末尾と同じ）
- * //#evalEnd                       → batch.end()
- * //#evalMark {"requestId":…}      → 残ったバッファの強制実行と診断の返却（= 応答）
- * ```
+ * 段階 1 の足場（凍結版 `repl-mode.ts` の区切り方の写し）はこのモジュールで置き換えた（台帳 P-01）。
+ * 凍結版との差は `tests/session/eval-intake-parity.spec.ts` が「違いの記録」として 1 件ずつ持つ（P-02）。
  *
- * `session.evaluate` は応答で診断を返す（設計 §5.3.1）ので、人の評価でも MCP の評価でも
- * 最後の行（`//#evalMark`）まで写す。凍結版の人の経路（⌘Enter）は `//#evalMark` を送らず、
- * 未完の入力が次の評価へ持ち越される — これは写さない（要求の終わりで強制実行する・設計 §5.3.1）。
- *
- * 写さないもの（メタ行の通信路から来たもの。設計 §5.3 の「引き継がない」）:
- * - メタ行そのもの。評価するコードの中に `//#…` の行があっても、ここでは DSL のコメントとして
- *   パーサへ渡す（凍結版では帯域外の命令として解釈される）
- * - `//#documentDirectory` の行が 1 行として実行される空の評価（`execute()` の呼び出しが 1 回
- *   多い）。基準は各 `execute()` の `documentDirectory` で渡す
- * - 拡張が DSL として注入する `global.setDocumentDirectory(...)`。in-process では `execute()` が
- *   自分で設定する（`interpreter-v2.ts` の `documentDirectory` の処理）
- * - 改行や前後の空白を含む `documentDirectory` の加工（メタ行が 1 行であるための制約）
- *
- * 出力は構造化した値で返す: 診断は応答の `diagnostics`、凍結版が stderr に書く行は `log` へ
- * （`log.line` の `kind` は設計 §5.3.6）。凍結版が stdout に書く `✓` は応答の `ok` に吸収する。
+ * 要求は 1 本の FIFO で直列に処理する（#476）。1 つの要求が [`QUEUE_STALL_REPORT_MS`] を超えても
+ * 終わらない間は、実行中の文と後ろで待つ要求の数を繰り返し報告する（#607。打ち切らない）。
  */
 
-import { parseAudioDSL, type AudioIR } from '@orbitscore/engine/dist/parser/audio-parser'
 import { AudioLine } from '@orbitscore/engine/dist/core/sequence/audio-line'
+import {
+  DslSyntaxError,
+  parseAudioDSLWithSpans,
+  type ParsedRequest,
+  type SourceSpan,
+} from '@orbitscore/engine/dist/parser/audio-parser'
 
 export type EvaluationSource = 'human' | 'agent'
 
 export interface EvaluationRequest {
   code: string
-  /** 毎回必須。`null` = 基準なし（`execute()` の空文字 = 前の基準のクリアへ写す・設計 §5.3.1）。 */
+  /** 毎回必須。`null` = 基準なし（`executeStatements()` の空文字 = 前の基準のクリアへ写す・設計 848 §5.3.1）。 */
   documentDirectory: string | null
   source: EvaluationSource
 }
@@ -50,17 +37,22 @@ export interface EvaluationRequest {
 export interface EvaluationDiagnostic {
   kind: 'parse' | 'runtime'
   message: string
+  /**
+   * 要求の `code` の中の位置（0 始まり・UTF-16）。構文エラーは読めなかったトークンの位置（幅 0）、
+   * 実行時エラーは失敗した文の範囲。分からない時（engine の想定外の失敗）は無い。
+   */
+  range?: SourceSpan
 }
 
 export interface EvaluationOutcome {
-  /** `diagnostics` が空の時だけ true（凍結版の `//#evalMark` と同じ）。 */
+  /** `diagnostics` が空の時だけ true。 */
   ok: boolean
   diagnostics: EvaluationDiagnostic[]
   /** 実際に使った値（要求の値をそのまま返す）。 */
   documentDirectory: string | null
 }
 
-/** 凍結版が stderr に書いていた行。`kind` は設計 §5.3.6 の `log.line` の分類。 */
+/** 受付口が出すログの行。`kind` は設計 848 §5.3.6 の `log.line` の分類。 */
 export interface IntakeLogLine {
   kind: 'diagnostic' | 'stall' | 'session'
   level: 'error'
@@ -68,9 +60,24 @@ export interface IntakeLogLine {
 }
 
 export interface IntakeExecuteOptions {
+  /** 要求の `code` 全体（`.orbslog` の 1 レコードの `code`）。 */
   source: string
   evalSource: EvaluationSource
   documentDirectory: string
+}
+
+/** engine が呼ぶ口（`index` は `request.entries` の添字）。 */
+export interface IntakeExecuteHooks {
+  /** 文の実行の直前。 */
+  onStatement(index: number): void
+  /** 文が失敗したその時（ログの順を凍結版と同じにする — 失敗は後ろの文の出力より先に出る）。 */
+  onFailure(index: number, message: string): void
+}
+
+/** 実行時に失敗した文（`index` は `request.entries` の添字）。 */
+export interface StatementFailure {
+  index: number
+  message: string
 }
 
 /**
@@ -83,14 +90,19 @@ export interface IntakeContext {
 }
 
 export interface EvaluationIntakeDeps {
-  /** `InterpreterV2.execute` を呼ぶ口。 */
-  execute(ir: AudioIR, options: IntakeExecuteOptions, context: IntakeContext): Promise<void>
+  /** `InterpreterV2.executeStatements` を呼ぶ口。失敗した文の一覧を返す。 */
+  execute(
+    request: ParsedRequest,
+    options: IntakeExecuteOptions,
+    context: IntakeContext,
+    hooks: IntakeExecuteHooks,
+  ): Promise<StatementFailure[]>
   log(line: IntakeLogLine, context: IntakeContext): void
-  /** 既定は engine の `parseAudioDSL`。 */
-  parse?: (code: string) => AudioIR
+  /** 既定は engine の `parseAudioDSLWithSpans`。 */
+  parse?: (code: string) => ParsedRequest
   /** 既定は `AudioLine.beginBatchAll()` / `endBatchAll()`（#611 §5.7）。 */
   batch?: { begin(): void; end(): void }
-  /** 既定は凍結版と同じ 60 秒。 */
+  /** 既定は 60 秒（凍結版と同じ）。 */
   stallReportMs?: number
 }
 
@@ -108,9 +120,8 @@ export interface EvaluationIntake {
 export const QUEUE_STALL_REPORT_MS = 60_000
 
 /**
- * 凍結版の stdin を readline が分ける規則（`\n` / `\r` / `\r\n`）でコードを行に分ける。
- * 凍結版はコードの後ろに `\n//#evalEnd` を続けて送るので、コードの最後の行はその `\n` で
- * 終わる（コードが `\r` で終わる時は `\r\n` が 1 つの改行になる）。
+ * LSP と同じ行の規則（`\n` / `\r` / `\r\n`）でテキストを行に分ける。位置（`range` の `line`）は
+ * この規則で数える（凍結版の stdin を readline が分ける規則とも同じ）。末尾の改行の後は空の 1 行。
  */
 export function splitIntoReplLines(code: string): string[] {
   const parts = `${code}\n`.split(/\r\n|\r|\n/)
@@ -118,26 +129,21 @@ export function splitIntoReplLines(code: string): string[] {
   return parts
 }
 
-interface RequestContext {
-  documentDirectory: string
-  evalSource: EvaluationSource
-  diagnostics: EvaluationDiagnostic[]
-  context: IntakeContext
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIntake {
-  const parse = deps.parse ?? parseAudioDSL
+  const parse = deps.parse ?? parseAudioDSLWithSpans
   const batch = deps.batch ?? {
     begin: () => AudioLine.beginBatchAll(),
     end: () => AudioLine.endBatchAll(),
   }
   const stallReportMs = deps.stallReportMs ?? QUEUE_STALL_REPORT_MS
 
-  let buffer = ''
-  let emptyLineCount = 0
   let queue: Promise<void> = Promise.resolve()
-  /** 受け付けたがまだ始まっていない段の数（全要求の行 + 各要求の最後の強制実行）。 */
-  let waitingSteps = 0
+  /** 受け付けたがまだ始まっていない要求の数。 */
+  let waitingRequests = 0
 
   const reportError = (
     kind: IntakeLogLine['kind'],
@@ -147,85 +153,26 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
     deps.log({ kind, level: 'error', text }, context)
   }
 
-  async function executeCurrentBuffer(
-    clearOnIncomplete: boolean,
-    ctx: RequestContext,
-  ): Promise<void> {
-    const code = buffer.trim()
-    if (!code) {
-      buffer = ''
-      emptyLineCount = 0
-      return
-    }
-    // 🔴 #612: 「未完」判定はパース段のエラーにだけ適用する（実行時エラーの文言は
-    // ユーザー由来の文字列を含み、`EOF` を含みうる）。
-    let ir: AudioIR
-    try {
-      ir = parse(code)
-    } catch (error: any) {
-      // 🔴 #607: 「未完」と判定してよいのはパーサが入力の終端（EOF）に達した場合だけ。
-      // 行の途中の不正トークンを未完として保留すると、以後の入力が合体して永久に止まる。
-      if (!clearOnIncomplete && /\bEOF\b/.test(String(error.message ?? ''))) {
-        return
-      }
-      reportError('diagnostic', `[ERROR] ${error.message}`, ctx.context)
-      ctx.diagnostics.push({ kind: 'parse', message: String(error.message) })
-      buffer = ''
-      return
-    }
-
-    // ここから先は入力が完結している — 失敗しても保留せず必ず報告してバッファを捨てる。
-    try {
-      await deps.execute(
-        ir,
-        { source: code, evalSource: ctx.evalSource, documentDirectory: ctx.documentDirectory },
-        ctx.context,
-      )
-    } catch (error: any) {
-      reportError('diagnostic', `[ERROR] ${error.message}`, ctx.context)
-      ctx.diagnostics.push({ kind: 'runtime', message: String(error.message) })
-    }
-    buffer = ''
-  }
-
-  /** 凍結版 `handleLine` のうち、メタ行でない行の処理（`repl-mode.ts` の末尾 2 分岐）。 */
-  async function handleCodeLine(line: string, ctx: RequestContext): Promise<void> {
-    if (line.trim() === '') {
-      emptyLineCount++
-      buffer += '\n'
-      // 2+ 連続空行 = バッファ確定・強制実行
-      if (emptyLineCount >= 2 && buffer.trim()) {
-        await executeCurrentBuffer(true, ctx)
-        emptyLineCount = 0
-      }
-      return
-    }
-    emptyLineCount = 0
-    buffer += line + '\n'
-    await executeCurrentBuffer(false, ctx)
-  }
-
-  /** 1 段が [`stallReportMs`] を超えても終わらないあいだ、繰り返し報告する（#607）。 */
-  async function runWithStallReport(
-    preview: string,
+  /** 実行が [`stallReportMs`] を超えても終わらないあいだ、繰り返し報告する（#607）。 */
+  async function runWithStallReport<T>(
+    current: () => string,
     context: IntakeContext,
-    step: () => Promise<void>,
-  ): Promise<void> {
+    step: () => Promise<T>,
+  ): Promise<T> {
     const startedAt = Date.now()
-    const shown = preview.trim().slice(0, 120)
     const timer = setInterval(() => {
       const seconds = Math.round((Date.now() - startedAt) / 1000)
       reportError(
         'stall',
-        `[ERROR] REPL queue is still blocked after ${seconds}s by: ${shown}` +
-          ` — ${waitingSteps} line(s) are waiting behind it and will not run until it finishes.` +
+        `[ERROR] evaluation queue is still blocked after ${seconds}s by: ${current().trim().slice(0, 120)}` +
+          ` — ${waitingRequests} request(s) are waiting behind it and will not run until it finishes.` +
           ` They are accepted but NOT executed.`,
         context,
       )
     }, stallReportMs)
     timer.unref?.()
     try {
-      await step()
+      return await step()
     } finally {
       clearInterval(timer)
     }
@@ -233,64 +180,91 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
 
   async function runRequest(
     request: EvaluationRequest,
-    lines: string[],
     context: IntakeContext,
   ): Promise<EvaluationOutcome> {
-    const ctx: RequestContext = {
-      documentDirectory: request.documentDirectory ?? '',
-      evalSource: request.source,
-      diagnostics: [],
-      context,
+    const diagnostics: EvaluationDiagnostic[] = []
+    const report = (diagnostic: EvaluationDiagnostic): void => {
+      reportError('diagnostic', `[ERROR] ${diagnostic.message}`, context)
+      diagnostics.push(diagnostic)
     }
-    let notStarted = lines.length + 1
-    try {
-      batch.begin()
-      // 凍結版では `//#documentDirectory` の行がここで 1 行として処理され、空行の数え上げを
-      // 0 に戻してバッファを捨てる。ふつうは前の要求の強制実行の後に空白しか残らないので
-      // 何も変えないが、想定外の失敗で途中のまま終わった要求のバッファを次の要求へ持ち越さない。
-      buffer = ''
-      emptyLineCount = 0
-      try {
-        for (const line of lines) {
-          notStarted--
-          waitingSteps--
-          await runWithStallReport(line, context, () => handleCodeLine(line, ctx))
-        }
-      } finally {
-        // #611 §5.7 guard 2 と同じ保証: 1 行の失敗でもバッチは必ず閉じる。
-        batch.end()
-      }
-      // `//#evalMark` は提出の境界 — 未完のまま残った入力を強制実行してから報告する（#614）。
-      notStarted--
-      waitingSteps--
-      if (buffer.trim()) {
-        await runWithStallReport(buffer, context, () => executeCurrentBuffer(true, ctx))
-        emptyLineCount = 0
-      }
-    } finally {
-      waitingSteps -= notStarted
-    }
-    return {
-      ok: ctx.diagnostics.length === 0,
-      diagnostics: ctx.diagnostics,
+    const outcome = (): EvaluationOutcome => ({
+      ok: diagnostics.length === 0,
+      diagnostics,
       documentDirectory: request.documentDirectory,
+    })
+
+    let parsed: ParsedRequest
+    try {
+      parsed = parse(request.code)
+    } catch (error) {
+      const position = error instanceof DslSyntaxError ? error.position : undefined
+      report({
+        kind: 'parse',
+        message: messageOf(error),
+        ...(position ? { range: { start: position, end: position } } : {}),
+      })
+      return outcome()
     }
+    if (parsed.entries.length === 0) return outcome()
+
+    let currentIndex = 0
+    const reported = new Set<number>()
+    const reportFailure = (index: number, message: string): void => {
+      if (reported.has(index)) return
+      reported.add(index)
+      const span = parsed.entries[index]?.span
+      report({ kind: 'runtime', message, ...(span ? { range: span } : {}) })
+    }
+    batch.begin()
+    try {
+      const failures = await runWithStallReport(
+        () => parsed.entries[currentIndex]?.text ?? request.code,
+        context,
+        () =>
+          deps.execute(
+            parsed,
+            {
+              source: request.code,
+              evalSource: request.source,
+              documentDirectory: request.documentDirectory ?? '',
+            },
+            context,
+            {
+              onStatement: (index) => {
+                currentIndex = index
+              },
+              onFailure: reportFailure,
+            },
+          ),
+      )
+      // onFailure を呼ばない実装でも、返った失敗は落とさない（報告済みのものは二重にしない）。
+      for (const failure of failures) reportFailure(failure.index, failure.message)
+    } catch (error) {
+      // engine の想定外の失敗（起動の失敗など）。どの文かは分からないので位置は付けない。
+      report({ kind: 'runtime', message: messageOf(error) })
+    } finally {
+      // #611 §5.7 guard 2 と同じ保証: 失敗してもバッチは必ず閉じる。
+      batch.end()
+    }
+    return outcome()
   }
 
   return {
     evaluate(request: EvaluationRequest, context: IntakeContext = {}): Promise<EvaluationOutcome> {
-      const lines = splitIntoReplLines(request.code)
-      waitingSteps += lines.length + 1
-      const run = queue.then(() => runRequest(request, lines, context))
+      waitingRequests++
+      const run = queue.then(() => {
+        waitingRequests--
+        return runRequest(request, context)
+      })
       // 1 件の想定外の失敗で以後の評価が全停止しないように、チェーン自体は reject を握る。
       // 黙って握ると劣化が見えなくなるので、必ず痕跡を残す（凍結版 `pushLine` の catch と同じ）。
       queue = run.then(
         () => undefined,
-        (error: any) => {
+        (error: unknown) => {
           try {
             reportError(
               'session',
-              `[ERROR] unexpected REPL queue failure: ${error?.message ?? String(error)}`,
+              `[ERROR] unexpected evaluation queue failure: ${messageOf(error)}`,
             )
           } catch {
             // 報告の口まで壊れていてもキューは止めない（失敗そのものは呼び出し元へ reject で届く）。

@@ -16,6 +16,7 @@ import {
 } from '../../../packages/session/src/rpc/runtime-dir'
 import { startRpcServer, type RpcServer } from '../../../packages/session/src/rpc/server'
 
+import { fakeExecuteStatements, type FakeExecuteOptions } from './fake-execute-statements'
 import { RpcTestClient } from './rpc-test-client'
 
 export interface EditorSession {
@@ -28,8 +29,8 @@ export interface EditorSession {
 }
 
 export interface EditorSessionOptions {
-  /** 偽の interpreter が評価を受けた時（評価されたコードと source を見る）。 */
-  onExecute?(ir: unknown, options: { source?: string; evalSource?: string }): void
+  /** 偽の interpreter が文を 1 つ実行する時（文の文字列と options を見る）。 */
+  onExecute?(text: string, options: FakeExecuteOptions): void
   /** 偽の interpreter の `openPluginUi`（`plugin.openUi` / `openUiAtCursor` が呼ぶ）。 */
   openPluginUi?(receiver: string, index: number, expectedName?: string): Promise<unknown>
   editorRequestTimeoutMs?: number
@@ -42,8 +43,9 @@ export async function startEditorSession(
 ): Promise<EditorSession> {
   const interpreter = {
     boot: async () => {},
-    execute: async (ir: unknown, executeOptions: { source?: string; evalSource?: string }) =>
-      options.onExecute?.(ir, executeOptions),
+    executeStatements: fakeExecuteStatements((text, executeOptions) =>
+      options.onExecute?.(text, executeOptions),
+    ),
     openPluginUi: (receiver: string, index: number, expectedName?: string) =>
       (options.openPluginUi ?? (async () => ({})))(receiver, index, expectedName),
     getGlobals: () => [{ stop: () => {}, saveAllPluginStates: async () => ({}) }],

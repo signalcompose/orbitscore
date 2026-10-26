@@ -327,7 +327,7 @@ In this way, selective execution is an operation that "updates parameters while 
 `InterpreterV2.execute()` has an option called `skipTransportCommands`. The options type grew with §L1 and import (#456), but the parts relevant to transport are only the head and the tail.
 
 ```typescript
-// packages/engine/src/interpreter/interpreter-v2.ts:133-231 (§L1 の記録・import・global/sequence init を // ... で省略)
+// packages/engine/src/interpreter/interpreter-v2.ts:133-220 (§L1 の記録・import・global/sequence init を // ... で省略)
   async execute(
     ir: AudioIR,
     options?: {
