@@ -3,7 +3,7 @@
   "$id": "urn:orbitscore:protocol:session:v1",
   "title": "OrbitScoreSessionProtocolV1",
   "description": "OrbitScore session protocol v1: JSON-RPC 2.0 over WebSocket (/rpc). One text frame carries one message. Design: docs/design/848-native-orbitstudio-design.md section 5. This file is the single source of truth; protocol/gen/ is generated from it (npm run protocol:generate).",
-  "x-protocol-version": "1.0",
+  "x-protocol-version": "1.1",
   "x-surface-vocabulary": {
     "gui": "The app's GUI calls this client-to-server method as a user operation.",
     "mcp": "The MCP relay calls this method to implement the MCP tools listed in x-mcp-tools.",
@@ -531,9 +531,28 @@
       "type": "object",
       "properties": {
         "kind": { "type": "string", "enum": ["parse", "runtime"] },
-        "message": { "type": "string" }
+        "message": { "type": "string" },
+        "range": {
+          "$ref": "#/$defs/Range",
+          "description": "1.1: where in the request's code (0-based, UTF-16). A parse error points at the token where reading failed; a runtime error spans the statement that failed. Omitted when unknown."
+        },
+        "documentRange": {
+          "$ref": "#/$defs/DocumentRange",
+          "description": "1.1: the same place in the document the request came from (target), when layer 2 can map it. Omitted for code outside a document or when the code differs from the synced document."
+        }
       },
       "required": ["kind", "message"],
+      "additionalProperties": false
+    },
+    "DocumentRange": {
+      "description": "1.1: a range in a synced document at a given version.",
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "version": { "type": "integer" },
+        "range": { "$ref": "#/$defs/Range" }
+      },
+      "required": ["uri", "version", "range"],
       "additionalProperties": false
     },
     "EvalId": {
@@ -1244,12 +1263,16 @@
       "additionalProperties": false
     },
     "StepSource": {
-      "description": "Where the sounding call is, in the coordinates of the evalId request's code (0-based, UTF-16, end exclusive).",
+      "description": "Where the statement that set the sounding pattern is (it contains the play() call; argPath picks the argument), in the coordinates of the evalId request's code (0-based, UTF-16, end exclusive).",
       "type": "object",
       "properties": {
         "evalId": { "$ref": "#/$defs/EvalId" },
         "start": { "$ref": "#/$defs/Position" },
-        "end": { "$ref": "#/$defs/Position" }
+        "end": { "$ref": "#/$defs/Position" },
+        "document": {
+          "$ref": "#/$defs/DocumentRange",
+          "description": "1.1: the same statement in the document the request came from, when layer 2 can map it (a subject-block's code joins lines that are apart in the document)."
+        }
       },
       "required": ["evalId", "start", "end"],
       "additionalProperties": false

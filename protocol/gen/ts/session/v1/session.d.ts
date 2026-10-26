@@ -6,7 +6,7 @@
  */
 
 /** The protocol version these types describe (x-protocol-version). */
-export type ProtocolVersionLiteral = '1.0'
+export type ProtocolVersionLiteral = '1.1'
 
 /**
  * A document URI as the editor client knows it (file: for saved documents).
@@ -304,6 +304,34 @@ export interface EvaluateParams {
 export interface EvaluateDiagnostic {
   kind: 'parse' | 'runtime'
   message: string
+  range?: Range1
+  documentRange?: DocumentRange
+}
+/**
+ * LSP range; end is exclusive.
+ */
+export interface Range1 {
+  start: Position
+  end: Position
+}
+/**
+ * 1.1: the same place in the document the request came from (target), when layer 2 can map it. Omitted for code outside a document or when the code differs from the synced document.
+ */
+export interface DocumentRange {
+  uri: DocumentUri
+  version: number
+  range: Range
+}
+/**
+ * 1.1: a range in a synced document at a given version.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * via the `definition` "DocumentRange".
+ */
+export interface DocumentRange1 {
+  uri: DocumentUri
+  version: number
+  range: Range
 }
 /**
  * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
@@ -831,7 +859,7 @@ export interface DocsSearchResult {
   matches: DocsSearchMatch[]
 }
 /**
- * Where the sounding call is, in the coordinates of the evalId request's code (0-based, UTF-16, end exclusive).
+ * Where the statement that set the sounding pattern is (it contains the play() call; argPath picks the argument), in the coordinates of the evalId request's code (0-based, UTF-16, end exclusive).
  *
  * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
  * via the `definition` "StepSource".
@@ -840,6 +868,15 @@ export interface StepSource {
   evalId: EvalId
   start: Position
   end: Position
+  document?: DocumentRange2
+}
+/**
+ * 1.1: the same statement in the document the request came from, when layer 2 can map it (a subject-block's code joins lines that are apart in the document).
+ */
+export interface DocumentRange2 {
+  uri: DocumentUri
+  version: number
+  range: Range
 }
 /**
  * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema

@@ -463,6 +463,31 @@ MUTE(
 - Any `global` or `seq` transport command can be executed by selecting it in the editor and pressing **Command + Enter**.
 - Reserved keywords (`RUN`, `LOOP`, `MUTE`) can also be executed this way.
 
+### 評価の単位（Evaluation Unit・#997）
+
+> **Status**: 📋 規範（2026-10-26・束 S-eval #1022 で実装）。設計: `docs/design/997-evaluation-model-design.md`。
+> owner 2026-10-26「推奨でとりあえず進めて」で設計 997 §9 の Q-1〜Q-6 を推奨どおりに採った（後で見直す可能性がある）。
+
+**1 回の評価**（エディタの選択・**Command + Enter** の subject-block・MCP `evaluate_orbitscore` のコード片・`run_selection`）を、どこで区切って実行するかは **host によって違う**:
+
+| host | 区切り方 |
+|---|---|
+| **OrbitStudio（ネイティブ版）** | 下の規則 E-1〜E-7 |
+| VS Code 拡張（凍結版 4.4.0）・`orbitscore` の REPL | 従来どおり: 行を溜めてパースし、パースできた所で実行する（行の途中で入力の終端に達した時だけ続きを待つ・空行 2 連で区切る）。改める予定は無い（凍結版） |
+| `orbitscore play <file>` | ファイル全体を 1 回で評価する（従来どおり） |
+
+OrbitStudio の規則:
+
+- **E-1 1 度に読む**: 1 回の評価のテキストは 1 度にパースする。**空行は文を切らない**。行頭が `.` の行は前の文のチェーンの続き（`kick.play(1, 0)` ⏎ `  .gain(-6)` は 1 文）
+- **E-2 構文エラーなら何も実行しない**: パースが 1 か所でも失敗したら、その評価の**どの文も実行しない**。診断は位置（行・桁）つきで返る。閉じていない括弧が評価の終わりまで続いた時も構文エラー（「続きを待つ」は無い）
+- **E-3 ソースの順に実行する**: 文は書いた順に 1 つずつ実行する。`var … = init …` を前へ寄せない（REPL と同じ順）。`init GLOBAL` が 2 つあれば両方を順に
+- **E-4 実行時エラーはその文だけ**: 実行時エラー（未定義のシーケンス・ファイルが無い等）はその文だけが失敗し、**残りの文は実行する**。診断は失敗した文の位置つき
+- **E-5 import は先・失敗したら残りを止める**: ファイル import（IM.1〜IM.6）はその評価の他の文より先に評価する（IM.2）。IM.1（import は先頭）は**評価ごとに**検査する（選択の途中に import があるとエラー）。import が失敗したら、その評価の残りの文は実行しない
+- **E-6 1 回の評価 = 1 まとまり**: 1 回の評価の中の出口の切り替えは同時（`AudioLine` のバッチ・#611 §5.7）で、セッションログ（`.orbslog`）の 1 レコードになる（`SESSION_LOG_SPEC_v1.md` §3.1）
+- **E-7 読めない文はエラー**（#965）: 文の頭が `var` / `import` / `RUN` / `LOOP` / `MUTE` / 識別子のどれでもない、または識別子の後に `.` が無い文は構文エラー（以前は黙って読み飛ばしていた）。文字列とコメントの外の、DSL が使わない文字も構文エラー。**`;` だけは例外**で、文の区切りとして書いてよい（読み飛ばされる。改行が無くても文は続けて書ける: `kick.play(1) hat.play(1)`）
+
+> E-7 はパーサ（`packages/engine`）の規則なので、**`orbitscore play`・凍結版の REPL・main からビルドし直した拡張版にも効く**（4.4.0 のタグからビルドした `.vsix` は変わらない）。
+
 ---
 
 ## 6. Audio Playback
