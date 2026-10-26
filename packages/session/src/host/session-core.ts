@@ -2,10 +2,9 @@
  * 層 2 の真実を持つもの（設計 848 §3 の「2 セッション」の行）: engine・評価の受付口・log ring・
  * transport の状態・クライアントの一覧。RPC サーバに渡すメソッドの実装もここに置く。
  *
- * このビルドが実装しているメソッド: `session.*`（`registerMcp` を除く）・`engine.*`・`audio.*`・
- * `plugin.*`（`openUiAtCursor` を除く）・`docs.*`（後の 3 群は `layer2-methods.ts`）。残り
- * （`editor.*`・`plugin.openUiAtCursor`・`session.registerMcp`）は束 S-mcp の中継と S-editor が足す
- * （台帳 P-19）。
+ * このビルドが実装しているメソッド: `session.*`・`engine.*`・`audio.*`・`plugin.*`（`openUiAtCursor` を
+ * 除く）・`docs.*`（後の 3 群は `layer2-methods.ts`）。残り（`editor.*`・`plugin.openUiAtCursor`）は
+ * 束 S-editor が足す（台帳 P-19）。
  */
 import crypto from 'node:crypto'
 
@@ -24,6 +23,7 @@ import { captureConsole, parseStepLine, transportChange } from './console-captur
 import type { DocsSites } from './docs-sites'
 import type { EngineHost, StartEngineParams } from './engine-host'
 import { audioMethods, docsMethods, pluginMethods, type Layer2MethodDeps } from './layer2-methods'
+import { registerMcp, type RegisterMcpDeps, type RegisterMcpParams } from './mcp-registration'
 import { classifyEngineLine, classifySessionLine, type OutputStream } from './log-classify'
 import { LogHub, type LogLineNotification } from './log-hub'
 
@@ -57,6 +57,8 @@ export interface SessionCoreOptions {
   stallReportMs?: number
   /** `--docs-dir` から決めた docs の在りか（既定は両方なし）。 */
   docs?: DocsSites
+  /** `session.registerMcp` の外への手（`claude` CLI・ホーム）。テストで差し替える。 */
+  registerMcp?: Omit<RegisterMcpDeps, 'workspaceRoot'>
 }
 
 /** 評価の帰属を覚えておく件数の上限（`evalId` → `target`）。 */
@@ -120,6 +122,8 @@ export class SessionCore {
         options.onShutdownRequested?.()
         return {}
       },
+      'session.registerMcp': (params: RegisterMcpParams) =>
+        registerMcp(params, { workspaceRoot: options.workspaceRoot, ...options.registerMcp }),
       'engine.start': startEngine,
       'engine.stop': stopEngine,
       'engine.getState': () => options.engine.getState(),

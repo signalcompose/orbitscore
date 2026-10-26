@@ -317,6 +317,14 @@ export const LEDGER: readonly LedgerEntry[] = [
     state: 'open',
     bundle: 'S-mcp（N1-b1）→ N2',
   },
+  {
+    id: 'P-22',
+    title:
+      '中継のスタブの置き場（~/Library/Application Support/OrbitStudio/bin/orbitstudio-mcp）が提案のまま（N0-c で決める）',
+    deadline: { kind: 'release-1' },
+    state: 'open',
+    bundle: 'S-mcp（N1-b2）→ N0-c / N2',
+  },
 ]
 
 // ---------------------------------------------------------------------------
