@@ -82,15 +82,17 @@ jobs:
           ISSUE_TITLE: RustSec advisories failing on main
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DENY_OUTCOME: ${{ steps.deny.outcome }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
           gh label create "$ISSUE_LABEL" \
             --description "Scheduled RustSec advisory failures" \
             --color D73A4A || true
 
           if [ "$DENY_OUTCOME" = "failure" ]; then
-            body="RustSec の勧告が見つかりました。実行: $RUN_URL"
+            body="cargo deny check advisories が失敗しました（勧告の検出、または DB / crates.io の取得失敗の可能性。ログで確認してください）。対象: $REF_NAME ($COMMIT_SHA)。実行: $RUN_URL"
           else
-            body="定期の advisory 検査そのものが失敗しました（勧告かどうか不明）。実行: $RUN_URL"
+            body="定期の advisory 検査そのものが失敗しました（勧告かどうか不明）。対象: $REF_NAME ($COMMIT_SHA)。実行: $RUN_URL"
           fi
 
           issue_number="$(
