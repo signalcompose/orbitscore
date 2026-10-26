@@ -26,6 +26,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - `helpers/mcp-client.ts` に `StdioMcpClient`（`McpClient` の派生・シナリオの型はそのまま）、`helpers/gated-target.ts` に起動とプロセスの見つけ方。teardown の sweep は headless の時だけ層 2 と中継のプロセスも数える
 - `native` は起動で「apps/OrbitStudio（束 N2）が要る」と落ちる（黙って skip しない）→ 台帳 **P-23** を新設（`apps/OrbitStudio/Package.swift` が現れた時に印が残っていれば red）
 - unit（ゲートの外・11 件）: 既定が `vscode`・runtime-dir・起動引数・設定の写し・sweep の正規表現・本物の headless の起動（vite-node で src を起こす）
+- dev 学習サイト（ja / en）の gated spec の引用を 43 行のずれに合わせて付け直した（`check-citations.mjs --fix`・着地を確認）。`mcp-and-gated-e2e.md` の `:107-131` は中身が変わった（`appAvailable`）ので、引用を `:113-143` の新しいコードに差し替え、`ORBIT_GATED_TARGET` の 1 段落を足した
 
 Part of #1011
 
