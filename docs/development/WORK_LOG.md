@@ -25,6 +25,8 @@ OrbitStudio の層 2 `packages/session` を新設し、最初の小 PR（N1-a0�
 
 - **評価の受付口の足場**（`packages/session/src/eval/evaluation-intake.ts`・台帳 P-01）: 凍結版 `createReplSession` の区切り方の写し。写す相手は MCP の経路（`writeCodeToEngine` の枠 + `//#evalMark`）。結果は構造化した値（`ok` / `diagnostics` / `documentDirectory`）で返し、stderr の行は `log`（`kind` = diagnostic / stall / session）へ。engine は `@orbitscore/engine/dist/<module>` で読み、テストでは vitest の alias で src に向ける（`npm test` は build より前に走る）
 - **差分テスト**（`tests/session/eval-intake-parity.spec.ts`・台帳 P-02）: 凍結版の側は拡張の本物の `writeCodeToEngine` が書いた行を流す。`execute()` の呼び出し・バッチの開閉・`[ERROR]` の行を起きた順に比べ、各評価の診断も比べる。コーパス 23 件（#607 / #612 / #614 / #476・#997 の検証ケース 8 件）。写しを 6 通りに壊すとそれぞれ該当ケースが red になることを確かめた
+- **暫定物の台帳**（`tests/repo/native-provisional-ledger.ts` / `.spec.ts`・設計 §1.4.2）: P-01〜P-18 と検査 1〜7。release モード（`ORBIT_RELEASE_PREFLIGHT=1`）は今は落ちる（足場が開いているので正しい）
+- **D-8 の follow-up**（台帳 P-10 を閉じた）: `planning-issue-state.spec.ts` の `DOCUMENTS` に新地図と新計画
 - 計画 §2.1 と地図 §4.A に #1001 と統合ブランチ名を記録
 
 Part of #1001

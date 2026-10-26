@@ -41,6 +41,10 @@ const repoRoot = path.resolve(__dirname, '../..')
 const DOCUMENTS = [
   'docs/planning/DEVELOPMENT_MAP.md',
   'docs/planning/IMPLEMENTATION_PLAN_2026-09.md',
+  // 設計 848 の完了条件 D-8（新ラインの地図と計画）。暫定物の台帳 P-10 が、`packages/session` が
+  // 現れた時点でここに 2 本が無ければ red にする（`tests/repo/native-provisional-ledger.ts`）。
+  'docs/planning/NATIVE_DEVELOPMENT_MAP.md',
+  'docs/planning/IMPLEMENTATION_PLAN_NATIVE.md',
 ] as const
 
 /** 「まだ終わっていない」ことを含意する語。閉じた issue の行に出たら疑わしい。 */
