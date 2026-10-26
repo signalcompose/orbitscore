@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(license): put the DSL specification documents under Apache-2.0 (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon` / **Issue**: [#998](https://github.com/signalcompose/orbitscore/issues/998)
+
+owner 裁定（2026-10-26・設計 848 §14 (9) の延長）で、**DSL の仕様書（文法と意味の文書）だけ**を Apache-2.0 にした。実装（`packages/engine` 等）はルートの Signal compose Source-Available License のまま。
+
+- **対象** 3 本: `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` / `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`。冒頭に SPDX の 2 行（`SPDX-FileCopyrightText` / `SPDX-License-Identifier: Apache-2.0`）を HTML コメントで置いた。issue の表のとおり `PROJECT_FILE_SPEC_v1.md` 等は対象外
+- **全文**: `LICENSES/Apache-2.0.txt`（apache.org の `LICENSE-2.0.txt`・sha256 `cfc7749b…`）
+- **書き分け**: ルートの `LICENSE` に「EXCEPTION: DSL SPECIFICATION DOCUMENTS」の節（対象の一覧と、実装は覆わないこと）、README の License 節に同じ一覧と `protocol/`（C-2 で追加予定）の扱い、`CONTRIBUTING.md` に「仕様書への貢献は Apache-2.0」
+- **検査** `tests/docs/dsl-spec-license.spec.ts`: `docs/core/` と `docs/specs-v2/` の `.md` を全件分類（未分類が増えたら red）/ 対象の冒頭の SPDX / 対象外に Apache の SPDX が無い / LICENSE・README の一覧が一致 / 全文の sha256 / `protocol/` が現れたら LICENSE が触れていること。SPDX を 1 本消す・一覧から 1 行消す・未分類の仕様書を足す・対象外に SPDX を付ける、の 5 通りで red を確認
+- 冒頭に 2 行足したので、dev サイトの機械検証の引用 4 本（`mixer-audio-line.md` の ja / en）を `check-citations.mjs --fix` で +2 し、着地先が同じ行であることを目で確かめた。散文の `path:line` は、ずれる前に正しかった `SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47`（SC.1）の ja / en だけ +2 した（ほかの散文の行番号は今回の前から既にずれていたので触っていない）
+- user サイトの DSL の章を含めるかは PR で owner に確認する（含めていない）
+
+Closes #998
+
+---
+
 ### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Signal compose Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <div id="title-block-header" class="header">
 
 <div class="docmeta">

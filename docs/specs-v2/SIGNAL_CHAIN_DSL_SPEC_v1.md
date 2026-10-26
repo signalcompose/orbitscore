@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Signal compose Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # OrbitScore Signal Chain DSL Specification v1
 
 Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決定ログ: DESIGN_DISCUSSION_RECORD §15（決定 \#64–#77）+ 本文内の決定 \#78（`master` 予約・SC.2.1）/ 実装: \#495 言語サービスと同時設計（本仕様の制定時点では未実装）

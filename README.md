@@ -477,7 +477,7 @@ code --install-extension orbitscore-darwin-arm64-*.vsix
 
 ## License
 
-Signal compose Source-Available License v1.0 — see [LICENSE](LICENSE) for details.
+The OrbitScore implementation is licensed under the Signal compose Source-Available License v1.0 — see [LICENSE](LICENSE) for details.
 
 Summary:
 - **Base**: Apache License 2.0
@@ -488,6 +488,16 @@ Summary:
 Packaged binary products (Steam, App Store, Gumroad, etc.) are distributed under separate end-user license terms accompanying each product.
 
 Commercial licensing inquiries: license@signalcompose.com
+
+### DSL specification documents: Apache-2.0
+
+The documents that define the grammar and semantics of the OrbitScore DSL are licensed under the [Apache License 2.0](LICENSES/Apache-2.0.txt) only, without the additional conditions above:
+
+- [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](docs/core/INSTRUCTION_ORBITSCORE_DSL.md)
+- [`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`](docs/specs-v2/PITCH_DSL_SPEC_v1.1.md)
+- [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md)
+
+Each of them carries `SPDX-License-Identifier: Apache-2.0` at its top, and the root [LICENSE](LICENSE) lists the same files. Only the specification documents are covered: the implementation of the DSL (the parser and interpreter in `packages/engine`) and the rest of the code stay under the root license. The session protocol definitions for OrbitStudio (the native macOS app), which will be added under `protocol/`, will also be Apache-2.0 and carry their own `LICENSE`.
 
 Copyright (c) 2026 Signal compose Inc.
 

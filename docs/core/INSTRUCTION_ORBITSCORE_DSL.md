@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Signal compose Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # INSTRUCTION_ORBITSCORE_DSL.md
 
 ## OrbitScore 2.0.0 — DSL Specification
