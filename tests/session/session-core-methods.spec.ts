@@ -29,7 +29,7 @@ function core(): SessionCore {
     broadcast: () => {},
     editorAttached: () => false,
     requestEditor: () => Promise.reject(new Error('not used')),
-    captureConsole: false,
+    attachEngineOutput: false,
   })
 }
 

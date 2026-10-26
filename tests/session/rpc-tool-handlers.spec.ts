@@ -85,7 +85,7 @@ async function startHarness(
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => false,
     requestEditor: (method, params) => rpc!.requestEditor(method, params),
-    captureConsole: false,
+    attachEngineOutput: false,
     docs: resolveDocsSites(options.docsDirs ?? []),
     // 🔴 本物の `claude` CLI を決して呼ばない（呼ぶと利用者の ~/.claude.json に登録が残る）。
     registerMcp: { execFile: claudeNotInstalled },

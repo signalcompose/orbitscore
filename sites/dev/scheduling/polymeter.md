@@ -140,7 +140,7 @@ snare.beat(5 by 4)         // スネア: 5秒/小節（グローバルより長�
 各シーケンスは `loopSequence()` という関数でループを回します。その核心は `setTimeout` を使った自己再帰的なチェーンです。ただし 2026-07-07 の #389 以降、「次の setTimeout を何 ms 後に仕掛けるか」の決め方が大きく変わりました。まずはファイル冒頭の定数とその説明を見てみましょう。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:3-14
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:4-15
 /**
  * How far BEFORE a bar boundary the loop timer fires (#389 mechanism A).
  *
@@ -160,13 +160,13 @@ export const LOOP_TIMER_LEAD_MS = 100
 そこで #389 は、境界の **100ms 前**にタイマーを発火させ、次の小節のイベントを「未来」として enqueue するようにしました。delay の計算は `armDelay()` に集約されています。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:152-162
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:153-163
   const armDelay = (boundary: number): number => {
     const leadMs = Math.min(LOOP_TIMER_LEAD_MS, patternDuration / 2)
     const raw = boundary + patternDuration - leadMs - (Date.now() - scheduler.startTime)
     if (raw < -patternDuration && Date.now() - lastLagLogMs > 5000) {
       lastLagLogMs = Date.now()
-      console.warn(
+      host.warn(
         `⚠️ ${sequenceName}: loop timer lagged ${Math.round(-raw)}ms behind the grid (system stall?) — catching up; stale bars may be skipped`,
       )
     }
@@ -179,7 +179,7 @@ export const LOOP_TIMER_LEAD_MS = 100
 その `armDelay()` を使って自己再帰するのが `scheduleNextIteration()` です。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:164-225 (mute->unmute 分岐の内部を // ... で省略)
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:165-226 (mute->unmute 分岐の内部を // ... で省略)
   const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {
       const isMuted = getIsMutedFn()
@@ -241,7 +241,7 @@ polymeter の観点で大事なのは、`nextScheduleTime += previousDuration` �
 launch quantize (`global.quantize("bar")` が既定) が入ったことで、`seq.loop()` の**最初の小節の開始時刻**はシーケンス自身の拍子ではなく、**グローバルの `tempo()` × `beat()` が作る小節境界**に揃えられます。`loopSequence()` はそれを `startTime` オプションで受け取ります。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:84-104
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:85-105
   // Quantized start: if startTime is in the future, the first iteration is
   // scheduled at startTime and the first wait is reduced from one full
   // patternDuration to (patternDuration - leadIn) so subsequent boundaries
@@ -251,11 +251,11 @@ launch quantize (`global.quantize("bar")` が既定) が入ったことで、`se
   const leadInMs = effectiveStart - currentTime
 
   if (leadInMs > 0) {
-    console.log(
+    host.log(
       `🔄 ${sequenceName} (loop queued, +${Math.round(leadInMs)}ms to next quantize boundary)`,
     )
   } else {
-    console.log(`🔄 ${sequenceName} (loop started)`)
+    host.log(`🔄 ${sequenceName} (loop started)`)
   }
 
   // Track next scheduled time (cumulative, to avoid drift)
@@ -268,7 +268,7 @@ launch quantize (`global.quantize("bar")` が既定) が入ったことで、`se
 `startTime` を渡しているのは `Sequence.loop()` で、`nextQuantizedTime()` (グローバルの tempo と beat から計算) の結果です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2062-2070
+// packages/engine/src/core/sequence.ts:2061-2069
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

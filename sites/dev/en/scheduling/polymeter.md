@@ -140,7 +140,7 @@ Here, kick's pattern returns every 4 seconds, and snare's pattern returns every 
 Each sequence runs its loop with a function called `loopSequence()`. Its core is a self-recursive chain using `setTimeout`. However, since #389 on 2026-07-07, the way "how many ms from now the next setTimeout is armed" is decided has changed substantially. Let's start with the constant at the top of the file and its explanation.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:3-14
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:4-15
 /**
  * How far BEFORE a bar boundary the loop timer fires (#389 mechanism A).
  *
@@ -160,13 +160,13 @@ The key property is that "`setTimeout` never fires early." If you aim a timer ex
 So #389 made the timer fire **100 ms before** the boundary, enqueueing the next bar's events as "future." The delay computation is consolidated in `armDelay()`.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:152-162
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:153-163
   const armDelay = (boundary: number): number => {
     const leadMs = Math.min(LOOP_TIMER_LEAD_MS, patternDuration / 2)
     const raw = boundary + patternDuration - leadMs - (Date.now() - scheduler.startTime)
     if (raw < -patternDuration && Date.now() - lastLagLogMs > 5000) {
       lastLagLogMs = Date.now()
-      console.warn(
+      host.warn(
         `⚠️ ${sequenceName}: loop timer lagged ${Math.round(-raw)}ms behind the grid (system stall?) — catching up; stale bars may be skipped`,
       )
     }
@@ -179,7 +179,7 @@ The essence is the formula `raw = (next boundary) − lead − (current relative
 `scheduleNextIteration()` is what recurses using that `armDelay()`.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:164-225 (mute->unmute 分岐の内部を // ... で省略)
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:165-226 (mute->unmute 分岐の内部を // ... で省略)
   const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {
       const isMuted = getIsMutedFn()
@@ -241,7 +241,7 @@ One more thing that did not exist in the 2026-05 version is the `safeSchedule()`
 With launch quantize (`global.quantize("bar")` is the default), the **start time of the first bar** of `seq.loop()` is aligned not to the sequence's own meter but to the **bar boundary formed by the global `tempo()` × `beat()`**. `loopSequence()` receives it via the `startTime` option.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:84-104
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:85-105
   // Quantized start: if startTime is in the future, the first iteration is
   // scheduled at startTime and the first wait is reduced from one full
   // patternDuration to (patternDuration - leadIn) so subsequent boundaries
@@ -251,11 +251,11 @@ With launch quantize (`global.quantize("bar")` is the default), the **start time
   const leadInMs = effectiveStart - currentTime
 
   if (leadInMs > 0) {
-    console.log(
+    host.log(
       `🔄 ${sequenceName} (loop queued, +${Math.round(leadInMs)}ms to next quantize boundary)`,
     )
   } else {
-    console.log(`🔄 ${sequenceName} (loop started)`)
+    host.log(`🔄 ${sequenceName} (loop started)`)
   }
 
   // Track next scheduled time (cumulative, to avoid drift)
@@ -268,7 +268,7 @@ With launch quantize (`global.quantize("bar")` is the default), the **start time
 It is `Sequence.loop()` that passes `startTime`, the result of `nextQuantizedTime()` (computed from the global tempo and beat).
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2062-2070
+// packages/engine/src/core/sequence.ts:2061-2069
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

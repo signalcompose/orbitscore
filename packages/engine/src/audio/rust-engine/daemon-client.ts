@@ -32,6 +32,7 @@ import type {
   SourceRoutingTarget,
   WireLineOp,
 } from '../types'
+import { host } from '../engine-backend'
 
 export type { WireDest, WireLineOp } from '../types'
 
@@ -295,7 +296,7 @@ export class DaemonClient extends EventEmitter {
       try {
         await this.cleanupAfterStartFailure()
       } catch (cleanupErr) {
-        console.warn('DaemonClient cleanup after startup failure failed:', cleanupErr)
+        host.warn('DaemonClient cleanup after startup failure failed:', cleanupErr)
       }
       throw err
     }
@@ -309,7 +310,7 @@ export class DaemonClient extends EventEmitter {
         this.ws.close()
       } catch (e) {
         // startup phase では listener 未登録の可能性が高いので console に出す。
-        console.warn('DaemonClient ws.close() threw during startup cleanup:', e)
+        host.warn('DaemonClient ws.close() threw during startup cleanup:', e)
       }
       this.ws = null
     }
@@ -348,9 +349,9 @@ export class DaemonClient extends EventEmitter {
           child.kill('SIGKILL')
         } catch (e) {
           // kill 自体が throw (process table 未解放等) したら診断を残す。
-          console.warn('DaemonClient SIGKILL failed:', e)
+          host.warn('DaemonClient SIGKILL failed:', e)
         }
-        console.warn(
+        host.warn(
           `DaemonClient child did not exit within ${DEFAULT_KILL_TIMEOUT_MS}ms of SIGTERM; escalated to SIGKILL`,
         )
         resolve()
@@ -742,10 +743,10 @@ export class DaemonClient extends EventEmitter {
       this.ws?.close()
     } catch (e) {
       // ws.close() は原則 throw しないが、ws ライブラリ内部の assertion 等で例外が出ても quit は
-      // 継続する。完全に silent にすると cleanup 失敗が隠れるため console.warn で可視化する
+      // 継続する。完全に silent にすると cleanup 失敗が隠れるため host.warn で可視化する
       // （onError と同じ方針。以前は 'ws-close-error' を emit していたが consumer が無く実質
       // silent だった）。
-      console.warn('DaemonClient quit: ws.close() threw unexpectedly:', e)
+      host.warn('DaemonClient quit: ws.close() threw unexpectedly:', e)
     }
     this.ws = null
     if (this.child) {
@@ -868,8 +869,8 @@ export class DaemonClient extends EventEmitter {
     // 蓄積を止めることと転送を止めることは別である。**転送は継続する。**
     let collecting = true
     const routeStderrLine = createDaemonStderrLineRouter(
-      (line) => console.log(`[daemon] ${line}`),
-      (line) => console.error(`[daemon] ${line}`),
+      (line) => host.log(`[daemon] ${line}`),
+      (line) => host.error(`[daemon] ${line}`),
     )
     const onStderrData = (chunk: Buffer): void => {
       const text = chunk.toString()
@@ -984,7 +985,7 @@ export class DaemonClient extends EventEmitter {
       // リスナーで log する (ws 'error' 規約に揃える)。
       child.on('error', (err) => {
         if (settled) {
-          console.warn('DaemonClient: child process error after startup settled:', err)
+          host.warn('DaemonClient: child process error after startup settled:', err)
           return
         }
         finish(() =>
@@ -1029,12 +1030,9 @@ export class DaemonClient extends EventEmitter {
     // onError に引き継ぐことで、connect 失敗は単一経路（reject）に、post-connect の死は onError に
     // 集約される。
     const onError = (err: Error): void => {
-      // 詳細（ECONNRESET 等）を console.warn で必ず可視化する — 'close' ハンドラの daemon-died
+      // 詳細（ECONNRESET 等）を host.warn で必ず可視化する — 'close' ハンドラの daemon-died
       // 通知だけでは socket レベルの死因が消えるため。実際の cleanup / respawn 駆動は 'close' が行う。
-      console.warn(
-        'DaemonClient websocket error (close handling / respawn follows if it died):',
-        err,
-      )
+      host.warn('DaemonClient websocket error (close handling / respawn follows if it died):', err)
     }
     ws.on('close', () => {
       // running を倒す前に「起動成功後だったか」を捕まえる（死の判定に使う）。

@@ -2,6 +2,8 @@
  * Transport control for Global class
  */
 
+import { host } from '../../audio/engine-backend'
+
 import { Scheduler } from './types'
 
 export class TransportControl {
@@ -26,7 +28,7 @@ export class TransportControl {
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
-    console.log('✅ Global starting')
+    host.log('✅ Global starting')
 
     return this
   }
@@ -53,7 +55,7 @@ export class TransportControl {
     if (this._isRunning) {
       this._isRunning = false
       this._isLooping = false
-      console.log('✅ Global stopped')
+      host.log('✅ Global stopped')
     }
     return this
   }

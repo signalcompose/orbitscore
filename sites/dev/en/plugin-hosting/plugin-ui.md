@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:843-863
+// packages/engine/src/core/sequence.ts:842-862
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -80,7 +80,7 @@ form enumerates every matching catalog element in the registered chain and calls
 open for each one.
 
 ```typescript
-// packages/engine/src/core/global.ts:1142-1152
+// packages/engine/src/core/global.ts:1139-1149
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -103,7 +103,7 @@ perfectly legitimate action would turn red every time (the host-side error PH.2c
 through `openPluginUiIdempotent`, which succeeds as a no-op when the UI is already open.
 
 ```typescript
-// packages/engine/src/core/global.ts:1179-1187
+// packages/engine/src/core/global.ts:1176-1184
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -350,7 +350,7 @@ is fixed as the save target** and is never re-resolved for later close / save.
 When sending to the daemon, a window title and a **window token** are attached.
 
 ```typescript
-// packages/engine/src/core/global.ts:1257-1263
+// packages/engine/src/core/global.ts:1254-1260
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -386,7 +386,7 @@ of a token that is in use" loudly, so even a collision does not become a silent 
 On a successful open, TS records one entry in its session ledger. The key is the window token.
 
 ```typescript
-// packages/engine/src/core/global.ts:64-70
+// packages/engine/src/core/global.ts:61-67
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -406,7 +406,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:590-603
+// packages/engine/src/audio/rust-engine/daemon-client.ts:591-604
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -885,7 +885,7 @@ existing save flow from the event.
       try {
         await this.pluginUiSafepointSaver(target)
       } catch (error) {
-        console.error(
+        host.error(
           `[plugin-ui] safepoint save failed for ${JSON.stringify(target)}; ` +
             `AckUiSafepoint was not sent: ${error instanceof Error ? error.message : String(error)}`,
         )

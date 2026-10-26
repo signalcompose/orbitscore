@@ -115,7 +115,7 @@ export interface ScheduledPlay {
 Why is `slice` optional? The answer is a branch in the sequence layer. Depending on the chop declaration, the method being called changes entirely.
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:127-154
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:128-155
       // Schedule event (argPath = #390 live playhead marker, observational only)
       if (chopDivisions && chopDivisions > 1) {
         const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
@@ -272,7 +272,7 @@ The `while` loop, as long as `scheduledPlays[0].time <= now` is true, takes even
 The events of one bar are pushed onto the queue in bulk by `scheduleEvents()` at the start of the loop. This function lives in the sequence layer (`packages/engine/src/core/sequence/scheduling/event-scheduler.ts`) and does not depend on the backend.
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:113-169 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:114-170 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
 
@@ -327,7 +327,7 @@ The point is "absolute latency is a constant shift = musically irrelevant." Ever
 This scheme brings a new problem: "mapping TS's `Date.now()` to the daemon's transport clock." The daemon reports its own `now_sec` in a 1 Hz `StreamStats`, and the TS side accumulates those as anchors. With #389 mechanism B, the single anchor was replaced by a **least-squares fit over the last 30 samples** (`ANCHOR_WINDOW`, `fitAnchorSamples()`). `daemonNowSec()`, called on the dispatch hot path, evaluates that fit in O(1).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1797-1803
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1796-1802
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -409,7 +409,7 @@ The SC version's `clearSequenceEvents()` (`event-scheduler.ts:440-462`) has the 
 What actually sends to the daemon is `executePlayback()`. Several protective mechanisms are lined up in series here. The respawn-related comment at the top of the function is long, so the quote starts from the guards themselves.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1667-1711
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1669-1713
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -471,7 +471,7 @@ Let's read them in order.
 `daemon.playAt()` is a thin wrapper in `DaemonClient` that sends a JSON `PlayAt` request over WebSocket.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:374-384
+// packages/engine/src/audio/rust-engine/daemon-client.ts:375-385
   async playAt(
     sampleId: string,
     timeSec: number,
@@ -490,7 +490,7 @@ Let's read them in order.
 `emitStepMarker()` prints to stdout a machine-readable line for the live playhead, with which the editor extension highlights the `play()` arguments.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1659
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1661
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -503,9 +503,11 @@ Let's read them in order.
    */
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
-      console.log(
-        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
-      )
+      host.step({
+        seq: play.sequenceName,
+        argPath: play.argPath,
+        atEpochMs: Math.round(this.startTime + play.time),
+      })
     }
   }
 ```
@@ -515,16 +517,18 @@ The design point is that the timestamp is the **grid time** (`startTime + play.t
 The story of #654 (2026-08-30, WORK_LOG 6.421) is interesting. #390 had been wired only on the audio path, so the playhead never moved at all for `instrument()` / `midi()` sequences. The fix was to add a `scheduleStepMarker()` to `MidiScheduler` that enqueues a marker with the same grammar.
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:171-176
+// packages/engine/src/midi/midi-scheduler.ts:173-178
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
     this.enqueue(time, owner, () => {
-      console.log(`[STEP] ${owner} ${argPath} ${atEpochMs}`)
+      host.step({ seq: owner, argPath, atEpochMs })
     })
   }
 ```
 
 Both the audio side and the MIDI side stamp the "grid time," so the playheads of different layers can be compared — that is the judgement recorded in the WORK_LOG. Note that `[STEP]` lines are filtered out of the output channel in normal mode, so observing them on a real machine requires starting with `debug: true` (WORK_LOG 6.421).
+
+Since 2026-10 (#1022) the marker leaves the engine as a structured event, `host.step({ seq, argPath, atEpochMs })`, rather than a string assembled for `console.log` (`engine-backend.ts:79-99`). The default output still writes `[STEP] <seq> <argPath> <atEpochMs>` to stdout, so the frozen extension's `parseStepLine()` is unchanged. Layer 2 of the native app (`packages/session`) swaps the output with `setHostOutput()` and receives the event without going through a string.
 
 ## Gain Conversion: dB → amplitude
 
@@ -586,7 +590,7 @@ Note that only the sequence gain is converted here. The master gain (`global.gai
         .pluginAllNotesOff()
         .then(({ released, stale, failed }) => {
           if (released > 0 || stale > 0 || failed > 0) {
-            console.log(
+            host.log(
               `[rust-engine] plugin all-notes-off: released=${released} stale=${stale} failed=${failed}`,
             )
           }

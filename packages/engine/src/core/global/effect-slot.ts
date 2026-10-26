@@ -13,11 +13,9 @@ import * as path from 'path'
 import type { AudioEngine, EffectChainApplyRequest, EffectChainPlanStage } from '../../audio/types'
 import { DaemonProtocolError, isEffectChainRegistryIntact } from '../../audio/rust-engine/errors'
 import type { RackRecipe } from '../../signal-chain/rack'
-import {
-  projectStateStoreFor,
-  stateFileNameForIdentity,
-  type PluginStateIdentity,
-} from '../project-state-store'
+import { projectStateStoreFor, stateFileNameForIdentity } from '../project-state-store'
+import type { PluginStateIdentity } from '../project-state-store'
+import { host } from '../../audio/engine-backend'
 
 import { AudioManager } from './audio-manager'
 import { effectReplaceNotice } from './effect-replace-notice'
@@ -621,7 +619,7 @@ export class EffectChainMap<K> {
         element.declaredStatePath ??
         (this.statePathFallback ? await this.statePathFallback(identity) : undefined)
       if (fallbackState) {
-        console.log(
+        host.log(
           `[plugin-state] restoring '${externalReceiver}/effect/${element.normalizedName}/${element.occurrence}' from ${fallbackState}`,
         )
       }
@@ -771,7 +769,7 @@ export class EffectChainMap<K> {
         : undefined
     const statePath = spec.statePath ?? fallbackStatePath
     if (fallbackStatePath !== undefined) {
-      console.log(
+      host.log(
         `[plugin-state] restoring '${externalReceiver}/${role}/${normalizedName}/${occurrence}' from ${fallbackStatePath}`,
       )
     }
@@ -861,7 +859,7 @@ export class EffectChainMap<K> {
     } catch (error) {
       const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
       const message = error instanceof Error ? error.message : String(error)
-      // 🔴 stream の選択は `effectReplaceNotice` が握る（呼び出し側で `console.warn` を
+      // 🔴 stream の選択は `effectReplaceNotice` が握る（呼び出し側で `host.warn` を
       // 使わないこと）。理由はそのモジュールの docstring を参照 — 拡張は engine の stderr を
       // 内容を見ずに `ERROR:` で記録するので、正常に継続する通知を warn で出すと E2E R-E4
       // 「復旧は ERROR 行を増やさない」が落ちる。実際に落ちた（#625・4 回目の再発）。
@@ -899,7 +897,7 @@ export class EffectChainMap<K> {
         : undefined
     const statePath = replacing?.statePath ?? spec.statePath ?? fallbackStatePath
     if (fallbackStatePath !== undefined) {
-      console.log(
+      host.log(
         `[plugin-state] restoring '${externalReceiver}/${role}/${normalizedName}/${occurrence}' from ${fallbackStatePath}`,
       )
     }

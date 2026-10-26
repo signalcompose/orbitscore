@@ -100,7 +100,7 @@ TS 側の司令塔は `packages/engine/src/core/global/mixer-manager.ts` の `Mi
 並びます。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:294-314
+// packages/engine/src/core/global/mixer-manager.ts:295-315
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -117,7 +117,7 @@ TS 側の司令塔は `packages/engine/src/core/global/mixer-manager.ts` の `Mi
       bus = state.pool.acquire(name)
       state.buses.set(name, bus)
       if (this.kindsWithBus(name).length > 1) {
-        console.warn(MixerManager.ambiguousMessage(name))
+        host.warn(MixerManager.ambiguousMessage(name))
       }
     }
     return this.makeHandle(kind, name, bus)
@@ -141,7 +141,7 @@ prefix と上限は TS 側の定数として置かれていて、コメントが
 明言しています。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:33-46
+// packages/engine/src/core/global/mixer-manager.ts:34-47
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:510-549
+// packages/engine/src/core/sequence.ts:509-548
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -286,7 +286,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:627-648
+// packages/engine/src/core/sequence.ts:626-647
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -417,7 +417,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 呼び出し側（`stageOutputElement()`）はこれを見るだけです。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:450-467
+// packages/engine/src/core/sequence.ts:449-466
   private stageOutputElement(
     name: string,
     dest: OutputDest,
@@ -907,7 +907,7 @@ export type WireLineOp =
 送信側は 1 行です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:663-666
+// packages/engine/src/audio/rust-engine/daemon-client.ts:664-667
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1245,7 +1245,7 @@ PR-2（TS 側）は instrument の `SetSourceRouting` 発行を 1 箇所に集�
 wire を通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:972-1006
+// packages/engine/src/core/sequence.ts:971-1005
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()
@@ -1312,7 +1312,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 修正後の `Global.gain()` は dB を線形 amplitude に変換して `setGlobalGain` に渡します。
 
 ```typescript
-// packages/engine/src/core/global.ts:614-626
+// packages/engine/src/core/global.ts:611-623
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
     if (typeof result === 'number') {
@@ -1322,7 +1322,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
     void this.audioEngine
       .setGlobalGain?.(gainDbToAmplitude(this.effectsManager.getMasterGainDb()))
       ?.catch((error) => {
-        console.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
+        host.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
       })
     return this
   }
@@ -1360,7 +1360,7 @@ masterGainDb` を返していたこと、**insert との順序は変わってい
 残す理由をこう書いています。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:67-76
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:68-77
   // `masterGainDb === -Infinity`（完全無音）だけは残す — daemon 側の gain が 0.0 になるまでの
   // ramp 中に音が漏れるのを避けるため、発音側でも落とす。
   if (isMuted) {

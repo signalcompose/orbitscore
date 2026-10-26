@@ -164,7 +164,7 @@ Both `processGlobalInit()` and `processSequenceInit()` are designed so that "if 
 ### processGlobalInit()
 
 ```typescript
-// packages/engine/src/interpreter/process-initialization.ts:27-43
+// packages/engine/src/interpreter/process-initialization.ts:28-44
 export async function processGlobalInit(init: GlobalInit, state: InterpreterState): Promise<void> {
   if (state.mixers.handles.has(init.variableName) || state.mixers.nodes.has(init.variableName)) {
     throw new Error(
@@ -191,7 +191,7 @@ After first rejecting a collision with the mixer namespace, it looks up an exist
 The sequence initialization has the same structure but with one caveat at reuse time.
 
 ```typescript
-// packages/engine/src/interpreter/process-initialization.ts:62-104
+// packages/engine/src/interpreter/process-initialization.ts:63-105
 export async function processSequenceInit(
   init: SequenceInit,
   state: InterpreterState,
@@ -208,14 +208,14 @@ export async function processSequenceInit(
   if (init.globalVariable) {
     global = state.globals.get(init.globalVariable)
     if (!global) {
-      console.error(`Global instance not found: ${init.globalVariable}`)
+      host.error(`Global instance not found: ${init.globalVariable}`)
       return
     }
   } else {
     // Legacy syntax: init GLOBAL.seq
     global = state.currentGlobal
     if (!global) {
-      console.error('No global instance available for sequence initialization')
+      host.error('No global instance available for sequence initialization')
       return
     }
   }
@@ -300,7 +300,7 @@ export async function processStatement(
       break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
-      console.warn(`Unknown statement type: ${(statement as any).type}`)
+      host.warn(`Unknown statement type: ${(statement as any).type}`)
   }
 }
 ```
@@ -607,7 +607,7 @@ export async function processTransportStatement(
     return
   }
 
-  console.error(`Transport target not found: ${target}`)
+  host.error(`Transport target not found: ${target}`)
 }
 ```
 

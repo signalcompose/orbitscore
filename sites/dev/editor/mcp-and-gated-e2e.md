@@ -446,7 +446,7 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 ディレクトリが既に無いこと自体は、このループが望んでいた結果そのものであって失敗ではありません。ところが `catch` が `console.warn` を出しており、engine の stderr は拡張側で `ERROR:` を前置されるので、**無害なレースがそのまま ERROR 件数を 1 行ぶん押し上げて**いました。実測では、#840 のマージ前ゲートでこれが `expected 9 to be less than or equal to 8` という形になり、レースとは何の関係もないテスト（`restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch`）を落としています。修正は、`statSync` をエントリごとの `try` で囲んで **ENOENT だけを飲む**というものです。
 
 ```typescript
-// packages/engine/src/audio/slicing/temp-file-manager.ts:98-118
+// packages/engine/src/audio/slicing/temp-file-manager.ts:100-120
       for (const file of files) {
         if (!file.startsWith('orbitscore_')) continue
         const dirPath = path.join(this.tempDir, file)
@@ -1295,12 +1295,14 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1659
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1661
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
-      console.log(
-        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
-      )
+      host.step({
+        seq: play.sequenceName,
+        argPath: play.argPath,
+        atEpochMs: Math.round(this.startTime + play.time),
+      })
     }
   }
 ```
@@ -1308,17 +1310,17 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ここで `#654` の話になります。WORK_LOG 6.421 によると、SIGMUS 用の新曲（7 層）を実機で鳴らしたところ、`audio()` の gong 1 層だけが playhead を刻み、Kontakt の 6 層は静止したままでした。退行ではなく **最初から片翼**だった — `[STEP]` を出すのは audio 経路だけで、MIDI 側は `sequence.ts` の Stage C で `argPath` を捨てていたのです。修正は TS のみで、`MidiScheduler` に marker 専用のアクションを積む口を足しました。
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:171-176
+// packages/engine/src/midi/midi-scheduler.ts:173-178
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
     this.enqueue(time, owner, () => {
-      console.log(`[STEP] ${owner} ${argPath} ${atEpochMs}`)
+      host.step({ seq: owner, argPath, atEpochMs })
     })
   }
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1651-1661
+// packages/engine/src/core/sequence.ts:1650-1660
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

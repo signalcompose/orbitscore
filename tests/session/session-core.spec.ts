@@ -10,10 +10,11 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  captureConsole,
+  createHostOutput,
   parseStepLine,
   transportChange,
-} from '../../packages/session/src/host/console-capture'
+} from '../../packages/session/src/host/engine-output'
+import { host } from '../../packages/engine/src/audio/engine-backend'
 import { EngineHost, type EngineInterpreter } from '../../packages/session/src/host/engine-host'
 import { SessionCore } from '../../packages/session/src/host/session-core'
 import {
@@ -99,7 +100,7 @@ async function startSession(engine: FakeEngine, workspaceRoot: string | null = '
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => rpc?.editorClient() !== null && rpc?.editorClient() !== undefined,
     requestEditor: (method, params) => rpc!.requestEditor(method, params),
-    captureConsole: false,
+    attachEngineOutput: false,
   })
   rpc = await startRpcServer({
     socketPath: socket.socketPath,
@@ -442,19 +443,48 @@ describe('EngineHost (design 848 §4.5 · §5.3.2)', () => {
   })
 })
 
-describe('console capture (P-07)', () => {
-  it('splits formatted output into non-empty lines per stream and restores the console', () => {
+describe('engine output port (P-07 · #1022 replaced the console capture)', () => {
+  it('formats engine output like console and splits it into non-empty lines per stream', () => {
     const lines: string[] = []
-    const target = { log: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn(), warn: vi.fn() }
-    const release = captureConsole((stream, text) => lines.push(`${stream}:${text}`), {
-      target: target as unknown as Console,
+    const steps: unknown[] = []
+    const output = createHostOutput({
+      line: (stream, text) => lines.push(`${stream}:${text}`),
+      step: (event) => steps.push(event),
     })
-    ;(target as unknown as Console).log('a %s', 'b', '\n\nc')
-    ;(target as unknown as Console).warn('w')
-    ;(target as unknown as Console).error({ x: 1 })
-    release()
+    output.log('a %s', 'b', '\n\nc')
+    output.warn('w')
+    output.error({ x: 1 })
+    output.step({ seq: 'kick', argPath: '0', atEpochMs: 5 })
     expect(lines).toEqual(['stdout:a b ', 'stdout:c', 'stderr:w', 'stderr:{ x: 1 }'])
-    expect(typeof target.log).toBe('function')
+    expect(steps).toEqual([{ seq: 'kick', argPath: '0', atEpochMs: 5 }])
+  })
+
+  it('a session attaches to the engine host output and gives it back to console on dispose', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const broadcasts: Array<[string, unknown]> = []
+    const core = new SessionCore({
+      engine: new EngineHost({
+        createInterpreter: () => fakeInterpreter().interpreter,
+        env: {},
+        sessionLogCwd: '/ws',
+        sessionLogEnabled: false,
+        log: () => {},
+      }),
+      workspaceRoot: null,
+      broadcast: (method, params) => broadcasts.push([method, params]),
+      editorAttached: () => false,
+      requestEditor: () => Promise.reject(new Error('not used')),
+    })
+    host.log('🎚️ kick: play=[1,0]')
+    host.step({ seq: 'kick', argPath: '1', atEpochMs: 9 })
+    expect(log).not.toHaveBeenCalled()
+    expect(core.logs.select(10)).toContain('🎚️ kick: play=[1,0]')
+    expect(broadcasts.filter(([method]) => method === 'transport.step')).toEqual([
+      ['transport.step', { seq: 'kick', argPath: '1', atEpochMs: 9, source: null }],
+    ])
+    core.dispose()
+    host.log('after dispose')
+    expect(log).toHaveBeenCalledWith('after dispose')
   })
 
   it('parses the engine [STEP] grammar and the transport words', () => {

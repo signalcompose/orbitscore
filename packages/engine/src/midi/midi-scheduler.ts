@@ -1,3 +1,5 @@
+import { host } from '../audio/engine-backend'
+
 import { MidiOutput } from './midi-output'
 
 /**
@@ -171,7 +173,7 @@ export class MidiScheduler {
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
     this.enqueue(time, owner, () => {
-      console.log(`[STEP] ${owner} ${argPath} ${atEpochMs}`)
+      host.step({ seq: owner, argPath, atEpochMs })
     })
   }
 
@@ -241,7 +243,7 @@ export class MidiScheduler {
         // the tick: aborting would skip the queue cleanup below (fired actions
         // re-fire next tick = double-send) and drop the remaining due actions
         // (a paired note-off → hanging note). Log and continue.
-        console.error(`MidiScheduler: action failed (owner=${action.owner}):`, e)
+        host.error(`MidiScheduler: action failed (owner=${action.owner}):`, e)
       }
     }
 

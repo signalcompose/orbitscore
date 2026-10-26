@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:843-863
+// packages/engine/src/core/sequence.ts:842-862
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -77,7 +77,7 @@ aux("verb").ui("ValhallaRoom")
 名前形は登記チェーンから一致する catalog 要素を全列挙し、1 件ずつ冪等 open を呼びます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1142-1152
+// packages/engine/src/core/global.ts:1139-1149
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -100,7 +100,7 @@ aux("verb").ui("ValhallaRoom")
 `openPluginUiIdempotent` を通り、既に開いていれば no-op で成功します。
 
 ```typescript
-// packages/engine/src/core/global.ts:1179-1187
+// packages/engine/src/core/global.ts:1176-1184
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -343,7 +343,7 @@ identity を保存対象として確定**させ、以降の close / 保存では
 daemon へ送る際には、ウィンドウタイトルと **window token** を添えます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1257-1263
+// packages/engine/src/core/global.ts:1254-1260
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -379,7 +379,7 @@ export function allocatePluginUiWindowToken(): number {
 open が成功すると、TS はセッション簿記に 1 枚ぶんの記録を残します。キーは window token です。
 
 ```typescript
-// packages/engine/src/core/global.ts:64-70
+// packages/engine/src/core/global.ts:61-67
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -398,7 +398,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:590-603
+// packages/engine/src/audio/rust-engine/daemon-client.ts:591-604
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -870,7 +870,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
       try {
         await this.pluginUiSafepointSaver(target)
       } catch (error) {
-        console.error(
+        host.error(
           `[plugin-ui] safepoint save failed for ${JSON.stringify(target)}; ` +
             `AckUiSafepoint was not sent: ${error instanceof Error ? error.message : String(error)}`,
         )

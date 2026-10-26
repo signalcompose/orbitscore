@@ -4,6 +4,7 @@
  */
 
 import { noteNameToPitchClass } from '../midi/note-name'
+import { host } from '../audio/engine-backend'
 
 import {
   AudioToken,
@@ -38,13 +39,8 @@ import {
   parsePitchModifiers as parsePitchModifiersAt,
   ParserUtils,
 } from './parser-utils'
-import {
-  SCOPE_CHAIN_OPS,
-  VOICING_ARITY,
-  VOICING_OPS,
-  collapseScopedRun,
-  type ScopeChain,
-} from './play-postfix-ops'
+import { SCOPE_CHAIN_OPS, VOICING_ARITY, VOICING_OPS, collapseScopedRun } from './play-postfix-ops'
+import type { ScopeChain } from './play-postfix-ops'
 
 type PostfixResult = { value: PlayElement | string; newPos: number; changed: boolean }
 
@@ -363,7 +359,7 @@ export class ExpressionParser {
   private accidentalToAlteration(run: string): number {
     const sign = run[0] === '#' ? 1 : -1
     if (run.length > 2) {
-      console.warn(
+      host.warn(
         `⚠️  Accidental "${run}" has ${run.length} markers; the spec recommends at most 2 (bb / ##).`,
       )
     }

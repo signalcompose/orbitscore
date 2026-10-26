@@ -22,6 +22,8 @@
 
 import { Output } from '@julusian/midi'
 
+import { host } from '../audio/engine-backend'
+
 import { ActiveNote, MidiBackend, MidiBackendPort, MidiOutput } from './midi-output'
 
 // ---------------------------------------------------------------------------
@@ -114,7 +116,7 @@ export class RtMidiOutput implements MidiOutput {
     const { name: resolvedName, index } = matches[0]!
 
     if (matches.length > 1) {
-      console.warn(
+      host.warn(
         `RtMidiOutput: multiple ports match "${portName}" (${matches
           .map((m) => m.name)
           .join(', ')}); using first match "${resolvedName}"`,

@@ -5,6 +5,7 @@
  * 完全に置き換えて全 sequence が LinkAudio 経由となる。 hardware 出力との
  * 混在は不可。 詳細は docs/research/LINK_AUDIO_API.md §0 参照。
  */
+import { host } from '../../audio/engine-backend'
 
 // Sample rates accepted as "common" without a warning. Anything else still
 // works (the plugin resamples), but we surface a hint so a typo like 480000
@@ -43,7 +44,7 @@ export class LinkAudioManager {
       !Number.isInteger(targetSampleRate) ||
       targetSampleRate <= 0
     ) {
-      console.warn(
+      host.warn(
         `⚠️  global.linkAudio(${targetSampleRate}): invalid target sample rate ` +
           `(must be a positive integer). Falling back to auto-detect.`,
       )
@@ -51,7 +52,7 @@ export class LinkAudioManager {
       return
     }
     if (!COMMON_SAMPLE_RATES.has(targetSampleRate)) {
-      console.warn(
+      host.warn(
         `⚠️  global.linkAudio(${targetSampleRate}): non-standard sample rate. ` +
           `Common values are 44100 / 48000 / 88200 / 96000 / 176400 / 192000. ` +
           `Proceeding anyway — the plugin will resample.`,

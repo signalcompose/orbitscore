@@ -332,7 +332,7 @@ insert の分離」と「昇格失敗時に bus を返却しないロールバ�
 （sum / aux）とも共有されています。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:980-1011
+// packages/engine/src/core/global/effect-slot.ts:978-1009
 /**
  * `<prefix><n>` 連番 + free-list の bus pool（SequenceEffectManager / MixerManager 由来）。
  * 失敗した宣言が pool を恒久消費しないよう、返却された名前を優先再利用する
@@ -375,7 +375,7 @@ landmine を producer 側の呼び出し規律で回避する仕組み）。`app
 になります。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:454-472
+// packages/engine/src/core/global/effect-slot.ts:452-470
   /** Settle a complete effect rack through one prepare-commit daemon command. */
   async applyRack(key: K, rack: RackSpec): Promise<void> {
     return this.enqueue(key, () => this.applyRackBody(key, rack))

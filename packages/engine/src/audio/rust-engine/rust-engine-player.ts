@@ -37,7 +37,7 @@
  */
 
 import { gainDbToAmplitude } from '../audio-gain-utils'
-import type { AudioEngineBackend } from '../engine-backend'
+import { host, type AudioEngineBackend } from '../engine-backend'
 import type {
   AudioDevice,
   EffectChainApplyRequest,
@@ -527,17 +527,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
       // 単一 anchor 推定（量子化ヨレあり）に静かに落ちる。演奏中にヨレが戻った
       // とき、ログに手掛かりが無いと原因追跡が不可能になるので遷移端で必ず出す。
       if (previousFit && !this.anchorFit) {
-        console.warn(
+        host.warn(
           '⚠️  [rust-engine] clock-anchor regression degraded — falling back to single-anchor estimate (window contaminated?); timing jitter may increase until it recovers',
         )
       } else if (!previousFit && this.anchorFit && this.anchorSamples.length > 2) {
         // length > 2 guard: boot/respawn 直後に 2 サンプル目で fit が初めて立つ
         // 通常経路では出さない（劣化からの復帰のみ知らせる）。
-        console.log('✅ [rust-engine] clock-anchor regression recovered')
+        host.log('✅ [rust-engine] clock-anchor regression recovered')
       }
     } else {
       // 不正な now_sec で anchor を凍結させると drift しうるので、無言にせず通知する。
-      console.warn(
+      host.warn(
         '⚠️  [rust-engine] StreamStats missing a valid now_sec — clock anchor not updated:',
         data,
       )
@@ -558,12 +558,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     const text = `[rust-engine] daemon-error [${severity ?? 'unknown'}] ${
       code ?? 'UNKNOWN'
     }: ${message ?? JSON.stringify(data)}`
-    // fatal（DEVICE_LOST 等）は severity を保って console.error に出す（daemon-died 経路も別途
+    // fatal（DEVICE_LOST 等）は severity を保って host.error に出す（daemon-died 経路も別途
     // 扱うが、ticker 経由のこのレコードが warn に埋もれて見落とされないようにする）。
     if (severity === 'fatal') {
-      console.error(`❌  ${text}`)
+      host.error(`❌  ${text}`)
     } else {
-      console.warn(`⚠️  ${text}`)
+      host.warn(`⚠️  ${text}`)
     }
   }
 
@@ -609,7 +609,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     } catch (err) {
       // anchor=0 は初回 StreamStats（≤約1s）で自己修復するが、その間 onset clip しうるので
       // 無言にせず通知する（空 catch を避ける）。
-      console.warn(
+      host.warn(
         '⚠️  [rust-engine] getStatus() failed — clock anchor defaults to 0 (self-heals on first StreamStats):',
         err,
       )
@@ -635,18 +635,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (this.disposed) return // quit() 進行中 — respawn しない
     // 再 anchor 完了まで dispatch を止める（respawning の宣言コメント参照・唯一 load-bearing）。
     this.respawning = true
-    console.warn('⚠️  [rust-engine] daemon died unexpectedly — respawning…')
+    host.warn('⚠️  [rust-engine] daemon died unexpectedly — respawning…')
     // respawnLoop は try/finally で自己完結するが、想定外の throw（将来の改変等）が
     // unhandled rejection になって TS プロセスを巻き込まないよう安全網を張る。
     void this.ensureRespawn().catch((err) => {
-      console.error('❌ [rust-engine] unexpected error escaped respawn loop:', err)
+      host.error('❌ [rust-engine] unexpected error escaped respawn loop:', err)
       this.respawning = false
     })
   }
 
   private enqueuePluginUiEvent(work: () => Promise<void> | void): void {
     this.pluginUiEventTail = this.pluginUiEventTail.then(work).catch((error) => {
-      console.error(
+      host.error(
         `[plugin-ui] event handling failed: ${error instanceof Error ? error.message : String(error)}`,
       )
     })
@@ -666,7 +666,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       try {
         await this.pluginUiSafepointSaver(target)
       } catch (error) {
-        console.error(
+        host.error(
           `[plugin-ui] safepoint save failed for ${JSON.stringify(target)}; ` +
             `AckUiSafepoint was not sent: ${error instanceof Error ? error.message : String(error)}`,
         )
@@ -688,7 +688,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       const target = pluginUiTargetFromEvent(data)
       const completion = data.completion
       if (completion === 'timeout-without-save') {
-        console.error(
+        host.error(
           `[plugin-ui] ${JSON.stringify(target)} closed after timing out without saving state`,
         )
       } else if (completion !== 'safepoint-completed') {
@@ -709,7 +709,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.enqueuePluginUiEvent(() => {
       const data = wireObject(raw, 'PluginUiClosedByRespawn data')
       const target = pluginUiTargetFromEvent(data)
-      console.error(
+      host.error(
         `[plugin-ui] ${JSON.stringify(target)} was closed by daemon respawn and was not reopened`,
       )
       // Global 側のセッション簿記を実態に揃える（残すと DSL ui() の冪等判定が
@@ -779,7 +779,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // benign な getStatus 失敗（daemon 生存・anchor は StreamStats で自己修復）は isRunning が
           // true なので success へ進む。実際の再死のときだけ retry に回す（沈黙させず可視化する）。
           if (!this.daemon.isRunning()) {
-            console.warn(
+            host.warn(
               `⚠️  [rust-engine] daemon re-died during session re-establishment ` +
                 `(attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}) — retrying…`,
             )
@@ -795,19 +795,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reapplyBusLinesAfterRespawn()
           await this.reapplySourceRoutingAfterRespawn()
           await this.reapplyGlobalGainAfterRespawn()
-          console.warn(
+          host.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
           )
           return
         } catch (err) {
-          console.warn(
+          host.warn(
             `⚠️  [rust-engine] respawn attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS} failed:`,
             err,
           )
         }
       }
       // 上限到達 — recovery 断念。TS プロセスは落とさず poll ループだけ止める。
-      console.error(
+      host.error(
         `❌ [rust-engine] daemon respawn failed after ${MAX_RESPAWN_ATTEMPTS} attempts — ` +
           `stopping playback (the TS process stays alive).`,
       )
@@ -834,7 +834,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       } catch (err) {
         // respawnLoop は disposed=true で早期 return するので通常は throw しない。想定外の
         // 失敗でも quit は続行するが、silent に握り潰さず記録する。
-        console.warn('[rust-engine] quit: respawn settled with an unexpected error:', err)
+        host.warn('[rust-engine] quit: respawn settled with an unexpected error:', err)
       }
     }
     // CONTROL_QUIT の前に、既に受け取った UI close の保存・ack を完結させる。
@@ -936,8 +936,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   private reportAudioOutput(status: Record<string, unknown>): void {
     const report = audioOutputReportLines(status)
-    if (report.error) console.error(report.error)
-    if (report.info) console.log(report.info)
+    if (report.error) host.error(report.error)
+    if (report.info) host.log(report.info)
   }
 
   /**
@@ -1020,7 +1020,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         await this.daemon.setBusRouting(seqBus, output, sends)
       } catch (err) {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
-        console.error(
+        host.error(
           `❌ [rust-engine] failed to restore bus routing after daemon respawn (bus=${seqBus})`,
           err,
         )
@@ -1051,7 +1051,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         await this.daemon.setBusLine(bus, line)
       } catch (err) {
         // Keep the intent: a later respawn gets another restoration attempt.
-        console.error(
+        host.error(
           `❌ [rust-engine] failed to restore bus line after daemon respawn (bus=${bus})`,
           err,
         )
@@ -1097,7 +1097,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       await this.daemon.setGlobalGain(intent.amplitude, intent.rampSec)
     } catch (err) {
       // キャッシュは意図的に残す: 次の respawn で再試行する。
-      console.error(
+      host.error(
         `❌ [rust-engine] failed to restore master gain after daemon respawn ` +
           `(amplitude=${intent.amplitude})`,
         err,
@@ -1112,7 +1112,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         await this.daemon.setSourceRouting(source, unit, target)
       } catch (err) {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
-        console.error(
+        host.error(
           `❌ [rust-engine] failed to restore source routing after daemon respawn ` +
             `(source=${source}, unit=${unit})`,
           err,
@@ -1399,7 +1399,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
         // per-key の false 化により、self-heal は失敗した宣言だけを再ロードする（#461 review）。
         this.markPluginInactive(key, role, instance)
-        console.error(
+        host.error(
           `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}` +
             (bus ? ` (bus=${bus})` : ''),
           err,
@@ -1423,7 +1423,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         // The respawned daemon started empty, so a failed replay cannot retain the old registry.
         // Mark this receiver inactive through the same seam used by single-plugin self-heal.
         this.markPluginInactive(key, 'effect')
-        console.error(
+        host.error(
           `❌ [rust-engine] failed to restore effect rack after daemon respawn${
             bus === undefined ? ' (master)' : ` (bus=${bus})`
           }`,
@@ -1587,7 +1587,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         .pluginAllNotesOff()
         .then(({ released, stale, failed }) => {
           if (released > 0 || stale > 0 || failed > 0) {
-            console.log(
+            host.log(
               `[rust-engine] plugin all-notes-off: released=${released} stale=${stale} failed=${failed}`,
             )
           }
@@ -1606,7 +1606,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   private warnUnlessDisconnected(label: string, err: unknown): void {
     if (err instanceof DaemonConnectionError || err instanceof DaemonQuitError) return
-    console.warn(`⚠️  [rust-engine] ${label} failed unexpectedly:`, err)
+    host.warn(`⚠️  [rust-engine] ${label} failed unexpectedly:`, err)
   }
 
   clearSequenceEvents(sequenceName: string): void {
@@ -1652,9 +1652,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
-      console.log(
-        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
-      )
+      host.step({
+        seq: play.sequenceName,
+        argPath: play.argPath,
+        atEpochMs: Math.round(this.startTime + play.time),
+      })
     }
   }
 
@@ -1741,10 +1743,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       return
     }
-    console.error(
-      `❌ [rust-engine] playback error for ${play.sequenceName} (${play.filepath}):`,
-      err,
-    )
+    host.error(`❌ [rust-engine] playback error for ${play.sequenceName} (${play.filepath}):`, err)
   }
 
   /** filepath を daemon にロードし sample_id を返す（キャッシュ + single-flight）。 */
@@ -1770,7 +1769,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
         ) {
           this.durations.set(filepath, res.frames / res.sampleRate)
         } else {
-          console.warn(
+          host.warn(
             `⚠️  [rust-engine] LoadSample for "${filepath}" returned invalid metadata ` +
               `(sample_rate=${res.sampleRate}, frames=${res.frames}) — ` +
               `chop slice 領域を計算できず、slice は全体再生に degrade します。`,
@@ -1901,6 +1900,6 @@ export class RustEnginePlayer implements AudioEngineBackend {
     const key = RustEnginePlayer.warningKey(kind, discriminator)
     if (this.warned.has(key)) return
     this.warned.add(key)
-    console.warn(message)
+    host.warn(message)
   }
 }

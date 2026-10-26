@@ -1,4 +1,5 @@
 import type { Scheduler } from '../../global/types'
+import { host } from '../../../audio/engine-backend'
 
 /**
  * Options for one-shot sequence playback
@@ -51,7 +52,7 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
     clearSequenceEventsFn(sequenceName)
   }
 
-  console.log(`▶ ${sequenceName} (one-shot)`)
+  host.log(`▶ ${sequenceName} (one-shot)`)
 
   // Schedule events from current time with a small buffer (100ms) to ensure they're in the future
   const scheduleTime = currentTime + 100
@@ -66,7 +67,7 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
   const runTimer = setTimeout(() => {
     setRunTimerFn(undefined)
     clearSequenceEventsFn(sequenceName)
-    console.log(`⏹ ${sequenceName} (finished)`)
+    host.log(`⏹ ${sequenceName} (finished)`)
   }, tailDelay)
   setRunTimerFn(runTimer)
 

@@ -4,6 +4,7 @@ import * as path from 'path'
 import { stringify, parse } from 'yaml'
 
 import type { AudioEngine, PluginStateSaveResult, PluginStateSaveTarget } from '../audio/types'
+import { host } from '../audio/engine-backend'
 
 export interface PluginStateIdentity {
   receiver: string
@@ -131,7 +132,7 @@ export async function resolveRegisteredPluginStatePath(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     const detail = error instanceof Error ? ` (${code ?? 'unknown'}: ${error.message})` : ''
-    console.error(
+    host.error(
       `Registered plugin state '${absoluteStatePath}' for '${key}' ${
         code === 'ENOENT' ? 'does not exist' : `is not readable${detail}`
       }; loading the plugin without state.`,
@@ -139,7 +140,7 @@ export async function resolveRegisteredPluginStatePath(
     return undefined
   }
   if (!stateStats.isFile()) {
-    console.error(
+    host.error(
       `Registered plugin state '${absoluteStatePath}' for '${key}' is not a file; ` +
         'loading the plugin without state.',
     )
@@ -150,7 +151,7 @@ export async function resolveRegisteredPluginStatePath(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     const detail = error instanceof Error ? ` (${code ?? 'unknown'}: ${error.message})` : ''
-    console.error(
+    host.error(
       `Registered plugin state '${absoluteStatePath}' for '${key}' ${
         code === 'ENOENT' ? 'does not exist' : `is not readable${detail}`
       }; loading the plugin without state.`,

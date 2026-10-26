@@ -23,6 +23,7 @@ import { RootContext } from '../midi/types'
 import { MidiScheduler } from '../midi/midi-scheduler'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 import type { RackRecipe } from '../signal-chain/rack'
+import { host } from '../audio/engine-backend'
 
 import { Global } from './global'
 import { isStateFileSpec } from './global/plugin-resolver'
@@ -256,7 +257,7 @@ export class Sequence {
         const deferToNextCycle = ['tempo', 'beat', 'length', 'play'].includes(parameterName)
 
         if (deferToNextCycle && this.stateManager.isLooping()) {
-          console.log(
+          host.log(
             `🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (next cycle)`,
           )
           return
@@ -268,9 +269,7 @@ export class Sequence {
         // nothing audible. Still log the familiar "(seamless)" line so the console reads
         // the same either way.
         if (skipReschedule) {
-          console.log(
-            `🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`,
-          )
+          host.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
           return
         }
 
@@ -279,7 +278,7 @@ export class Sequence {
         const currentTime = now - scheduler.startTime
         this.clearEvents(this.stateManager.getName())
         this.scheduleEventsFromTime(scheduler, currentTime)
-        console.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
+        host.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
       }
     }
   }
@@ -595,13 +594,13 @@ export class Sequence {
       // pre-route Ableton tracks before playback. Fire-and-forget + best-effort:
       // the dispatch path re-registers idempotently if this races the boot.
       this.audioEngine.registerLinkAudioChannel?.(destinationName)?.catch((err) => {
-        console.warn(
+        host.warn(
           `⚠️  ${name}.output("${destinationName}"): ` +
             `eager LinkAudio channel registration failed (will retry on playback): ${err}`,
         )
       })
     } else {
-      console.warn(
+      host.warn(
         `⚠️  ${name}.output("${destinationName}") ` +
           `was called without 'global.linkAudio()'. The channel name is recorded ` +
           `but will not take effect until LinkAudio mode is declared.`,
@@ -726,12 +725,12 @@ export class Sequence {
       if (err instanceof DaemonProtocolError) {
         // daemon 側の決定的な拒否（kind/順序違反・非 outproc-effect ビルドの UNSUPPORTED 等）。
         // 再送しても同じ結果＝スクリプト側の修正が必要なので、actionable な error で出す。
-        console.error(
+        host.error(
           `❌ ${name}: SetBusLine(${bus}) was rejected — routing was NOT applied. ` +
             `Fix the declaration and re-run .output()/.send(): ${err.message}`,
         )
       } else {
-        console.warn(
+        host.warn(
           `⚠️  ${name}: SetBusLine(${bus}) failed (transient) — ` +
             `the declared line remains pending for the next routing call or playback start: ${err}`,
         )
@@ -1009,7 +1008,7 @@ export class Sequence {
   private syncInstrumentSourceRouting(): void {
     void this.ensureInstrumentSourceRouting().catch((error) => {
       const name = this.stateManager.getName() || 'sequence'
-      console.error(
+      host.error(
         `❌ ${name}: SetSourceRouting(plugin:${name}, unit=0) failed — instrument routing was NOT applied.`,
         error,
       )
@@ -1070,7 +1069,7 @@ export class Sequence {
    */
   density(value: number): this {
     if (!Number.isFinite(value)) {
-      console.warn(
+      host.warn(
         `⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ` +
           `density(${value}) is not a finite number — defaulting to 0.5.`,
       )
@@ -1097,7 +1096,7 @@ export class Sequence {
   comp(...chords: PlayElement[]): this {
     const name = this.stateManager.getName() || 'sequence'
     if (chords.length === 0) {
-      console.warn(`⚠️  Sequence '${name}': comp() needs at least one chord — ignored.`)
+      host.warn(`⚠️  Sequence '${name}': comp() needs at least one chord — ignored.`)
       return this
     }
     // Pick the figure: an explicit cell wins; with neither cell nor density set a
@@ -1108,7 +1107,7 @@ export class Sequence {
       // A cell names specific onsets, so a co-set density() has no effect — say so
       // rather than silently ignore it (a known cell takes precedence).
       if (this._compDensity !== undefined) {
-        console.warn(
+        host.warn(
           `⚠️  Sequence '${name}': both cell("${this._compCell}") and density() are set — ` +
             `the cell wins; density is ignored.`,
         )
@@ -1117,7 +1116,7 @@ export class Sequence {
       cellName = 'charleston'
     } // else: density mode — cellName stays undefined
     const onsets = cellToGrid(cellName, this._compDensity, (msg) =>
-      console.warn(`⚠️  Sequence '${name}': ${msg}`),
+      host.warn(`⚠️  Sequence '${name}': ${msg}`),
     )
     // Expand each chord into a comped bar: a `( )` group with one slot per cell
     // slot, the chord (a fresh clone per onset, mirroring `*n`) at onsets, 0 else.
@@ -1199,7 +1198,7 @@ export class Sequence {
     this._chopDivisions = divisions
 
     if (!this._audioFilePath) {
-      console.error(`${this.stateManager.getName()}: no audio file set`)
+      host.error(`${this.stateManager.getName()}: no audio file set`)
       return this
     }
 
@@ -1224,7 +1223,7 @@ export class Sequence {
       this.global.getBinding(name),
     )
     for (const w of warnings) {
-      console.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)
+      host.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)
     }
     this._audioRandomWarningPending = containsRandomDegree(resolved)
 
@@ -1481,7 +1480,7 @@ export class Sequence {
     // Discoverability: `.voicelead()` is active but no chord stack (≥2 pitched voices at one
     // onset) was found, so it had no effect — likely a missing `[ ]` around intended chords.
     if (prev === null) {
-      console.warn(
+      host.warn(
         `⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': .voicelead() found no ` +
           `chord stacks (≥2 voices at one onset); voice-leading had no effect. Use [a, b, ...] stacks.`,
       )
@@ -1690,7 +1689,7 @@ export class Sequence {
   private resolveOutputDetune(detune: number): number {
     if (!this.isInstrument() || detune === 0) return detune
     if (!this._instrumentDetuneWarned) {
-      console.warn(
+      host.warn(
         `⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': detune is not supported for plugin instruments in v1; skipping detune.`,
       )
       this._instrumentDetuneWarned = true
@@ -1856,7 +1855,7 @@ export class Sequence {
     if (this._dispatchSkipLoggedFor === reason) return
     this._dispatchSkipLoggedFor = reason
     const name = this.stateManager.getName() || 'sequence'
-    console.error(`[ERROR] Sequence '${name}': ${reason} このシーケンスは無音でスキップします。`)
+    host.error(`[ERROR] Sequence '${name}': ${reason} このシーケンスは無音でスキップします。`)
   }
 
   /**
@@ -2110,7 +2109,7 @@ export class Sequence {
 
     // Log stop message for loop sequences
     if (wasLooping) {
-      console.log(`⏹ ${sequenceName} (loop stopped)`)
+      host.log(`⏹ ${sequenceName} (loop stopped)`)
     }
 
     return this
@@ -2144,7 +2143,7 @@ export class Sequence {
       const scheduler = this.activeScheduler()
       const currentTime = Date.now() - scheduler.startTime
 
-      console.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)
+      host.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)
 
       // Clear old scheduled events (MIDI: also releases sounding notes, §7-2)
       this.clearEvents(sequenceName)

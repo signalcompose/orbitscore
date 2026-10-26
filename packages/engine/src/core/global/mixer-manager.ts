@@ -16,6 +16,7 @@ import {
 } from '../sequence/audio-line'
 import { clampGainDb } from '../sequence/parameters/gain-manager'
 import { clampPan } from '../sequence/parameters/pan-manager'
+import { host } from '../../audio/engine-backend'
 
 export type { MixerOutputOptions, MixerSendOptions }
 
@@ -307,7 +308,7 @@ export class MixerManager {
       bus = state.pool.acquire(name)
       state.buses.set(name, bus)
       if (this.kindsWithBus(name).length > 1) {
-        console.warn(MixerManager.ambiguousMessage(name))
+        host.warn(MixerManager.ambiguousMessage(name))
       }
     }
     return this.makeHandle(kind, name, bus)

@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../audio/types'
+import { host } from '../audio/engine-backend'
 
 import type { ActiveNote, MidiOutput } from './midi-output'
 
@@ -23,9 +24,9 @@ export class PluginNoteOutput implements MidiOutput {
     if (this.engine.pluginNoteOn) {
       void this.engine
         .pluginNoteOn(key, channel - 1, normalizedVelocity, port)
-        .catch((err) => console.error('❌ PluginNoteOn failed', { key, port, err }))
+        .catch((err) => host.error('❌ PluginNoteOn failed', { key, port, err }))
     } else {
-      console.error('❌ PluginNoteOn unavailable: engine.pluginNoteOn is not implemented', {
+      host.error('❌ PluginNoteOn unavailable: engine.pluginNoteOn is not implemented', {
         key,
         port,
       })
@@ -77,9 +78,9 @@ export class PluginNoteOutput implements MidiOutput {
     if (this.engine.pluginNoteOff) {
       void this.engine
         .pluginNoteOff(key, note.channel - 1, undefined, note.port)
-        .catch((err) => console.error('❌ PluginNoteOff failed', { key, port: note.port, err }))
+        .catch((err) => host.error('❌ PluginNoteOff failed', { key, port: note.port, err }))
     } else {
-      console.error('❌ PluginNoteOff unavailable: engine.pluginNoteOff is not implemented', {
+      host.error('❌ PluginNoteOff unavailable: engine.pluginNoteOff is not implemented', {
         key,
       })
     }

@@ -72,7 +72,7 @@ export async function startEditorSession(
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => rpc?.editorClient() != null,
     requestEditor: (method, params) => rpc!.requestEditor(method, params),
-    captureConsole: false,
+    attachEngineOutput: false,
   })
   const session = core
   rpc = await startRpcServer({

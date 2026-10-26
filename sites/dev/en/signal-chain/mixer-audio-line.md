@@ -103,7 +103,7 @@ empty-name check, three steps line up: reserving the bus name, the LinkAudio exc
 acquisition from the pool.
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:294-314
+// packages/engine/src/core/global/mixer-manager.ts:295-315
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -120,7 +120,7 @@ acquisition from the pool.
       bus = state.pool.acquire(name)
       state.buses.set(name, bus)
       if (this.kindsWithBus(name).length > 1) {
-        console.warn(MixerManager.ambiguousMessage(name))
+        host.warn(MixerManager.ambiguousMessage(name))
       }
     }
     return this.makeHandle(kind, name, bus)
@@ -144,7 +144,7 @@ prefix and the cap are constants on the TS side, and the comment states explicit
 must match the Rust side.
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:33-46
+// packages/engine/src/core/global/mixer-manager.ts:34-47
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:510-549
+// packages/engine/src/core/sequence.ts:509-548
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -296,7 +296,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:627-648
+// packages/engine/src/core/sequence.ts:626-647
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -431,7 +431,7 @@ export function lineNeedsBus(elements: readonly LineElement[]): boolean {
 The call site (`stageOutputElement()`) only consults it.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:450-467
+// packages/engine/src/core/sequence.ts:449-466
   private stageOutputElement(
     name: string,
     dest: OutputDest,
@@ -939,7 +939,7 @@ export type WireLineOp =
 The sending side is one line.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:663-666
+// packages/engine/src/audio/rust-engine/daemon-client.ts:664-667
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1280,7 +1280,7 @@ expanded the target to the explicit three values `none / master / bus`. Regardle
 order, only the newest destination derived from the score crosses the wire.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:972-1006
+// packages/engine/src/core/sequence.ts:971-1005
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()
@@ -1347,7 +1347,7 @@ side had had `set_global_gain` (with a gain ramp) from the start, and **TS had n
 The fixed `Global.gain()` converts dB to linear amplitude and passes it to `setGlobalGain`.
 
 ```typescript
-// packages/engine/src/core/global.ts:614-626
+// packages/engine/src/core/global.ts:611-623
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
     if (typeof result === 'number') {
@@ -1357,7 +1357,7 @@ The fixed `Global.gain()` converts dB to linear amplitude and passes it to `setG
     void this.audioEngine
       .setGlobalGain?.(gainDbToAmplitude(this.effectsManager.getMasterGainDb()))
       ?.catch((error) => {
-        console.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
+        host.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
       })
     return this
   }
@@ -1396,7 +1396,7 @@ on `calculateEventGain` (`event-scheduler.ts:30-65`) states that the old impleme
 (next section), and then gives the reason for keeping it:
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:67-76
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:68-77
   // `masterGainDb === -Infinity`（完全無音）だけは残す — daemon 側の gain が 0.0 になるまでの
   // ramp 中に音が漏れるのを避けるため、発音側でも落とす。
   if (isMuted) {

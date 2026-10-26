@@ -5,6 +5,7 @@
 
 import { GlobalInit, SequenceInit } from '../parser/audio-parser'
 import { Global } from '../core/global'
+import { host } from '../audio/engine-backend'
 
 import { InterpreterState } from './types'
 
@@ -75,14 +76,14 @@ export async function processSequenceInit(
   if (init.globalVariable) {
     global = state.globals.get(init.globalVariable)
     if (!global) {
-      console.error(`Global instance not found: ${init.globalVariable}`)
+      host.error(`Global instance not found: ${init.globalVariable}`)
       return
     }
   } else {
     // Legacy syntax: init GLOBAL.seq
     global = state.currentGlobal
     if (!global) {
-      console.error('No global instance available for sequence initialization')
+      host.error('No global instance available for sequence initialization')
       return
     }
   }

@@ -283,7 +283,7 @@ export type ValueArray = {
 interpreter 側の分岐は次のとおりです。
 
 ```typescript
-// packages/engine/src/interpreter/process-value-binding.ts:40-46
+// packages/engine/src/interpreter/process-value-binding.ts:41-47
 export function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
   if (!global) return
@@ -332,11 +332,11 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 データの配置で守られています。
 
 ```typescript
-// packages/engine/src/core/global.ts:356-370
+// packages/engine/src/core/global.ts:353-367
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
-      console.warn(`⚠️  value namespace: "${name}" redefined (last-write-wins).`)
+      host.warn(`⚠️  value namespace: "${name}" redefined (last-write-wins).`)
     }
     this.chordRegistry.delete(name)
     this.rackRegistry.set(name, structuredClone(rack) as RackRecipe)
@@ -424,7 +424,7 @@ export function effectArgumentsToRack(
 （master / seq / sum / aux）」と呼ぶものです。いずれも `effect-slot.ts` の 2 つの関数を通ります。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:290-302
+// packages/engine/src/core/global/effect-slot.ts:288-300
 /**
  * 単発の文字列形 `effect("X")` を **1 要素のラック**へ脱糖する（SC.10.3b）。
  *
@@ -446,7 +446,7 @@ export function toRackRecipe(value: string | RackRecipe, pluginId?: string): Rac
 `RackRecipe`（interpreter の分類済みレシピ）を `RackSpec`（解決済みの宣言）へ変換します。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:132-143
+// packages/engine/src/core/global/effect-slot.ts:130-141
 /** Resolve the interpreter's category-classified recipe immediately before applying a rack. */
 export function resolveEffectRack(
   recipe: RackRecipe,
@@ -501,7 +501,7 @@ SC.10.5 の規範を要約すると、(1) 後勝ち、(2) 新旧配列は**名�
 ### LCS のトークンはカテゴリ付き
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:248-252
+// packages/engine/src/core/global/effect-slot.ts:246-250
 function elementToken(element: ChainElement | RackElementSpec): string {
   return element.kind === 'catalog'
     ? `catalog:${element.normalizedName}`
@@ -512,7 +512,7 @@ function elementToken(element: ChainElement | RackElementSpec): string {
 LCS の表自体は素朴な DP（`effect-slot.ts:255-271`）で、対応の取り出しがこうなっています。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:272-288
+// packages/engine/src/core/global/effect-slot.ts:270-286
   const pairs: Array<{ previousIndex: number; nextIndex: number }> = []
   let i = 0
   let j = 0
@@ -540,7 +540,7 @@ LCS で対応がついた要素を **keep** するか **replace** するかは�
 「解決済みパス・pluginId・declaredStatePath」の 3 つで決まります。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:304-319
+// packages/engine/src/core/global/effect-slot.ts:302-317
 /**
  * カタログ要素の**同一性**（LCS で対応づいた要素を keep するか replace するかの判定）。
  *
@@ -562,7 +562,7 @@ function sameCatalogIdentity(old: ChainElement, other: RackElementSpec | ChainEl
 ### diff か rebuild か、そして occurrence
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:459-472
+// packages/engine/src/core/global/effect-slot.ts:457-470
   private async applyRackBody(key: K, rack: RackSpec): Promise<void> {
     if (!this.audioEngine.applyEffectChain) {
       throw new Error('Effect rack hosting requires the Rust engine backend.')
@@ -586,7 +586,7 @@ function sameCatalogIdentity(old: ChainElement, other: RackElementSpec | ChainEl
 occurrence の割り当てを見てみましょう。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:496-516
+// packages/engine/src/core/global/effect-slot.ts:494-514
     // Every LCS-corresponding element survives as the same identity, including an in-place
     // catalog spec replacement. Unmatched dropped identities are free for deterministic reuse.
     for (const nextIndex of rack.keys()) {
@@ -620,7 +620,7 @@ state ファイル名は `[receiver, role, normalizedName, occurrence]` から�
 ### plan の組み立てと発行
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:586-600
+// packages/engine/src/core/global/effect-slot.ts:584-598
     const operations: EffectChainPlanStage[] = []
     for (const [nextIndex, element] of next.entries()) {
       const previousIndex = previousForNew.get(nextIndex)
@@ -643,7 +643,7 @@ keep できる要素は `op: 'keep'` に `prev_index`（**適用前**チェー�
 再評価は、ロードし直しではなく keep op のパラメータ更新になります。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:644-669
+// packages/engine/src/core/global/effect-slot.ts:642-667
     const request: EffectChainApplyRequest = {
       ...(bus === undefined ? {} : { bus }),
       mode,
@@ -721,7 +721,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:508-515
+// packages/engine/src/audio/rust-engine/daemon-client.ts:509-516
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',

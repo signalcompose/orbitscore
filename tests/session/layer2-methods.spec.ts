@@ -106,7 +106,7 @@ async function startSession(engine: FakeEngine, docs?: DocsSites) {
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => false,
     requestEditor: (method, params) => rpc!.requestEditor(method, params),
-    captureConsole: false,
+    attachEngineOutput: false,
     docs,
   })
   rpc = await startRpcServer({

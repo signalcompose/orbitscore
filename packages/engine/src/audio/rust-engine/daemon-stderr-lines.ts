@@ -29,8 +29,8 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // `orbit-clap-host` の中継が un-silence され、**プラグイン自身の正常動作の警告**
   // （`NotePortsExtension なし; port 0 を使用` 等）が `ERROR:` として記録された。
   // 実機ゲートで**既存テストを含む 7 件**が「ERROR 行が増えた」で落ちたのがこれ
-  // （15 → 17）。行そのものは `get_log` に残る — `console.error` ではなく
-  // `console.log` へ回るだけで、**診断が消えるわけではない**。
+  // （15 → 17）。行そのものは `get_log` に残る — `host.error` ではなく
+  // `host.log` へ回るだけで、**診断が消えるわけではない**。
   if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN)\s/.test(plain)) return true
   // child プロセスは daemon の stderr を継承し、tracing を持たない(依存を足していない)。
   // level トークンを自分で名乗った行だけを非エラーとして認める(例: "plugin.process() failed")。

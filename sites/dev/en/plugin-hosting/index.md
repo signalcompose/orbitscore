@@ -139,7 +139,7 @@ only to path-direct specs (catalog names carry no extension, so rejecting them h
 reach catalog resolution).
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:33-61
+// packages/engine/src/core/global/effect-slot.ts:31-59
 /**
  * effect spec の共通前処理。順序は load-bearing（PluginEffectManager 由来）:
  * spec 検証 → LinkAudio gate → パス解決。未保存ファイル等で resolve が

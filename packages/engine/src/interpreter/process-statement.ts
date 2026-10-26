@@ -13,8 +13,7 @@ import {
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
-import { physicalOutputDest } from '../core/sequence/audio-line'
-import type { OutputDest } from '../core/sequence/audio-line'
+import { physicalOutputDest, type OutputDest } from '../core/sequence/audio-line'
 import { resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
@@ -25,6 +24,7 @@ import {
   type MixerRuntimeNode,
 } from '../signal-chain/runtime'
 import { effectArgumentsToRack, instrumentArguments } from '../signal-chain/rack'
+import { host } from '../audio/engine-backend'
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
@@ -115,7 +115,7 @@ export async function processStatement(
       break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
-      console.warn(`Unknown statement type: ${(statement as any).type}`)
+      host.warn(`Unknown statement type: ${(statement as any).type}`)
   }
 }
 
@@ -465,7 +465,7 @@ async function handleGlobalTransportCommand(global: any, command: string): Promi
       break
 
     default:
-      console.warn(`Unknown global transport command: ${command}`)
+      host.warn(`Unknown global transport command: ${command}`)
   }
 }
 
@@ -511,7 +511,7 @@ export async function processTransportStatement(
     return
   }
 
-  console.error(`Transport target not found: ${target}`)
+  host.error(`Transport target not found: ${target}`)
 }
 
 /**
@@ -541,7 +541,7 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
 
   // Warn about missing sequences
   if (notFound.length > 0) {
-    console.warn(
+    host.warn(
       `⚠️ RUN(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
     )
   }
@@ -566,7 +566,7 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
   // Preload all audio buffers in parallel (to avoid sequential loading delays)
   const scheduler = state.audioEngine as any
   if (scheduler.loadBuffer) {
-    console.log(`🔧 [RUN] Preloading ${validSequences.length} buffers in parallel...`)
+    host.log(`🔧 [RUN] Preloading ${validSequences.length} buffers in parallel...`)
     await Promise.all(
       validSequences.map(async (seqName) => {
         const sequence = state.sequences.get(seqName)
@@ -574,13 +574,13 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
           const audioPath = (sequence as any)._audioFilePath
           if (audioPath) {
             // _audioFilePath is always absolute (sequence.audio() resolves at set time)
-            console.log(`🔧 [RUN] Preloading ${seqName}: ${audioPath}`)
+            host.log(`🔧 [RUN] Preloading ${seqName}: ${audioPath}`)
             await scheduler.loadBuffer(audioPath)
           }
         }
       }),
     )
-    console.log(`🔧 [RUN] Preload complete`)
+    host.log(`🔧 [RUN] Preload complete`)
   }
 
   // Execute run() on all specified sequences immediately (in parallel)
@@ -712,7 +712,7 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
 
   // Warn about missing sequences
   if (notFound.length > 0) {
-    console.warn(
+    host.warn(
       `⚠️ LOOP(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
     )
   }
@@ -752,7 +752,7 @@ async function handleMuteCommand(sequenceNames: string[], state: InterpreterStat
 
   // Warn about missing sequences
   if (notFound.length > 0) {
-    console.warn(
+    host.warn(
       `⚠️ MUTE(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
     )
   }
