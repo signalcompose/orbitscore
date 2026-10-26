@@ -1,5 +1,5 @@
 /**
- * Audio backend seam (post-2.0 S2 / Issue #296).
+ * Audio backend seam (post-2.0 S2 / Issue #296) と、engine が host に出す出力の口（下の `host`）。
  *
  * `AudioEngineBackend` は interpreter / scheduler が音声バックエンドに要求する
  * 唯一の契約面。`RustEnginePlayer`（orbit-audio-daemon / WebSocket）がこれを満たす。
@@ -52,4 +52,48 @@ export interface AudioEngineBackend extends Scheduler {
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
   isPluginActive?(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean
+}
+
+/** engine が鳴らした step（`[STEP] <seq> <argPath> <atEpochMs>` の中身）。 */
+export interface EngineStepEvent {
+  seq: string
+  argPath: string
+  atEpochMs: number
+}
+
+/**
+ * engine が host に出す出力の口（設計 848 台帳 P-07・束 S-eval #1022 の N1-d3）: 人間向けのログ行
+ * （`console.log` / `warn` / `error` と同じ引数）と、鳴った step。
+ *
+ * 既定は console（凍結版の REPL・`orbitscore play` は今と同じ行を書く。step は `[STEP] …` の 1 行）。
+ * OrbitStudio の層 2 は `setHostOutput` で差し込み、process の console を横取りせずに受け取る。
+ * 既定の口は呼んだその時に `console.*` を引くので、テストの `vi.spyOn(console, …)` もそのまま効く。
+ */
+export interface HostOutput {
+  log(...args: unknown[]): void
+  warn(...args: unknown[]): void
+  error(...args: unknown[]): void
+  step(event: EngineStepEvent): void
+}
+
+const consoleOutput: HostOutput = {
+  log: (...args) => console.log(...args),
+  warn: (...args) => console.warn(...args),
+  error: (...args) => console.error(...args),
+  step: ({ seq, argPath, atEpochMs }) => console.log(`[STEP] ${seq} ${argPath} ${atEpochMs}`),
+}
+
+let currentOutput: HostOutput = consoleOutput
+
+/** engine の中から host へ書く口（差し込まれた口へ回す）。`host.log(…)` は `console.log(…)` と同じ引数。 */
+export const host: HostOutput = {
+  log: (...args) => currentOutput.log(...args),
+  warn: (...args) => currentOutput.warn(...args),
+  error: (...args) => currentOutput.error(...args),
+  step: (event) => currentOutput.step(event),
+}
+
+/** host が出力の口を差し込む。`null` で既定（console）に戻す。 */
+export function setHostOutput(output: HostOutput | null): void {
+  currentOutput = output ?? consoleOutput
 }

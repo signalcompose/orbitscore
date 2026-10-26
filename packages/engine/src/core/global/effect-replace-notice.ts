@@ -19,6 +19,7 @@
  * として目立つ。変えているのは**深刻度の分類**だけで、**本当に失敗して中止する経路は
  * throw する**（この関数を通らない）。
  */
+import { host } from '../../audio/engine-backend'
 export function effectReplaceNotice(message: string): void {
-  console.log(`[effect-replace] ⚠️ ${message}`)
+  host.log(`[effect-replace] ⚠️ ${message}`)
 }

@@ -8,6 +8,7 @@ import * as path from 'path'
 import { RandomValue } from '../../../parser/audio-parser'
 import { ScheduleEventsOptions, ScheduleEventsFromTimeOptions } from '../types'
 import { generateRandomValue } from '../parameters/random-utils'
+import { host } from '../../../audio/engine-backend'
 
 /**
  * Verify that an audio file path is absolute, logging and returning `undefined` if not
@@ -24,7 +25,7 @@ import { generateRandomValue } from '../parameters/random-utils'
  */
 function resolveAudioFilePath(audioFilePath: string, sequenceName: string): string | undefined {
   if (!path.isAbsolute(audioFilePath)) {
-    console.error(
+    host.error(
       `[ERROR] Sequence '${sequenceName}': audio file path is not absolute: "${audioFilePath}". ` +
         `This is an internal error — sequence.audio() should have absolutized the path. ` +
         `このシーケンスは無音でスキップします。`,
@@ -206,7 +207,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
   const currentIteration = Math.floor(elapsedTime / patternDuration)
 
   // Debug logging to understand scheduling behavior
-  console.log(
+  host.log(
     `🔧 [scheduleFromTime] ${sequenceName}: fromTime=${fromTime}ms, loopStartTime=${loopStartTime}ms, elapsed=${elapsedTime}ms, iteration=${currentIteration}, patternDur=${patternDuration}ms`,
   )
 
@@ -221,13 +222,13 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
 
         // Skip events that are in the past
         if (startTimeMs <= fromTime) {
-          console.log(
+          host.log(
             `🔧 [scheduleFromTime] ${sequenceName}: SKIP past event at ${startTimeMs}ms (fromTime=${fromTime}ms)`,
           )
           continue
         }
 
-        console.log(
+        host.log(
           `🔧 [scheduleFromTime] ${sequenceName}: SCHEDULE event at ${startTimeMs}ms (fromTime=${fromTime}ms)`,
         )
 

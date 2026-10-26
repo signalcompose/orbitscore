@@ -5,6 +5,7 @@
 import path from 'node:path'
 
 import type { AudioEngine } from '../../audio/types'
+import { host } from '../../audio/engine-backend'
 
 import { expandHome, resolveAudio } from './audio-resolver'
 
@@ -83,11 +84,11 @@ export class AudioManager {
 
     this._resolveCache.clear()
     if (resolved.length === 1) {
-      console.log(`📂 audioPath: ${inputs[0]} → ${resolved[0]}`)
-      console.log(`📂 base: ${this._documentDirectory} (.orbs file directory)`)
+      host.log(`📂 audioPath: ${inputs[0]} → ${resolved[0]}`)
+      host.log(`📂 base: ${this._documentDirectory} (.orbs file directory)`)
     } else {
-      console.log(`📂 audioPath: ${resolved.length} entries`)
-      resolved.forEach((p, i) => console.log(`   [${i}]: ${p}`))
+      host.log(`📂 audioPath: ${resolved.length} entries`)
+      resolved.forEach((p, i) => host.log(`   [${i}]: ${p}`))
     }
 
     this._audioPaths = resolved
@@ -128,7 +129,7 @@ export class AudioManager {
   audioDevice(deviceName: string): this {
     const currentDevice = this.audioEngine.getCurrentOutputDevice?.()
     if (currentDevice && currentDevice.name === deviceName) {
-      console.log(`🔊 Already using device: ${deviceName}`)
+      host.log(`🔊 Already using device: ${deviceName}`)
       return this
     }
 
@@ -137,11 +138,11 @@ export class AudioManager {
     // 実際の切り替えは VS Code 設定 `orbitscore.audioDevice`（エンジンビュー / MCP の
     // `select_audio_device`）が唯一の経路で、DSL からは配線されていない。
     // 誤誘導するくらいなら、行き先を名指しする。
-    console.warn(`⚠️  global.audioDevice("${deviceName}") does not switch the output device.`)
-    console.warn(
+    host.warn(`⚠️  global.audioDevice("${deviceName}") does not switch the output device.`)
+    host.warn(
       `⚠️  Set it in the Audio Engine Settings view (VS Code setting "orbitscore.audioDevice") and restart the engine.`,
     )
-    if (currentDevice) console.warn(`⚠️  Current device: ${currentDevice.name}`)
+    if (currentDevice) host.warn(`⚠️  Current device: ${currentDevice.name}`)
     return this
   }
 

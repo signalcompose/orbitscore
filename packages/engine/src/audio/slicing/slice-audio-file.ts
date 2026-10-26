@@ -3,6 +3,8 @@
  * Coordinates WAV processing, file management, and caching
  */
 
+import { host } from '../engine-backend'
+
 import { AudioSliceInfo } from './types'
 import { SliceCache } from './slice-cache'
 import { TempFileManager } from './temp-file-manager'
@@ -64,10 +66,10 @@ export function sliceAudioFile(
     try {
       fileManager.writeSliceFile(sliceFilepath, buffer)
       if (process.env.ORBITSCORE_DEBUG) {
-        console.log(`✅ Successfully created slice ${sliceNumber}/${divisions}: ${sliceFilepath}`)
+        host.log(`✅ Successfully created slice ${sliceNumber}/${divisions}: ${sliceFilepath}`)
       }
     } catch (error) {
-      console.error(`❌ Failed to create slice ${sliceNumber}/${divisions}: ${error}`)
+      host.error(`❌ Failed to create slice ${sliceNumber}/${divisions}: ${error}`)
       continue
     }
 
@@ -83,7 +85,7 @@ export function sliceAudioFile(
     })
 
     if (process.env.ORBITSCORE_DEBUG) {
-      console.log(
+      host.log(
         `Created slice ${sliceNumber}/${divisions}: ${fileManager.generateSliceFilename(filepath, sliceNumber, divisions)} (${Math.round(duration)}ms)`,
       )
     }

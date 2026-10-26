@@ -9,6 +9,7 @@
  */
 import crypto from 'node:crypto'
 
+import { setHostOutput } from '@orbitscore/engine/dist/audio/engine-backend'
 import type { ParsedRequest } from '@orbitscore/engine/dist/parser/audio-parser'
 
 import {
@@ -26,7 +27,7 @@ import type { PluginUiResult } from '../mcp/mcp-types'
 import { RpcError, PROTOCOL_VERSION } from '../rpc/protocol'
 import type { AttachedClient, NotificationHandler, RequestHandler } from '../rpc/server'
 
-import { captureConsole, parseStepLine, transportChange } from './console-capture'
+import { createHostOutput, parseStepLine, transportChange, type StepEvent } from './engine-output'
 import type { DocsSites } from './docs-sites'
 import {
   DocumentStore,
@@ -72,10 +73,11 @@ export interface SessionCoreOptions {
   requestEditor(method: string, params: unknown): Promise<unknown>
   /** `session.shutdown` を受けた時（CLI が畳む経路へ回す）。 */
   onShutdownRequested?(): void
-  /** console の横取り（テストでは false にして偽の console を渡す）。 */
-  captureConsole?: boolean
-  /** headless の CLI で、横取りした行を元の console にも書くか。 */
-  consolePassthrough?: boolean
+  /**
+   * engine の出力の口（`host`）にこの層の受け手を差し込むか（既定は true）。口は process に 1 つなので、
+   * 同じ process に層 2 をいくつも立てるテストでは false にする。
+   */
+  attachEngineOutput?: boolean
   stallReportMs?: number
   /** `--docs-dir` から決めた docs の在りか（既定は両方なし）。 */
   docs?: DocsSites
@@ -109,7 +111,7 @@ export class SessionCore {
   private playing = false
   /** いま `execute()` の中にいる評価の帰属（console の行に `evalId` を付けるため）。 */
   private executing: IntakeContext | null = null
-  private releaseConsole: (() => void) | null = null
+  private engineOutputAttached = false
   readonly handlers: Readonly<Record<string, RequestHandler>>
   readonly notificationHandlers: Readonly<Record<string, NotificationHandler>>
 
@@ -130,10 +132,14 @@ export class SessionCore {
         this.logs.emit(classifySessionLine(line.kind, line.level, line.text), context),
       stallReportMs: options.stallReportMs,
     })
-    if (options.captureConsole !== false) {
-      this.releaseConsole = captureConsole((stream, text) => this.onEngineLine(stream, text), {
-        passthrough: options.consolePassthrough,
-      })
+    if (options.attachEngineOutput !== false) {
+      setHostOutput(
+        createHostOutput({
+          line: (stream, text) => this.onEngineLine(stream, text),
+          step: (event) => this.onEngineStep(event),
+        }),
+      )
+      this.engineOutputAttached = true
     }
     const startEngine = async (params: StartEngineParams) => {
       const result = await options.engine.start(params)
@@ -408,10 +414,10 @@ export class SessionCore {
     if (client.capabilities.has('editor')) this.documents.clear()
   }
 
-  /** console の横取りを外す（shutdown・テスト）。 */
+  /** engine の出力の口を既定（console）に戻す（shutdown・テスト）。 */
   dispose(): void {
-    this.releaseConsole?.()
-    this.releaseConsole = null
+    if (this.engineOutputAttached) setHostOutput(null)
+    this.engineOutputAttached = false
   }
 
   /** 層 2 自身の行（RPC サーバの拒否の理由など）。 */
@@ -419,12 +425,12 @@ export class SessionCore {
     this.logs.emit(classifySessionLine('session', level, text))
   }
 
-  /** engine が console に書いた 1 行（P-07 の横取り・テストからも直接呼ぶ）。 */
+  /** engine が出力の口に書いた 1 行（テストからも直接呼ぶ）。 */
   onEngineLine(stream: OutputStream, text: string): void {
+    // step は型つきで届く（`onEngineStep`）。口を通らずに書かれた `[STEP]` の行だけがここへ来る。
     const step = stream === 'stdout' ? parseStepLine(text) : null
     if (step) {
-      this.logs.recordStep(text)
-      this.options.broadcast('transport.step', { ...step, source: null })
+      this.onEngineStep(step)
       return
     }
     const change = stream === 'stdout' ? transportChange(text) : null
@@ -433,6 +439,12 @@ export class SessionCore {
       this.options.broadcast('transport.state', { playing: this.playing })
     }
     this.logs.emit(classifyEngineLine(stream, text), this.executing ?? {})
+  }
+
+  /** engine が鳴らした step。ring には凍結版と同じ `[STEP]` の行で残す（debug の時に読める）。 */
+  onEngineStep(step: StepEvent): void {
+    this.logs.recordStep(`[STEP] ${step.seq} ${step.argPath} ${step.atEpochMs}`)
+    this.options.broadcast('transport.step', { ...step, source: null })
   }
 
   /** 帰属を覚えた評価の `target`（`.orbslog` の `sourceFile` への写しは設計 §5.3.1 (a)）。 */

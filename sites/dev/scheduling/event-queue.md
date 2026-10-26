@@ -115,7 +115,7 @@ export interface ScheduledPlay {
 `slice` が optional なのはなぜでしょうか。答えは sequence 層の分岐にあります。chop の指定によって、そもそも呼ぶメソッドが変わるのです。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:127-154
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:128-155
       // Schedule event (argPath = #390 live playhead marker, observational only)
       if (chopDivisions && chopDivisions > 1) {
         const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
@@ -272,7 +272,7 @@ const MAX_DRIFT_MS = 1000
 1 小節分のイベントは、ループ開始時に `scheduleEvents()` がまとめてキューへ push します。この関数は sequence 層 (`packages/engine/src/core/sequence/scheduling/event-scheduler.ts`) にあり、バックエンドに依存しません。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:113-169 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:114-170 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
 
@@ -327,7 +327,7 @@ poll がイベントを検出した時点で、Rust 版は「今すぐ鳴らせ�
 この方式には「TS の `Date.now()` と daemon の transport clock を対応づける」という新しい問題が伴います。daemon は 1Hz の `StreamStats` で自分の `now_sec` を報告し、TS 側はそれを anchor として蓄積します。#389 の機構 B で、単一 anchor から **直近 30 サンプルの最小二乗フィット**に変わりました (`ANCHOR_WINDOW`、`fitAnchorSamples()`)。dispatch のホットパスで呼ばれる `daemonNowSec()` は、そのフィットを O(1) で評価します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1797-1803
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1796-1802
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -409,7 +409,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 実際に daemon へ送るのは `executePlayback()` です。ここには複数の保護機構が直列に並んでいます。関数冒頭の respawn 関連のコメントは長いので、ガードの本体から引用します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1667-1711
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1669-1713
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -471,7 +471,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `daemon.playAt()` は `DaemonClient` の薄いラッパーで、JSON の `PlayAt` リクエストを WebSocket で送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:374-384
+// packages/engine/src/audio/rust-engine/daemon-client.ts:375-385
   async playAt(
     sampleId: string,
     timeSec: number,
@@ -490,7 +490,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `emitStepMarker()` は、エディタ拡張が `play()` の引数をハイライトする live playhead のための、機械可読な 1 行を stdout に出します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1659
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1643-1661
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -503,9 +503,11 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
    */
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
-      console.log(
-        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
-      )
+      host.step({
+        seq: play.sequenceName,
+        argPath: play.argPath,
+        atEpochMs: Math.round(this.startTime + play.time),
+      })
     }
   }
 ```
@@ -515,16 +517,18 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 面白いのは #654 (2026-08-30、WORK_LOG 6.421) の経緯です。#390 は audio 経路にしか配線されておらず、`instrument()` / `midi()` シーケンスでは playhead がまったく動きませんでした。修正は `MidiScheduler` に同じ文法のマーカーを積む `scheduleStepMarker()` を足すことでした。
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:171-176
+// packages/engine/src/midi/midi-scheduler.ts:173-178
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
     this.enqueue(time, owner, () => {
-      console.log(`[STEP] ${owner} ${argPath} ${atEpochMs}`)
+      host.step({ seq: owner, argPath, atEpochMs })
     })
   }
 ```
 
 audio 側と MIDI 側の両方が「グリッド時刻」を打つので、層どうしの playhead を比べられる、というのが WORK_LOG に書かれた判断です。なお `[STEP]` 行は通常モードでは output channel からフィルタされるので、実機で観測するには `debug: true` で起動する必要があります (WORK_LOG 6.421)。
+
+2026-10 (#1022) 以降、マーカーは `console.log` に組み立てた文字列ではなく、`host.step({ seq, argPath, atEpochMs })` という構造化イベントとして出ます (`engine-backend.ts:79-99`)。既定の出力先は従来どおり `[STEP] <seq> <argPath> <atEpochMs>` を stdout に書くので、凍結版の拡張の `parseStepLine()` は何も変わりません。ネイティブ版の層 2 (`packages/session`) は `setHostOutput()` で出力先を差し替え、文字列を経由せずにイベントを受け取ります。
 
 ## ゲインの変換: dB → amplitude
 
@@ -586,7 +590,7 @@ $$
         .pluginAllNotesOff()
         .then(({ released, stale, failed }) => {
           if (released > 0 || stale > 0 || failed > 0) {
-            console.log(
+            host.log(
               `[rust-engine] plugin all-notes-off: released=${released} stale=${stale} failed=${failed}`,
             )
           }

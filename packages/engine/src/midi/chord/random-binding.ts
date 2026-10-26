@@ -1,3 +1,5 @@
+import { host } from '../../audio/engine-backend'
+
 import type { BoundValue } from './types'
 
 type RandomValue = Extract<BoundValue, { kind: 'random' }>
@@ -21,7 +23,7 @@ export function createRandomBinding(source: string, bound: BoundValue | undefine
   }
   const lattice = [...bound.lattice]
   if (lattice.length < 2 || lattice.every((value) => value === lattice[0])) {
-    console.warn(`⚠️  random.${source} は常に同じ音を選びます`)
+    host.warn(`⚠️  random.${source} は常に同じ音を選びます`)
   }
   return { kind: 'random', lattice, period: bound.period, from: source }
 }

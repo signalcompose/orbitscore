@@ -2,6 +2,8 @@
  * Master effects management for Global class
  */
 
+import { host } from '../../audio/engine-backend'
+
 import { MasterEffect, Scheduler } from './types'
 
 export class EffectsManager {
@@ -44,7 +46,7 @@ export class EffectsManager {
           sequence.gain(currentGainDb)
         }
       }
-      console.log(`🎚️ Global: master gain=${valueDb} dB`)
+      host.log(`🎚️ Global: master gain=${valueDb} dB`)
     }
 
     return this
@@ -71,7 +73,7 @@ export class EffectsManager {
     }
 
     const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(`🎛️ Global: ${effectType} off${seamless}`)
+    host.log(`🎛️ Global: ${effectType} off${seamless}`)
   }
 
   /**
@@ -95,7 +97,7 @@ export class EffectsManager {
     }
 
     const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(`🎛️ Global: ${logMessage}${seamless}`)
+    host.log(`🎛️ Global: ${logMessage}${seamless}`)
   }
 
   /**

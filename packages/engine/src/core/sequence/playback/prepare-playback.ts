@@ -1,6 +1,7 @@
 import * as path from 'path'
 
 import type { Scheduler } from '../../global/types'
+import { host } from '../../../audio/engine-backend'
 
 /**
  * Result of playback preparation
@@ -45,7 +46,7 @@ export async function preparePlayback(
   const isRunning = scheduler.isRunning
 
   if (!isRunning) {
-    console.log(`⚠️ ${sequenceName} - scheduler not running. Use global.start() first.`)
+    host.log(`⚠️ ${sequenceName} - scheduler not running. Use global.start() first.`)
     return null
   }
 

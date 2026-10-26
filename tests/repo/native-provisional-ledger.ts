@@ -150,7 +150,9 @@ export const LEDGER: readonly LedgerEntry[] = [
     id: 'P-07',
     title: 'engine の console 出力を in-process で受け取る経路（console の横取り）',
     deadline: { kind: 'release-1' },
-    state: 'open',
+    state: 'closed',
+    closedBy:
+      'S-eval の N1-d3（#1022）: engine に出力の口 host（audio/engine-backend.ts・既定は console）を足し、engine の console.* を置き換えた。層 2 は setHostOutput で受け、console の横取り（console-capture.ts）を消した',
     bundle: 'S-rpc（N1-a2）→ S-eval',
   },
   {

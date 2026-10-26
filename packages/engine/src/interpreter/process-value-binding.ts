@@ -6,6 +6,7 @@ import type {
   RandomBinding,
 } from '../parser/audio-parser'
 import { classifyArrayBinding } from '../signal-chain/rack'
+import { host } from '../audio/engine-backend'
 
 import type { InterpreterState } from './types'
 
@@ -17,7 +18,7 @@ import type { InterpreterState } from './types'
  */
 export function requireGlobal(state: InterpreterState, label: string) {
   if (!state.currentGlobal) {
-    console.error(`${label} requires a global (declare \`var g = init GLOBAL\` first).`)
+    host.error(`${label} requires a global (declare \`var g = init GLOBAL\` first).`)
     return null
   }
   return state.currentGlobal
@@ -30,7 +31,7 @@ export function requireGlobal(state: InterpreterState, label: string) {
  */
 export function processImportStatement(statement: ImportStatement, state: InterpreterState): void {
   if (statement.module !== 'chords') {
-    console.warn(`Unknown import "${statement.module}" — v1.1 supports only \`import chords\`.`)
+    host.warn(`Unknown import "${statement.module}" — v1.1 supports only \`import chords\`.`)
     return
   }
   requireGlobal(state, '`import chords`')?.importChords()

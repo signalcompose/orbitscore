@@ -342,7 +342,7 @@ pool, a few retries would exhaust it — the free-list is the countermeasure. It
 `BusPool`, shared with `MixerManager` (sum / aux).
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:980-1011
+// packages/engine/src/core/global/effect-slot.ts:978-1009
 /**
  * `<prefix><n>` 連番 + free-list の bus pool（SequenceEffectManager / MixerManager 由来）。
  * 失敗した宣言が pool を恒久消費しないよう、返却された名前を優先再利用する
@@ -385,7 +385,7 @@ previous chain"; `mode` is normally `'diff'` and becomes `'rebuild'` only after 
 the daemon-side registry cannot be trusted.
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:454-472
+// packages/engine/src/core/global/effect-slot.ts:452-470
   /** Settle a complete effect rack through one prepare-commit daemon command. */
   async applyRack(key: K, rack: RackSpec): Promise<void> {
     return this.enqueue(key, () => this.applyRackBody(key, rack))

@@ -928,7 +928,7 @@ owner の提起で調査され、**不要と結論された**ことです。旧 
 TS 側の差し替えは `EffectChainMap` の `replacement` オプションで opt-in します。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:221-235
+// packages/engine/src/core/global/effect-slot.ts:219-233
   /** Opt-in for in-place daemon replacement. */
   readonly replacement?: {
     readonly beforeReplace: (key: K, oldSlot: PluginSlot) => Promise<void>
@@ -950,7 +950,7 @@ instrument は `'retain-on-reject'`（§4.1 の failure model どおり、daemon
 保持する）です。`issueReplacement` の catch を見ると、policy によって台帳の扱いが分かれています。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:786-805
+// packages/engine/src/core/global/effect-slot.ts:784-803
     try {
       result = await this.audioEngine.replacePlugin(
         resolvedPath,
@@ -1042,7 +1042,7 @@ dry 縮退（無音にはならない）+ forget-and-ensure — だから TS 側
 `failurePolicy: 'forget-and-ensure'` を渡します。
 
 ```typescript
-// packages/engine/src/core/global.ts:168-192
+// packages/engine/src/core/global.ts:165-189
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -1126,7 +1126,7 @@ Stage A では Codex の変異 8 種（すべて「削除」型）が全部 red 
 TS 側は `applyRack` が主経路です。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:459-472
+// packages/engine/src/core/global/effect-slot.ts:457-470
   private async applyRackBody(key: K, rack: RackSpec): Promise<void> {
     if (!this.audioEngine.applyEffectChain) {
       throw new Error('Effect rack hosting requires the Rust engine backend.')
@@ -1148,7 +1148,7 @@ TS 側は `applyRack` が主経路です。
 その catalog 要素について `beforeReplace` が呼ばれます。
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:639-641
+// packages/engine/src/core/global/effect-slot.ts:637-639
     for (const previousIndex of [...dropPrevious].sort((a, b) => a - b)) {
       const old = previous[previousIndex]
       if (old?.kind === 'catalog') await this.replacement?.beforeReplace(key, old)
@@ -1159,7 +1159,7 @@ effect 側の `beforeReplace` は `prepareEffectReplacement` で、役目は消�
 行うので、instrument 側と違って TS で保存は呼びません。
 
 ```typescript
-// packages/engine/src/core/global.ts:1393-1415
+// packages/engine/src/core/global.ts:1390-1412
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
     const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)
@@ -1191,9 +1191,9 @@ effect 側の `beforeReplace` は `prepareEffectReplacement` で、役目は消�
 増やさない」が落ちたことから、「続行する通知」の唯一の出口として stdout に固定されました。
 
 ```typescript
-// packages/engine/src/core/global/effect-replace-notice.ts:22-24
+// packages/engine/src/core/global/effect-replace-notice.ts:23-25
 export function effectReplaceNotice(message: string): void {
-  console.log(`[effect-replace] ⚠️ ${message}`)
+  host.log(`[effect-replace] ⚠️ ${message}`)
 }
 ```
 

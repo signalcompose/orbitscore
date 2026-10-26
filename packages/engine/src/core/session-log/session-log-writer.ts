@@ -20,6 +20,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
+import { host } from '../../audio/engine-backend'
+
 /** Who initiated an eval (§3 `evalSource`). */
 export type EvalSource = 'human' | 'agent' | 'replay'
 
@@ -156,7 +158,7 @@ export class SessionLogWriter {
         }
         this.disabled = true
         this.filePath = null
-        console.warn(
+        host.warn(
           `⚠️  session-log: failed to open ${candidate} — logging disabled (playback continues): ${e}`,
         )
         return
@@ -206,7 +208,7 @@ export class SessionLogWriter {
       fs.appendFileSync(this.filePath, line + '\n')
     } catch (e) {
       this.disabled = true
-      console.warn(`⚠️  session-log: write error — logging disabled (playback continues): ${e}`)
+      host.warn(`⚠️  session-log: write error — logging disabled (playback continues): ${e}`)
     }
   }
 }

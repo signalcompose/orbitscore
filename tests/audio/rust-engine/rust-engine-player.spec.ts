@@ -15,6 +15,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
+import {
+  setHostOutput,
+  type EngineStepEvent,
+} from '../../../packages/engine/src/audio/engine-backend'
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import {
   fitAnchorSamples,
@@ -492,6 +496,32 @@ describe('RustEnginePlayer with mock daemon', () => {
       expect(Number.isSafeInteger(parsed?.atEpochMs)).toBe(true)
     } finally {
       log.mockRestore()
+    }
+  })
+
+  it('[STEP] は host の口へ型つきの step として出る — 層 2 は文字列を経由しない (#1022)', async () => {
+    const steps: EngineStepEvent[] = []
+    const lines: string[] = []
+    setHostOutput({
+      log: (...args) => lines.push(args.map(String).join(' ')),
+      warn: () => {},
+      error: () => {},
+      step: (event) => steps.push(event),
+    })
+    try {
+      const p = await boot()
+      p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', undefined, '2')
+      p.scheduleStepMarker(0, 'seqB', '1', 0)
+      p.start()
+      await waitFor(() => steps.length >= 2)
+      expect(steps.map(({ seq, argPath }) => `${seq} ${argPath}`).sort()).toEqual([
+        'seqA 2',
+        'seqB 1',
+      ])
+      expect(steps.every((s) => Number.isSafeInteger(s.atEpochMs))).toBe(true)
+      expect(lines.some((l) => l.includes('[STEP]'))).toBe(false)
+    } finally {
+      setHostOutput(null)
     }
   })
 

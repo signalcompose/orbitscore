@@ -1,4 +1,5 @@
 import type { Scheduler } from '../../global/types'
+import { host } from '../../../audio/engine-backend'
 
 /**
  * How far BEFORE a bar boundary the loop timer fires (#389 mechanism A).
@@ -90,11 +91,11 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   const leadInMs = effectiveStart - currentTime
 
   if (leadInMs > 0) {
-    console.log(
+    host.log(
       `🔄 ${sequenceName} (loop queued, +${Math.round(leadInMs)}ms to next quantize boundary)`,
     )
   } else {
-    console.log(`🔄 ${sequenceName} (loop started)`)
+    host.log(`🔄 ${sequenceName} (loop started)`)
   }
 
   // Track next scheduled time (cumulative, to avoid drift)
@@ -124,11 +125,11 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       const r = run() as unknown as void | Promise<void>
       if (r && typeof (r as Promise<void>).catch === 'function') {
         ;(r as Promise<void>).catch((e) =>
-          console.error(`[ERROR] Sequence '${sequenceName}': loop scheduling error:`, e),
+          host.error(`[ERROR] Sequence '${sequenceName}': loop scheduling error:`, e),
         )
       }
     } catch (e) {
-      console.error(`[ERROR] Sequence '${sequenceName}': loop scheduling error:`, e)
+      host.error(`[ERROR] Sequence '${sequenceName}': loop scheduling error:`, e)
     }
   }
 
@@ -154,7 +155,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
     const raw = boundary + patternDuration - leadMs - (Date.now() - scheduler.startTime)
     if (raw < -patternDuration && Date.now() - lastLagLogMs > 5000) {
       lastLagLogMs = Date.now()
-      console.warn(
+      host.warn(
         `⚠️ ${sequenceName}: loop timer lagged ${Math.round(-raw)}ms behind the grid (system stall?) — catching up; stale bars may be skipped`,
       )
     }
@@ -182,7 +183,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       if (wasMuted && !isMuted) {
         // Just unmuted! Reschedule events from current time
         const now = Date.now() - scheduler.startTime
-        console.log(`🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${now}ms`)
+        host.log(`🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${now}ms`)
 
         // Clear old events (if any)
         clearSequenceEventsFn(sequenceName)

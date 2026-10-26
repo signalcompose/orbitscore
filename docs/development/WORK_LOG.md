@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(engine): add the host output port and stop capturing the console in layer 2 (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d3-output-port`（`1022-d5-strict-parser` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d3・台帳 P-07）
+
+- engine に出力の口 **`host`** を足した（`audio/engine-backend.ts` = engine とその外の境界の契約を置く既存のモジュール。新しいファイルは足さない）: `host.log` / `warn` / `error`（`console` と同じ引数）と `host.step({seq, argPath, atEpochMs})`。**既定は console**（凍結版の REPL・`orbitscore play` が書く行は今と同じ。step は `[STEP] …` の 1 行）で、呼んだその時に `console.*` を引くので既存テストの spy もそのまま効く。`setHostOutput` で差し込み、`null` で既定へ
+- engine の `console.log/warn/error` を **29 ファイル 142 か所**で `host.*` に置き換えた（`cli/` と CLI の入口 `cli-audio.ts` は CLI 自身の出力なので対象外・コメントは書き換えない）。`[STEP]` を出す 2 か所（audio の dispatch・`midi-scheduler.ts`）は型つきの `host.step` に
+- 名前を `host` にしたのは、`engineOutput.log(` が `console.log(` より長く prettier の折り返しが増えて、ファイルの大きさのラチェットを超えたため（`host` はどのファイルの名前とも衝突しない）。それでも import の 1 行で超えた 4 ファイルは、値と型が混ざった複数行の import を「値の import」と「型の import」に分けて 1 行に収めた（リポジトリに既にある書き方）。縮んだ 6 ファイルの baseline を下げた
+- 層 2: console の横取り（`console-capture.ts`・`PROVISIONAL(P-07)`）を消し、`engine-output.ts`（`host` に差し込む受け手。`util.format` で 1 行ずつ `log.line` の分類へ・step は `transport.step` へ）に置き換えた。`SessionCore` の `captureConsole` / `consolePassthrough` は `attachEngineOutput` に（テスト 5 か所の設定を更新）。**台帳 P-07 を閉じた**
+- テスト: engine の口 2 本（既定は console と同じ引数・差し込みと戻し）・層 2 の受け手（console の横取りのテストを受け手のテストへ書き換え）と「層 2 が口に付き、`transport.step` を流し、dispose で console へ返す」1 本・**`[STEP]` を出す 2 か所（audio の dispatch・MIDI）が文字列ではなく型つきの step で口へ出す**ことを 1 本ずつ（層 2 は口を通らない `[STEP]` の行も拾えるので、文字列に戻しても層 2 の挙動は変わらず、ここでしか気づけない）。台帳の spec の例を P-07 → P-25 / P-08 へ
+- 変異 11 種（既定の step を消す・`null` で戻さない・warn を log へ・log を import 時の console に固定・層 2 が付かない・dispose で返さない・warn を stdout へ・step を受け手で捨てる・step を流さない・audio / MIDI の marker を文字列に戻す）がすべて red
+- dev 学習サイト: engine のコードを引用している 150 件が `console.*` → `host.*` で一致しなくなった。変更前と変更後のソースの行の対応（difflib）で引用の区間を写し、`--fix` で行番号を付け直した（26 ページ・日英）。内容の差は `console.* → host.*` と `[STEP]` の 2 か所の `host.step({…})` だけであることを差分で確かめた。`[STEP]` の節（scheduling/event-queue・日英）に口の説明を 1 段落足した
+- 現在のコードを説明するコメント 5 か所の `console.*` を `host.*` に（過去の経緯を書いたコメントはそのまま）。`packages/session/CLAUDE.md` の「engine が console に書く行は層 2 が横取りする」を口の記述に更新
+
 ### feat(parser): reject characters the DSL does not use, except ; (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1022-d5-strict-parser`（同じ小 PR の 2 つ目のコミット）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d5 の後半・設計 997 Q-7 = A）

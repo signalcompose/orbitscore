@@ -52,7 +52,7 @@ flowchart LR
 When `global.start()` is called from the DSL, the following call chain begins. First, `Global.start()`.
 
 ```typescript
-// packages/engine/src/core/global.ts:667-690
+// packages/engine/src/core/global.ts:664-687
   // Transport control
   start(): this {
     // §L1: only open a NEW session on an actual stopped→running transition —
@@ -70,7 +70,7 @@ When `global.start()` is called from the DSL, the following call chain begins. F
       try {
         this._onTransportStart?.()
       } catch (e) {
-        console.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
+        host.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
       }
     }
     // #283: re-assert Link tempo leadership once the transport is running.
@@ -117,7 +117,7 @@ According to the comment at the top of the file, the MIDI path goes through this
 Next, `TransportControl.start()` calls `globalScheduler.start()`. This part is unchanged from the 2026-05 version.
 
 ```typescript
-// packages/engine/src/core/global/transport-control.ts:19-32
+// packages/engine/src/core/global/transport-control.ts:21-34
   start(): this {
     // If already running, do nothing (idempotent)
     if (this._isRunning) {
@@ -128,7 +128,7 @@ Next, `TransportControl.start()` calls `globalScheduler.start()`. This part is u
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
-    console.log('✅ Global starting')
+    host.log('✅ Global starting')
 
     return this
   }
@@ -156,7 +156,7 @@ Note that `TransportClock.startTime` and `RustEnginePlayer.startTime` call `Date
 `global.stop()` cascades in the reverse direction. This too has grown by the session log and the auto-snapshot.
 
 ```typescript
-// packages/engine/src/core/global.ts:701-731 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
+// packages/engine/src/core/global.ts:698-728 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
   stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
@@ -165,7 +165,7 @@ Note that `TransportClock.startTime` and `RustEnginePlayer.startTime` call `Date
       try {
         this._onTransportStop?.()
       } catch (e) {
-        console.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
+        host.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
       }
       // ...
     }
@@ -182,7 +182,7 @@ The phrase "music unstoppable" in the comment is memorable. The design decision 
 `TransportControl.stop()` handles stopping all sequences and the scheduler.
 
 ```typescript
-// packages/engine/src/core/global/transport-control.ts:43-59
+// packages/engine/src/core/global/transport-control.ts:45-61
   stop(): this {
     // Stop all sequences first
     for (const [, sequence] of this.sequences.entries()) {
@@ -196,7 +196,7 @@ The phrase "music unstoppable" in the comment is memorable. The design decision 
     if (this._isRunning) {
       this._isRunning = false
       this._isLooping = false
-      console.log('✅ Global stopped')
+      host.log('✅ Global stopped')
     }
     return this
   }
@@ -363,7 +363,7 @@ When `skipTransportCommands: true` is passed, statements with `statement.type ==
 An element of transport that did not exist in the 2026-05 version is **launch quantize**. `global.quantize()` has `"bar"` as its default and makes the start of `LOOP()` and the swap of `play()` during LOOP wait until the next boundary.
 
 ```typescript
-// packages/engine/src/core/global.ts:568-586
+// packages/engine/src/core/global.ts:565-583
   /**
    * Set the global launch-quantize value.
    *
@@ -420,7 +420,7 @@ In OrbitScore, "playback position" is held as **the transport's start time**. In
 `Global` has functions that convert elapsed ms into `"bar:beat"` (added for the §L1 session log).
 
 ```typescript
-// packages/engine/src/core/global.ts:739-742
+// packages/engine/src/core/global.ts:736-739
   getTransportPosition(): string | null {
     if (!this.transportClock.running) return null
     return this.msToBarBeat(Date.now() - this.transportClock.startTime)
@@ -428,7 +428,7 @@ In OrbitScore, "playback position" is held as **the transport's start time**. In
 ```
 
 ```typescript
-// packages/engine/src/core/global.ts:775-780
+// packages/engine/src/core/global.ts:772-777
     const { tempo, beat } = params
     const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
     const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
@@ -476,7 +476,7 @@ stateDiagram-v2
 `loop()` remains deprecated; the recommended way is to control sequence loops individually with `seq.loop()` / `LOOP()`.
 
 ```typescript
-// packages/engine/src/core/global.ts:692-699
+// packages/engine/src/core/global.ts:689-696
   /**
    * @deprecated Not needed. Use LOOP(seq) for sequences instead.
    */
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2089-2117
+// packages/engine/src/core/sequence.ts:2088-2116
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
@@ -527,7 +527,7 @@ first at the entry of `run()` / `loop()` / `stop()`.
 
     // Log stop message for loop sequences
     if (wasLooping) {
-      console.log(`⏹ ${sequenceName} (loop stopped)`)
+      host.log(`⏹ ${sequenceName} (loop stopped)`)
     }
 
     return this
@@ -542,7 +542,7 @@ events were actually placed at. Writing it as a difference rather than a literal
 makes it follow along automatically if the way `scheduleTime` is decided ever changes.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/run-sequence.ts:62-71
+// packages/engine/src/core/sequence/playback/run-sequence.ts:63-72
   // 🔴 `+ 100` と直に書かない。尻尾は**イベントを実際に置いた原点**から測る必要があり、
   // 差で書いておくと `scheduleTime` の決め方が変わっても自動で追随する。この整合こそが
   // 「RUN 終端で音が止まる」の前提なので、定数へ畳んで結合を切らないこと。
@@ -550,7 +550,7 @@ makes it follow along automatically if the way `scheduleTime` is decided ever ch
   const runTimer = setTimeout(() => {
     setRunTimerFn(undefined)
     clearSequenceEventsFn(sequenceName)
-    console.log(`⏹ ${sequenceName} (finished)`)
+    host.log(`⏹ ${sequenceName} (finished)`)
   }, tailDelay)
   setRunTimerFn(runTimer)
 ```

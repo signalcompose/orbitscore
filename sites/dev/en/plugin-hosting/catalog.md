@@ -945,7 +945,7 @@ the **destination** changes.
 On the TS side replacement is opted into through the `replacement` option of `EffectChainMap`.
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:221-235
+// packages/engine/src/core/global/effect-slot.ts:219-233
   /** Opt-in for in-place daemon replacement. */
   readonly replacement?: {
     readonly beforeReplace: (key: K, oldSlot: PluginSlot) => Promise<void>
@@ -968,7 +968,7 @@ rejection the old declaration is kept). The catch block of `issueReplacement` sh
 registry handling splits by policy.
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:786-805
+// packages/engine/src/core/global/effect-slot.ts:784-803
     try {
       result = await this.audioEngine.replacePlugin(
         resolvedPath,
@@ -1064,7 +1064,7 @@ dry (never silence) plus forget-and-ensure — which is why the three effect man
 `failurePolicy: 'forget-and-ensure'`.
 
 ```typescript
-// packages/engine/src/core/global.ts:168-192
+// packages/engine/src/core/global.ts:165-189
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -1152,7 +1152,7 @@ slot.
 On the TS side `applyRack` is the main path.
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:459-472
+// packages/engine/src/core/global/effect-slot.ts:457-470
   private async applyRackBody(key: K, rack: RackSpec): Promise<void> {
     if (!this.audioEngine.applyEffectChain) {
       throw new Error('Effect rack hosting requires the Rust engine backend.')
@@ -1174,7 +1174,7 @@ Old and new arrays are matched by the **LCS (longest common subsequence)** of th
 go into `dropPrevious`, and `beforeReplace` is called for the catalog ones.
 
 ```typescript
-// packages/engine/src/core/global/effect-slot.ts:639-641
+// packages/engine/src/core/global/effect-slot.ts:637-639
     for (const previousIndex of [...dropPrevious].sort((a, b) => a - b)) {
       const old = previous[previousIndex]
       if (old?.kind === 'catalog') await this.replacement?.beforeReplace(key, old)
@@ -1185,7 +1185,7 @@ disappearing insert. The state save itself is performed atomically by the daemon
 `save_dropped` in `ApplyEffectChain`, so unlike the instrument side TS does not call save.
 
 ```typescript
-// packages/engine/src/core/global.ts:1393-1415
+// packages/engine/src/core/global.ts:1390-1412
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
     const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)
@@ -1218,9 +1218,9 @@ ERROR. In #625 this recurred for the **fourth time** and failed R-E4 ("recovery 
 lines"), so the "continuing notice" was pinned to stdout as its single exit.
 
 ```typescript
-// packages/engine/src/core/global/effect-replace-notice.ts:22-24
+// packages/engine/src/core/global/effect-replace-notice.ts:23-25
 export function effectReplaceNotice(message: string): void {
-  console.log(`[effect-replace] ⚠️ ${message}`)
+  host.log(`[effect-replace] ⚠️ ${message}`)
 }
 ```
 

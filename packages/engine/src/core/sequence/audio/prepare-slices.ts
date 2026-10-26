@@ -1,4 +1,5 @@
 import { audioSlicer } from '../../../audio/audio-slicer'
+import { host } from '../../../audio/engine-backend'
 
 /**
  * Options for slice preparation
@@ -31,6 +32,6 @@ export function prepareSlices(options: PrepareSlicesOptions): void {
     audioSlicer.sliceAudioFile(audioFilePath, chopDivisions)
     // Successfully prepared slices
   } catch (err: any) {
-    console.error(`${sequenceName}: failed to prepare slices - ${err.message}`)
+    host.error(`${sequenceName}: failed to prepare slices - ${err.message}`)
   }
 }

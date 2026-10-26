@@ -446,7 +446,7 @@ The same count carried a distortion in the opposite direction, too. Where #756 f
 The directory already being gone is exactly the outcome this loop wants — it is not a failure. But the `catch` emitted a `console.warn`, and engine stderr is prefixed with `ERROR:` on the extension side, so **a benign race pushed the ERROR count up by one line**. Measured on PR #840's merge gate, this surfaced as `expected 9 to be less than or equal to 8` and failed a test with nothing to do with the race (`restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch`). The fix wraps `statSync` in a per-entry `try` that **swallows ENOENT only**.
 
 ```typescript
-// packages/engine/src/audio/slicing/temp-file-manager.ts:98-118
+// packages/engine/src/audio/slicing/temp-file-manager.ts:100-120
       for (const file of files) {
         if (!file.startsWith('orbitscore_')) continue
         const dirPath = path.join(this.tempDir, file)
@@ -1305,12 +1305,14 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1659
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1661
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
-      console.log(
-        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
-      )
+      host.step({
+        seq: play.sequenceName,
+        argPath: play.argPath,
+        atEpochMs: Math.round(this.startTime + play.time),
+      })
     }
   }
 ```
@@ -1318,17 +1320,17 @@ The audio-side source is a single place in `rust-engine-player.ts`.
 This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer piece for SIGMUS was played on the real device, only the single `audio()` gong layer stepped the playhead while the six Kontakt layers sat frozen. Not a regression but **one-winged from the start** — only the audio path emitted `[STEP]`; the MIDI side discarded `argPath` in Stage C of `sequence.ts`. The fix was TypeScript only: a marker-only action was added to `MidiScheduler`.
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:171-176
+// packages/engine/src/midi/midi-scheduler.ts:173-178
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
     this.enqueue(time, owner, () => {
-      console.log(`[STEP] ${owner} ${argPath} ${atEpochMs}`)
+      host.step({ seq: owner, argPath, atEpochMs })
     })
   }
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1651-1661
+// packages/engine/src/core/sequence.ts:1650-1660
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

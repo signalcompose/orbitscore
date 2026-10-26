@@ -6,6 +6,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 
+import { host } from '../engine-backend'
+
 /**
  * Manages temporary files for audio slices
  */
@@ -80,7 +82,7 @@ export class TempFileManager {
           fs.unlinkSync(filepath)
         }
       } catch (error) {
-        console.warn(`Failed to delete temp file ${filepath}: ${error}`)
+        host.warn(`Failed to delete temp file ${filepath}: ${error}`)
       }
     }
     // Clear the tracking set after cleanup
@@ -119,7 +121,7 @@ export class TempFileManager {
     } catch (error) {
       // Anything else (the temp root itself unreadable, a permission change) is still worth
       // one line — but it must stay a warning, since cleanup is best-effort by design.
-      console.warn(`Failed to cleanup old directories: ${error}`)
+      host.warn(`Failed to cleanup old directories: ${error}`)
     }
   }
 

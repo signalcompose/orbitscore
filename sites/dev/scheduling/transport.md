@@ -52,7 +52,7 @@ flowchart LR
 `global.start()` を DSL で呼ぶと、次の呼び出し連鎖が始まります。まず `Global.start()` です。
 
 ```typescript
-// packages/engine/src/core/global.ts:667-690
+// packages/engine/src/core/global.ts:664-687
   // Transport control
   start(): this {
     // §L1: only open a NEW session on an actual stopped→running transition —
@@ -70,7 +70,7 @@ flowchart LR
       try {
         this._onTransportStart?.()
       } catch (e) {
-        console.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
+        host.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
       }
     }
     // #283: re-assert Link tempo leadership once the transport is running.
@@ -117,7 +117,7 @@ export class TransportClock {
 次に `TransportControl.start()` が `globalScheduler.start()` を呼び出します。ここは 2026-05 版から変わっていません。
 
 ```typescript
-// packages/engine/src/core/global/transport-control.ts:19-32
+// packages/engine/src/core/global/transport-control.ts:21-34
   start(): this {
     // If already running, do nothing (idempotent)
     if (this._isRunning) {
@@ -128,7 +128,7 @@ export class TransportClock {
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
-    console.log('✅ Global starting')
+    host.log('✅ Global starting')
 
     return this
   }
@@ -156,7 +156,7 @@ export class TransportClock {
 `global.stop()` は逆方向に連鎖します。こちらも session log と自動スナップショットのぶん太っています。
 
 ```typescript
-// packages/engine/src/core/global.ts:701-731 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
+// packages/engine/src/core/global.ts:698-728 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
   stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
@@ -165,7 +165,7 @@ export class TransportClock {
       try {
         this._onTransportStop?.()
       } catch (e) {
-        console.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
+        host.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
       }
       // ...
     }
@@ -182,7 +182,7 @@ export class TransportClock {
 `TransportControl.stop()` はシーケンスの一括停止とスケジューラーの停止を担います。
 
 ```typescript
-// packages/engine/src/core/global/transport-control.ts:43-59
+// packages/engine/src/core/global/transport-control.ts:45-61
   stop(): this {
     // Stop all sequences first
     for (const [, sequence] of this.sequences.entries()) {
@@ -196,7 +196,7 @@ export class TransportClock {
     if (this._isRunning) {
       this._isRunning = false
       this._isLooping = false
-      console.log('✅ Global stopped')
+      host.log('✅ Global stopped')
     }
     return this
   }
@@ -363,7 +363,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 2026-05 版に無かった transport の要素が **launch quantize** です。`global.quantize()` は `"bar"` を既定値として持ち、`LOOP()` の起動と LOOP 中の `play()` 差し替えを次の境界まで待たせます。
 
 ```typescript
-// packages/engine/src/core/global.ts:568-586
+// packages/engine/src/core/global.ts:565-583
   /**
    * Set the global launch-quantize value.
    *
@@ -420,7 +420,7 @@ export function nextQuantizedTime(
 `Global` は経過 ms を `"bar:beat"` に変換する関数を持っています (§L1 の session log 用に追加)。
 
 ```typescript
-// packages/engine/src/core/global.ts:739-742
+// packages/engine/src/core/global.ts:736-739
   getTransportPosition(): string | null {
     if (!this.transportClock.running) return null
     return this.msToBarBeat(Date.now() - this.transportClock.startTime)
@@ -428,7 +428,7 @@ export function nextQuantizedTime(
 ```
 
 ```typescript
-// packages/engine/src/core/global.ts:775-780
+// packages/engine/src/core/global.ts:772-777
     const { tempo, beat } = params
     const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
     const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
@@ -476,7 +476,7 @@ stateDiagram-v2
 `loop()` は deprecated のままで、シーケンスのループは `seq.loop()` / `LOOP()` で個別に制御するのが推奨です。
 
 ```typescript
-// packages/engine/src/core/global.ts:692-699
+// packages/engine/src/core/global.ts:689-696
   /**
    * @deprecated Not needed. Use LOOP(seq) for sequences instead.
    */
@@ -502,7 +502,7 @@ stateDiagram-v2
 `clearRunTimer()` が先に走るようになっています。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2089-2117
+// packages/engine/src/core/sequence.ts:2088-2116
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
@@ -527,7 +527,7 @@ stateDiagram-v2
 
     // Log stop message for loop sequences
     if (wasLooping) {
-      console.log(`⏹ ${sequenceName} (loop stopped)`)
+      host.log(`⏹ ${sequenceName} (loop stopped)`)
     }
 
     return this
@@ -541,7 +541,7 @@ stateDiagram-v2
 書いてあるのは、`scheduleTime` の決め方が変わっても自動で追随させるためです。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/run-sequence.ts:62-71
+// packages/engine/src/core/sequence/playback/run-sequence.ts:63-72
   // 🔴 `+ 100` と直に書かない。尻尾は**イベントを実際に置いた原点**から測る必要があり、
   // 差で書いておくと `scheduleTime` の決め方が変わっても自動で追随する。この整合こそが
   // 「RUN 終端で音が止まる」の前提なので、定数へ畳んで結合を切らないこと。
@@ -549,7 +549,7 @@ stateDiagram-v2
   const runTimer = setTimeout(() => {
     setRunTimerFn(undefined)
     clearSequenceEventsFn(sequenceName)
-    console.log(`⏹ ${sequenceName} (finished)`)
+    host.log(`⏹ ${sequenceName} (finished)`)
   }, tailDelay)
   setRunTimerFn(runTimer)
 ```

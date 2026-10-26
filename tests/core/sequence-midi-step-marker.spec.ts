@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
+import { setHostOutput, type EngineStepEvent } from '../../packages/engine/src/audio/engine-backend'
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
@@ -107,6 +108,25 @@ describe('#654 live playhead markers for note sequences', () => {
       T0 + LEAD_IN_MS + 500,
       T0 + LEAD_IN_MS + 1000,
       T0 + LEAD_IN_MS + 1500,
+    ])
+  })
+
+  it('hands the markers to the host output as typed steps, not as text (#1022)', async () => {
+    const typed: EngineStepEvent[] = []
+    setHostOutput({
+      log: () => {},
+      warn: () => {},
+      error: () => {},
+      step: (event) => typed.push(event),
+    })
+    try {
+      await playDsl('p.play(1, 3)')
+    } finally {
+      setHostOutput(null)
+    }
+    expect(typed).toEqual([
+      { seq: 'piano', argPath: '0', atEpochMs: T0 + LEAD_IN_MS },
+      { seq: 'piano', argPath: '1', atEpochMs: T0 + LEAD_IN_MS + 1000 },
     ])
   })
 

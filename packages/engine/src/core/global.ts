@@ -17,6 +17,7 @@ import { PluginNoteOutput } from '../midi/plugin-note-output'
 import type { RackRecipe } from '../signal-chain/rack'
 import { gainDbToAmplitude } from '../audio/audio-gain-utils'
 import { pluginChainPathFor } from '../audio/rust-engine/daemon-client'
+import { host } from '../audio/engine-backend'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -48,12 +49,8 @@ import {
   type RegisteredChainElement,
   type StandardElement,
 } from './global/effect-slot'
-import {
-  ProjectStateStore,
-  projectStateStoreFor,
-  type PluginStateIdentity,
-  type SavedProjectPluginState,
-} from './project-state-store'
+import { ProjectStateStore, projectStateStoreFor } from './project-state-store'
+import type { PluginStateIdentity, SavedProjectPluginState } from './project-state-store'
 
 /**
  * 開いている plugin UI 1 枚ぶんの簿記（#633）。
@@ -211,7 +208,7 @@ export class Global {
           // a drain-ack timeout, which cannot be triggered deterministically with the
           // real app/plugin setup. It uses the same console.warn -> get_log path as
           // existing warnings; the callback wiring itself is covered by a unit test.
-          console.warn(
+          host.warn(
             `[instrument-replace] ⚠️ Sequence '${sequenceName}' was replaced, but its old daemon slot was quarantined and cannot be reused; repeated quarantines may exhaust the instrument pool.`,
           )
         },
@@ -320,7 +317,7 @@ export class Global {
    */
   defineChord(name: string, voices: StackElement[]): this {
     const { voices: resolved, warnings } = evaluateChord(voices, this.getBinding.bind(this))
-    for (const w of warnings) console.warn(`⚠️  chord ${name}: ${w}`)
+    for (const w of warnings) host.warn(`⚠️  chord ${name}: ${w}`)
     this.setChord(name, { kind: 'chord', voices: resolved })
     return this
   }
@@ -356,7 +353,7 @@ export class Global {
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
-      console.warn(`⚠️  value namespace: "${name}" redefined (last-write-wins).`)
+      host.warn(`⚠️  value namespace: "${name}" redefined (last-write-wins).`)
     }
     this.chordRegistry.delete(name)
     this.rackRegistry.set(name, structuredClone(rack) as RackRecipe)
@@ -372,7 +369,7 @@ export class Global {
   /** Bind a chord value, warning on overwrite (§10-4: global binding + conflict warning). */
   private setChord(name: string, value: BoundValue): this {
     if (this.chordRegistry.has(name) || this.rackRegistry.has(name)) {
-      console.warn(`⚠️  chord namespace: "${name}" redefined (last-write-wins, §10-4).`)
+      host.warn(`⚠️  chord namespace: "${name}" redefined (last-write-wins, §10-4).`)
     }
     this.rackRegistry.delete(name)
     this.chordRegistry.set(name, value)
@@ -562,7 +559,7 @@ export class Global {
     if (typeof bpm !== 'number') return
     void this.audioEngine
       .setLinkTempo?.(bpm)
-      ?.catch((err) => console.warn('⚠️  Link tempo push failed:', err))
+      ?.catch((err) => host.warn('⚠️  Link tempo push failed:', err))
   }
 
   /**
@@ -620,7 +617,7 @@ export class Global {
     void this.audioEngine
       .setGlobalGain?.(gainDbToAmplitude(this.effectsManager.getMasterGainDb()))
       ?.catch((error) => {
-        console.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
+        host.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
       })
     return this
   }
@@ -681,7 +678,7 @@ export class Global {
       try {
         this._onTransportStart?.()
       } catch (e) {
-        console.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
+        host.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
       }
     }
     // #283: re-assert Link tempo leadership once the transport is running.
@@ -706,7 +703,7 @@ export class Global {
       try {
         this._onTransportStop?.()
       } catch (e) {
-        console.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
+        host.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
       }
       if (options?.autoSnapshot !== false) {
         // Run after this synchronous stop stack has cleared the transport. The
@@ -715,7 +712,7 @@ export class Global {
         void Promise.resolve()
           .then(() => this.saveAllPluginStates())
           .catch((error) => {
-            console.error(
+            host.error(
               `[plugin-state] auto-snapshot failed: ${
                 error instanceof Error ? error.message : String(error)
               }`,
@@ -1364,14 +1361,14 @@ export class Global {
           this.forgetPluginUiSession(sequenceName, 0)
           throw error
         }
-        console.warn(
+        host.warn(
           `[instrument-replace] ⚠️ Plugin UI for Sequence '${sequenceName}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
         )
       }
     }
     const projectDirectory = this.audioManager.getDocumentDirectory()
     if (!projectDirectory) {
-      console.warn(
+      host.warn(
         `[instrument-replace] ⚠️ Cannot save the old instrument state for Sequence '${sequenceName}' because the document directory is not set; replacement will continue without state preservation.`,
       )
       return
@@ -1424,7 +1421,7 @@ export class Global {
     if (targets.length === 0) {
       // No state can be lost. Keep this normal path on plain stdout so the
       // extension filters it out instead of presenting an ERROR to the user.
-      console.log('[plugin-state] auto-snapshot skipped: no loaded plugin targets')
+      host.log('[plugin-state] auto-snapshot skipped: no loaded plugin targets')
       return { saved: 0, failures: 0 }
     }
     const projectDirectory = this.audioManager.getDocumentDirectory()
@@ -1442,7 +1439,7 @@ export class Global {
         )
         .map((identity) => `'${identity}'`)
         .join(', ')
-      console.log(
+      host.log(
         `[plugin-state] ⚠️ auto-snapshot skipped: document directory is not set; ` +
           `unsaved targets: ${identities}`,
       )
@@ -1464,7 +1461,7 @@ export class Global {
           target.identity.normalizedName,
           target.identity.occurrence,
         ].join('/')
-        console.error(
+        host.error(
           `[plugin-state] auto-snapshot failed for '${identity}': ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -1473,9 +1470,9 @@ export class Global {
     }
     const summary = `[plugin-state] auto-snapshot complete (${saved} saved, ${failures} failed)`
     if (failures > 0) {
-      console.error(summary)
+      host.error(summary)
     } else {
-      console.log(summary)
+      host.log(summary)
     }
     return { saved, failures }
   }

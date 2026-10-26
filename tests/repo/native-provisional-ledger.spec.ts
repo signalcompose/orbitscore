@@ -49,9 +49,10 @@ describe('native provisional ledger (design 848 §1.4)', () => {
   it('finds the markers of the scaffolds that exist today', () => {
     const ids = scanMarkers(repoRoot).markers.map((marker) => marker.id)
     expect(ids).toContain('P-02')
-    expect(ids).toContain('P-07')
-    // P-01（評価の受付口の足場）は束 S-eval の N1-d1（#1022）で閉じ、印も消えた
+    expect(ids).toContain('P-25')
+    // P-01（評価の受付口の足場）と P-07（console の横取り）は束 S-eval（#1022）で閉じ、印も消えた
     expect(ids).not.toContain('P-01')
+    expect(ids).not.toContain('P-07')
   })
 
   it('has no violation in the repository (checks 1–5 and 7)', () => {
@@ -162,13 +163,13 @@ describe('native provisional ledger — each check goes red on its shape', () =>
   })
 
   it('[6] on the real repository, release mode names every release-1 row that is not closed', () => {
-    // 仕組みが生きていることの確認（今は P-07 などが開いているので、リリースの preflight は落ちる）。
+    // 仕組みが生きていることの確認（今は P-08 などが開いているので、リリースの preflight は落ちる）。
     // 第 1 リリースの時に全部が閉じれば、期待する一覧は空になり、この it はそのまま緑で残る。
     const violations = ledgerViolations(realInput({ releaseMode: true }))
     const notClosed = LEDGER.filter(
       (row) => row.deadline.kind === 'release-1' && row.state !== 'closed',
     ).map((row) => row.id)
-    expect(notClosed).toContain('P-07')
+    expect(notClosed).toContain('P-08')
     for (const id of notClosed) {
       expect(violations.some((line) => line.startsWith('[6]') && line.includes(`${id} `))).toBe(
         true,
