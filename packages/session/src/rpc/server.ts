@@ -54,6 +54,11 @@ export interface RpcServerOptions {
   capabilities?: string[]
   handlers: Readonly<Record<string, RequestHandler>>
   notificationHandlers?: Readonly<Record<string, NotificationHandler>>
+  /**
+   * TCP のリスナーの HTTP（upgrade でないもの）。`/app/` の配信など（§7.3）。応答したら true。
+   * 無ければ・false を返せば 404。UDS は常に 404（`/rpc` だけ）。
+   */
+  tcpHttp?(request: http.IncomingMessage, response: http.ServerResponse, port: number): boolean
   /** 層 2 自身の行（拒否の理由など）。値を含めない。 */
   log(level: 'error' | 'warn' | 'info', text: string): void
   onAttach?(client: AttachedClient): void
@@ -337,7 +342,10 @@ export async function startRpcServer(options: RpcServerOptions): Promise<RpcServ
 
   let tcp: http.Server | null = null
   if (options.tcp) {
-    tcp = http.createServer(notFound)
+    tcp = http.createServer((request, response) => {
+      if (options.tcpHttp?.(request, response, tcpPort ?? 0)) return
+      notFound(request, response)
+    })
     tcp.on(
       'upgrade',
       upgradeWith('tcp', (request) =>

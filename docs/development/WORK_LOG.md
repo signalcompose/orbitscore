@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): add the orbitscore session CLI with the ready line and the parent-death shutdown (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1001-a3-session-cli`（`1001-a2-session-server` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-4 = N1-a3）
+
+- `packages/session/src/cli.ts` + `session-main.ts`: `node dist/cli.js session [--runtime-dir] [--port] [--token-file] [--docs-dir]… [--web-dir] [--workspace-root] [--parent-pid] [--host-bundle-id] [--plugin-catalog] [--plugin-scan-path]`。`--mcp` は無い（未知の引数として拒否）
+- **ready 行**（stdout の 1 行目だけ）: `{"ready":true,"socket","port","protocol_version","token"}`。`port` と `token` は TCP を開いた時だけ。起動の失敗は stderr に `{"ready":false,"error":{code,message}}`（`RUNTIME_DIR_UNSAFE` / `SOCKET_PATH_TOO_LONG` / `SESSION_ALREADY_RUNNING` / `TOKEN_FILE_UNSAFE` / `BAD_ARGUMENTS` / `LISTEN_FAILED`・秘密なし）
+- **F-1**: stdin がパイプ（FIFO かソケット）の時だけ EOF で、`--parent-pid` の PID が消えても、SIGINT / SIGTERM / `session.shutdown` と同じ経路（engine を止める → サーバを閉じてソケットを消す）で終了。`--parent-pid` の周期 1 秒は置き値（台帳 P-08 を `open`）
+- `--token-file`（0600 でなければ拒否・F-12 で同じトークンを使う）/ `/app/` の静的配信（`--web-dir`・Host 検査・`frame-ancestors 'none'`・外へ出ない）
+- 実プロセスのテスト（vite-node で build 前に起こす）: stdin を閉じると終了 / 親を SIGKILL すると終了 / パイプでない stdin の EOF では終わらない / SIGKILL の後に同じ runtime-dir・port・トークンファイルで起動し直して再 attach（F-12 の層 2 側）/ 本物の `InterpreterV2` で daemon が起動前に死ぬと `engine.start` が失敗を返す
+- 計画 §2.1 に束 S-rpc の実測の変更行（8,368）を記録（上限 1,500 の約 5.6 倍・切り直しは #1001 に提案）
+
+Part of #1001
+
+---
+
 ### feat(session): add the session RPC server over a Unix socket and loopback TCP (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1001-a2-session-server`（`1001-a1-protocol-schema` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-3 = N1-a2）
