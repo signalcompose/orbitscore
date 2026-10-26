@@ -1,6 +1,7 @@
 ---
 title: Live Coding
 description: The workflow for changing music by rewriting code while it is playing
+host: both
 ---
 
 # Live Coding
@@ -11,12 +12,16 @@ This chapter pulls together the operations and the way of thinking you use durin
 
 ## Executing With Cmd+Enter
 
-The basic action in VS Code (or Cursor) is `Cmd+Enter` (`Ctrl+Enter` on Windows / Linux). Pressing this key executes one of the following, depending on the cursor position and selection state.
+The basic action is `Cmd+Enter` (`Ctrl+Enter` on Windows / Linux). Pressing this key executes one of the following, depending on the cursor position and selection state.
 
 | State | What gets executed |
 |---|---|
 | You have text selected | Only the selected range is executed |
 | Nothing is selected (the cursor is just placed on a line) | The entire "block" containing the cursor is executed |
+
+::: info Where to press it
+- **Extension**: In VS Code (or Cursor), press it in the editor where the `.orbs` file is open.
+:::
 
 A "block" is a group of lines separated by blank lines. For example, the following code is split into two blocks.
 

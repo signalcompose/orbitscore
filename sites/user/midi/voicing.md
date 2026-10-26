@@ -1,6 +1,7 @@
 ---
 title: ボイシングと voice leading
 description: コードの配置を変えるボイシング演算子、ランダム要素の追加、滑らかな声部進行（voicelead）、コンピングリズム（comp）の使い方を説明します
+host: both
 ---
 
 # ボイシングと voice leading

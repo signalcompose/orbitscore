@@ -1,5 +1,6 @@
 ---
 title: "エンジン設定"
+host: both+split
 ---
 
 # エンジン設定
@@ -8,8 +9,9 @@ OrbitScore の音は **Audio Engine**（Rust 製・orbit-audio-daemon）が鳴�
 この章では、エンジンの起動・停止と、現時点で設定できる項目 / まだできない項目を説明します。
 
 ## エンジンの起動と停止
+<!-- host: ext -->
 
-OrbitScore の Activity Bar にある **Audio Engine Settings** ビューから操作します。
+VS Code の Activity Bar にある OrbitScore の **Audio Engine Settings** ビューから操作します。
 ステータスバー右下の **OrbitScore: Stopped** をクリックすると、このビューが開きます。
 
 `.orbs` ファイルを開いているときは、エディタ右上のボタン（**OrbitScore: Start / Stop Engine**）でも
@@ -35,9 +37,9 @@ OrbitScore の Activity Bar にある **Audio Engine Settings** ビューから�
 
 ## 出力デバイスを選ぶ
 
-**Audio Engine Settings** ビューの **Output Device** を開くと、使えるデバイスが一覧されます。
-選択中のデバイスには `●` が付きます。**System Default** を選ぶと OS のデフォルト出力に戻ります。
-選択中のデバイスをもう一度クリックすると選択が解除され、エンジンが停止します。
+- **拡張版**: **Audio Engine Settings** ビューの **Output Device** を開くと、使えるデバイスが一覧されます。
+  選択中のデバイスには `●` が付きます。**System Default** を選ぶと OS のデフォルト出力に戻ります。
+  選択中のデバイスをもう一度クリックすると選択が解除され、エンジンが停止します。
 
 エンジンが動いている間にデバイスをクリックすると、その場で切り替わります（停止と再起動は不要です）。
 

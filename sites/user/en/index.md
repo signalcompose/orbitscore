@@ -1,6 +1,7 @@
 ---
 title: What is OrbitScore
 description: OrbitScore is a DSL and audio engine for making live coding music in VS Code
+host: both
 ---
 
 # What is OrbitScore
@@ -81,9 +82,9 @@ You can also open chapter 9 (Reference) or chapter 10 (Troubleshooting) on their
 ## System Requirements
 
 - macOS Apple Silicon (Macs with M1, M2, M3, etc.)
-- VS Code or Cursor (version 1.99.0 or later)
+- **Extension**: VS Code or Cursor (version 1.99.0 or later). The released `.vsix` is arm64-only; Intel Mac, Windows, and Linux are not supported.
 
-Intel Mac, Windows, and Linux are not supported. (The released `.vsix` is arm64-only.)
+Items marked **Extension** on this site describe how things work in OrbitScore distributed as a VS Code extension (`.vsix`).
 
 ## Next Step
 

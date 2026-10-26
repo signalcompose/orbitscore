@@ -1,6 +1,7 @@
 ---
 title: Your First Sound
 description: A step-by-step guide to playing your first sound with OrbitScore
+host: both+split
 ---
 
 # Your First Sound
@@ -9,7 +10,7 @@ Once you have installed the VS Code extension, it is time to make some sound. By
 
 ## What You Will Need
 
-- The OrbitScore VS Code extension installed (see [Installation](./installation.md))
+- **Extension**: The OrbitScore VS Code extension installed (see [Installation](./installation.md))
 - A folder containing a `.wav` audio file. For this chapter, a single kick (bass drum) sample is enough
 
 If you do not have an audio file at hand, you can download a free kick sample from sites such as [freesound.org](https://freesound.org/). The file name does not matter, but this guide assumes the file is named `kick.wav`.
@@ -27,12 +28,14 @@ orbitscore-practice/
 ```
 
 ## Step 2: Open the Folder in VS Code
+<!-- host: ext -->
 
 Launch VS Code and select **File → Open Folder...** from the menu, then open the `orbitscore-practice` folder you just created.
 
 ## Step 3: Create an `.orbs` File
+<!-- host: ext -->
 
-Right-click in the file explorer of your working folder and select **New File**. Name the file `first-sound.orbs` (the extension must be `.orbs`).
+In VS Code, right-click in the file explorer of your working folder and select **New File**. Name the file `first-sound.orbs` (the extension must be `.orbs`).
 
 ## Step 4: Write the Code
 
@@ -94,6 +97,7 @@ global.audioPath("/Users/yourname/orbitscore-practice/audio")
 Make sure `kick.wav` actually exists inside the `audio/` folder. Watch out for typos in the file name.
 
 ### Is the VS Code Extension Running?
+<!-- host: ext -->
 
 The status bar at the bottom of the VS Code window should show `🎵 OrbitScore: Ready`. If it does not, click that part of the status bar to start the extension.
 

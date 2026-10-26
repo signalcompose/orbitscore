@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(user-site): classify every chapter by host and label the extension-only paragraphs (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon-d2`（D-① の上に積む）/ **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)（計画 §7.1 の D-②・docs の連続 PR ②）
+
+D-① の文法と lint に従って、user サイトの全章に `host:` を入れ、配布線で操作が違う段落を併記の形にした（別冊 §3 の表どおり・裁定 (20) A + owner の条件）。
+
+- **frontmatter**: ja / en の 42 章に `host:`。`both` 17 / `both+split` 3（`first-sound` / `engine-settings` / `troubleshooting`）/ `ext` 1（`installation`）。別冊 §3.2 の表と同じ
+- **併記**（`- **拡張版**:` / `- **Extension**:`）: `index`（動作環境）・`live-coding`（`Cmd+Enter` をどこで押すか）・`instrument` / `effects`（Rescan Plugin Catalog）・`routing`（クイックフィックスの電球）・`engine-settings`（Output Device の一覧）・`troubleshooting`（電球・デバイス・報告に書くもの）・`first-sound`（用意するもの）。`index` に「拡張版」の意味を 1 文で足した
+- **分割節の印** `<!-- host: ext -->`: `first-sound` のステップ 2・3 と「VS Code 拡張機能が起動しているか」/ `engine-settings` の「エンジンの起動と停止」/ `troubleshooting` の「`Cmd+Enter` が動かない（拡張版）」。印は見えないので、見出しか最初の文で VS Code の手順と分かるようにした
+- 🔴 **OrbitStudio の行は書いていない**: アプリの表面は「参照（作り直してよい）」で未確定（設計 848 §7.4）。今書くと拡張版の読者が読むページに未確定の OrbitStudio の情報が載る（owner (20) の条件に反する）。表面が決まった時（A-parity）に `- **OrbitStudio**:` を足す。PR で owner に確認する
+- **主語**（`index` の「VS Code の上で」・`first-sound` の冒頭など）は A-parity 後（(20) A）なので触っていない。可用性の行（軸 B）は OrbitStudio の版が無いので書いていない
+- lint の `HOST_MISSING_BASELINE`（D-① の暫定）を仕組みごと消した。`midi/link-audio.md` が拡張版のハーネスの旧称 `orbitstudio-mcp-gated.spec.ts` を出典に挙げていて AV-HOST-SCOPE が反応したので、旧称の識別子 2 つを除外する修正を D-① に入れた
+- 確認: `npm run docs:check` 緑・`npm run docs:build:user` 成功（印は HTML に出ない）・実サイトを 4 通り壊して lint の red を確認
+
+Part of #848
+
+---
+
 ### docs(user-site): add the availability notation grammar and its lint (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon-d1` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)（計画 `IMPLEMENTATION_PLAN_NATIVE.md` §7.1 の D-①・docs の連続 PR ①）

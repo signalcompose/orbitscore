@@ -1,6 +1,7 @@
 ---
 title: Troubleshooting
 description: Common issues you may run into when using OrbitScore, with their solutions
+host: both+split
 ---
 
 # Troubleshooting
@@ -20,7 +21,9 @@ kick.audio("kick.wav").play(1, 0, 1, 0).output()    // to master
 
 The same rule applies to `sum` / `aux` buses and to instruments. Routing sequences into `global.sum("drum")` is not enough on its own — the bus itself has no output, so nothing reaches the speakers (you need `sum("drum").output()`).
 
-The editor raises an `output-missing` warning on a sounding sequence with no output, together with an "add `<name>.output()`" quick fix. Check whether the light bulb is showing. See [sum and aux/send](/en/mixing/routing) for details.
+The editor raises an `output-missing` warning on a sounding sequence with no output, together with an "add `<name>.output()`" quick fix. See [sum and aux/send](/en/mixing/routing) for details.
+
+- **Extension**: Check whether the light bulb is showing in the editor.
 
 ### Have You Called `global.start()`?
 
@@ -59,11 +62,14 @@ Please make sure the file specified by `audio()` actually exists inside the fold
 
 Please make sure your operating system's audio output is set to the device you want to listen on. Also confirm that the system volume is not at 0.
 
-If you have picked a device inside OrbitScore, also check which device is marked `●` under **Output Device** in the **Audio Engine Settings** view. When the device you chose never asks for audio, the engine starts on the OS default output instead ([Engine Settings](/en/getting-started/engine-settings)).
+- **Extension**: If you have picked a device inside OrbitScore, also check which device is marked `●` under **Output Device** in the **Audio Engine Settings** view.
+
+When the device you chose never asks for audio, the engine starts on the OS default output instead ([Engine Settings](/en/getting-started/engine-settings)).
 
 ---
 
-## `Cmd+Enter` Does Not Work
+## `Cmd+Enter` Does Not Work (Extension)
+<!-- host: ext -->
 
 ### Is the File Extension `.orbs`?
 
@@ -126,7 +132,7 @@ If you encounter a problem that is not described here, or if the steps above do 
 When you report an issue, including the following information as much as possible helps the cause be identified more quickly:
 
 - OS version (e.g., macOS 15.0 Apple Silicon)
-- VS Code or Cursor version
+- **Extension**: VS Code or Cursor version
 - OrbitScore version
 - The full text of any error messages
-- Logs shown in `View → Output → OrbitScore`
+- **Extension**: Logs shown in `View → Output → OrbitScore`

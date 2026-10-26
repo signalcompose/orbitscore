@@ -1,6 +1,7 @@
 ---
 title: Polymeter and Polyrhythm
 description: A look at one of OrbitScore's defining features — running sequences with different time signatures and tempos at the same time
+host: both
 ---
 
 # Polymeter and Polyrhythm

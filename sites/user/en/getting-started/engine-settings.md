@@ -1,5 +1,6 @@
 ---
 title: "Engine Settings"
+host: both+split
 ---
 
 # Engine Settings
@@ -9,8 +10,9 @@ This chapter covers starting and stopping the engine, and what you can — and c
 configure.
 
 ## Starting and stopping the engine
+<!-- host: ext -->
 
-Use the **Audio Engine Settings** view in the OrbitScore Activity Bar.
+Use the **Audio Engine Settings** view in the OrbitScore Activity Bar of VS Code.
 Clicking **OrbitScore: Stopped** in the status bar (bottom right) opens that view.
 
 While a `.orbs` file is open, the button at the top right of the editor
@@ -37,9 +39,9 @@ Changing the buffer size, changing the sample rate, and multi-channel output are
 
 ## Choosing an output device
 
-Expand **Output Device** in the **Audio Engine Settings** view to list the devices you can use.
-The selected device is marked with `●`. Choosing **System Default** returns to the OS default
-output. Clicking the already-selected device deselects it and stops the engine.
+- **Extension**: Expand **Output Device** in the **Audio Engine Settings** view to list the devices you can use.
+  The selected device is marked with `●`. Choosing **System Default** returns to the OS default
+  output. Clicking the already-selected device deselects it and stops the engine.
 
 Clicking a device while the engine is running switches to it in place — no stop and restart needed.
 

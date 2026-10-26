@@ -1,6 +1,7 @@
 ---
 title: Installation
 description: How to install the OrbitScore VS Code extension via the .vsix file
+host: ext
 ---
 
 # Installation

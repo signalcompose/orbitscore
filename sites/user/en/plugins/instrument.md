@@ -1,6 +1,7 @@
 ---
 title: Playing a Plugin Instrument
 description: How to host a CLAP / VST3 plugin as an instrument with seq.instrument() and play it using degree notation
+host: both
 ---
 
 # Playing a Plugin Instrument
@@ -34,7 +35,7 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3")  // full path
 Selecting by catalog name gives you autocomplete suggestions in the editor. When a plugin with the same name exists as both CLAP and VST3, CLAP currently takes priority (this behaviour is under review in #658). To select the VST3 version explicitly, prefix the format, as in `"vst3/Kontakt 8"`. When multiple vendors share a name, disambiguate the same way with a vendor prefix, as in `"Native Instruments/Kontakt 8"`.
 
 ::: tip When a catalog name does not show up in autocomplete
-Run **"OrbitScore: Rescan Plugin Catalog"** from the Command Palette to rescan installed plugins. Try this if a plugin you just installed does not appear in autocomplete.
+- **Extension**: Run **"OrbitScore: Rescan Plugin Catalog"** from the Command Palette to rescan installed plugins. Try this if a plugin you just installed does not appear in autocomplete.
 :::
 
 ## Saving and Restoring a Sound (State)

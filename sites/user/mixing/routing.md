@@ -1,6 +1,7 @@
 ---
 title: sum と aux/send
 description: 複数のシーケンスをグループバスにまとめたり、send でリターンバスに送ったりする方法を解説します
+host: both
 ---
 
 # sum と aux/send
@@ -142,7 +143,11 @@ sum("drum").send("rev", -18)
 | `output-missing` | 発音するシーケンスに `output()` / `send()` / バス名の参照が 1 つも無い | Warning |
 | `dry-not-routed` | `send()` の宛先が aux だけで、本流（dry）の出口が無い | Information |
 
-どちらにも「`<名前>.output()` を足す」クイックフィックス（電球アイコン）が付きます。`output-missing` の方が既定で選ばれます。
+どちらにも「`<名前>.output()` を足す」クイックフィックスが付きます。`output-missing` の方が既定で選ばれます。
+
+::: info クイックフィックスの選び方
+- **拡張版**: エディタに出る電球アイコンから選びます。
+:::
 
 `midi()` を書いたシーケンスは対象外です。MIDI は外部機器へ送るのでミキサーの出口を持たないからです。
 

@@ -1,6 +1,7 @@
 ---
 title: モードとスケール
 description: mode() で独自のピッチラティスを定義し、(..).mode(name) でグループに適用する方法を説明します
+host: both
 ---
 
 # モードとスケール

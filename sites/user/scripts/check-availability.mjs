@@ -63,60 +63,6 @@ const siteRoot = rootIndex === -1 ? defaultSiteRoot : path.resolve(argv[rootInde
 const HOST_VALUES = ['both', 'app', 'ext', 'both+split']
 const SCOPED_HOSTS = new Set(['both', 'both+split'])
 
-/**
- * D-① only: chapters that predate the `host:` key. They get it in the next PR
- * (docs PR ②), which deletes this list. Shrink-only: an entry whose chapter
- * already has `host:` (or no longer exists) is an error, and a chapter that is
- * not listed must carry `host:`. Applied to the real site only, not to --root.
- */
-const HOST_MISSING_BASELINE =
-  siteRoot === defaultSiteRoot
-    ? [
-        'basics/audio-manipulation.md',
-        'basics/live-coding.md',
-        'basics/multiple-sequences.md',
-        'basics/patterns.md',
-        'basics/polyrhythm.md',
-        'en/basics/audio-manipulation.md',
-        'en/basics/live-coding.md',
-        'en/basics/multiple-sequences.md',
-        'en/basics/patterns.md',
-        'en/basics/polyrhythm.md',
-        'en/getting-started/engine-settings.md',
-        'en/getting-started/first-sound.md',
-        'en/getting-started/installation.md',
-        'en/index.md',
-        'en/midi/index.md',
-        'en/midi/link-audio.md',
-        'en/midi/mode-scale.md',
-        'en/midi/pitch-dsl.md',
-        'en/midi/quantize.md',
-        'en/midi/voicing.md',
-        'en/mixing/effects.md',
-        'en/mixing/routing.md',
-        'en/plugins/instrument.md',
-        'en/projects/import.md',
-        'en/reference/methods.md',
-        'en/troubleshooting.md',
-        'getting-started/engine-settings.md',
-        'getting-started/first-sound.md',
-        'getting-started/installation.md',
-        'index.md',
-        'midi/index.md',
-        'midi/link-audio.md',
-        'midi/mode-scale.md',
-        'midi/pitch-dsl.md',
-        'midi/quantize.md',
-        'midi/voicing.md',
-        'mixing/effects.md',
-        'mixing/routing.md',
-        'plugins/instrument.md',
-        'projects/import.md',
-        'reference/methods.md',
-        'troubleshooting.md',
-      ]
-    : []
-
 const V = String.raw`\d+\.\d+\.\d+`
 
 /** The five fixed forms (STYLE_GUIDE.md「可用性表記」). Regex sources, anchored at both ends. */
@@ -238,25 +184,14 @@ function firstBodyLineAfterHeading(ch, i) {
 
 function checkHost(ch) {
   if (!ch.hasFrontmatter || ch.hosts.length === 0) {
-    if (!HOST_MISSING_BASELINE.includes(ch.rel)) {
-      report(
-        errors,
-        ch.rel,
-        1,
-        'AV-HOST',
-        `frontmatter has no \`host:\` (${HOST_VALUES.join(' | ')})`,
-      )
-    }
-    return null
-  }
-  if (HOST_MISSING_BASELINE.includes(ch.rel)) {
     report(
       errors,
       ch.rel,
-      ch.hosts[0].line,
+      1,
       'AV-HOST',
-      'has `host:` now — remove it from HOST_MISSING_BASELINE',
+      `frontmatter has no \`host:\` (${HOST_VALUES.join(' | ')})`,
     )
+    return null
   }
   if (ch.hosts.length > 1) {
     report(errors, ch.rel, ch.hosts[1].line, 'AV-HOST', '`host:` appears more than once')
@@ -433,17 +368,6 @@ for (const ch of chapters) {
   checkHostScope(ch, host)
   checkTerms(ch)
   facts.set(ch.rel, { host: ch.hosts[0]?.value ?? null, anchors, markers })
-}
-
-for (const rel of HOST_MISSING_BASELINE) {
-  if (!facts.has(rel))
-    report(
-      errors,
-      rel,
-      1,
-      'AV-HOST',
-      'listed in HOST_MISSING_BASELINE but no such chapter — remove the entry',
-    )
 }
 
 for (const [rel, ja] of facts) {

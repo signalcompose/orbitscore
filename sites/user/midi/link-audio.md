@@ -1,6 +1,7 @@
 ---
 title: LinkAudio（Ableton Live への音声出力）
 description: global.linkAudio() と seq.output() を使って OrbitScore の音を Ableton Live へ直接送る方法を説明します
+host: both
 ---
 
 # LinkAudio（Ableton Live への音声出力）

@@ -1,6 +1,7 @@
 ---
 title: sum and aux/send
 description: How to group sequences into a bus with sum, and send audio to a return bus with aux/send
+host: both
 ---
 
 # sum and aux/send
@@ -142,7 +143,11 @@ A line with no output at all is silent, so "I forgot to write it" and "I meant i
 | `output-missing` | A sounding sequence has no `output()`, no `send()`, and no bus-name reference at all | Warning |
 | `dry-not-routed` | Every `send()` goes to an aux, and the main (dry) path has no output | Information |
 
-Both come with an "add `<name>.output()`" quick fix (the light bulb). The one on `output-missing` is the preferred action.
+Both come with an "add `<name>.output()`" quick fix. The one on `output-missing` is the preferred action.
+
+::: info How to apply the quick fix
+- **Extension**: Pick it from the light bulb shown in the editor.
+:::
 
 A sequence that declares `midi()` is exempt: MIDI goes to external gear, so it has no mixer output.
 

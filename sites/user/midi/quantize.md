@@ -1,6 +1,7 @@
 ---
 title: Launch Quantize（起動タイミングの制御）
 description: global.quantize() と seq.quantize() で LOOP の起動タイミングをグリッドに揃える方法を説明します
+host: both
 ---
 
 # Launch Quantize（起動タイミングの制御）

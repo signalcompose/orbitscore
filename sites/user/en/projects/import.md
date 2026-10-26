@@ -1,6 +1,7 @@
 ---
 title: Multi-File Projects
 description: How to use import to assemble a project from multiple .orbs files
+host: both
 ---
 
 # Multi-File Projects
