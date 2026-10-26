@@ -62,4 +62,41 @@ export const FROZEN_COPIES: readonly FrozenCopy[] = [
     original: 'packages/vscode-extension/src/evaluate-document-directory.ts',
     why: '改行の制約を写さない（設計 848 §5.3.1・§6.1 の裁定による例外）。isOrbitscoreDocument は 1 行なので取り込んだ',
   },
+  {
+    copy: 'packages/session/src/language/diagnostics-analysis.ts',
+    original: 'packages/vscode-extension/src/diagnostics-analysis.ts',
+  },
+  {
+    copy: 'packages/session/src/language/dsl-completion-context.ts',
+    original: 'packages/vscode-extension/src/dsl-completion-context.ts',
+  },
+  {
+    copy: 'packages/session/src/language/dsl-method-catalog.ts',
+    original: 'packages/vscode-extension/src/dsl-method-catalog.ts',
+  },
+  {
+    copy: 'packages/session/src/language/plugin-catalog-completion.ts',
+    original: 'packages/vscode-extension/src/plugin-catalog-completion.ts',
+    why: '置き場所の違いによる import のパス（plugin-catalog-reader は src の直下）',
+  },
+  {
+    copy: 'packages/session/src/language/plugin-name-diagnostics.ts',
+    original: 'packages/vscode-extension/src/plugin-name-diagnostics.ts',
+    why: '置き場所の違いによる import のパス（plugin-catalog-reader は src の直下）',
+  },
+  {
+    copy: 'packages/session/src/language/completion-context.ts',
+    original: 'packages/vscode-extension/src/completion-context.ts',
+    why: 'vscode を vscode-shim に差し替える（層 2 に vscode は無い・台帳 P-25）',
+  },
+  {
+    copy: 'packages/session/src/language/diagnostics-provider.ts',
+    original: 'packages/vscode-extension/src/diagnostics-provider.ts',
+    why: 'vscode を vscode-shim に差し替える（台帳 P-25）+ import のパス',
+  },
+  {
+    copy: 'packages/session/src/language/dsl-providers.ts',
+    original: 'packages/vscode-extension/src/dsl-providers.ts',
+    why: 'vscode と extension-state を shim に差し替える（台帳 P-25）+ import のパス',
+  },
 ]

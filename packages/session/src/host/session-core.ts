@@ -17,6 +17,7 @@ import {
   type IntakeContext,
   type IntakeExecuteOptions,
 } from '../eval/evaluation-intake'
+import { LanguageServices, type DiagnosticEntry } from '../language/language-services'
 import { RpcError, PROTOCOL_VERSION } from '../rpc/protocol'
 import type { AttachedClient, NotificationHandler, RequestHandler } from '../rpc/server'
 
@@ -77,6 +78,8 @@ export class SessionCore {
   readonly logs: LogHub
   /** エディタのクライアントが開いている document の写し（§5.5）。 */
   readonly documents: DocumentStore
+  /** 補完と診断（凍結版のコードを層 2 で走らせる・§5.3.4）。 */
+  private readonly language: LanguageServices
   private readonly intake: EvaluationIntake
   private readonly targets = new Map<string, EvaluateTarget>()
   private playing = false
@@ -92,6 +95,10 @@ export class SessionCore {
       () => options.engine.debug,
     )
     this.documents = new DocumentStore((level, text) => this.sessionLog(level, text))
+    this.language = new LanguageServices({
+      log: (level, text) => this.sessionLog(level, text),
+      workspaceRoot: options.workspaceRoot,
+    })
     this.intake = createEvaluationIntake({
       execute: (ir: AudioIR, executeOptions: IntakeExecuteOptions, context: IntakeContext) =>
         this.execute(ir, executeOptions, context),
@@ -141,6 +148,11 @@ export class SessionCore {
       'engine.stop': stopEngine,
       'engine.getState': () => options.engine.getState(),
       'editor.getState': () => editorStateOf(this.requireEditor().active()),
+      'editor.getDiagnostics': (params: { path?: string }) => this.getDiagnostics(params.path),
+      'editor.complete': async (params: { uri: string; position: Position }) => {
+        const document = this.documents.get(params.uri)
+        return { items: document ? await this.language.complete(document, params.position) : [] }
+      },
       'editor.getDocumentText': () => {
         const active = this.requireEditor().active()
         return active
@@ -187,17 +199,24 @@ export class SessionCore {
           version: number
           text: string
           documentDirectory: string | null
-        }) =>
-          this.documents.open(params.uri, params.version, params.text, params.documentDirectory),
+        }) => {
+          this.documents.open(params.uri, params.version, params.text, params.documentDirectory)
+          void this.publishDiagnostics(params.uri)
+        },
       ),
       'editor.didChange': fromEditor(
         'editor.didChange',
-        (params: { uri: string; version: number; changes: TextChange[] }) =>
-          this.documents.change(params.uri, params.version, params.changes),
+        (params: { uri: string; version: number; changes: TextChange[] }) => {
+          if (this.documents.change(params.uri, params.version, params.changes)) {
+            void this.publishDiagnostics(params.uri)
+          }
+        },
       ),
-      'editor.didClose': fromEditor('editor.didClose', (params: { uri: string }) =>
-        this.documents.close(params.uri),
-      ),
+      'editor.didClose': fromEditor('editor.didClose', (params: { uri: string }) => {
+        this.documents.close(params.uri)
+        // 閉じた文書のマーカーを消す（凍結版は DiagnosticCollection から消した）。
+        this.options.broadcast('editor.diagnostics', { uri: params.uri, items: [] })
+      }),
       'editor.didChangeSelection': fromEditor(
         'editor.didChangeSelection',
         (params: { uri: string; range: Range; cursor?: Position }) =>
@@ -208,6 +227,49 @@ export class SessionCore {
         (params: { uri: string | null }) => this.documents.setActive(params.uri),
       ),
     }
+  }
+
+  /**
+   * 文書の診断を計算して `editor.diagnostics` で送る（§5.5）。計算の間に文書が変われば、古い版の
+   * 結果は送らない（後の変更がもう 1 回計算する）。
+   */
+  private async publishDiagnostics(uri: string): Promise<void> {
+    const document = this.documents.get(uri)
+    if (!document) return
+    const version = document.version
+    let items: DiagnosticEntry[]
+    try {
+      items = await this.language.diagnose(document)
+    } catch (error) {
+      this.sessionLog('error', `[session] diagnostics failed for ${uri}: ${String(error)}`)
+      return
+    }
+    if (this.documents.get(uri)?.version !== version) return
+    this.options.broadcast('editor.diagnostics', { uri, items })
+  }
+
+  /**
+   * MCP `get_diagnostics`（凍結版 `getDiagnosticsForAgent` と同じ規則）: パスを渡せばその 1 件を必ず
+   * 返し（診断が無くても空の配列で）、渡さなければ診断が 1 件以上ある文書だけを返す。対象は同期済みの
+   * 文書（エディタが付いていなければ空）。
+   */
+  private async getDiagnostics(filePath?: string) {
+    if (filePath !== undefined) {
+      const document = this.documents
+        .all()
+        .find((candidate) => documentPath(candidate.uri) === filePath)
+      return {
+        files: [
+          { path: filePath, diagnostics: document ? await this.language.diagnose(document) : [] },
+        ],
+      }
+    }
+    const files = []
+    for (const document of this.documents.all()) {
+      const diagnostics = await this.language.diagnose(document)
+      if (diagnostics.length > 0) files.push({ path: documentPath(document.uri), diagnostics })
+    }
+    return { files }
   }
 
   /** クライアントが離れた時。エディタなら写しを捨てる（再接続で `didOpen` が再送される・F-12）。 */

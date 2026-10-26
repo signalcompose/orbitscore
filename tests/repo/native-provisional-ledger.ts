@@ -351,6 +351,14 @@ export const LEDGER: readonly LedgerEntry[] = [
     state: 'open',
     bundle: 'S-editor（N1-c1）→ プロトコルの MINOR',
   },
+  {
+    id: 'P-25',
+    title:
+      '凍結版の言語機能（補完・診断）を、写しのまま vscode の形の器（vscode-shim）で走らせる足場',
+    deadline: { kind: 'ext-retire' },
+    state: 'open',
+    bundle: 'S-editor（N1-c2）→ 拡張版の退役',
+  },
 ]
 
 // ---------------------------------------------------------------------------

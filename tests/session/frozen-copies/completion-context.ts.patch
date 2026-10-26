@@ -1,0 +1,6 @@
+@@ -1,4 +1,4 @@
+-import * as vscode from 'vscode'
++import * as vscode from './vscode-shim'
+ 
+ /**
+  * Tracks what methods have been called in a chain
