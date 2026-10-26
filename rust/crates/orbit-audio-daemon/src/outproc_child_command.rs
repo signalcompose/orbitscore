@@ -22,6 +22,7 @@ pub(crate) fn effect_child_command(
         .arg(chain_manifest)
         .arg("--sample-rate")
         .arg(sample_rate.to_string())
+        .stdin(Stdio::null())
         .stderr(Stdio::inherit());
     if let Some(host_bundle_id) = host_bundle_id {
         cmd.arg(crate::HOST_BUNDLE_ID_ARG).arg(host_bundle_id);

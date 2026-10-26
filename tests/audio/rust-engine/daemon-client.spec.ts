@@ -841,17 +841,20 @@ describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   let recorderBin: string
   let argvFile: string
   let envFile: string
+  let stdinFile: string
 
   beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-audio-device-'))
     argvFile = path.join(tmpDir, 'argv.txt')
     envFile = path.join(tmpDir, 'env.txt')
+    stdinFile = path.join(tmpDir, 'stdin.txt')
     recorderBin = await createWarmExecutable(
       tmpDir,
       'orbit-audio-daemon',
       `#!/bin/sh
 printf '%s\n' "$@" > "${argvFile}"
 env > "${envFile}"
+if [ -p /dev/stdin ]; then echo fifo; elif [ -S /dev/stdin ]; then echo socket; else echo other; fi > "${stdinFile}"
 exit 1
 `,
     )
@@ -866,6 +869,7 @@ exit 1
     // warm up の空 spawn が書いた argv / env を持ち越さない。各 it は自分の spawn の結果だけを見る。
     fs.rmSync(argvFile, { force: true })
     fs.rmSync(envFile, { force: true })
+    fs.rmSync(stdinFile, { force: true })
   })
 
   afterEach(async () => {
@@ -880,20 +884,44 @@ exit 1
       ).rejects.toThrow(/daemon exited before ready/)
       await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
       const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
-      expect(argv).toEqual(['--audio-device', 'USB Audio'])
+      expect(argv).toEqual([
+        '--audio-device',
+        'USB Audio',
+        '--exit-on-stdin-eof',
+        '--parent-pid',
+        String(process.pid),
+      ])
     },
     SPAWN_TEST_TIMEOUT_MS,
   )
 
+  // #996 以降、audioDevice の有無にかかわらず親の死の検知の引数は常に付く。
+  // 親 PID は engine 自身（= spawn したこのプロセス）。
   it(
-    'audioDevice 未指定時は追加 argv を渡さない',
+    'audioDevice 未指定時は --audio-device を渡さない（親の死の検知の引数だけ）',
     async () => {
       await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
         /daemon exited before ready/,
       )
       await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
-      const argv = fs.readFileSync(argvFile, 'utf-8')
-      expect(argv.trim()).toBe('')
+      const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
+      expect(argv).toEqual(['--exit-on-stdin-eof', '--parent-pid', String(process.pid)])
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  // 🔴 **配線のテスト**（#996）。daemon は stdin の EOF で engine の死を知るので、stdin が
+  // `'ignore'`（= /dev/null）に戻ると `--exit-on-stdin-eof` を渡していても監視が効かない
+  // （daemon はパイプでない stdin の EOF を親の死とみなさない）。Node の `'pipe'` は Unix では
+  // socketpair なので、FIFO と socket のどちらでもよい。
+  it(
+    'daemon の stdin をパイプで渡す（engine の死を daemon が EOF で知る・#996）',
+    async () => {
+      await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+        /daemon exited before ready/,
+      )
+      await vi.waitFor(() => expect(fs.existsSync(stdinFile)).toBe(true))
+      expect(['fifo', 'socket']).toContain(fs.readFileSync(stdinFile, 'utf-8').trim())
     },
     SPAWN_TEST_TIMEOUT_MS,
   )

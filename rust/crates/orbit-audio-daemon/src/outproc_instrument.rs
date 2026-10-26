@@ -426,8 +426,8 @@ pub(crate) fn instrument_child_command(
         .arg("--plugin")
         .arg(plugin)
         .arg("--sample-rate")
-        .arg(sample_rate.to_string())
-        .stderr(Stdio::inherit());
+        .arg(sample_rate.to_string());
+    command.stdin(Stdio::null()).stderr(Stdio::inherit());
     if let Some(id) = plugin_id {
         command.arg("--plugin-id").arg(id);
     }

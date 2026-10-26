@@ -721,7 +721,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:508-515
+// packages/engine/src/audio/rust-engine/daemon-client.ts:509-516
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -1502,7 +1502,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5412-5419
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5413-5420
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

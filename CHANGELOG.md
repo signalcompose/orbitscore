@@ -79,7 +79,7 @@ DSL の機能追加リリース。Pitch DSL で**音高そのものをランダ�
 
 ## [4.2.0] - 2026-09-14
 
-拡張のみの機能追加リリース。DSL・wire・出力の意味論は変更なし。詳細は [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md)（"chore(release): bump the extension to 4.2.0"）を参照。
+拡張のみの機能追加リリース。DSL・wire・出力の意味論は変更なし。詳細は [`docs/archive/WORK_LOG_2026-09.md`](docs/archive/WORK_LOG_2026-09.md)（"chore(release): bump the extension to 4.2.0"）を参照。
 
 ### Added
 
