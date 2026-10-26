@@ -92,8 +92,8 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 | [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
 | [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
 | [967-random-pitch-design.md](../design/967-random-pitch-design.md) | #967/#968/#969/#970 | Pitch DSL の音高の乱数 `r` / `rr` / `random.<mode変数>`（拡張 4.3.0 で実装） |
-| [848-native-orbitstudio-design.md](../design/848-native-orbitstudio-design.md) | #848 | 🔴 **OrbitStudio（macOS ネイティブ版アプリ）の設計**（初版 2026-09-11 / 改訂 2026-10-26・PR [#995](https://github.com/signalcompose/orbitscore/pull/995)）。層 2 の プロセス化（`packages/session`）/ セッションプロトコル v1（JSON-RPC 2.0 over WebSocket・§5）/ MCP の置き場（§6）/ 完了条件 D-1〜D-12（§1.2）。**owner の裁定は §14.0・裁定待ちは §14** |
-| [848-docs-structure-design.md](../design/848-docs-structure-design.md) | #848 | 文書（user / dev サイト）の保持構造 — 両版の共存・`.app` への同梱・追従ルーチン（本体 D-9 / §9.1 の**別冊**）。**owner 裁定待ちは §10** |
+| [848-native-orbitstudio-design.md](../design/848-native-orbitstudio-design.md) | #848 | 🔴 **OrbitStudio（macOS ネイティブ版アプリ）の設計**（初版 2026-09-11 / 改訂 2026-10-26・PR [#995](https://github.com/signalcompose/orbitscore/pull/995)）。層 2 の プロセス化（`packages/session`）/ セッションプロトコル v1（JSON-RPC 2.0 over WebSocket・§5）/ MCP の置き場（§6）/ 完了条件 D-1〜D-12（§1.2）。**owner の裁定は §14.0**（第 1 回・第 2 回とも裁定済み。owner に確かめる残りは §14.0 の Q-r2-1 / Q-r2-2。Q-r2-3 は #996 に `release-gate` を付けて済み） |
+| [848-docs-structure-design.md](../design/848-docs-structure-design.md) | #848 | 文書（user / dev サイト）の保持構造 — 両版の共存・`.app` への同梱・追従ルーチン（本体 D-9 / §9.1 の**別冊**）。**owner の裁定は §10**（2026-10-26 に (15)〜(21) を全件裁定。(20) の owner の条件 = 規則 AV-HOST-SCOPE は docs の連続 PR ①） |
 
 #### アーカイブ済み（`docs/archive/design/`）
 

@@ -32,6 +32,8 @@ PR [#995](https://github.com/signalcompose/orbitscore/pull/995)（マージ `4f6
 
 検証: `npm run docs:build`（user / dev）と `npm run docs:check`（996 citations / 0 failed）が緑。仕様の判断・実装・テストは変更していない。
 
+**追記（main・受け入れの確認）**: 別冊の行の「owner 裁定待ちは §10」は、別冊の冒頭の一文（`848-docs-structure-design.md:6`）が #995 で更新されずに残っていたのを写したもの。§10 自体は 2026-10-26 に全件裁定済みと書いている。INDEX の 2 行と別冊の冒頭を「裁定は §10 / §14.0・残る確認は Q-r2-1 / Q-r2-2」に直した（Q-r2-3 は #996 に `release-gate` が付いていることを `gh issue view 996` で確認）。
+
 Part of #848
 
 ---

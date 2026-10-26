@@ -3,7 +3,7 @@
 **対象 issue**: #848（ネイティブ版の設計・計画・地図）の別冊
 **関連**: [`848-native-orbitstudio-design.md`](848-native-orbitstudio-design.md)（本体・D-9 / §9.1 / §10.3 / §14 (15)〜(20) から参照）/ [`IMPLEMENTATION_PLAN_NATIVE.md`](../planning/IMPLEMENTATION_PLAN_NATIVE.md)（R-app N4-e・docs の連続 PR ①〜③）/ [`NATIVE_DEVELOPMENT_MAP.md`](../planning/NATIVE_DEVELOPMENT_MAP.md) §4.G
 **状態**: 設計（実装しない）・2026-09-18・`1276ab1f` 実測（🔴 これは 09-14 の 4.2.0 マージで、09-18 の main ではない — 本体 §2）・**改訂 2026-10-23（main `7410dcb0`・拡張 4.4.0）: 崩れた前提「`.vsix` に docs は同梱されていない」を直した**（§0 の 3 行・§6.1・§6.4・§8 G-7・§9。下の注記）・改訂 2026-10-26（owner 裁定 第 2 回: 本体の暫定物の台帳に合わせて §3.4・§5.4・§7.4）
-**起案 / 審査**: Fable（effort: high）/ main。**owner 裁定待ちは §10**。
+**起案 / 審査**: Fable（effort: high）/ main。**owner の裁定は §10**（2026-10-26 に全件裁定・設計 §14.0）。
 **用語**: **OrbitStudio = macOS ネイティブ版アプリ**（owner 2026-09-18）。VS Code 拡張は「拡張版」（凍結線・現 4.4.0。凍結後も owner の個別例外で 4.2.1 / 4.3.0 / 4.4.0 が出た）。
 
 > 🔴 **改訂の注記（2026-10-23）**: 本書は 09-18 の時点で「凍結版は docs を `.vsix` に同梱していない」を前提にしていたが、**同じ 09-18 の 09:37 に #954 / PR #955 がマージされ、拡張 4.2.1 で user サイトが同梱された**（`scripts/copy-user-site.sh` が Markdown 45 本 + ビルド済み dist を拡張パッケージの内側 `packages/vscode-extension/sites/user/` へコピーし、`resolveUserDocsLocation` がモノレポ → `extension-bundle` の順に探す。**dev サイトは owner 決定で意図的に同梱しない**）。したがってアプリへの同梱は**新設ではなく、凍結版の同梱の引き継ぎ**になる（本体 D-9）。本書で新しいのは、同梱の**形**（Markdown + dist + DSL 仕様 + manifest・§6.2）と、可用性表記（§5）・追従ルーチン（§7）の設計である。前提を直した行には「改訂（10-23）」と付した。
