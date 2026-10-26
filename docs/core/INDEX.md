@@ -92,6 +92,7 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 | [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
 | [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
 | [967-random-pitch-design.md](../design/967-random-pitch-design.md) | #967/#968/#969/#970 | Pitch DSL の音高の乱数 `r` / `rr` / `random.<mode変数>`（拡張 4.3.0 で実装） |
+| [997-evaluation-model-design.md](../design/997-evaluation-model-design.md) | #997/#965/#620/#695/#987/#630/#631 | ネイティブ版の評価のかたち — 要求を 1 度にパースして文で切る・構文エラーは全体を実行しない・要求 1 つ = 1 記録・再生位置の出どころ（起案・owner の確認待ち） |
 
 #### アーカイブ済み（`docs/archive/design/`）
 
