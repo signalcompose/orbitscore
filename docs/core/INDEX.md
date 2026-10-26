@@ -92,6 +92,8 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 | [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
 | [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
 | [967-random-pitch-design.md](../design/967-random-pitch-design.md) | #967/#968/#969/#970 | Pitch DSL の音高の乱数 `r` / `rr` / `random.<mode変数>`（拡張 4.3.0 で実装） |
+| [848-native-orbitstudio-design.md](../design/848-native-orbitstudio-design.md) | #848 | 🔴 **OrbitStudio（macOS ネイティブ版アプリ）の設計**（初版 2026-09-11 / 改訂 2026-10-26・PR [#995](https://github.com/signalcompose/orbitscore/pull/995)）。層 2 の プロセス化（`packages/session`）/ セッションプロトコル v1（JSON-RPC 2.0 over WebSocket・§5）/ MCP の置き場（§6）/ 完了条件 D-1〜D-12（§1.2）。**owner の裁定は §14.0・裁定待ちは §14** |
+| [848-docs-structure-design.md](../design/848-docs-structure-design.md) | #848 | 文書（user / dev サイト）の保持構造 — 両版の共存・`.app` への同梱・追従ルーチン（本体 D-9 / §9.1 の**別冊**）。**owner 裁定待ちは §10** |
 
 #### アーカイブ済み（`docs/archive/design/`）
 
@@ -252,10 +254,12 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 
 | File | Purpose |
 |---|---|
-| [DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md) | 🔴 **開発計画の正本**（2026-09-03 制定）。open issue はこの地図に**合わせる**。§0 使い方と運用規則 / §1 再設計しない確定事項 / §1b 機能の持ち方 / §2 全体図 / §3 リリースまでの筋 / §4 領域ごとの地図 / §5 Epic の裁定 / §6 統合一覧 / §7 新規に必要な issue / §8 提案 / §9 未確認 |
+| [DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md) | 🔴 **開発計画の正本**（2026-09-03 制定）。🔴 **主語は拡張版（凍結版）** — 凍結線を越えた後は [`NATIVE_DEVELOPMENT_MAP.md`](../planning/NATIVE_DEVELOPMENT_MAP.md) が正本で、**両者は同時に生きる**（同地図 §0.1）。open issue はこの地図に**合わせる**。§0 使い方と運用規則 / §1 再設計しない確定事項 / §1b 機能の持ち方 / §2 全体図 / §3 リリースまでの筋 / §4 領域ごとの地図 / §5 Epic の裁定 / §6 統合一覧 / §7 新規に必要な issue / §8 提案 / §9 未確認 |
 | [IMPLEMENTATION_PLAN_2026-09.md](../planning/IMPLEMENTATION_PLAN_2026-09.md) | 設計文書 11 本の PR 戦略（一方通行の判断・PR 一覧・順序の根拠・段）（2026-09-03） |
 | [`USER_OUTCOMES_2026-09.md`](../planning/USER_OUTCOMES_2026-09.md) | 各 PR が完了するとユーザーは何ができるか（plan §1 の PR ごとに 1 行・見え方の凡例つき） |
-| [`NATIVE_MIGRATION_2026-09.md`](../planning/NATIVE_MIGRATION_2026-09.md) | 🔴 **拡張版 stable の凍結と、ネイティブ OrbitStudio.app への移行**（2026-09-10 裁定・#827）。§0〜§11 は別セッションの検討状況、**§12 が owner 裁定で正**。凍結線 = O-surface 完了・O-multiout 以降は新ライン・SC 削除は凍結前 |
+| [`NATIVE_MIGRATION_2026-09.md`](../planning/NATIVE_MIGRATION_2026-09.md) | 🔴 **拡張版 stable の凍結と、ネイティブ OrbitStudio.app への移行**（2026-09-10 裁定・#827）。§0〜§11 は別セッションの検討状況、**§12 が owner 裁定で正**。凍結線 = O-surface 完了・O-multiout 以降は新ライン・SC 削除は凍結前。**この裁定の上に立つ設計・計画・地図**は [`848-native-orbitstudio-design.md`](../design/848-native-orbitstudio-design.md) / [`IMPLEMENTATION_PLAN_NATIVE.md`](../planning/IMPLEMENTATION_PLAN_NATIVE.md) / [`NATIVE_DEVELOPMENT_MAP.md`](../planning/NATIVE_DEVELOPMENT_MAP.md) |
+| [`NATIVE_DEVELOPMENT_MAP.md`](../planning/NATIVE_DEVELOPMENT_MAP.md) | 🔴 **凍結線を越えた後の開発計画の正本**（制定 2026-09-11 / 改訂 2026-10-26・PR [#995](https://github.com/signalcompose/orbitscore/pull/995)）。主語は **OrbitStudio**（ネイティブ版アプリ）と層 1 / 2 の続きで、拡張版の地図 [`DEVELOPMENT_MAP.md`](../planning/DEVELOPMENT_MAP.md) と**同時に生きる**（§0.1）。engine 線の節は中身を写さず**番号で参照**する。issue 本文の先頭は `NMAP §4.X`（拡張版の `MAP §4.X` と区別する・§0） |
+| [`IMPLEMENTATION_PLAN_NATIVE.md`](../planning/IMPLEMENTATION_PLAN_NATIVE.md) | ネイティブ版の実装プラン — 段・束・受け入れ基準（初版 2026-09-11 / 改訂 2026-10-26）。§0 に**一方通行の判断**（N-1 プロトコル v1 の形ほか）・§2.1 に束ごとの実行環境（Linux で完結 / macOS 実機が要る）・§7 にクラウドへ続けて渡せる順の作業列。拡張版の [`IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) は**引き継がない**（engine 線の PR だけ番号で参照） |
 | [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md) | 束ブランチ運用: 小 PR は統合ブランチへ軽いゲートで、フルレビューと実機検証は束 PR で 1 回（他リポジトリへの導入手順・GitHub stacked PR との違い・参照つき） |
 | [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 の結果と判断根拠、および 6 つのクラスタ C1〜C6（診断の整合／プラグインの生存管理／daemon 起動の失敗面／時間の粒度／配布／ミキサーの出力側）。ラベル運用は [PROJECT_RULES.md](PROJECT_RULES.md) §1b (#689/#690) |
 | [issue-states.json](../planning/issue-states.json) | 🔴 **生成物・手で編集しない**（2026-09-08・#814）。地図と計画が参照する issue の open/closed スナップショット。`scripts/docs/refresh-issue-states.mjs`（`gh` の認証が要る）が生成し、`tests/docs/planning-issue-state.spec.ts` が突合する。**テストが GitHub API を叩かない**ための固定であって、古いこと自体はテストを赤にしない |

@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(index): list the OrbitStudio design and native plan in the docs index (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/docs-sync-pr995` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+PR [#995](https://github.com/signalcompose/orbitscore/pull/995)（マージ `4f6705e`）への追従。追従ルーチンによる docs のみの変更で、`packages/` `rust/` `tests/` は触っていない。
+
+#995 は設計 2 本（`848-native-orbitstudio-design.md` / `848-docs-structure-design.md`）と計画 2 本（`IMPLEMENTATION_PLAN_NATIVE.md` / `NATIVE_DEVELOPMENT_MAP.md`）を新設したが、**`docs/core/INDEX.md`（すべてのドキュメントの目次）には 1 本も載っていなかった**（WORK_LOG 以外からの参照が 0 だった）。
+
+- 設計ノートの表に 848 の 2 本を追加
+- Planning の表に `NATIVE_DEVELOPMENT_MAP.md` と `IMPLEMENTATION_PLAN_NATIVE.md` を追加
+- `DEVELOPMENT_MAP.md` の行に**主語が拡張版（凍結版）であること**を明記。#995 でマージされた地図が自ら「凍結線を越えた後の開発計画の正本」を名乗り「両者は同時に生きる」と書いているのに対し、INDEX は無条件に「開発計画の正本」と書いていて読者が衝突する
+- `NATIVE_MIGRATION_2026-09.md` の行から、その裁定の上に立つ設計・計画・地図へのリンクを張った
+
+検証: `npm run docs:build`（user / dev）と `npm run docs:check`（996 citations / 0 failed）が緑。仕様の判断・実装・テストは変更していない。
+
+Part of #848
+
+---
+
 ### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
