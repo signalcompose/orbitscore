@@ -30,6 +30,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - dev 学習サイトの引用のずれのうち行ずれだけのものを `check-citations.mjs --fix` で再アンカーし、中身が変わった 2 箇所 × 2 言語（spawn と `run()`）は抜粋と説明を手で更新。`docs/research/ENGINE_DAEMON_PROTOCOL.md` に §2.1.2（親の死の検知）を追記
 - 🔴 未実施（帰国後に main が手元で）: macOS 実機のマージ前ゲート（ビルド + 実機 gated E2E 全件・cold install）、`#[cfg(target_os = "macos")]` のテスト、実 CoreAudio での「engine の SIGKILL → daemon が消える」
 - その後の macOS 実機 gated で、`#606 E2E-K3` が「SIGKILL 後も daemon が生存する」という旧契約のため失敗。#996 の新契約に合わせ、kill 前の発音と 5 秒以内の daemon 自己終了を検証し、`_exit` で途中までになる WAV の末尾無音判定は外した
+- `/simplify`（4 観点）の整理: ゾンビを除く生存判定を `tests/helpers/process-liveness.ts` に 1 本化（gated と実 daemon のテストから使う）/ `check_parent` の非 direct 分岐を既存の `probe_pid_liveness` に置き換え（ESRCH だけを消失とみなす意味は同じ）/ Rust の結合テストの待ちループを `gated_common::wait_until` に・stdin の enum を `Stdio` に・後始末を `Drop` のガードに。見送り: 起動引数の 1 回の解析・終了経路の集約・起動ハーネスの共通化（差分の範囲外）
+- main が macOS で確認: daemon の lib 65・Origin 2・親の死 5（skip 0）/ 実 CoreAudio の parent-death 1 / `npm test` 2734 passed・87 skipped。dev サイトの引用 44 件は行ずれ（+1 / −10 / −12）だけを確認して `--fix`
 
 Closes #996
 

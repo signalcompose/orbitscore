@@ -9,6 +9,7 @@
 //! - **補助 = 親 PID**（[`PARENT_PID_ARG`]）: 書き端を別のプロセスが握ったまま（fd の継承）親だけが
 //!   死ぬと EOF は来ない。その形を周期的な `getppid()` で拾う（child 側の
 //!   `orbit_audio_sandbox::ParentWatch` と同じ判定）
+//! `orbit_audio_sandbox::ParentWatch` は構築時の `getppid()` しか記録せず engine 指定の期待 PID（daemon 起動前に死んだ engine の検知）を扱えず、sandbox 自体も daemon では `outproc-*` feature の optional 依存なので使わない。
 //!
 //! 🔴 **どちらも engine が引数で明示した時だけ働く。** 古い engine は stdin を `'ignore'`
 //! （= `/dev/null`）で渡し、引数も付けない。EOF を無条件に親の死とみなすと、古い engine と
@@ -24,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::outproc_shm_sweep::{probe_pid_liveness, PidLiveness};
 use tracing::warn;
 
 /// stdin の EOF を親の死とみなす。engine が stdin をパイプで渡した時だけ付ける。
@@ -197,9 +199,9 @@ pub(crate) fn check_parent(expected: libc::pid_t, direct: bool) -> Option<Parent
         return (now != expected).then_some(ParentGone::Reparented { expected, now });
     }
     // 親でない PID は存在だけを見る（PID の再利用には弱いが、補助の機構の fallback なので許す）。
-    // SAFETY: signal 0 は権限と存在の確認だけで、何も送らない。`expected > 1` は from_args が保証。
-    let missing = unsafe { libc::kill(expected, 0) } != 0
-        && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    // `Dead` は kill(pid, 0) の ESRCH だけ。EPERM などの `Unknown` は従来どおり生存扱い。
+    let missing =
+        u32::try_from(expected).is_ok_and(|pid| probe_pid_liveness(pid) == PidLiveness::Dead);
     missing.then_some(ParentGone::PidMissing { expected })
 }
 

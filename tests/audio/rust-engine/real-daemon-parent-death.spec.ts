@@ -13,13 +13,15 @@
  * 起動する（Rust 側の `parent_watch.rs` と同じ）。
  */
 
-import { ChildProcess, execFileSync, spawn } from 'child_process'
+import { ChildProcess, spawn } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { createInterface } from 'readline'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { isProcessRunning } from '../../helpers/process-liveness'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../')
 const DAEMON_BIN = path.join(REPO_ROOT, 'rust/target/release/orbit-audio-daemon')
@@ -28,20 +30,6 @@ const RUN = process.env.ORBIT_REAL_DAEMON === '1'
 
 /** daemon の PID 監視は 250ms 周期・stdin の EOF は即時。十分な余裕を持たせる。 */
 const DAEMON_EXIT_TIMEOUT_MS = 5_000
-
-/**
- * pid のプロセスがまだ動いているか。孤児の daemon は init / subreaper に引き取られ、刈り取られる
- * までゾンビとして残りうる（`process.kill(pid, 0)` はゾンビにも成功する）ので、状態まで見る。
- */
-function isRunning(pid: number): boolean {
-  let stat = ''
-  try {
-    stat = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim()
-  } catch {
-    // ps は該当プロセスが無いと非ゼロで終わる
-  }
-  return stat !== '' && !stat.startsWith('Z')
-}
 
 function nullAudioEnv(): NodeJS.ProcessEnv {
   if (process.platform !== 'linux') return {}
@@ -108,12 +96,12 @@ describe.runIf(RUN)('engine の SIGKILL の後に daemon が残らない (#996)'
 
     // engine が生きている間は daemon も生きている（= engine が stdin を開けたまま保っている）。
     await new Promise((r) => setTimeout(r, 1_000))
-    expect(isRunning(pid)).toBe(true)
+    expect(isProcessRunning(pid)).toBe(true)
 
     const exited = new Promise((r) => proc.once('exit', r))
     proc.kill('SIGKILL')
     await exited
-    await vi.waitFor(() => expect(isRunning(pid)).toBe(false), {
+    await vi.waitFor(() => expect(isProcessRunning(pid)).toBe(false), {
       timeout: DAEMON_EXIT_TIMEOUT_MS,
       interval: 50,
     })

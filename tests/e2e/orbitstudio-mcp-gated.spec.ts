@@ -52,6 +52,7 @@ import {
   estimateFundamentalHz,
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
+import { isProcessRunning } from '../helpers/process-liveness'
 
 import { defaultOutputDeviceName, listOutputDevices } from './helpers/audio-devices'
 import {
@@ -484,17 +485,6 @@ function processExists(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
-}
-
-/** Match real-daemon-parent-death.spec.ts: a zombie is no longer a running daemon. */
-function processIsRunning(pid: number): boolean {
-  let stat = ''
-  try {
-    stat = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim()
-  } catch {
-    // ps exits non-zero when the process no longer exists.
-  }
-  return stat !== '' && !stat.startsWith('Z')
 }
 
 /**
@@ -7043,14 +7033,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // OrbitScore cli-audio engine.
         process.kill(enginePid, 'SIGKILL')
         await waitForEngineState(session.client, false, 15_000, '#606 E2E-K3 engine SIGKILL')
-        await waitUntil(() => !processIsRunning(daemonPid!), {
-          intervalMs: 50,
+        await waitUntil(() => !isProcessRunning(daemonPid!), {
+          intervalMs: 100,
           timeoutMs: 5000,
           label: '#606 E2E-K3 daemon exits after engine SIGKILL',
         })
         daemonPid = undefined
-
-        // A surviving daemon's WebSocket-disconnect all-notes-off stays covered by protocol.rs.
 
         const analysis = analyzeWavBuffer(fs.readFileSync(capturePath), { windowMs: 20 })
         expect(

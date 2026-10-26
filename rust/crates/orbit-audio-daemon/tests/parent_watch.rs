@@ -8,11 +8,15 @@
 //! `.asoundrc` を置いた一時 HOME で起動する（CI の ubuntu で走らせるため）。macOS は実デバイスを
 //! 使う（`smoke.rs` と同じ）。それでも起動できない環境では skip する。
 
+mod gated_common;
+
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use gated_common::wait_until;
 
 const DAEMON: &str = env!("CARGO_BIN_EXE_orbit-audio-daemon");
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -21,18 +25,49 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// 「終わらない」ことを確かめる観察時間。PID の監視周期の数倍。
 const STAYS_ALIVE_FOR: Duration = Duration::from_millis(1500);
 
-/// daemon の stdin の渡し方。
-enum Stdin {
-    /// 新しい engine（`stdio[0] = 'pipe'`）。書き端はテストが持つ。
-    Pipe,
-    /// 古い engine（`stdio[0] = 'ignore'` = `/dev/null`）。
-    DevNull,
-}
-
 struct Daemon {
     child: Child,
     stdin: Option<ChildStdin>,
     stderr: mpsc::Receiver<String>,
+}
+
+struct ParentAndDaemon {
+    parent: Child,
+    parent_reaped: bool,
+    daemon_pid: Option<u32>,
+}
+
+impl ParentAndDaemon {
+    fn new(parent: Child) -> Self {
+        Self {
+            parent,
+            parent_reaped: false,
+            daemon_pid: None,
+        }
+    }
+
+    fn kill_parent(&mut self) -> std::io::Result<()> {
+        self.parent.kill()?;
+        self.parent.wait()?;
+        self.parent_reaped = true;
+        Ok(())
+    }
+
+    fn kill_daemon(&mut self) {
+        if let Some(pid) = self.daemon_pid.take() {
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        }
+    }
+}
+
+impl Drop for ParentAndDaemon {
+    fn drop(&mut self) {
+        if !self.parent_reaped {
+            let _ = self.parent.kill();
+            let _ = self.parent.wait();
+        }
+        self.kill_daemon();
+    }
 }
 
 impl Drop for Daemon {
@@ -44,14 +79,11 @@ impl Drop for Daemon {
 
 impl Daemon {
     /// daemon を起動し、ready 行を待つ。音声デバイスが無く起動できない環境では `None`（skip）。
-    fn spawn(stdin: Stdin, args: &[&str]) -> Option<Self> {
+    fn spawn(stdin: Stdio, args: &[&str]) -> Option<Self> {
         let mut command = Command::new(DAEMON);
         command
             .args(args)
-            .stdin(match stdin {
-                Stdin::Pipe => Stdio::piped(),
-                Stdin::DevNull => Stdio::null(),
-            })
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         with_null_audio_on_linux(&mut command);
@@ -66,19 +98,11 @@ impl Daemon {
         };
         match read_ready_line(stdout) {
             Some(line) if line.contains(r#""ready":true"#) => Some(daemon),
-            line => skip_only_on_startup_error(&daemon.stderr_text(), line),
-        }
-    }
-
-    fn exited_within(&mut self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            if self.child.try_wait().expect("try_wait").is_some() {
-                return true;
+            line => {
+                skip_only_on_startup_error(&daemon.stderr_text(), line);
+                None
             }
-            thread::sleep(Duration::from_millis(20));
         }
-        false
     }
 
     fn stderr_text(&mut self) -> String {
@@ -110,13 +134,12 @@ fn drain_stderr(mut stderr: impl Read + Send + 'static) -> mpsc::Receiver<String
 /// ready にならなかった daemon を skip してよいのは、daemon 自身が起動失敗（`"ready":false`・
 /// 音声デバイスが無い等）を報告した時だけ。何も言わずに終わった daemon は失敗として扱う —
 /// 「親の死でない EOF を親の死とみなして起動前に終わる」退行は、まさにその形で現れる。
-fn skip_only_on_startup_error<T>(stderr: &str, stdout_line: Option<String>) -> Option<T> {
+fn skip_only_on_startup_error(stderr: &str, stdout_line: Option<String>) {
     assert!(
         stderr.contains(r#""ready":false"#),
         "daemon ended before ready without a startup error (stdout {stdout_line:?}): {stderr}"
     );
     eprintln!("skipping: the daemon cannot start here: {stderr}");
-    None
 }
 
 /// stdout の最初の JSON 行（ready 行。起動失敗は stderr に出る）を待つ。読み終えた stdout は
@@ -148,17 +171,6 @@ fn is_running(pid: u32) -> bool {
     !stat.is_empty() && !stat.starts_with('Z')
 }
 
-fn wait_until_gone(pid: u32, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if !is_running(pid) {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    false
-}
-
 fn own_pid() -> String {
     std::process::id().to_string()
 }
@@ -167,14 +179,19 @@ fn own_pid() -> String {
 #[test]
 fn exits_when_stdin_reaches_eof_with_the_flag() {
     let pid = own_pid();
-    let Some(mut daemon) =
-        Daemon::spawn(Stdin::Pipe, &["--exit-on-stdin-eof", "--parent-pid", &pid])
-    else {
+    let Some(mut daemon) = Daemon::spawn(
+        Stdio::piped(),
+        &["--exit-on-stdin-eof", "--parent-pid", &pid],
+    ) else {
         return;
     };
     drop(daemon.stdin.take());
     assert!(
-        daemon.exited_within(EXIT_TIMEOUT),
+        wait_until(EXIT_TIMEOUT, || daemon
+            .child
+            .try_wait()
+            .expect("try_wait")
+            .is_some()),
         "daemon must exit after its stdin closes"
     );
     let stderr = daemon.stderr_text();
@@ -187,12 +204,16 @@ fn exits_when_stdin_reaches_eof_with_the_flag() {
 /// 🔴 opt-in: 引数が無ければ、stdin がパイプで EOF になっても終わらない。
 #[test]
 fn keeps_running_on_stdin_eof_without_the_flag() {
-    let Some(mut daemon) = Daemon::spawn(Stdin::Pipe, &[]) else {
+    let Some(mut daemon) = Daemon::spawn(Stdio::piped(), &[]) else {
         return;
     };
     drop(daemon.stdin.take());
     assert!(
-        !daemon.exited_within(STAYS_ALIVE_FOR),
+        !wait_until(STAYS_ALIVE_FOR, || daemon
+            .child
+            .try_wait()
+            .expect("try_wait")
+            .is_some()),
         "stdin EOF must not stop a daemon whose engine did not ask for it: {}",
         daemon.stderr_text()
     );
@@ -201,11 +222,15 @@ fn keeps_running_on_stdin_eof_without_the_flag() {
 /// 🔴 古い engine の起動の形（stdin = /dev/null・引数なし）では終わらない。
 #[test]
 fn old_engine_spawn_shape_keeps_running() {
-    let Some(mut daemon) = Daemon::spawn(Stdin::DevNull, &[]) else {
+    let Some(mut daemon) = Daemon::spawn(Stdio::null(), &[]) else {
         return;
     };
     assert!(
-        !daemon.exited_within(STAYS_ALIVE_FOR),
+        !wait_until(STAYS_ALIVE_FOR, || daemon
+            .child
+            .try_wait()
+            .expect("try_wait")
+            .is_some()),
         "the old engine's spawn shape must keep the daemon running: {}",
         daemon.stderr_text()
     );
@@ -216,13 +241,17 @@ fn old_engine_spawn_shape_keeps_running() {
 fn flag_with_dev_null_stdin_keeps_running() {
     let pid = own_pid();
     let Some(mut daemon) = Daemon::spawn(
-        Stdin::DevNull,
+        Stdio::null(),
         &["--exit-on-stdin-eof", "--parent-pid", &pid],
     ) else {
         return;
     };
     assert!(
-        !daemon.exited_within(STAYS_ALIVE_FOR),
+        !wait_until(STAYS_ALIVE_FOR, || daemon
+            .child
+            .try_wait()
+            .expect("try_wait")
+            .is_some()),
         "/dev/null's EOF is not the parent's death: {}",
         daemon.stderr_text()
     );
@@ -243,12 +272,13 @@ fn exits_when_the_parent_is_killed_even_if_stdin_stays_open() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     with_null_audio_on_linux(&mut command);
-    let mut parent = command.spawn().expect("spawn sh");
-    let _stdin_writer = parent.stdin.take();
-    let stderr = drain_stderr(parent.stderr.take().expect("stderr"));
+    let parent = command.spawn().expect("spawn sh");
+    let mut processes = ParentAndDaemon::new(parent);
+    let _stdin_writer = processes.parent.stdin.take();
+    let stderr = drain_stderr(processes.parent.stderr.take().expect("stderr"));
 
     let (tx, rx) = mpsc::channel();
-    let stdout = parent.stdout.take().expect("stdout");
+    let stdout = processes.parent.stdout.take().expect("stdout");
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let _ = tx.send(line);
@@ -267,27 +297,21 @@ fn exits_when_the_parent_is_killed_even_if_stdin_stays_open() {
         }
     }
     let Some(daemon_pid) = daemon_pid else {
-        let _ = parent.kill();
-        let _ = parent.wait();
         panic!("sh did not report the daemon pid");
     };
+    processes.daemon_pid = Some(daemon_pid);
     if !ready {
-        let _ = parent.kill();
-        let _ = parent.wait();
-        let _ = Command::new("kill")
-            .args(["-9", &daemon_pid.to_string()])
-            .status();
+        let _ = processes.kill_parent();
+        processes.kill_daemon();
         let stderr = stderr.recv_timeout(EXIT_TIMEOUT).unwrap_or_default();
-        return skip_only_on_startup_error(&stderr, None).unwrap_or(());
+        skip_only_on_startup_error(&stderr, None);
+        return;
     }
 
-    parent.kill().expect("SIGKILL sh");
-    parent.wait().expect("reap sh");
-    let gone = wait_until_gone(daemon_pid, EXIT_TIMEOUT);
-    if !gone {
-        let _ = Command::new("kill")
-            .args(["-9", &daemon_pid.to_string()])
-            .status();
+    processes.kill_parent().expect("SIGKILL and reap sh");
+    let gone = wait_until(EXIT_TIMEOUT, || !is_running(daemon_pid));
+    if gone {
+        processes.daemon_pid = None;
     }
     assert!(
         gone,
