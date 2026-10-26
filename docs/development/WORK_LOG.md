@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): draft the evaluation model for the native line (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `997-evaluation-model-design`（`1017-c3-reverse-requests` の上・docs だけの draft）/ **Issue**: [#997](https://github.com/signalcompose/orbitscore/issues/997)（計画 §7.1 の C-12）
+
+- `docs/design/997-evaluation-model-design.md` を起案した（実装しない・owner の確認待ち）
+- 土台: 段階 1 の受付口（`packages/session/src/eval/evaluation-intake.ts`）に本物の `parseAudioDSL` を通し、今の区切り方の振る舞いを 12 通り実測した（読めない文が 0 文で `ok`・行頭の `.` のチェーンが黙って捨てられる・空行 2 連が文を割る・行ごとの評価では IM.1 が効かない ほか）。追跡されている `.orbs` 127 本でパーサの読み飛ばしに頼るものは 0
+- 関連 6 件（#965 / #620 / #695 / #987 / #630 / #631）を一次ソースで分類（区切り方が原因なのは #695 と #965 の半分。#620 は層 2 では構造的に起きない。#987 は拡張版の文字列照合が原因だが、出どころは評価の側でしか作れない）
+- 推奨: 区切りは 3 層（展開 / 分割 / まとまり）に分け、展開は凍結版のまま・分割は「要求を 1 度にパースして文で切り、ソースの順に実行」・まとまりは「要求 1 つ = 1 バッチ = 1 記録」。構文エラーは全体を実行しない / 実行時エラーはその文だけ（今と同じ）。#987 は世代番号（owner が #987 に残した B 案）を層 2 が文の位置へ対応づける。実装は TypeScript のまま（評価は音の時刻の経路に乗っていない）
+- owner に確かめること 6 件（Q-1〜Q-6。うち Q-3 = `;` と読めない文の扱い、Q-6 = 複数行の import は DSL の構文に触れる）と、owner の「バグ的な振る舞い」の例の欄（§6.2）を空けた
+- `docs/core/INDEX.md` の設計ノートの表に行を足した
+
 ### feat(session): forward the reverse editor requests and resolve run selection in layer 2 (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1017-c3-reverse-requests`（`1017-c2-language-services` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1017](https://github.com/signalcompose/orbitscore/issues/1017)（束 S-editor・計画 §7.1 の C-11 = N1-c3）
