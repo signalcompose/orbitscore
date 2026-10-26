@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): add the session RPC server over a Unix socket and loopback TCP (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1001-a2-session-server`（`1001-a1-protocol-schema` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-3 = N1-a2）
+
+- **RPC サーバ**（`packages/session/src/rpc/`）: UDS と TCP の 2 リスナー・`/rpc` のハンドラは 1 つ。`session.hello` → `session.attach`（attach より前のメソッドは close 1008）。TCP は Host 許可リスト + Origin（欠落・`null` も拒否 = 403）+ トークン（定数時間の比較・欠落と不一致は close 1008）。UDS はトークン不要で、runtime-dir 0700（所有者と mode を検査し、広ければ起動しない）+ ソケット 0600。取り残しのソケットは消し、生きているソケットがあれば起動しない。パスが長すぎれば macOS は `getconf DARWIN_USER_TEMP_DIR` へ退避。TCP に `/mcp` は無い（404）。params と結果はスキーマ（Ajv 2020）で検査し、スキーマの外の結果は wire に出さない
+- **層 2 の芯**（`packages/session/src/host/`）: `EngineHost`（`InterpreterV2` を in-process で持つ。凍結版が子プロセスの env / 引数で渡していたものを daemon を起こす前に写す・停止は凍結版 `cli/shutdown.ts` の順で `quit()` の後に応答）/ `SessionCore`（`session.evaluate`・`getState`・`getLog`・`shutdown`・`engine.*`・`evalId`・`target` の記憶）/ `LogHub`（ring は凍結版と同じ文字列・容量 1000・既定 50）/ `log-classify`（凍結版 `shouldFilterLine` の写しを凍結版と同じ答えか事例で確かめる・daemon の level）
+- **console の横取り**（台帳 P-07 を `open`）: engine の `[STEP]` → `transport.step`（`source: null`）、`✅ Global running` 等 → `transport.state`、それ以外 → `log.line`。評価の最中の行に `evalId` / `clientId` を付ける
+- 未実装のメソッドは `METHOD_NOT_FOUND`（台帳に **P-19** を新設・設計 §1.4.1 にも行）。スキーマに `ENGINE_NOT_RUNNING` を足した（設計 §5.9 S-8）
+- 設計 §5.3.2 の未確認（`engine.stop` が daemon の消滅を待つか）を確かめた: `quit()` は SIGTERM の経路では `exit` を待つが、SIGKILL へ昇格した経路は待たない（設計 §5.9 に記録・engine 線への提案）
+
+Part of #1001
+
+---
+
 ### feat(protocol): add the session protocol v1 schema, the generated TS types and the Apache-2.0 license (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1001-a1-protocol-schema`（`1001-a0-eval-intake` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-2 = N1-a1）

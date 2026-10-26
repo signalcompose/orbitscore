@@ -22,7 +22,8 @@
     "EDITOR_TIMEOUT": -32013,
     "DOC_NOT_FOUND": -32020,
     "DOCS_UNAVAILABLE": -32021,
-    "SHUTTING_DOWN": -32030
+    "SHUTTING_DOWN": -32030,
+    "ENGINE_NOT_RUNNING": -32031
   },
   "x-methods": {
     "session.hello": {
@@ -43,7 +44,7 @@
     "session.evaluate": {
       "direction": "client-to-server",
       "kind": "request",
-      "description": "Stateless evaluation: documentDirectory is required on every call (null = no base). All clients share one FIFO.",
+      "description": "Stateless evaluation: documentDirectory is required on every call (null = no base). All clients share one FIFO. ENGINE_NOT_RUNNING when the engine has not been started.",
       "params": { "$ref": "#/$defs/EvaluateParams" },
       "result": { "$ref": "#/$defs/EvaluateResult" },
       "x-surfaces": ["gui", "mcp"],
