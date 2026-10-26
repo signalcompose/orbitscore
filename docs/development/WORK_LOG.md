@@ -17,7 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #1031 (split RustSec advisory gate) into the work log (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/docs-sync-pr1031` / **追従元**: PR [#1031](https://github.com/signalcompose/orbitscore/pull/1031)（merge commit `2aa309d`・head `21d7b2f1`）
+
+PR #1031（`cargo deny check advisories` を `rust-ci.yml` から分け、依存を変える PR と毎日の main で回す）の追従。
+差分は CI のワークフロー 2 本・`.husky/pre-push`・WORK_LOG で、**DSL / ランタイム / 拡張の表面を 1 つも変えていない**。
+したがって直した先は WORK_LOG の 1 か所だけである。
+
+- #1031 の記録の「🔴 未実施: …（= 検出が生きていること）」が、**PR 自身の CI で解消済みだったのに残っていた**
+  （4 本のコミットのうち最初の `72b8ec5` で書かれ、以降のコミットで更新されなかった）。追記で補正し、
+  **残っている未検証は通知の経路だけ**であること（通知の段が `schedule` / `workflow_dispatch` に絞られているため
+  `pull_request` の赤では走らない・`.github/workflows/rust-advisories.yml:76`）を明記した
+- 追従不要と判断したものは PR 本文に理由付きで列挙した。要約: `sites/dev/` に CI / git フックを扱う章が無い
+  （`docs/development/WORK_LOG.md:844` が別の追従で同じことを実測済み）・`sites/user/` と `docs/user/` は
+  出荷済みの拡張の使い方だけを書く・`sites/dev/glossary.md:128` の「GPL 依存を `cargo-deny` で gate」は
+  bans / licenses / sources が全 PR で走り続けるので記述のまま正しい
+- 🔴 `.husky/pre-push` の advisory 判定が `rust-advisories.yml` の `paths` と 1 か所ずれている点は
+  PR 本文で報告した（実装は変えない）
+
+Part of #1030
+
+---
+
 ### ci(rust): run RustSec advisories only on dependency changes and daily on main (Oct 26, 2026)
+
+> **2026-10-26 追記（追従ルーチン）**: 下の「🔴 未実施」は**検出については解消済み**だった。この PR の
+> head `21d7b2f1` で `advisory gate (RustSec)` が RUSTSEC-2026-0386 を検出して赤になっており
+> （[run 40399798494](https://github.com/signalcompose/orbitscore/actions/runs/40399798494/job/121842278404)）、
+> 同じ push の `license / dependency gate` は緑だった（＝分けた効果もここで確認できている）。
+> 🔴 **残っている未検証は失敗の通知の経路だけ**: 通知の段は
+> `if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')`
+> で絞ってあるので（`.github/workflows/rust-advisories.yml:76`）、`pull_request` で起きた上の赤では
+> 走っていない。追跡 issue が開く／既存の issue にコメントが付くことは、マージ後の `workflow_dispatch`
+> か最初の定期実行（21:23 UTC）まで確かめられない。
+> なお本 PR は `advisory gate (RustSec)` が赤のままマージされた（main の `Cargo.lock` に #1002 が
+> 入っていないための期待どおりの赤。main に required status checks は無いのでマージは止まらない）。
 
 **Date**: 2026-10-26 / **ブランチ**: `1030-rust-advisories-schedule` / **Issue**: [#1030](https://github.com/signalcompose/orbitscore/issues/1030)
 
