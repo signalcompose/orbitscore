@@ -3,8 +3,9 @@
  * transport の状態・クライアントの一覧。RPC サーバに渡すメソッドの実装もここに置く。
  *
  * このビルドが実装しているメソッド: `session.*`・`engine.*`・`audio.*`・`plugin.*`（`openUiAtCursor` を
- * 除く）・`docs.*`（後の 3 群は `layer2-methods.ts`）。残り（`editor.*`・`plugin.openUiAtCursor`）は
- * 束 S-editor が足す（台帳 P-19）。
+ * 除く）・`docs.*`（後の 3 群は `layer2-methods.ts`）・`editor.did*` と `editor.getState` /
+ * `getDocumentText`（同期済みの写しから）。残り（`editor.complete` / `getDiagnostics` と逆方向の
+ * `editor.*`・`plugin.openUiAtCursor`）は束 S-editor の後続の小 PR が足す（台帳 P-19）。
  */
 import crypto from 'node:crypto'
 
@@ -17,10 +18,18 @@ import {
   type IntakeExecuteOptions,
 } from '../eval/evaluation-intake'
 import { RpcError, PROTOCOL_VERSION } from '../rpc/protocol'
-import type { AttachedClient, RequestHandler } from '../rpc/server'
+import type { AttachedClient, NotificationHandler, RequestHandler } from '../rpc/server'
 
 import { captureConsole, parseStepLine, transportChange } from './console-capture'
 import type { DocsSites } from './docs-sites'
+import {
+  DocumentStore,
+  editorStateOf,
+  documentPath,
+  type Position,
+  type Range,
+  type TextChange,
+} from './document-store'
 import type { EngineHost, StartEngineParams } from './engine-host'
 import { audioMethods, docsMethods, pluginMethods, type Layer2MethodDeps } from './layer2-methods'
 import { registerMcp, type RegisterMcpDeps, type RegisterMcpParams } from './mcp-registration'
@@ -66,6 +75,8 @@ const TARGET_MEMORY = 256
 
 export class SessionCore {
   readonly logs: LogHub
+  /** エディタのクライアントが開いている document の写し（§5.5）。 */
+  readonly documents: DocumentStore
   private readonly intake: EvaluationIntake
   private readonly targets = new Map<string, EvaluateTarget>()
   private playing = false
@@ -73,12 +84,14 @@ export class SessionCore {
   private executing: IntakeContext | null = null
   private releaseConsole: (() => void) | null = null
   readonly handlers: Readonly<Record<string, RequestHandler>>
+  readonly notificationHandlers: Readonly<Record<string, NotificationHandler>>
 
   constructor(private readonly options: SessionCoreOptions) {
     this.logs = new LogHub(
       (line: LogLineNotification) => options.broadcast('log.line', line),
       () => options.engine.debug,
     )
+    this.documents = new DocumentStore((level, text) => this.sessionLog(level, text))
     this.intake = createEvaluationIntake({
       execute: (ir: AudioIR, executeOptions: IntakeExecuteOptions, context: IntakeContext) =>
         this.execute(ir, executeOptions, context),
@@ -127,10 +140,79 @@ export class SessionCore {
       'engine.start': startEngine,
       'engine.stop': stopEngine,
       'engine.getState': () => options.engine.getState(),
+      'editor.getState': () => editorStateOf(this.requireEditor().active()),
+      'editor.getDocumentText': () => {
+        const active = this.requireEditor().active()
+        return active
+          ? { path: documentPath(active.uri), text: active.text }
+          : { path: null, text: null }
+      },
       ...audioMethods(layer2),
       ...pluginMethods(layer2),
       ...docsMethods(layer2),
     }
+    this.notificationHandlers = this.editorNotifications()
+  }
+
+  /** エディタが付いていなければ `NO_EDITOR_ATTACHED`（設計 §5.3.4・D-3）。 */
+  private requireEditor(): DocumentStore {
+    if (!this.options.editorAttached()) {
+      throw new RpcError(
+        'NO_EDITOR_ATTACHED',
+        'no editor is attached to this session — open a document window in OrbitStudio, or use evaluate_orbitscore',
+      )
+    }
+    return this.documents
+  }
+
+  /**
+   * `editor.did*`（§5.5）。`editor` capability を持つクライアントの通知だけを受ける（エディタは
+   * 同時に 1 つ・§5.4）。それ以外のクライアントの通知は捨てて理由を残す。
+   */
+  private editorNotifications(): Record<string, NotificationHandler> {
+    const fromEditor =
+      <P>(method: string, apply: (params: P) => void): NotificationHandler =>
+      (params: P, client: AttachedClient) => {
+        if (!client.capabilities.has('editor')) {
+          this.sessionLog('warn', `[session] ${method} from a client without the editor capability`)
+          return
+        }
+        apply(params)
+      }
+    return {
+      'editor.didOpen': fromEditor(
+        'editor.didOpen',
+        (params: {
+          uri: string
+          version: number
+          text: string
+          documentDirectory: string | null
+        }) =>
+          this.documents.open(params.uri, params.version, params.text, params.documentDirectory),
+      ),
+      'editor.didChange': fromEditor(
+        'editor.didChange',
+        (params: { uri: string; version: number; changes: TextChange[] }) =>
+          this.documents.change(params.uri, params.version, params.changes),
+      ),
+      'editor.didClose': fromEditor('editor.didClose', (params: { uri: string }) =>
+        this.documents.close(params.uri),
+      ),
+      'editor.didChangeSelection': fromEditor(
+        'editor.didChangeSelection',
+        (params: { uri: string; range: Range; cursor?: Position }) =>
+          this.documents.select(params.uri, params.range, params.cursor),
+      ),
+      'editor.didChangeActive': fromEditor(
+        'editor.didChangeActive',
+        (params: { uri: string | null }) => this.documents.setActive(params.uri),
+      ),
+    }
+  }
+
+  /** クライアントが離れた時。エディタなら写しを捨てる（再接続で `didOpen` が再送される・F-12）。 */
+  onClientDetached(client: AttachedClient): void {
+    if (client.capabilities.has('editor')) this.documents.clear()
   }
 
   /** console の横取りを外す（shutdown・テスト）。 */
@@ -188,9 +270,8 @@ export class SessionCore {
       protocolVersion: PROTOCOL_VERSION,
       engine: await this.options.engine.getState(),
       transport: { playing: this.playing },
-      // 文書の同期は束 S-editor（`editor.did*`）。それまでは空。
-      documents: [],
-      activeUri: null,
+      documents: this.documents.list(),
+      activeUri: this.documents.activeUriValue,
       workspaceRoot: this.options.workspaceRoot,
       editorAttached: this.options.editorAttached(),
     }

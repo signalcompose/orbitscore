@@ -343,6 +343,14 @@ export const LEDGER: readonly LedgerEntry[] = [
     },
     bundle: 'S-mcp（N1-b3）→ N2',
   },
+  {
+    id: 'P-24',
+    title:
+      'editor.getState の languageId を拡張子から推定し、isDirty を「開いてから変わったか」で近似（didOpen に languageId・didSave が無い）',
+    deadline: { kind: 'release-1' },
+    state: 'open',
+    bundle: 'S-editor（N1-c1）→ プロトコルの MINOR',
+  },
 ]
 
 // ---------------------------------------------------------------------------
