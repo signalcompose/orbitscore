@@ -38,6 +38,21 @@ Part of #1030
 
 ---
 
+### fix(deps): bump tokio past RUSTSEC-2026-0386 so cargo-deny passes again (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu` / **Issue**: [#999](https://github.com/signalcompose/orbitscore/issues/999)
+
+Rust CI の `license / dependency gate`（`cargo deny check`）が 2026-10-26 から落ちていた。原因は RUSTSEC-2026-0386（tokio の `AsyncFd::new` 系が I/O safety に反する・unsound）。`rust/Cargo.lock` の tokio 1.52.1 が該当していた。
+
+- `cargo update -p tokio` で tokio を **1.52.1 → 1.54.1** へ（勧告の Solution は `>=1.51.6, <1.52.0 OR >=1.53.3`）。差分は `rust/Cargo.lock` の 2 行（version と checksum）だけで、tokio の依存の並びと `tokio-macros 2.7.0` は変わらない
+- 勧告の対象 API（`AsyncFd`）は workspace の Rust コードで使っていない（`grep -rn AsyncFd` 0 件）。直接の実害ではなく、ゲートを戻すための更新
+- 確認（Linux・cloud・cargo-deny 0.20.2）: 更新前の lock で `advisories FAILED`（RUSTSEC-2026-0386 を再現）→ 更新後 `advisories ok, bans ok, licenses ok, sources ok`。`cargo clippy --workspace --all-targets --locked -- -D warnings` / `cargo test --workspace --locked`（575 passed / 0 failed / 21 ignored）/ `cargo fmt --all --check` が緑
+- 🔴 未実施: macOS 実機のマージ前ゲート（ビルド + 実機 gated E2E）。daemon は tokio の上で WebSocket と IPC を回すので、帰国後に main が手元で通す
+
+Closes #999
+
+---
+
 ### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
