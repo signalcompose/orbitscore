@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): sync the editor's documents into layer 2 and answer editor state from the copy (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1017-c1-document-sync`（統合ブランチ `1017-session-editor` の最初の小 PR・draft）/ **Issue**: [#1017](https://github.com/signalcompose/orbitscore/issues/1017)（束 S-editor・計画 §7.1 の C-10 / C-11 = N1-c1）
+
+- C-10: 束 S-editor の issue #1017 を起票し、統合ブランチ `1017-session-editor` を S-mcp の最後の小 PR（#1016）の先端から切った。計画 §2.1 の S-mcp / S-editor の行のブランチ名を実際の名前に（台帳 P-15 の仮置きを外した）
+- `host/document-store.ts`: エディタが開いている document の写し。LSP と同じ 0 始まり・UTF-16 の座標で `editor.didChange` の範囲の置き換えを当てる（`\n` / `\r\n` / `\r`・範囲の外は端へ寄せる）。古い・重複した版と、開いていない文書への変更は当てずに理由を残す
+- `SessionCore`: `editor.did*` の 5 通知は `editor` capability を持つクライアントからだけ受ける。`editor.getState` / `editor.getDocumentText` は同期済みの写しから（凍結版と同じく位置は 1 始まり・アクティブな文書が無ければ全欄 null・エディタが付いていなければ `NO_EDITOR_ATTACHED`）。`session.getState` の `documents` / `activeUri` を埋めた。エディタのクライアントが離れたら写しを捨てる（再接続で `didOpen` が再送される・F-12）
+- IM.6 の第 2 候補が `editor.didChangeActive` に従うことを、中継と同じ RPC ハンドラ + `buildServer` で確かめた（アクティブな `.orbs` → その文書のディレクトリ / 未保存の文書 → ワークスペース）
+- `languageId` は拡張子から推定、`isDirty` は「開いてから変わったか」の近似 → 台帳 **P-24** を新設（`didOpen` に言語、`didSave` 通知がプロトコルに無い）
+
+Part of #1017
+
+---
+
 ### test(e2e): add the native parity ledger and the MCP tools v1 gate (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1011-b4-parity`（`1011-b3-harness` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-9 = N1-b4）

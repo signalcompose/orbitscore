@@ -270,6 +270,8 @@ export async function startSession(argv: readonly string[], io: SessionIo): Prom
       tcp: args.port !== undefined && token ? { port: args.port, token } : undefined,
       sessionVersion: io.sessionVersion,
       handlers: core.handlers,
+      notificationHandlers: core.notificationHandlers,
+      onDetach: (client) => core.onClientDetached(client),
       log: (level, text) => core.sessionLog(level, text),
       tcpHttp: (request, response, port) =>
         serveDocs(docs, request, response, port, (level, text) => core.sessionLog(level, text)) ||
