@@ -10,6 +10,12 @@
 
 # OrbitScore Pitch DSL Specification — v1.1 “MIDI Integration”
 
+> **実装の許諾 / Implementation grant**（案・未確定 / draft）
+>
+> Signal compose Inc. grants everyone permission to create, use, and distribute implementations of the OrbitScore DSL — software that follows the grammar and semantics defined in the OrbitScore DSL specification documents (listed in the License section of the repository's README) — under the terms of the Apache License, Version 2.0, including the patent license in its Section 3. This grant concerns the language only. It is not a license to the text of the specification documents, which remain under the root LICENSE of this repository (© Signal compose Inc.).
+>
+> Signal compose Inc. は、OrbitScore DSL の仕様書（リポジトリの README の License 節に一覧）が定める文法と意味に沿った実装を作り、使い、配布することを、Apache License 2.0 の条件（第 3 条の特許の許諾を含む）で誰にでも許諾します。この許諾は言語についてのもので、仕様書の本文の許諾ではありません。仕様書の本文はこのリポジトリのルートの LICENSE（© Signal compose Inc.）に従います。英文と食い違う場合は英文が優先します。
+
 **Status**: E1–E6 as-built — pitch / chords + voicing / randomness / key-center register / section variables / per-note expression / mode scope are implemented and test-covered (synced to DESIGN_DISCUSSION_RECORD decisions \#47–59). §3 group-chain modifiers and any later phases are tracked separately, not asserted as done here. **Date**: 2026-06-14 (orig. 2026-06-12) **Authors**: Hiroshi Yamato (design decisions) / Claude (drafting) **Relation to existing docs**: - Extends `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` (v3.0, single source of truth) - Supersedes the pitch system of `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` (chromatic degree system) - Implements ROADMAP_2026.md v1.1 “MIDI Integration” (Epic \#132) with a revised DSL design
 
 ------------------------------------------------------------------------
