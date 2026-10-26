@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): check that E2E DSL strings parse with the strict parser (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d6-e2e-dsl-parse`（`1022-d4-step-source` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の完了条件・設計 997 §7.3 の「`tests/e2e/*.ts` の DSL を D-E3 のパーサで読み直す」）
+
+- 新しい spec `tests/e2e/gated-dsl-strict-parse.spec.ts`（通常の `npm test` で走る静的な検査）: `tests/e2e` の TS を TypeScript の構文木で読み、**DSL が engine へ渡る位置**（`code` / `lines` / `replace` の値・`[…].join()` の配列・DSL を示す名前の変数・配列を返すアロー関数・`evaluate()` の第 1 引数・`writeFileSync` の内容・`…Scenario()` の引数）にある **DSL らしい**文字列を取り出し、厳しくしたパーサで読む。E-7 の 3 つの文言（以前は黙って読み飛ばしていた入力）で落ちるものがあれば red。意図した構文エラー（別の文言）は通す
+- テンプレートの `${…}` は仮の値で埋める（`JSON.stringify(…)` → `"s"`・文の頭で直後が `(` → `LOOP`・それ以外 → `p<i>`）。DSL を送らない spec 4 本（書き方の検査・helper の unit・語の一覧・この spec 自身）は理由つきで除外
+- 結果（実測・2026-10-26）: **132 件・読み飛ばしに頼るもの 0 件**（うちテンプレート 58 件）。位置を見ずに DSL らしさだけで拾うと、TS のコード片・アサーションの文言・仮の値の誤りで 9 件の誤検出が出たので、位置と DSL らしさの両方で絞った。取り出さない DSL らしい文字列は検索の断片（`indexOf` / `includes` / `toContain` の引数・`edit_document` の `find`）だけであることを確かめた
+- 抽出が黙って見えなくならないよう、件数の下限（100）と位置の種類ごとの存在も検査する
+- 変異 7 種（gated の譜面に読めない行を足す・`code` の位置を読まない・命令の仮の値を消す・E-7 の文言を見ない・DSL らしさが常に偽・`join` を読まない・検索の断片も読む）がすべて red
+- 設計 997 §2.4 と §7.3 に結果を追記
+
 ### feat(session): fill transport.step.source from engine pattern generations (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1022-d4-step-source`（`1022-d3-output-port` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d4・設計 997 D-P1 / D-P2・#987・台帳 P-04 の層 2 の側）

@@ -97,7 +97,7 @@
 | `parse-statement.ts:514-517` | 識別子の後に `.` が無ければ `statement: null` |
 | `packages/engine/src/parser/audio-parser.ts:84-110` | `statement` が `null` なら何もせず次へ |
 
-**読み飛ばしに頼っている既存の `.orbs` は無い**: リポジトリに追跡されている `.orbs` 127 本を、engine の `AudioTokenizer` と `StatementParser` で文ごとに読み直し、`statement: null` になった文を数えた（2026-10-26・`48b2e92`）→ **0 件**。パースが通らない 4 本は別の理由（`time()` / `fixpitch()` が未実装 ×3・`test-polymeter.orbs` の `Unexpected token in argument: COMMA` ×1）。🔴 E2E の spec の中に文字列で書いた DSL（`tests/e2e/*.ts`）は数えていない（§7 の検算で拾う）。
+**読み飛ばしに頼っている既存の `.orbs` は無い**: リポジトリに追跡されている `.orbs` 127 本を、engine の `AudioTokenizer` と `StatementParser` で文ごとに読み直し、`statement: null` になった文を数えた（2026-10-26・`48b2e92`）→ **0 件**。パースが通らない 4 本は別の理由（`time()` / `fixpitch()` が未実装 ×3・`test-polymeter.orbs` の `Unexpected token in argument: COMMA` ×1）。🔴 E2E の spec の中に文字列で書いた DSL（`tests/e2e/*.ts`）は数えていない（§7 の検算で拾う）。改訂（10-26・#1022）: 数えた — `tests/e2e` のソースを構文木で読み、DSL が engine へ渡る位置の DSL らしい文字列 **132 件**を厳しくしたパーサで読み直して、読み飛ばしに頼るもの **0 件**（テンプレートの 58 件は `${…}` を仮の値で埋めた）。恒久の検査は `tests/e2e/gated-dsl-strict-parse.spec.ts`。
 
 ### 2.5 設計 694 §4 の「フレーム」は半分だけ入った
 
@@ -380,7 +380,7 @@ N1-d5 を分けるのは、D-E3 だけが**凍結版と共有するパーサ**�
 - §6 の検証ケースがすべて期待どおり（unit は Linux・gated は macOS）。§6.2 の owner の例を含む
 - 差分テストの「違いの記録」に**無い差が 0**（P-02）
 - 台帳 P-01 / P-07 が `closed`、P-02 が「記録」の形、P-04 の層 2 の側が済み（`transport.step.source` が文書の評価で `null` でない）
-- `tests/e2e/*.ts` の DSL の文字列を D-E3 のパーサで読み直し、読み飛ばしに頼るものが 0（§2.4 で数えなかった分）
+- `tests/e2e/*.ts` の DSL の文字列を D-E3 のパーサで読み直し、読み飛ばしに頼るものが 0（§2.4 で数えなかった分）— ✅ 10-26: 132 件・0 件（`tests/e2e/gated-dsl-strict-parse.spec.ts` が恒久に検査する）
 - 評価の時間の実測（§4.5 の再検討の条件）を `WORK_LOG` に出典つきで残す
 - `chain-multiline` の実機 E2E を 1 本足し、`SYNTAX_UNCOVERED_BASELINE` から外す（V-13）
 
