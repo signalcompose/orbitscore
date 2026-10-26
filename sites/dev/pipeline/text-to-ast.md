@@ -155,7 +155,7 @@ Set を使ったルックアップは `O(1)` なので、キーワードの数�
 この `KEYWORDS` は元々 private static でしたが、#668 PR-E4 で `ReadonlySet<string>` の public static になり、モジュール末尾に照合用の view が export されました。
 
 ```typescript
-// packages/engine/src/parser/tokenizer.ts:288-289
+// packages/engine/src/parser/tokenizer.ts:295-296
 /** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
 export const KEYWORDS = AudioTokenizer.KEYWORDS
 ```

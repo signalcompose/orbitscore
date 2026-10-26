@@ -155,7 +155,7 @@ Set lookups are `O(1)`, so the speed does not change as the number of keywords g
 `KEYWORDS` was originally a private static. In #668 PR-E4 it became a public static typed `ReadonlySet<string>`, with a view exported at the end of the module for cross-checking.
 
 ```typescript
-// packages/engine/src/parser/tokenizer.ts:288-289
+// packages/engine/src/parser/tokenizer.ts:295-296
 /** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
 export const KEYWORDS = AudioTokenizer.KEYWORDS
 ```

@@ -213,10 +213,12 @@ export function parseAudioDSLWithSpans(source: string): ParsedRequest {
     return Math.min(text.length, i + 1)
   }
 
-  const tokens = new AudioTokenizer(text).tokenize()
-  const parser = new AudioParser(tokens)
+  let tokens: AudioToken[] = []
+  let parser: AudioParser | null = null
   const entries: ParsedEntry[] = []
   try {
+    tokens = new AudioTokenizer(text).tokenize()
+    parser = new AudioParser(tokens)
     parser.forEachStatement((statement, startPos, endPos) => {
       let last = endPos - 1
       while (
@@ -244,7 +246,9 @@ export function parseAudioDSLWithSpans(source: string): ParsedRequest {
     const at = [...message.matchAll(/at line (\d+), column (\d+)/g)].pop()
     const startToken = /\bEOF\b/.test(message)
       ? tokens[tokens.length - 1]
-      : tokens[parser.statementStart]
+      : parser
+        ? tokens[parser.statementStart]
+        : undefined
     const position = at
       ? positionOf((lineStarts[Number(at[1]) - 1] ?? text.length) + Number(at[2]) - 1)
       : startToken

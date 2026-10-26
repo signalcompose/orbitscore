@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(parser): reject characters the DSL does not use, except ; (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d5-strict-parser`（同じ小 PR の 2 つ目のコミット）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d5 の後半・設計 997 Q-7 = A）
+
+- `tokenizer.ts`: 文字列とコメントの外の、DSL が使わない文字（`!` `?` 英字でない文字など）を、黙って捨てる代わりに `Unexpected character "…" at line L, column C` にした。`;` だけは文の区切りとして明示的に読み飛ばす（spec E-7）。文言に `EOF` を入れない（凍結版の REPL のため）
+- 🔴 **Q-7 は owner がまだ見ていない**（実装の着手時に見つけた — 設計 997 §4.2 の訂正）。Q-3 と同じ類として「推奨で進めて」の範囲で採ったが、**戻せるように独立したコミット**にした
+- `parseAudioDSLWithSpans` はトークナイザの失敗も位置つきの `DslSyntaxError` にする（トークン化を try の中へ）
+- dev 学習サイトの `KEYWORDS` の引用（日英）の行がずれたので `--fix` で付け直し、着地先を目で照合した
+- 既存テストは 1 件も落ちなかった。追跡されている `.orbs` の検査に新しい文言を足した。テスト 4 本を追加（3 つの入力の文言と位置・`;` と文字列・コメントは通る）
+
 ### feat(parser): report unreadable statements as syntax errors (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1022-d5-strict-parser`（`1022-d1-intake` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d5・設計 997 Q-3 = A・#965）

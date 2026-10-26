@@ -1,6 +1,7 @@
 /**
- * 読めない文は構文エラー（spec「評価の単位」E-7・#965・設計 997 Q-3 = A）。以前のパーサは
- * 読めないトークンと `.` の無い識別子を黙って読み飛ばし、評価は `ok` を返していた。
+ * 読めない文は構文エラー（spec「評価の単位」E-7・#965・設計 997 Q-3 = A / Q-7 = A）。以前のパーサは
+ * 読めないトークンと `.` の無い識別子を、トークナイザは DSL が使わない文字を黙って読み飛ばし、
+ * 評価は `ok` を返していた。
  *
  * パーサは凍結版の REPL と `orbitscore play` も使うので、🔴 文言に `EOF` を入れない（凍結版の REPL は
  * `EOF` を含むパースのエラーを「入力の途中」と読んで次の行を待ち、次の正しい行まで巻き込む）。
@@ -71,6 +72,40 @@ describe('unreadable statements are syntax errors (E-7 / #965)', () => {
   })
 })
 
+describe('characters the DSL does not use are syntax errors, except ; (E-7 / design 997 Q-7)', () => {
+  it.each([
+    [
+      'kick.play(1, 0)!!!',
+      'Unexpected character "!" at line 1, column 16',
+      { line: 0, character: 15 },
+    ],
+    [
+      'global.tempo(120)\nドラム.play(1)',
+      'Unexpected character "ド" at line 2, column 1',
+      { line: 1, character: 0 },
+    ],
+    [
+      'kick.play(1, 0) ? 1',
+      'Unexpected character "?" at line 1, column 17',
+      { line: 0, character: 16 },
+    ],
+  ])('%j → %s', (source, message, position) => {
+    expect(() => parseAudioDSL(source)).toThrow(message)
+    const error = errorOf(source)
+    expect(error).toBeInstanceOf(DslSyntaxError)
+    expect(error.message).toBe(message)
+    expect(error.position).toEqual(position)
+    expect(error.message).not.toMatch(/\bEOF\b/)
+  })
+
+  it('keeps ; as a separator and leaves strings and comments alone', () => {
+    expect(parseAudioDSLWithSpans('kick.play(1);;\nhat.play(1);').entries).toHaveLength(2)
+    expect(parseAudioDSLWithSpans('kick.audio("a!b?.wav") // what? ドラム!').entries).toHaveLength(
+      1,
+    )
+  })
+})
+
 describe('the repository .orbs files do not rely on the old silent skipping', () => {
   it('no tracked .orbs file fails with the new E-7 errors', () => {
     // npm test は packages/engine から走るので、リポジトリのルートを基準にする。
@@ -85,7 +120,7 @@ describe('the repository .orbs files do not rely on the old silent skipping', ()
         parseAudioDSL(fs.readFileSync(path.join(repoRoot, file), 'utf8'))
       } catch (error) {
         const message = (error as Error).message
-        if (/^Cannot read a statement|^Expected "\." after /.test(message)) {
+        if (/^Cannot read a statement|^Expected "\." after |^Unexpected character /.test(message)) {
           hits.push(`${file}: ${message}`)
         }
       }

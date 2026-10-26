@@ -274,9 +274,16 @@ export class AudioTokenizer {
           tokens.push({ type: 'COLON', value: ':', line, column })
           this.advance()
           break
-        default:
-          // Skip unknown characters
+        case ';':
+          // 文の区切りとして書いてよい（spec「評価の単位」E-7）。文は区切り無しでも続くので読み飛ばす
           this.advance()
+          break
+        default:
+          // DSL が使わない文字は構文エラー（E-7・設計 997 Q-7）。以前は黙って捨てていた
+          // （`kick.play(1, 0)!!!` が通った）。🔴 文言に `EOF` を入れない（REPL が続きを待つため）
+          throw new Error(
+            `Unexpected character ${JSON.stringify(char)} at line ${line}, column ${column}`,
+          )
       }
     }
 
