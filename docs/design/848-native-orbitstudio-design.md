@@ -2,7 +2,7 @@
 
 **対象 issue**: #848（設計・計画・地図の起案）
 **関連**: [`NATIVE_MIGRATION_2026-09.md`](../planning/NATIVE_MIGRATION_2026-09.md)（移行の判断と根拠・**§12 が裁定**）/ [`IMPLEMENTATION_PLAN_NATIVE.md`](../planning/IMPLEMENTATION_PLAN_NATIVE.md)（本設計の実装順）/ [`NATIVE_DEVELOPMENT_MAP.md`](../planning/NATIVE_DEVELOPMENT_MAP.md)（新ラインの地図）
-**状態**: 設計（実装しない）・初版 2026-09-11（main `229d6387` 実測・PR #831 マージ後）・改訂 2026-09-18（`1276ab1f` 再測 — 🔴 これは 09-14 の 4.2.0 マージで、09-18 の main ではない・§2）・**改訂 2026-10-23（main `7410dcb0` 再測・拡張 4.4.0 出荷後・プロトコルの形とセキュリティを確定）**・**改訂 2026-10-26（owner 裁定 第 1 回・第 2 回を反映。第 2 回の改訂は `042906b9` を起点にした）**
+**状態**: 設計（実装しない）・初版 2026-09-11（main `229d6387` 実測・PR #831 マージ後）・改訂 2026-09-18（`1276ab1f` 再測 — 🔴 これは 09-14 の 4.2.0 マージで、09-18 の main ではない・§2）・**改訂 2026-10-23（main `7410dcb0` 再測・拡張 4.4.0 出荷後・プロトコルの形とセキュリティを確定）**・**改訂 2026-10-26（owner 裁定 第 1 回・第 2 回を反映。第 2 回の改訂は `042906b9` を起点にした）**・**改訂 2026-10-26（第 3 回・プロジェクト = フォルダ・§7.5。main `4f6705e` を起点にした）**
 **起案 / 審査**: fresh subagent（起案）/ main（審査）。過去の改訂の起案者は §16。**owner の裁定は §14.0 に記録**し（第 1 回・第 2 回）、本文はそれに従う。裁定が無い事項は本文で勝手に確定させていない。
 **用語（2026-09-18 owner 確定）**: 本書で **OrbitStudio** は **macOS ネイティブ版アプリ**だけを指す。VS Code 拡張は「拡張版」（**凍結線**・現 4.4.0。凍結後も owner の個別例外で 4.3.0 / 4.4.0 が出た・§0 2.5）。
 
@@ -447,14 +447,14 @@ LLM クライアント（Claude Code 等。1 回だけ登録・§6.3）
 
 **engine の読み方**: session は `@orbitscore/engine`（workspace 依存）をモジュールのパスで import する。engine に barrel（`src/index.ts`）は**足さない**（凍結版の `.vsix` に入る `engine/dist` に新しいファイルを増やさない）。これで S-rpc の最初の小 PR は「写し + 差分テスト + 台帳の仕組み」になり、**Linux（クラウド）で完結する**（実音も GUI も要らない）。
 
-#### 4.5.2 「最初のワークスペース」のネイティブ版での意味（10-23 追加）
+#### 4.5.2 「最初のワークスペース」のネイティブ版での意味（10-23 追加・10-26 第 3 回に改訂: プロジェクト = フォルダ）
 
-IM.6 の解決順（`document_path` → アクティブな `.orbs` → 最初のワークスペース → 基準なし・`evaluate-document-directory.ts:38-95`）の第 3 候補は、VS Code では「最初のワークスペースフォルダ」である。`NSDocument` のアプリ（§7.1）には「開いているフォルダ」が無いので、次のように決める:
+IM.6 の解決順（`document_path` → アクティブな `.orbs` → 最初のワークスペース → 基準なし・`evaluate-document-directory.ts:38-95`）の第 3 候補は、VS Code では「最初のワークスペースフォルダ」である。改訂（10-26 第 3 回）: アプリは**フォルダをプロジェクトとして開く**（§7.5）ので、次のように決める:
 
-- 層 2 は**ワークスペースを起動引数 `--workspace-root <dir>` でだけ受ける**（無ければ第 3 候補は無い = `null`）。セッションの途中で変える RPC は v1 に置かない（足すなら MINOR）
-- **アプリ**: 起動時にフォルダを渡された時（起動引数・Finder からフォルダを開く要求）だけ、そのフォルダを `--workspace-root` として session に渡す。渡されなければ第 3 候補は無い。v1 の GUI に「フォルダを開く」メニューを置くかは A-document で決める（無くても IM.6 は第 2 候補 = 前面のウィンドウの document で足りる）
-- **headless**: `--workspace-root` を任意で受ける。**省略時に cwd を暗黙に使わない**（起動した場所で評価結果が変わる隠れた状態を作らない — 3 値の `documentDirectory` を捨てたのと同じ理由・§5.3）
-- 理由（パリティ）: gated の共有セッションは**スクラッチの `tmpRoot` をワークスペースとして開いて**起動し（`orbitstudio-mcp-gated.spec.ts:751,830-837` の `openWorkspace`）、IM.6 の第 4 候補だけを確かめる題名（`#966 clears the previous base`）は空の窓で起動する。ハーネスの `native` / `headless` ターゲットは同じ `openWorkspace` を `--workspace-root` の有無に写せばよく、**どの題名がワークスペースの候補に依存しているかを数え上げなくても**パリティが保てる
+- **アプリ**: 第 3 候補は**前面の窓のプロジェクトのフォルダ**。WebView が `editor.didChangeActive({uri, workspaceRoot})` で伝える（§5.5）。1 ファイルの窓（§7.5）か、窓が 1 つも無い時は `null`（第 3 候補は無い）。アプリは `--workspace-root` を渡さない
+- 旧版（10-23）の「層 2 はワークスペースを起動引数でだけ受け、途中で変える RPC は v1 に置かない」は撤回した。窓ごとにフォルダが違い、前面の窓が変われば基準も変わる（VS Code で別のワークスペースの窓を前面にした時と同じ）。プロトコルは未実装なので戻せない判断は含まない（`packages/session` は main `4f6705e` に無い）
+- **headless**: `--workspace-root <dir>` を任意で受ける（エディタが付いていない時の第 3 候補）。**省略時に cwd を暗黙に使わない**（起動した場所で評価結果が変わる隠れた状態を作らない — 3 値の `documentDirectory` を捨てたのと同じ理由・§5.3）。エディタが付いている時は `editor.didChangeActive` の `workspaceRoot` が優先する
+- 理由（パリティ）: gated の共有セッションは**スクラッチの `tmpRoot` をワークスペースとして開いて**起動し（`orbitstudio-mcp-gated.spec.ts:751,830-837` の `openWorkspace`）、IM.6 の第 4 候補だけを確かめる題名（`#966 clears the previous base`）は空の窓で起動する。ハーネスの `native` ターゲットは `openWorkspace` を「`tmpRoot` をプロジェクトとして開く」に、`headless` ターゲットは `--workspace-root` の有無に写せばよく、**どの題名がワークスペースの候補に依存しているかを数え上げなくても**パリティが保てる
 - 相対の `document_path` もこの値で解決する（無ければ凍結版と同じエラー「relative but no workspace folder is open」）
 
 ### 4.6 🔴 タイミングと実行環境（10-26 書き直し・裁定 5。旧見出し「段階移行（言語を変える時の順序・今は決めない）」）
@@ -833,7 +833,7 @@ log.line (S→C 通知 + ring)
 
 `editor.didOpen({uri, text, documentDirectory})` / `editor.didChange({uri, version, changes[]})` / `editor.didClose({uri})` / `editor.didChangeSelection({uri, range})` / 改訂（10-23）`editor.didChangeActive({uri: string | null})`（C→S・通知）。層 2 は document の写しを持ち、診断（`diagnostics-analysis.ts` + `plugin-name-diagnostics.ts`）を計算して `editor.diagnostics({uri, items[]})` を push する。**`get_diagnostics`（MCP）と Monaco のマーカーは同じ計算結果**を見る。
 
-- `editor.didChangeActive` は**前面のウィンドウの document**（キーウィンドウ。Monaco にフォーカスが無くても同じ）を伝え、document の窓が 1 つも無ければ `null`。MCP `evaluate_orbitscore` の IM.6 の第 2 候補（アクティブな `.orbs`・`file:` の uri だけ）と `get_editor_state` はこの値を読む（§5.3.1）。凍結版の `vscode.window.activeTextEditor` に当たる
+- `editor.didChangeActive` は**前面のウィンドウの document**（キーウィンドウ。Monaco にフォーカスが無くても同じ）を伝え、document の窓が 1 つも無ければ `null`。MCP `evaluate_orbitscore` の IM.6 の第 2 候補（アクティブな `.orbs`・`file:` の uri だけ）と `get_editor_state` はこの値を読む（§5.3.1）。凍結版の `vscode.window.activeTextEditor` に当たる。改訂（10-26 第 3 回・§7.5）: 同じ通知で **`workspaceRoot: string | null`**（前面の窓のプロジェクトのフォルダ。1 ファイルの窓なら `null`）を運ぶ。IM.6 の第 3 候補（§4.5.2）
 - `didOpen` の `documentDirectory` は document の所在の記録で、**評価の基準ではない**。評価の基準は `session.evaluate` の `documentDirectory`（毎回必須・§5.3.1）が唯一の入口で、層 2 は document の写しから基準を推測しない（GUI の ⌘Enter はクライアントが自分の document のディレクトリを渡す）。改訂（10-26）: `session.evaluate` に `target`（どの文書のどの範囲か）が付いても、**この規則は変えない** — `target` は評価の帰属（どの文書の評価か）を運び、基準は運ばない。区切りを文書の写しから決めることは #997 の段階 2 で入りうるが、それは「何を評価するか」の話で、「どこを基準に import を解決するか」とは別の入口のまま保つ
 - F-12 で層 2 を再起動した時は、開いている全 document の `didOpen` と `didChangeActive` を再送する（§12）
 
@@ -882,7 +882,7 @@ log.line (S→C 通知 + ring)
 🔴 **改訂（10-26・裁定 4）**: MCP を話すプロセスは**層 2 ではなく、`.app` に同梱した中継**（`orbitscore relay`・`packages/session/src/relay/`）になった。中継は LLM クライアントから stdio で起動され、**それ自身が MCP サーバ**で、ツールを呼ばれるたびに UDS の `/rpc` で層 2 の RPC メソッドを呼ぶ（§4.4・§4.7）。ツールのコード（MCP 層 8 ファイル）は 10-23 のとおり `packages/session/src/mcp/` に移す — 変わったのは**それを走らせるプロセス**だけである。理由は §4.7 の冒頭と §4.7.1（ライブ中に締め出されない）。
 
 - **MCP 層 8 ファイル 1,885 行**（10-23 実測・`mcp-server` / `mcp-tools-{editor,engine,plugins}` / `mcp-types` / `mcp-docs` / `mcp-sdk` / `mcp-registration`・すべて pure・§3.1）を `packages/session/src/mcp/` へ**ファイル移動**する。ツール登録は `OrbitScoreToolHandlers`（`mcp-types.ts:184-235`）という**インタフェース 1 本**を受け取る形に既になっているので、仕事は **このインタフェースを §5.3 の RPC メソッドで実装する**こと（`agent-handlers.ts` 551 行の `*ForAgent` を書き換えるのではなく、**同じ型を別の実装で満たす**）。改訂（10-26）: 実装は**中継の中の UDS の RPC クライアント**で、層 2 の外から同じ型を満たす。ツール名・引数・戻りは **v1 の間は変えない**（§6.1。gated suite がそのまま通ることが D-1 / D-2 の前提）。改訂（10-23）: 4.4.0 で `evaluate(code, options?: {documentPath?})` に引数が増えた（`mcp-types.ts:185-188`・§5.3.1）
-- 改訂（10-26）: **ツール固有のロジックの置き場**: `evaluate_orbitscore` の IM.6 の解決（§5.3.1）は、中継が呼び出しのたびに `editor.getState()`（アクティブな `.orbs`）と `session.getState()`（`--workspace-root`）を RPC で取り、凍結版の純関数 `resolveEvaluateDocumentDirectory` を中継の中で走らせる（ファイルの存在の確認は中継のプロセスで行う — 同じ Mac・同じユーザー）。応答の末尾 `(documentDirectory: …)` と `get_log` の窓も中継の中。**どれも RPC の結果を整形するだけ**で、層 2 に無い能力を中継が持つことは無い（D-4）
+- 改訂（10-26）: **ツール固有のロジックの置き場**: `evaluate_orbitscore` の IM.6 の解決（§5.3.1）は、中継が呼び出しのたびに `editor.getState()`（アクティブな `.orbs` と、改訂 10-26 第 3 回の `workspaceRoot`・§4.5.2）と `session.getState()`（headless の `--workspace-root`）を RPC で取り、凍結版の純関数 `resolveEvaluateDocumentDirectory` を中継の中で走らせる（ファイルの存在の確認は中継のプロセスで行う — 同じ Mac・同じユーザー）。応答の末尾 `(documentDirectory: …)` と `get_log` の窓も中継の中。**どれも RPC の結果を整形するだけ**で、層 2 に無い能力を中継が持つことは無い（D-4）
 - 🔴 **`tools/list` の順序と条件付き登録は観測可能な契約**（改訂 10-23・L6）。MCP SDK の `tools/list` は登録順を返すので、凍結版は `buildServer` の呼び出し順（engine → editor → plugins → docs・`mcp-server.ts:98-105`）で順序を固定し、`tests/vscode-extension/mcp-server.spec.ts:396-480` がそれを検査している。handler があるときだけ登録されるのは 5 本（`save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `open_plugin_ui_at_cursor` / `register_mcp_server`・`mcp-types.ts:217-234` の optional）。凍結版の拡張は全部の handler を持つので（`extension.ts:268-273`）、外から見える順序は次の 28 本である:
 
   ```
@@ -972,8 +972,8 @@ log.line (S→C 通知 + ring)
 
 | 責務 | AppKit | 備考 |
 |---|---|---|
-| ドキュメント | `NSDocument` サブクラス（`.orbs`・UTF-8） | open / save / autosave / 未保存確認 / 最近使った書類は**標準で付いてくる**（裁定 2.2 の根拠） |
-| ウィンドウ | `NSWindowController` + タブ（`NSWindow.tabbingMode`） | 1 document = 1 window。パネル（Engine / Log / Catalog / Docs）は**サイドバー**（`NSSplitViewController`）で同じウィンドウ内 |
+| ドキュメント | 改訂（10-26 第 3 回・§7.5）: **フォルダを表す `NSDocument` サブクラス**（プロジェクト）+ **`.orbs` の `NSDocument` サブクラス**（UTF-8。窓を持つのは単独で開いた時だけ） | open / save / autosave / 未保存確認 / 最近使った書類は**標準で付いてくる**（裁定 2.2 の根拠。窓を持たない document での出方は A-document で実測・§7.5） |
+| ウィンドウ | `NSWindowController`。プロジェクトの中のファイルのタブは WebView が描く | 改訂（10-26 第 3 回・§7.5）: 旧「1 document = 1 window」を改め、**1 プロジェクト = 1 window**・`.orbs` を単独で開いた時だけ 1 ファイル = 1 window。パネル（Engine / Log / Catalog / Docs）は**サイドバー**（`NSSplitViewController`）で同じウィンドウ内 |
 | メニュー・キー | メニューバー・⌘Enter = `runSelection`（`package.json` の唯一のキーバインドと同じ） | ⌘Enter は WebView 内の Monaco keybinding が先に受け、変換中（IME composition）は評価しない（D-6） |
 | 環境設定 | `NSWindow` + 設定 8 項目の写像（§7.4・改訂 10-23: 旧版の「10 項目」は初版の値で、#502 で 2 項目が消えた） | `UserDefaults`。値は session の起動引数か RPC で渡す |
 | WebView | `WKWebView` × 1（エディタ + パネル）+ Docs パネル用の別の `WKWebView`（§4.7） | 改訂（10-23）: 🔴 **層 2 が配る `http://127.0.0.1:<port>/app/` を読む**（本命・§7.3）。`loadFileURL`（`file://`）は同等の代替ではない。トークンは `WKUserScript`（`forMainFrameOnly: true`）で注入し、`/app/` の外へ遷移させない（§4.7）。`WKScriptMessageHandler` は**document の入出力だけ**に使う（§7.3） |
@@ -1033,9 +1033,50 @@ N0-a の測定項目（計画 §3 N0）: (1) 上の 3 つの配信元それぞ�
 | TextMate 文法 `orbitscore-audio.tmLanguage.json` | 🔴 Monaco は TextMate をそのまま読まない。`monaco-textmate` + `vscode-oniguruma`（WASM）で流用するか、Monarch へ書き直すかは **N0-a の spike で決める**（判定基準: 既存文法との一致を 20 譜面のトークン列で機械比較） | native 必須 |
 | `capabilities.untrustedWorkspaces` | 概念が無い（アプリは常に信頼して開く = DAW と同じ・656 §16 (1)） | not-applicable |
 | （VS Code が無料で提供していたもの・`EDITOR_HOST_AND_APP_SIZE.md` §1.2）検索 / 置換・undo / redo・マルチカーソル | Monaco 標準機能（`ELECTRON_APP_PLAN.md` 5.2 の列挙どおり。自前実装なし） | native 必須（Monaco が持つ） |
-| 同・複数ファイル・最近使った書類・未保存確認 | `NSDocument` + ウィンドウのタブ（§7.1） | native 必須 |
+| 同・複数ファイル・最近使った書類・未保存確認 | プロジェクトの窓（§7.5）+ `.orbs` の `NSDocument`（§7.1）。改訂（10-26 第 3 回）: 旧「`NSDocument` + ウィンドウのタブ」 | native 必須 |
 | 同・設定 UI・キーバインド | 環境設定（設定 8 項目）・メニューの accelerator。キーバインドの**カスタマイズ UI は作らない**（⌘Enter 固定） | native 必須（範囲は §14 (11)） |
 | （`ELECTRON_APP_PLAN.md` 5.4 の列挙）ステータスバーの **BPM** とカーソル位置 | `transport.state` に tempo を含めて描く / Monaco の cursor イベント | 追加候補（拡張には無い表面。台帳では `not-applicable`、実装は A-panels の余力で） |
+
+
+### 7.5 プロジェクト = フォルダ（2026-10-26 第 3 回で新設）
+
+> 状態: **推奨**。owner の指示は「推奨でとりあえず進めて」（2026-10-26）で、画面案（2026-10-26 の artifact）は owner がまだ見ていない。§7.1 の旧「1 document = 1 window」を本節で置き換えた。決まっていない点は §14.0 末尾の (26)〜(29)。
+
+**なぜ変えるか**: DSL は複数のファイルを `import` で組む（`INSTRUCTION_ORBITSCORE_DSL.md` IM.1〜IM.6・#456）。1 つの窓に 1 つの `.orbs` では、どのファイルがどれを読み込むか・どれが起点かが画面に出ず、ファイルを開く・閉じるたびに Finder と往復する。(8) の owner の意見「エディタクライアント＝１テキストファイルではない」もこの形を求めている。
+
+**モデル**:
+
+| 開くもの | 窓 | IM.6 の第 3 候補（§4.5.2） |
+|---|---|---|
+| フォルダ（⌘O でフォルダを選ぶ・Dock のアイコンへ落とす・新しいプロジェクト・最近のプロジェクト） | **プロジェクトの窓**: 左にファイルの列、中央にタブで開いたファイル、右に演奏の列 | そのフォルダ |
+| `.orbs` を 1 つだけ（Finder でダブルクリック・⌘O でファイルを選ぶ） | **1 ファイルの窓**: ファイルの列を出さない（`import` 先はタブで開ける） | 無し（第 2 候補 = そのファイルのディレクトリで足りる） |
+
+- 1 ファイルの窓は、IM の「素朴な 1 ファイル運用は恒久に保護」と PRJ.2 の「単一 `.orbs` の手軽さ」（`PROJECT_FILE_SPEC_v1.md`）をそのまま守る。`.orbs` を開いた時に親フォルダを勝手にプロジェクトにしない（`~/Downloads` を丸ごと並べない）
+- 1 ファイルの窓から「フォルダをプロジェクトとして開く」を選べる（同じフォルダのプロジェクトの窓を開き、そのファイルを前面にする）
+- 同じファイルを 2 つの窓で同時に編集しない。プロジェクトの窓が既にそのファイルを含むなら、そちらのタブを前面にする
+
+**AppKit への写し（推奨）**: プロジェクトの窓は**フォルダを表す `NSDocument` サブクラス**（`read(from:ofType:)` でフォルダの URL を受ける）が持ち、各 `.orbs` は **`NSDocument` サブクラス**のまま（UTF-8 の open / save / autosave / 未保存確認 / undo はこちらに残す。裁定 2.2 の根拠「標準で付いてくる」は崩さない）。`.orbs` の document が窓を作る（`makeWindowControllers()`）のは単独で開いた時だけ。前例: CodeEdit（オープンソースの macOS エディタ）は `WorkspaceDocument: NSDocument`（フォルダ・`read(from:ofType:)` で URL を受ける）と `CodeFileDocument: NSDocument`（単独で開くと自分の窓を作る）を持つ（2026-10-26 に一次ソースで確認・`CodeEditApp/CodeEdit` の `CodeEdit/Features/Documents/`）。🔴 **未実測**: 窓を持たない `NSDocument` での autosave と「最近使った書類」の出方は A-document（計画 N3-a1）の最初に確かめる。崩れたら、フォルダの document が各ファイルの保存を自前で持つ案（`NSFileCoordinator` で書く）に落とす。
+
+**プロジェクトの窓が持つ能力**（画面案 2026-10-26）:
+
+| 能力 | 形 |
+|---|---|
+| ファイルの構成が見える | ファイルの列（フォルダは開閉できる）。各ファイルの横に、そのファイルが宣言するシーケンスの印。`project.yaml` と `states/` は「自動で書かれるファイル」に畳む（PRJ.2「所有権は機械」。人が開く場所に並べない） |
+| 起点が分かる | **どのファイルからも読み込まれていないファイル**を「起点」と表示する。import のグラフから毎回計算し、どこにも保存しない。起点は複数あってよい（セットごとに起点を分ける使い方を妨げない） |
+| つながりが分かる | 前面のファイルについて「読み込むファイル」と「読み込まれるファイル」を両方向に出す。見つからない import はその行へ飛べる |
+| 開く・閉じるが速い | タブ（⌘W で閉じる・⇧⌘T で開き直す）・⌘P（ファイル名とシーケンス名で探す。見つからなければその名前で作る）・import のパスを ⌘ クリック |
+| 名前の変更に import が付いてくる | ファイルの名前を変える・動かすと、それを読み込む `import` の書き換えを**変更前と後を並べて**示し、利用者が「書き換える」を選んで初めて書く（黙って書き換えない。GUI の操作はテキストの編集・§7.2） |
+| 外の変更を拾う | LLM が自分のツールでファイルを書く・git で切り替える等の変更を `NSFilePresenter`（`NSDocument` が既に使う）と FSEvents で拾う。未保存の変更が無ければ黙って読み直す。あれば窓の中のバナーで知らせ、どちらを残すかを利用者が選ぶ（モーダルを出さない・§7.3）。**読み直しても評価はしない**（IM.5「import 先だけの編集の自動反映は v1 スコープ外」・(25) の「実行は復帰しない」と同じ考え） |
+
+**評価との関係**（本節では変えない）:
+
+- ⌘Enter は、前面のファイルの選択（選択が無ければ subject-block・§7.4）を**そのファイルのディレクトリを基準に**評価する（IM.6「エディタで開いているファイルのディレクトリ」・凍結版と同じ）。読み込まれるファイルの中で ⌘Enter した時も同じで、IM.3 のとおり単独評価なので transport も書ける
+- 読み込まれるファイルの中の ⌘Enter を「起点からの評価」に変えるか、import をまたぐ評価の区切りをどうするかは **#997**（評価のかたち）で決める。本節は決めない
+- 1 つのプロジェクトの中のファイルは、同じ global と transport を共有する（(24) A のまま）。別のプロジェクトどうしは (26)
+
+**プロトコルへの影響**: `editor.didChangeActive` に `workspaceRoot` を足した（§4.5.2・§5.5）。MCP `open_file`（`editor.openFile`）は、そのパスを含むプロジェクトの窓が開いていればその窓のタブで開き、無ければ 1 ファイルの窓で開く（新しい窓を開くのは LLM の明示要求なので §7.3「ウィンドウは勝手に開閉しない」に反しない）。
+
+**新しいプロジェクト**: フォルダと起点の `main.orbs` と `audio/` を作るだけで、`project.yaml` は作らない（PRJ.2 の「最初に記録すべきものが発生した瞬間に自動生成」は変えない）。ただし PRJ.2 の 1. は「『新規プロジェクト作成』メニューは作らない」と書いているので、この文言との関係は (27) で確かめる。
 
 ---
 
@@ -1169,7 +1210,7 @@ per-PR macOS ランナーは owner 方針で回さない（`rust-ci.yml:1-24`）
 
 - `ORBIT_GATED_TARGET = vscode | native | headless`（既定 `vscode`・凍結版との互換）。差は**起動と MCP ポートの取り方だけ**:
   - `vscode`: 今日のまま（stock VS Code + `--extensionDevelopmentPath` + `ORBITSCORE_MCP_PORT`・`orbitstudio-mcp-gated.spec.ts:821-841`）。凍結版の `/mcp` はトークンを持たないので、ハーネスはトークンを送らない
-  - `native`: `OrbitStudio.app/Contents/MacOS/OrbitStudio` を **`ORBITSTUDIO_RUNTIME_DIR=<短いパス>`** 付きで起動する（改訂 10-26: 旧 `ORBITSCORE_MCP_PORT` → session の `--port --mcp` は消えた）。MCP は**中継を stdio で起動して**話す（`node packages/session/dist/cli.js relay` に同じ `ORBITSTUDIO_RUNTIME_DIR`）。起動する `.app` は `ORBIT_GATED_APP_PATH`（省略時はリポジトリ内のビルド成果物。リリース成果物を指せば 656 §6.2 の「同じ E2E を成果物へ」= E2E-D3 になる。成果物を指す時は中継も `.app` の中のものを使う）。teardown は PID オラクル（中継のプロセスも数える）。`openWorkspace` は起動時にフォルダ（`tmpRoot`）を渡すかどうかに写す（§4.5.2）
+  - `native`: `OrbitStudio.app/Contents/MacOS/OrbitStudio` を **`ORBITSTUDIO_RUNTIME_DIR=<短いパス>`** 付きで起動する（改訂 10-26: 旧 `ORBITSCORE_MCP_PORT` → session の `--port --mcp` は消えた）。MCP は**中継を stdio で起動して**話す（`node packages/session/dist/cli.js relay` に同じ `ORBITSTUDIO_RUNTIME_DIR`）。起動する `.app` は `ORBIT_GATED_APP_PATH`（省略時はリポジトリ内のビルド成果物。リリース成果物を指せば 656 §6.2 の「同じ E2E を成果物へ」= E2E-D3 になる。成果物を指す時は中継も `.app` の中のものを使う）。teardown は PID オラクル（中継のプロセスも数える）。`openWorkspace` は `tmpRoot` を**プロジェクトとして開く**操作に写す（改訂 10-26 第 3 回・§4.5.2・§7.5。旧「起動時にフォルダを渡すかどうか」）
   - `headless`: `node packages/session/dist/cli.js session --runtime-dir <短いパス> [--workspace-root <tmpRoot>]`（TCP を開かない）+ 同じ中継を stdio で起動
 - 🔴 **ハーネスの分離とトークン**（改訂 10-26・旧「ハーネスがトークンを知る経路」を置き換えた）: `native` / `headless` のハーネスは**利用者と同じ経路（中継）**を通る（CLAUDE.md「E2E は実利用の経路を映す」・memory `e2e-must-mirror-real-usage`）。中継は UDS で繋ぐので、**ハーネスはトークンを知る必要が無い** — 10-23 の `ORBITSCORE_SESSION_TOKEN_FILE` と `Authorization: Bearer` の載せ替えは削った。分離は runtime-dir で行う: ハーネスは `/tmp/orbe2e-XXXXXX/r`（33 文字・ソケットまで含めて 46 文字。macOS の `/tmp` は `/private/tmp` へのシンボリックリンクなので、実体のパスの長さで測る）を作って 0700 にし、アプリ（または headless の session）と中継の両方に同じ値を渡す。**利用者が動かしているアプリのソケット（`~/Library/Application Support/OrbitStudio/run/`）には触れない**。TCP の `/rpc` の拒否（D-10 の (1)）は unit と gated `native` の 1 本で確かめ、その 1 本は WebView が受けたトークンを読まない（拒否だけを見る）。ハーネスの変更（`helpers/mcp-client.ts` に stdio の transport を足す・今日は SDK 非依存の生 HTTP・`helpers/mcp-client.ts:1-10`）は束 S-mcp の tests 変更で、`vscode` ターゲットは何も変わらない
 - シナリオ本体（MCP ツール呼び出し・capture の判定）は**1 文字も変えない**。これが「両フロントエンドを同じハーネスが検証する」の実体。改訂（10-26）: v1 の間は MCP ツールが凍結版と同じなので、これはそのまま成り立つ。**v1 の後にアプリの MCP ツールを変える時**は、シナリオ本体ではなく**ターゲットごとの対応表**（`tests/e2e/helpers/mcp-tool-adapter.ts`・最初の変更の PR で新設）に「`native` / `headless` ではこのツールをこう呼ぶ」を足す。シナリオは能力の言葉（「評価する」「デバイスを選ぶ」）で書かれたまま残り、`vscode` ターゲット（凍結版）はそのまま通る（§6.1）
@@ -1356,6 +1397,15 @@ per-PR macOS ランナーは owner 方針で回さない（`rust-ci.yml:1-24`）
 | Q-r2-2 | T-1 の判断の閾値「m1 の p99 ≤ m0 の p99 + 64 フレーム」（§4.6） | 提案値。台帳 P-08 の置き値として扱い、T-1 の報告と一緒に main が確かめる |
 | Q-r2-3 | #996（daemon の Origin と親の死）に `release-gate` を付けるか | 推奨: 付ける（台帳 P-05）。付けるのは main |
 
+**プロジェクト = フォルダ（§7.5・2026-10-26 第 3 回）で出た問い**（本書は推奨で書いた。owner の指示は「推奨でとりあえず進めて」2026-10-26。決まったら本節に記録する）:
+
+| # | 問い | 選択肢 | 推奨と理由 |
+|---|---|---|---|
+| (26) | **プロジェクトの窓を 2 つ開いた時**、どちらが音を出すか。(24) は 1 つのプロジェクトの中の複数のファイルの問いで、別のプロジェクトどうしは問われていなかった | A 両方が同じ global と transport を共有する（(24) A をそのまま広げる）/ B **鳴らすプロジェクトは 1 つ**。鳴らしていないプロジェクトの窓で評価すると、窓の中のバナーで「このプロジェクトで鳴らす」を出し、押した時だけ切り替える / C プロジェクトごとに session と daemon を分ける | **B**。A は無関係な 2 曲の `kick` が同じ名前で後から評価した方に合流し（IM.2 の名前キー）、片方の評価がもう片方の音を書き換える。C は出力デバイスの取り合い（#624 のクラス）を持ち込み、「1 host = 1 session = 1 daemon」（§4.4）を崩す。B は Bitwig と同じ形（複数のプロジェクトを開けるがエンジンを持てるのは 1 つ・調査 B-5）。切り替えはボタンでだけ行い、ライブ中に勝手に音が止まらない（§7.3）。LLM の `evaluate_orbitscore` も同じ規則で、鳴らしていないプロジェクトのファイルを `document_path` で指すとエラーで返す（黙って切り替えない） |
+| (27) | PRJ.2 の 1.「『新規プロジェクト作成』メニューは作らない」と、アプリの「新しいプロジェクト…」（フォルダと `main.orbs` を作る・§7.5） | A PRJ.2 の文言は `project.yaml` を作る儀式の話と読み、メニューを置く（PRJ.2 に「フォルダを作るメニューは別」と 1 行足す）/ B メニューを置かない（⌘N で 1 ファイルの窓を作り、保存の時にフォルダを選ぶ） | **A**。PRJ.2 の理由は「単一 `.orbs` の手軽さを保つ・登記簿は機械が必要な時に作る」で、フォルダを作ることとは別。採るなら CLAUDE.md の運用規則 6 に従い **spec（PRJ.2）を先に直す** |
+| (28) | フォルダのプロジェクトでの **`project.yaml` の置き場所** | A いまのまま（評価の基準ディレクトリ）/ B プロジェクトのフォルダに 1 つ | **B（要実測）**。いまの実装は登記簿の場所を評価の基準ディレクトリから取り（`project-state-store.ts:105`。`sequence-effect-manager.ts:61` / `plugin-effect-manager.ts:31` / `mixer-manager.ts:178` の `projectDirectory: () => audioManager.getDocumentDirectory()`）、import の評価中は基準が module のディレクトリに切り替わる（`process-file-import.ts:179`）。読んだ範囲では、`mod/` のファイルを単独で評価すると `mod/project.yaml` ができ、起点から評価すると起点の隣にでき、**同じプラグインの状態が 2 つの登記簿に分かれうる**。🔴 **未実測**（実機で確かめていない）。B は `session.evaluate` にプロジェクトのフォルダを渡す入口が要る（§5.3.1・プロトコルは未実装なので v1 に入れられる）。`PROJECT_FILE_SPEC_v1.md` を先に直す |
+| (29) | 拡張版の **`.orbitscore.json`**（ワークスペースの直下に置く出力デバイスの旧い置き場・`engine-process.ts:197-232`。コメントでは Engine ビューと MCP `select_audio_device` が書くとされる・#388） | A 引き継がない / B プロジェクトのフォルダで読む | **A**。§5.3 の写像に無かった（本節の改訂で見つけた漏れ）。出力デバイスは環境設定 `audioDevice`（§7.4）と `project.yaml` の `audio:`（PRJ.1a）が受ける。凍結版でも #484 D3 で後方互換の fallback に下げてある（`engine-process.ts:217-224` のコメント） |
+
 ### 14.1 裁定前の表（2026-10-23 時点の推奨・14.0 で裁定したものも記録として残す）
 
 | # | 問い | 選択肢 | 推奨と理由 |
@@ -1409,3 +1459,4 @@ per-PR macOS ランナーは owner 方針で回さない（`rust-ci.yml:1-24`）
 | 2026-10-23 | 改訂（起案: fresh subagent / 審査: main）。§2 を main `7410dcb0`（拡張 4.4.0）で再測し、比較元 `1276ab1f` の日付を 09-14（4.2.0 マージ）に訂正、§2c の判定表を新設。🔴 **セキュリティの結論を反転**: 「認証を付けない」を撤回し `/rpc` と `/mcp` にトークン + Origin（§4.7 の脅威モデル・層 1 は engine 線へ申し送り）。**プロトコルの形を確定**: §5.3 を現行表面の全写像に作り直し（ツール 28・メタ行 8・stdout 4 系統・コマンド 19・HTTP 4・環境変数。漏れ L1〜L11）、`session.evaluate` は状態を持たない（`documentDirectory` 毎回必須・`evalId` をサーバが振る）、`transport.step` に `source`、`log.line` に `level` / `kind`、`docs.*` に `site` / `limit`、`engine.start` に `hostBundleId`、評価の単位は wire に焼かず実装の既定は凍結版と同じ。§4.4 に F-1 の機構（stdin の EOF + 親 PID）、§4.5.1 に層 2 が engine を呼ぶ入口（写し + 差分テスト）、§4.5.2 にネイティブ版のワークスペース、§6 に `tools/list` の順序の契約、§7.3 に WebView の配信元（`/app/` が本命・`file://` は代替ではない）、§10.2 にハーネスがトークンを知る経路。完了条件: D-1（v4.4.0・56 `it`・基準タグ `PARITY_BASELINE_TAG`）/ D-6（再現手順と Monaco の版の固定）/ D-9（4.2.1 の同梱を引き継ぐ）を書き換え、D-10（接続の認証）を追加。F-12 / F-13 を追加。§14 に (22)〜(25)。入力: 再測（`7410dcb0`）・外部参照の調査（2026-10-23）・#987 の設計（`origin/claude/sweet-pasteur-2l1eef`） |
 | 2026-10-26 | owner 裁定を反映（審査: main。起案なし — 裁定の記録と直接の帰結だけ）。§14.0 を新設し、裁定済み 20 件・説明待ち 7 件・全体への意見を原文で記録。(5) 自動更新は **B（含める）** に転じたので §9.3 を改訂。(6) の条件を §9.4、(8) の「1 クライアント = 複数 document」を §5.4、4.4.0 の Origin の issue（#996）を §4.7 に反映。§4.7 の反転・§4.5.1・(22)・(23)・(3)・(7)・(9) は**まだ決まっていない** |
 | 2026-10-26（第 2 回） | 改訂（起案: fresh subagent / 審査: main・起点 `042906b9`）。owner 裁定 第 2 回（7 件 + 全体への意見）を反映し、§14.0 に原文と反映先を記録。(1) **パリティの再定義**: 関門 = 「DSL が実行された結果は拡張版と同じ」+ 能力 / MCP ツールは v1 だけ関門（§6.1・`mcp-tools-v1.spec.ts` が `VERSION` で自動で外れる）/ 拡張版は回帰の検算台（§1.1・D-1 の分類の規則・D-2・§5.3 冒頭・§7.4・§10）/ `document_path` の改行禁止は写さない。(2) **§4.5.1 を段階 1（足場）/ 段階 2（#997・S-eval）に**し、**§1.4 暫定物の台帳**（18 行・印 `PROVISIONAL(P-xx)`・期限 4 種・release モード）と **D-11** を新設。4 ファイルの列挙 134 行に処分を付けた（§1.4.3）。新しく見つけた暫定物: engine の console 出力（P-07）・Monaco のパッチ（P-17）・`protocol:check` が TS 側だけ（P-18）。(3) `session.evaluate` に省略可能な **`target`**（§5.3.1）。(4) **中継**: セキュリティの再検討（2026-10-26）の推奨で、中継 = MCP サーバ・層 2 へは UDS・TCP の `/mcp` は v1 で開かない・TCP の `/rpc` は Origin の欠落も拒否（§4.4・§4.7・§4.7.1・§5.2・§5.3.8・§5.3.9・§6・§6.2・§6.3・§10.2・F-12・F-13・D-10 を書き直し・F-14〜F-17 と **D-12** を新設）。裁定シートの説明文（発見ファイル + `/mcp`）との差 3 点は §14.0 に「裁定 4 の範囲内の実装の選択・main が owner へ説明済み」として記録。裁定 7 の DSL の範囲 = 仕様書だけ・#998 を記録。F-12 の session の再起動を自動に（状態の復帰）。(5) **§4.6 を書き直し**: T-1（N0-d）と判断の規則（m1 の p99 > m0 の p99 + 64 フレームなら PR-Q をゲートへ・提案値）。(6)(7) 拡張版は書き直さない / `protocol/` は Apache-2.0（§5.8・§8）。§2d に判定表。§14.1 (3)(7)(9)(12)(22)(23) を閉じた |
+| 2026-10-26（第 3 回） | 改訂（起案・審査: main。起点 main `4f6705e`）。owner の指示「推奨でとりあえず進めて」を受け、**プロジェクト = フォルダ**に改めた: §7.5 を新設（1 プロジェクト = 1 window・`.orbs` を単独で開くと 1 ファイルの窓・フォルダの `NSDocument` + 窓を持たない `.orbs` の `NSDocument`・起点は import のグラフから計算・名前の変更で import の書き換えを提案・外の変更を拾うが評価はしない）。§4.5.2 を改訂（第 3 候補 = 前面の窓のプロジェクトのフォルダ。旧「起動引数でだけ受ける」を撤回）・§5.5 に `workspaceRoot`・§6 の中継の読み先・§7.1・§7.4・§10.2 を追随。§14.0 に (26)〜(29) を足した（(28) は `project.yaml` が評価の基準ディレクトリに置かれる実装を読んで出た懸念・未実測。(29) は §5.3 の写像の漏れ）。入力: 画面案（2026-10-26 の artifact）・CodeEdit の一次ソース |

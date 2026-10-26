@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): make the OrbitStudio project a folder (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon-848` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+画面案（2026-10-26 の artifact）を作る中で、設計 §7.1 の「1 document = 1 window」では `import` で組んだ複数ファイルの構成が画面に出ないと分かった。owner の指示「推奨でとりあえず進めて」を受け、設計 848 を**プロジェクト = フォルダ**に改めた。起案・審査は main。
+
+- **§7.5 を新設**: フォルダを開くとプロジェクトの窓（ファイルの列・タブ・演奏の列）、`.orbs` を 1 つだけ開くと 1 ファイルの窓（IM と PRJ.2 の「1 ファイルの手軽さ」を守る）。AppKit はフォルダの `NSDocument` + 窓を持たない `.orbs` の `NSDocument`（前例: CodeEdit の `WorkspaceDocument` / `CodeFileDocument` を一次ソースで確認）。起点は import のグラフから計算して保存しない。名前の変更では import の書き換えを変更前と後を並べて提案する。外の変更は拾うが評価はしない
+- **§4.5.2 を改訂**: IM.6 の第 3 候補は前面の窓のプロジェクトのフォルダ（`editor.didChangeActive` の `workspaceRoot`）。旧「起動引数 `--workspace-root` でだけ受ける」を撤回（headless には残す）。§5.5・§6・§7.1・§7.4・§10.2・計画 A-document・地図を追随
+- **§14.0 に問いを 4 つ**: (26) 2 つのプロジェクトを開いた時に鳴らすのは 1 つ（推奨 B）/ (27) PRJ.2 の「『新規プロジェクト作成』メニューは作らない」との関係 / (28) `project.yaml` が評価の基準ディレクトリに置かれる実装（`project-state-store.ts:105`・`process-file-import.ts:179`）のため、フォルダのプロジェクトで登記簿が分かれうる懸念（未実測）/ (29) `.orbitscore.json` が §5.3 の写像から漏れていた
+
+Part of #848
+
+---
+
 ### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
