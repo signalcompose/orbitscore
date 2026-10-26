@@ -172,7 +172,7 @@ export const LEDGER: readonly LedgerEntry[] = [
     title: 'D-8 の follow-up（planning-issue-state.spec.ts の DOCUMENTS に新地図と新計画）',
     deadline: { kind: 'when-exists', path: 'packages/session/package.json' },
     state: 'closed',
-    closedBy: 'S-rpc の N1-a0（#1001 の最初の小 PR）',
+    closedBy: '#1005（S-rpc の N1-a0）',
     check: (repoRoot) => {
       const spec = read(repoRoot, 'tests/docs/planning-issue-state.spec.ts') ?? ''
       const missing = [

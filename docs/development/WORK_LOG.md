@@ -19,7 +19,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### feat(session): add the evaluation intake scaffold, its parity test and the provisional ledger (Oct 26, 2026)
 
-**Date**: 2026-10-26 / **ブランチ**: `1001-a0-eval-intake`（統合ブランチ `1001-session-rpc` 向けの小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-0 / C-1）
+**Date**: 2026-10-26 / **ブランチ**: `1001-a0-eval-intake`（統合ブランチ `1001-session-rpc` 向けの小 PR・stacked の draft・PR #1005）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-0 / C-1）
 
 OrbitStudio の層 2 `packages/session` を新設し、最初の小 PR（N1-a0）を入れた。クラウド（Linux）の作業で、音は出していない。
 
