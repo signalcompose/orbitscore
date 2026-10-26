@@ -154,7 +154,7 @@ export const LEDGER: readonly LedgerEntry[] = [
     id: 'P-08',
     title: '実測で決める値（置き値）',
     deadline: { kind: 'release-1' },
-    state: 'planned',
+    state: 'open',
     bundle: '各束（S-rpc / S-mcp / A-skeleton / A-parity / N-spike）',
   },
   {
