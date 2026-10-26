@@ -99,4 +99,9 @@ export const FROZEN_COPIES: readonly FrozenCopy[] = [
     original: 'packages/vscode-extension/src/dsl-providers.ts',
     why: 'vscode と extension-state を shim に差し替える（台帳 P-25）+ import のパス',
   },
+  {
+    copy: 'packages/session/src/language/plugin-ui-at-cursor.ts',
+    original: 'packages/vscode-extension/src/plugin-ui-at-cursor.ts',
+    why: 'vscode / extension-state / agent-handlers を shim に差し替える（台帳 P-25）+ import のパス。VS Code のコマンドの境界をまたぐ openPluginUiAtCursorForAgent は層 2 に境界が無いので写さない（設計 848 §5.3.3）',
+  },
 ]

@@ -174,6 +174,15 @@ export interface TextDocument {
   getWordRangeAtPosition(position: Position): Range | undefined
 }
 
+/** 写した `plugin-ui-at-cursor.ts` が読むエディタ（文書と選択だけ）。 */
+export interface TextEditor {
+  readonly document: TextDocument
+  readonly selection: {
+    readonly active: Position
+    readonly anchor: Position
+  }
+}
+
 export interface Disposable {
   dispose(): void
 }
@@ -277,8 +286,13 @@ export const workspace = {
 export const messages: { log: (text: string) => void } = { log: () => {} }
 
 export const window = {
+  /** 層 2 にエディタの「前面」は無い。写しには呼ぶ側がエディタを渡す（既定値はいつも無し）。 */
+  activeTextEditor: undefined as TextEditor | undefined,
   showInformationMessage: async (message: string): Promise<undefined> => {
     messages.log(message)
     return undefined
   },
+  // 失敗は写しの戻り値（`error`）で呼び出し元へ届き、`❌` の行は outputChannel が層 2 のログへ書く。
+  // ここでも書くと同じ行が 2 回出るので、トーストに当たるものは何もしない。
+  showErrorMessage: async (_message: string): Promise<undefined> => undefined,
 }

@@ -298,7 +298,9 @@ export const LEDGER: readonly LedgerEntry[] = [
     title:
       'スキーマにあって層 2 がまだ実装していないメソッド（METHOD_NOT_FOUND と「後の束で実装」の detail を返す）',
     deadline: { kind: 'release-1' },
-    state: 'open',
+    state: 'closed',
+    closedBy:
+      'S-editor の N1-c3（#1017）: 逆方向の editor.* と plugin.openUiAtCursor を実装し、v1 の C→S のメソッドがすべて層 2 のハンドラを持つ（tests/session/session-core-methods.spec.ts）',
     bundle: 'S-rpc（N1-a2）→ S-mcp / S-editor',
   },
   {

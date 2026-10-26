@@ -83,6 +83,7 @@ async function startHarness(
     workspaceRoot: options.workspaceRoot === undefined ? null : options.workspaceRoot,
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => false,
+    requestEditor: (method, params) => rpc!.requestEditor(method, params),
     captureConsole: false,
     docs: resolveDocsSites(options.docsDirs ?? []),
     // 🔴 本物の `claude` CLI を決して呼ばない（呼ぶと利用者の ~/.claude.json に登録が残る）。
@@ -286,18 +287,27 @@ describe('IM.6 active editor input (design 848 §6)', () => {
     expect(sent.at(-1)?.params).toMatchObject({ documentDirectory: '/ws' })
   })
 
-  it.each(['NO_EDITOR_ATTACHED', 'METHOD_NOT_FOUND'])(
-    'treats %s from editor.getState as "no active editor"',
-    async (errorName) => {
-      const { call, sent } = fakeCall({
-        'session.getState': running('file:///ws/piece/a.orbs'),
-        'editor.getState': new RpcCallError(-32012, errorName, 'no editor'),
-        'session.evaluate': evaluated,
-      })
-      await createRpcToolHandlers(call).evaluate('x')
-      expect(sent.at(-1)?.params).toMatchObject({ documentDirectory: '/ws' })
-    },
-  )
+  it('treats NO_EDITOR_ATTACHED from editor.getState as "no active editor"', async () => {
+    const { call, sent } = fakeCall({
+      'session.getState': running('file:///ws/piece/a.orbs'),
+      'editor.getState': new RpcCallError(-32012, 'NO_EDITOR_ATTACHED', 'no editor'),
+      'session.evaluate': evaluated,
+    })
+    await createRpcToolHandlers(call).evaluate('x')
+    expect(sent.at(-1)?.params).toMatchObject({ documentDirectory: '/ws' })
+  })
+
+  // 台帳 P-19 を閉じた（S-editor の N1-c3）後は、層 2 が editor.getState を必ず実装している。
+  // METHOD_NOT_FOUND はもう「エディタ無し」ではなく配線の欠陥なので、黙って workspace に落とさない。
+  it('rethrows METHOD_NOT_FOUND from editor.getState (ledger P-19 is closed)', async () => {
+    const { call, sent } = fakeCall({
+      'session.getState': running('file:///ws/piece/a.orbs'),
+      'editor.getState': new RpcCallError(-32601, 'METHOD_NOT_FOUND', 'no handler'),
+      'session.evaluate': evaluated,
+    })
+    await expect(createRpcToolHandlers(call).evaluate('x')).rejects.toThrow('no handler')
+    expect(sent.map((s) => s.method)).toEqual(['session.getState', 'editor.getState'])
+  })
 
   it('does not ask the editor when no document is active, and rethrows other failures', async () => {
     const idle = fakeCall({ 'session.getState': running(null), 'session.evaluate': evaluated })
@@ -404,15 +414,17 @@ describe('the other tools through layer 2 (design 848 §6 / D-4)', () => {
     })
   })
 
-  it('tools whose layer-2 method is not built yet answer isError, not a crash (ledger P-19)', async () => {
+  it('editor tools without an editor answer isError with NO_EDITOR_ATTACHED, not a crash (D-3)', async () => {
     const harness = await startHarness()
     for (const [tool, args] of [
       ['open_file', { path: '/ws/a.orbs' }],
       ['get_editor_state', {}],
+      ['run_selection', {}],
+      ['open_plugin_ui_at_cursor', {}],
     ] as const) {
       const result = await harness.mcp.call(tool, args)
       expect(result.isError, tool).toBe(true)
-      expect(text(result), tool).toMatch(/^error: /)
+      expect(text(result), tool).toMatch(/^error: no editor is attached to this session/)
     }
   })
 })

@@ -57,10 +57,6 @@ interface SessionEvaluateResult {
 /** 凍結版 `evaluateForAgent` の engine の確認と同じ文言（`agent-handlers.ts`）。 */
 const ENGINE_NOT_RUNNING = 'engine is not running — start the engine first'
 
-/** エディタの状態が無いことを表す RPC のエラー。 */
-// PROVISIONAL(P-19): S-editor が `editor.getState` を実装するまで METHOD_NOT_FOUND も「無し」と読む。
-const NO_EDITOR = new Set(['NO_EDITOR_ATTACHED', 'METHOD_NOT_FOUND'])
-
 /**
  * 凍結版 `isExistingFileForEvaluation`（`agent-handlers.ts`）の写し。無い・ディレクトリでないだけを
  * 「ファイルでない」とし、それ以外の stat の失敗は理由つきで投げる（IM.6 の `could not inspect`）。
@@ -101,7 +97,8 @@ export function createRpcToolHandlers(
     try {
       editor = await call<EditorState>('editor.getState')
     } catch (error) {
-      if (error instanceof RpcCallError && NO_EDITOR.has(error.errorName ?? '')) return undefined
+      if (error instanceof RpcCallError && error.errorName === 'NO_EDITOR_ATTACHED')
+        return undefined
       throw error
     }
     if (editor.path === null) return undefined

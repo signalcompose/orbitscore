@@ -21,6 +21,8 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { checkTcpUpgrade, checkUdsUpgrade, tokensMatch, type UpgradeVerdict } from './http-guard'
 import {
   assertParams,
+  editorParamsProblem,
+  editorResultProblem,
   majorOf,
   METHODS,
   notificationProblem,
@@ -63,6 +65,8 @@ export interface RpcServerOptions {
   log(level: 'error' | 'warn' | 'info', text: string): void
   onAttach?(client: AttachedClient): void
   onDetach?(client: AttachedClient): void
+  /** 逆方向のリクエストの期限の既定（テストで縮める）。 */
+  editorRequestTimeoutMs?: number
 }
 
 export interface RpcServer {
@@ -73,14 +77,35 @@ export interface RpcServer {
   editorClient(): AttachedClient | null
   /** 接続している全クライアントへ通知を送る（params はスキーマで検査する）。 */
   broadcast(method: string, params: unknown): void
+  /**
+   * エディタのクライアントへ逆方向のリクエストを送り、答えを待つ（設計 §5.4）。エディタが付いて
+   * いなければ `NO_EDITOR_ATTACHED`、期限までに答えなければ `EDITOR_TIMEOUT`、答える前に切れれば
+   * `NO_EDITOR_ATTACHED`。答えは `x-editor-request` の result で検査する。
+   */
+  requestEditor(method: string, params: unknown, timeoutMs?: number): Promise<unknown>
   close(): Promise<void>
+}
+
+interface PendingEditorRequest {
+  method: string
+  resolve(result: unknown): void
+  reject(error: Error): void
+  timer: NodeJS.Timeout
 }
 
 interface Connection {
   ws: WebSocket
   listener: Listener
   client: AttachedClient | null
+  /** このクライアントへ送った逆方向のリクエスト（id → 待ち）。 */
+  pending: Map<string, PendingEditorRequest>
 }
+
+/**
+ * 逆方向のリクエストの期限（凍結版の相関ブリッジの timeout と同じ役目・§5.4）。
+ */
+// PROVISIONAL(P-08): 期限は置き値。A-document でエディタの実際の応答時間を測って決める。
+export const EDITOR_REQUEST_TIMEOUT_MS = 10_000
 
 function frame(message: Record<string, unknown>): string {
   return JSON.stringify({ jsonrpc: '2.0', ...message })
@@ -203,8 +228,11 @@ export async function startRpcServer(options: RpcServerOptions): Promise<RpcServ
     const { id, method, params } = message
     const isRequest = id !== undefined
     if (typeof method !== 'string') {
-      // クライアントからの応答（逆方向リクエストへの答え）は束 S-editor で受ける。
-      if (isRequest && ('result' in message || 'error' in message)) return
+      // クライアントからの応答（逆方向リクエストへの答え）。
+      if (isRequest && ('result' in message || 'error' in message)) {
+        settleEditorRequest(connection, message)
+        return
+      }
       send(connection, errorFrame(id, new RpcError('INVALID_REQUEST', 'missing method')))
       return
     }
@@ -229,17 +257,19 @@ export async function startRpcServer(options: RpcServerOptions): Promise<RpcServ
       assertParams(method, params)
       if (spec.kind === 'notification') {
         const handle = options.notificationHandlers?.[method]
-        if (!handle) throw new RpcError('METHOD_NOT_FOUND', `${method} is not implemented yet`)
+        if (!handle)
+          throw new RpcError('METHOD_NOT_FOUND', `${method} has no handler in this server`)
         handle(params ?? {}, client)
         return
       }
       const handle = options.handlers[method]
       if (!handle) {
-        // PROVISIONAL(P-19): スキーマにあって、まだこのビルドの層 2 が実装していないメソッド。
+        // `SessionCore` はスキーマの C→S のメソッドをすべて実装する（`session-core-methods.spec.ts`）。
+        // ここに来るのは、ハンドラの一部だけで立てたサーバ（テスト）か配線の欠陥。
         throw new RpcError(
           'METHOD_NOT_FOUND',
-          `${method} is not implemented yet`,
-          'declared in the v1 schema; implemented by a later bundle (ledger P-19)',
+          `${method} has no handler in this server`,
+          'declared in the v1 schema, but this server was started without a handler for it',
         )
       }
       const result = await handle(params ?? {}, client)
@@ -293,12 +323,94 @@ export async function startRpcServer(options: RpcServerOptions): Promise<RpcServ
     void dispatch(connection, message as Record<string, unknown>)
   }
 
+  const settleEditorRequest = (connection: Connection, message: Record<string, unknown>): void => {
+    const id = String(message.id)
+    const waiting = connection.pending.get(id)
+    if (!waiting) return
+    connection.pending.delete(id)
+    clearTimeout(waiting.timer)
+    if ('error' in message) {
+      const error = message.error as { message?: unknown } | undefined
+      waiting.reject(
+        new RpcError(
+          'INTERNAL_ERROR',
+          `the editor failed ${waiting.method}: ${String(error?.message ?? 'unknown error')}`,
+        ),
+      )
+      return
+    }
+    const problem = editorResultProblem(waiting.method, message.result)
+    if (problem) {
+      options.log(
+        'error',
+        `[session] the editor answered ${waiting.method} outside the schema: ${problem}`,
+      )
+      waiting.reject(
+        new RpcError(
+          'INTERNAL_ERROR',
+          `the editor answered ${waiting.method} with an invalid result`,
+        ),
+      )
+      return
+    }
+    waiting.resolve(message.result)
+  }
+
+  let editorRequestId = 0
+  const requestEditor = (
+    method: string,
+    params: unknown,
+    timeoutMs = options.editorRequestTimeoutMs ?? EDITOR_REQUEST_TIMEOUT_MS,
+  ) => {
+    const problem = editorParamsProblem(method, params)
+    if (problem) {
+      return Promise.reject(
+        new Error(`refusing to send ${method} to the editor outside the schema: ${problem}`),
+      )
+    }
+    const connection = [...connections].find((candidate) =>
+      candidate.client?.capabilities.has('editor'),
+    )
+    if (!connection) {
+      return Promise.reject(
+        new RpcError(
+          'NO_EDITOR_ATTACHED',
+          'no editor is attached to this session — open a document window in OrbitStudio',
+        ),
+      )
+    }
+    const id = `layer2-${(editorRequestId += 1)}`
+    return new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        connection.pending.delete(id)
+        reject(
+          new RpcError(
+            'EDITOR_TIMEOUT',
+            `the editor did not answer ${method} within ${timeoutMs} ms`,
+          ),
+        )
+      }, timeoutMs)
+      connection.pending.set(id, { method, resolve, reject, timer })
+      send(connection, frame({ id, method, params }))
+    })
+  }
+
   const onConnection = (ws: WebSocket, listener: Listener): void => {
-    const connection: Connection = { ws, listener, client: null }
+    const connection: Connection = { ws, listener, client: null, pending: new Map() }
     connections.add(connection)
     ws.on('message', (data, isBinary) => onMessage(connection, data, isBinary))
     ws.on('close', () => {
       connections.delete(connection)
+      for (const [, waiting] of connection.pending) {
+        clearTimeout(waiting.timer)
+        waiting.reject(
+          new RpcError(
+            'NO_EDITOR_ATTACHED',
+            `the editor disconnected before answering ${waiting.method}`,
+          ),
+        )
+      }
+      connection.pending.clear()
       if (connection.client) options.onDetach?.(connection.client)
     })
     ws.on('error', (error) => options.log('warn', `[session] /rpc socket error: ${error.message}`))
@@ -378,6 +490,7 @@ export async function startRpcServer(options: RpcServerOptions): Promise<RpcServ
       const text = frame({ method, params })
       for (const connection of connections) if (connection.client) send(connection, text)
     },
+    requestEditor,
     async close(): Promise<void> {
       for (const connection of connections) connection.ws.close(1001, 'session shutting down')
       const closing = [uds, ...(tcp ? [tcp] : [])].map(

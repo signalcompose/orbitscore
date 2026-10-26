@@ -297,7 +297,7 @@ describe('handshake and dispatch (design 848 §5.2)', () => {
     expect((await client.request('no.such.method')).error).toMatchObject({ code: -32601 })
     expect((await client.request('plugin.list')).error).toMatchObject({
       code: -32601,
-      data: { code: 'METHOD_NOT_FOUND', detail: expect.stringContaining('P-19') },
+      data: { code: 'METHOD_NOT_FOUND', detail: expect.stringContaining('without a handler') },
     })
     // `lines` は小数・0・負も受ける（凍結版の get_log と同じ・S-mcp の N1-b1）。型の違いは拒む。
     expect((await client.request('session.getLog', { lines: 'ten' })).error).toMatchObject({

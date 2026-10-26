@@ -27,13 +27,25 @@ export interface EditorSession {
   close(): Promise<void>
 }
 
+export interface EditorSessionOptions {
+  /** 偽の interpreter が評価を受けた時（評価されたコードと source を見る）。 */
+  onExecute?(ir: unknown, options: { source?: string; evalSource?: string }): void
+  /** 偽の interpreter の `openPluginUi`（`plugin.openUi` / `openUiAtCursor` が呼ぶ）。 */
+  openPluginUi?(receiver: string, index: number, expectedName?: string): Promise<unknown>
+  editorRequestTimeoutMs?: number
+}
+
 export async function startEditorSession(
   tmp: string,
   workspaceRoot: string | null = null,
+  options: EditorSessionOptions = {},
 ): Promise<EditorSession> {
   const interpreter = {
     boot: async () => {},
-    execute: async () => {},
+    execute: async (ir: unknown, executeOptions: { source?: string; evalSource?: string }) =>
+      options.onExecute?.(ir, executeOptions),
+    openPluginUi: (receiver: string, index: number, expectedName?: string) =>
+      (options.openPluginUi ?? (async () => ({})))(receiver, index, expectedName),
     getGlobals: () => [{ stop: () => {}, saveAllPluginStates: async () => ({}) }],
     audioEngine: { quit: async () => {}, getDaemonStatus: async () => ({}) },
   } as unknown as EngineInterpreter
@@ -57,6 +69,7 @@ export async function startEditorSession(
     workspaceRoot,
     broadcast: (method, params) => rpc?.broadcast(method, params),
     editorAttached: () => rpc?.editorClient() != null,
+    requestEditor: (method, params) => rpc!.requestEditor(method, params),
     captureConsole: false,
   })
   const session = core
@@ -67,6 +80,7 @@ export async function startEditorSession(
     notificationHandlers: session.notificationHandlers,
     onDetach: (client) => session.onClientDetached(client),
     log: (level, text) => session.sessionLog(level, text),
+    editorRequestTimeoutMs: options.editorRequestTimeoutMs,
   })
   const server = rpc
   const closers: Array<() => unknown> = []
