@@ -37,7 +37,7 @@ VS Code の Activity Bar にある OrbitScore の **Audio Engine Settings** ビ�
 
 ## 出力デバイスを選ぶ
 
-- **拡張版**: **Audio Engine Settings** ビューの **Output Device** を開くと、使えるデバイスが一覧されます。
+- **OrbitScore**: **Audio Engine Settings** ビューの **Output Device** を開くと、使えるデバイスが一覧されます。
   選択中のデバイスには `●` が付きます。**System Default** を選ぶと OS のデフォルト出力に戻ります。
   選択中のデバイスをもう一度クリックすると選択が解除され、エンジンが停止します。
 

@@ -82,9 +82,7 @@ LOOP(drum)
 ## 動作環境
 
 - macOS Apple Silicon（M1, M2, M3 等の Mac）
-- **拡張版**: VS Code または Cursor（バージョン 1.99.0 以上）。配布される `.vsix` は arm64 専用で、Intel Mac、Windows、Linux は未対応です。
-
-このサイトで「**拡張版**」と付けた項目は、VS Code 拡張機能として配布している OrbitScore（`.vsix`）での操作や条件です。
+- **OrbitScore**: VS Code または Cursor（バージョン 1.99.0 以上）。配布される `.vsix` は arm64 専用で、Intel Mac、Windows、Linux は未対応です。
 
 ## 次のステップ
 

@@ -23,7 +23,7 @@ kick.audio("kick.wav").play(1, 0, 1, 0).output()    // master へ
 
 出口の無い発音シーケンスには、エディタが `output-missing` の警告と「`<名前>.output()` を足す」クイックフィックスを出します。詳しくは [sum と aux/send](/mixing/routing) を参照してください。
 
-- **拡張版**: エディタに電球アイコンが出ていないか確認してください。
+- **OrbitScore**: エディタに電球アイコンが出ていないか確認してください。
 
 ### `global.start()` を呼んでいますか？
 
@@ -62,13 +62,13 @@ global.audioPath("/Users/yourname/orbitscore-practice/audio")
 
 OS のオーディオ出力設定で、音を聞きたいデバイスが選ばれているか確認してください。システムの音量が 0 になっていないかも確認してください。
 
-- **拡張版**: OrbitScore 側でデバイスを選んでいる場合は、**Audio Engine Settings** ビューの **Output Device** で `●` が付いているデバイスも確認してください。
+- **OrbitScore**: OrbitScore 側でデバイスを選んでいる場合は、**Audio Engine Settings** ビューの **Output Device** で `●` が付いているデバイスも確認してください。
 
 指定したデバイスから音の要求が来なかった場合、エンジンは起動時に OS のデフォルト出力へ切り替えます（[エンジン設定](/getting-started/engine-settings)）。
 
 ---
 
-## `Cmd+Enter` が動かない（拡張版）
+## VS Code で `Cmd+Enter` が動かない
 <!-- host: ext -->
 
 ### ファイルの拡張子は `.orbs` ですか？
@@ -132,7 +132,7 @@ drum.play(1, 1, 1, 1)
 報告の際は、以下の情報をできる範囲で記載していただくと、原因の特定がスムーズになります:
 
 - OS のバージョン（例: macOS 15.0 Apple Silicon）
-- **拡張版**: VS Code または Cursor のバージョン
+- **OrbitScore**: VS Code または Cursor のバージョン
 - OrbitScore のバージョン
 - エラーメッセージがあれば全文
-- **拡張版**: `View → Output → OrbitScore` に表示されたログ
+- **OrbitScore**: `View → Output → OrbitScore` に表示されたログ

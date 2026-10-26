@@ -10,7 +10,7 @@ VS Code 拡張機能のインストールが終わったら、いよいよ音を
 
 ## 用意するもの
 
-- **拡張版**: インストール済みの OrbitScore VS Code 拡張機能（[インストール](./installation.md)を参照）
+- **OrbitScore**: インストール済みの OrbitScore VS Code 拡張機能（[インストール](./installation.md)を参照）
 - `.wav` 形式のオーディオファイルが入ったフォルダ。今回は kick（バスドラム）の音 1 つあれば十分です
 
 オーディオファイルがまだ手元にない場合は、[freesound.org](https://freesound.org/) などから無料のキックサンプルをダウンロードしてください。ファイル名は何でも構いませんが、本ページでは `kick.wav` という名前で進めます。

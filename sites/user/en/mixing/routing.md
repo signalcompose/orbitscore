@@ -146,7 +146,7 @@ A line with no output at all is silent, so "I forgot to write it" and "I meant i
 Both come with an "add `<name>.output()`" quick fix. The one on `output-missing` is the preferred action.
 
 ::: info How to apply the quick fix
-- **Extension**: Pick it from the light bulb shown in the editor.
+- **OrbitScore**: Pick it from the light bulb shown in the editor.
 :::
 
 A sequence that declares `midi()` is exempt: MIDI goes to external gear, so it has no mixer output.

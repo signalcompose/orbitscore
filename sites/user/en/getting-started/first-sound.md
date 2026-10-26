@@ -10,7 +10,7 @@ Once you have installed the VS Code extension, it is time to make some sound. By
 
 ## What You Will Need
 
-- **Extension**: The OrbitScore VS Code extension installed (see [Installation](./installation.md))
+- **OrbitScore**: The OrbitScore VS Code extension installed (see [Installation](./installation.md))
 - A folder containing a `.wav` audio file. For this chapter, a single kick (bass drum) sample is enough
 
 If you do not have an audio file at hand, you can download a free kick sample from sites such as [freesound.org](https://freesound.org/). The file name does not matter, but this guide assumes the file is named `kick.wav`.

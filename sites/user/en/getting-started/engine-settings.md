@@ -39,7 +39,7 @@ Changing the buffer size, changing the sample rate, and multi-channel output are
 
 ## Choosing an output device
 
-- **Extension**: Expand **Output Device** in the **Audio Engine Settings** view to list the devices you can use.
+- **OrbitScore**: Expand **Output Device** in the **Audio Engine Settings** view to list the devices you can use.
   The selected device is marked with `●`. Choosing **System Default** returns to the OS default
   output. Clicking the already-selected device deselects it and stops the engine.
 
