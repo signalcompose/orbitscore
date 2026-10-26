@@ -376,7 +376,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `DaemonClient.start()` proceeds in the order "spawn → read the ready line from stdout → connect the WebSocket → receive the handshake."
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:254-292 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:255-293 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -397,30 +397,43 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
       this.running = true
 ```
 
-Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
+Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number). Nothing is written to stdin, but the engine keeps it **open** for as long as it lives. However the engine dies, the kernel closes the write end, so the daemon learns of its parent's death through EOF and exits on its own (#996; the daemon does this only when it is given `--exit-on-stdin-eof`).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:844-857
+// packages/engine/src/audio/rust-engine/daemon-client.ts:845-853
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
     audioDevice: string | undefined,
   ): Promise<string> {
     const binary = this.resolveDaemonBinary(explicitPath)
-    // `--audio-device <name>` は daemon 起動時のみ honor される（#484 D1・ランタイム切替は D2）。
-    // 名前が不一致でも daemon は起動を落とさず stderr に警告して host 既定へ縮退する。
-    const args = audioDevice ? ['--audio-device', audioDevice] : []
-    const child = spawn(binary, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: daemonEnv(process.env),
-    })
+    // 引数（`--audio-device`）と stdio（親の死を daemon が知るためのパイプ・#996）は daemon-spawn.ts。
+    const child = spawnDaemonProcess(binary, audioDevice, daemonEnv(process.env))
     this.child = child
 ```
 
-`env: daemonEnv(process.env)` is the stopping point mentioned earlier. `daemonEnv()` is a pure function that drops only `ELECTRON_RUN_AS_NODE` and passes everything else through (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)).
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-spawn.ts:31-44
+export function spawnDaemonProcess(
+  binary: string,
+  audioDevice: string | undefined,
+  env: NodeJS.ProcessEnv,
+): ChildProcess {
+  const child = spawn(binary, daemonSpawnArgs(audioDevice, process.pid), {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+  })
+  // 書き端の 'error'（daemon が先に死んだ後の EPIPE 等）を拾わないと、EventEmitter の
+  // unhandled 'error' が engine ごと落とす（`connectWebSocket` の永続 error listener と同じ理由）。
+  child.stdin?.on('error', (err) => console.warn('DaemonClient: daemon stdin error:', err))
+  return child
+}
+```
+
+`daemonEnv(process.env)` is the stopping point mentioned earlier (`spawnDaemonProcess` passes it straight through as `env`). `daemonEnv()` is a pure function that drops only `ELECTRON_RUN_AS_NODE` and passes everything else through (#878, PR [#889](https://github.com/signalcompose/orbitscore/pull/889)).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:76-79
+// packages/engine/src/audio/rust-engine/daemon-client.ts:77-80
 export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source
   return rest
@@ -432,7 +445,7 @@ The reason for dropping it is "**undo at your own exit what you added yourself**
 The general rule "do not hand host-derived variables to third parties" is deliberately *not* the justification. If it were, `VSCODE_*` and the other `ELECTRON_*` vars riding on the extension host's env would have to be dropped as well, and this function does not go that far.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:913-927
+// packages/engine/src/audio/rust-engine/daemon-client.ts:909-923
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -457,7 +470,7 @@ The daemon-side code that writes this ready line (`run()` in `main.rs`) and the 
 The search order for the daemon binary is in `resolveDaemonBinaryPath()`: explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:181-217 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:182-218 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
@@ -506,7 +519,7 @@ Not only the daemon itself but also the plugin children described below and the 
 The daemon does not load the actual plugins (CLAP / VST3) into its own process. Effects and instruments are each spawned as separate binaries in **out-of-process (OOP)** children, exchanging audio with the daemon over shared memory. The list of children that can be spawned is stated explicitly, in one place, as a constant in the daemon crate.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:104-113
+// rust/crates/orbit-audio-daemon/src/lib.rs:106-115
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",

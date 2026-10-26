@@ -38,6 +38,46 @@ Part of #1030
 
 ---
 
+### fix(daemon): exit when the parent engine dies (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu-996`（#999 の上に積む） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
+
+設計 848 §4.7 の脅威モデルで見つかった、出荷済み 4.4.0 の daemon の穴の 2 つ目（設計 §4.4 F-1・台帳 P-05）。engine が SIGKILL で落ちると daemon が残っていた。
+
+- **親の死の検知**（`orbit-audio-daemon/src/parent_watch.rs`）: 主 = stdin の EOF / 補助 = `getppid()` の付け替え（250ms 周期・child 側 `ParentWatch` と同じ判定）。🔴 **engine が引数（`--exit-on-stdin-eof` / `--parent-pid <pid>`）で明示した時だけ**働き、さらに stdin がパイプ（FIFO / socket）でなければ EOF を見ない — 古い engine（stdin = `/dev/null`・引数なし）と組んだ daemon が起動直後に終わらないため。監視は音声デバイスの初期化より前に張る。検知したら理由を stderr に書いて（best effort — engine が既に死んでいれば読み手はいない） `_exit(0)`（SIGTERM の既定の動作と同じ終わり方）
+- **engine 側**: spawn の形を `daemon-spawn.ts` に切り出し、stdin を `'pipe'` にして閉じない + 上の 2 引数を渡す。`daemon-client.ts` は 782 → 779 コード行（ラチェットの baseline を下げた）
+- tokio の `stdin()` は使わない（blocking pool 上の取り消せない `read` が runtime の終了を止める）。stdin は専用の OS スレッドで読む
+- テスト: Rust 単体 7 件 / 実 daemon の結合 5 件（Linux では ALSA の既定 PCM を null に向けた HOME で起動するので CI の ubuntu でも走る）/ TS の spawn 配線 1 件（既存 2 件は argv の期待値を更新）/ engine の SIGKILL の実プロセステスト 1 件（`ORBIT_REAL_DAEMON=1` で gate）。daemon の 4 機構と engine の 3 配線を 1 つずつ外して red になることを確認した。途中で、**ready 前に終わった daemon を「起動できない環境」として skip していた**ため「パイプの確認を外す」変異が生き残ったので、skip の条件を「daemon が `"ready":false` を報告した時だけ」に絞った
+- dev 学習サイトの引用のずれのうち行ずれだけのものを `check-citations.mjs --fix` で再アンカーし、中身が変わった 2 箇所 × 2 言語（spawn と `run()`）は抜粋と説明を手で更新。`docs/research/ENGINE_DAEMON_PROTOCOL.md` に §2.1.2（親の死の検知）を追記
+- 🔴 未実施（帰国後に main が手元で）: macOS 実機のマージ前ゲート（ビルド + 実機 gated E2E 全件・cold install）、`#[cfg(target_os = "macos")]` のテスト、実 CoreAudio での「engine の SIGKILL → daemon が消える」
+- その後の macOS 実機 gated で、`#606 E2E-K3` が「SIGKILL 後も daemon が生存する」という旧契約のため失敗。#996 の新契約に合わせ、kill 前の発音と 5 秒以内の daemon 自己終了を検証し、`_exit` で途中までになる WAV の末尾無音判定は外した
+- `/simplify`（4 観点）の整理: ゾンビを除く生存判定を `tests/helpers/process-liveness.ts` に 1 本化（gated と実 daemon のテストから使う）/ `check_parent` の非 direct 分岐を既存の `probe_pid_liveness` に置き換え（ESRCH だけを消失とみなす意味は同じ）/ Rust の結合テストの待ちループを `gated_common::wait_until` に・stdin の enum を `Stdio` に・後始末を `Drop` のガードに。見送り: 起動引数の 1 回の解析・終了経路の集約・起動ハーネスの共通化（差分の範囲外）
+- main が macOS で確認: daemon の lib 65・Origin 2・親の死 5（skip 0）/ 実 CoreAudio の parent-death 1 / `npm test` 2734 passed・87 skipped。dev サイトの引用 44 件は行ずれ（+1 / −10 / −12）だけを確認して `--fix`
+- PR #1007 ラウンド 1: `ps` の exit 1 + 空出力だけを消失とし、その他の検査失敗を消失として隠さないよう TS / Rust の生存判定を統一した。
+- 親 PID の境界ケースと socketpair EOF の結合テストを追加し、CI で実 daemon を必須化。child の stdin 継承と、意図した Origin 403 の二重 WARN も防いだ。
+- E2E-K3 の題名を確かめていること（daemon が自分で終わる）に合わせ、守り手の範囲をコメントで正確にした（切断が引き金になることは `protocol.rs`・実 child への配送は `outproc_instrument_gated.rs`）。その gated テスト（`#[ignore]`・実測 12 秒）を **CLAUDE.md のマージ前ゲートに無条件で追加**した（レビューで「守り手が手動テストにしか無い」と分かったため）。`outproc_instrument.rs` が file-size ラチェット（705）を 1 行超えたので、stdio の設定を 1 文にまとめて戻した
+- 見送り: 実プラグインで WebSocket だけを切る新しい gated テスト（設計の判断を含むので owner が決める）・`PARENT_PID_POLL_INTERVAL` への `PROVISIONAL(P-08)`（台帳は `rust/` を走査しない）・起動引数の 1 回の解析・終了経路の集約
+- ラウンド 2（code-reviewer / silent-failure-hunter / pr-test-analyzer）で Critical・Important 0 に収束。Minor も直した: 結合テストの daemon ごとに ALSA の HOME を分ける（同時書き換えで `ORBIT_REQUIRE_REAL_DAEMON=1` の CI が揺れないように）/ その env を rust-ci.yml の job 全体へ / 生存判定の単体テスト 7 件（catch-all に戻すと 3 件 red を確認）/ CLAUDE.md のゲートに `ORBIT_REQUIRE_REAL_DAEMON=1` の parent_watch と実 engine の parent-death を追加 / 「理由を stderr に残す」は best effort と明記
+
+Closes #996
+
+---
+
+### fix(daemon): reject WebSocket handshakes that carry an Origin header (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu-996`（#999 の上に積む） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
+
+設計 848 §4.7 の脅威モデルで見つかった、出荷済み 4.4.0 の daemon の穴の 1 つ目。
+
+- daemon の accept を `accept_hdr_async` にし、`Origin` ヘッダのあるハンドシェイクを 403 で拒否する（値は見ない・`null` も拒否）。WebSocket のハンドシェイクには CORS の preflight が無く、daemon は `LoadPlugin { path }` を受け付けるので、ブラウザからの接続を通さない。ブラウザは必ず Origin を付け（RFC 6455 §4.1）、daemon の client（engine の `ws`）は付けない。repo 内の WebSocket client は engine と Rust テストの 2 つだけで、どちらも Origin を付けないことを確認した
+- 戻り値の型は tungstenite の `Callback` が決めているので `clippy::result_large_err` を理由つきで allow
+- テスト（`tests/handshake_origin.rs`）: 3 種の Origin（`https://…` / `null` / `http://127.0.0.1:…`）が 403 になり、拒否の後も accept loop が次の接続を受ける / Origin の無い接続は 101 で通り handshake フレームを受け取る。`accept_async` に戻す変異で red になることを確認
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` §2.2 に規則を追記。dev 学習サイトの `server.rs` の引用を再アンカー
+
+Part of #996
+
+---
+
 ### fix(deps): bump tokio past RUSTSEC-2026-0386 so cargo-deny passes again (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu` / **Issue**: [#999](https://github.com/signalcompose/orbitscore/issues/999)
