@@ -27,9 +27,12 @@ daemon は起動すると audio device を確保し、localhost の空きポー�
 `--audio-device` の CLI 処理（#484 D1 / D3）が増え、Engine の起動が専用スレッドへ委譲されています。
 さらに 2026-09-06 に、**最初の shm を作る前に**死亡した旧 daemon の共有メモリを回収する段（0.5）が
 入りました（#779）。この順序は「自分の PID の残骸を消してよい」という規則の正当性要件です。
+2026-10-26 には、音声デバイスの初期化より**前に**親（engine）の死の監視を張る段（-0.5）が入りました
+（#996）。engine が `--exit-on-stdin-eof` / `--parent-pid` を渡した時だけ働き、初期化の途中で
+止まった daemon も親と一緒に終わります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:78-136
+// rust/crates/orbit-audio-daemon/src/main.rs:79-141
 async fn run() -> Result<(), i32> {
     // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
     // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
@@ -38,6 +41,10 @@ async fn run() -> Result<(), i32> {
     if has_list_audio_devices_flag(std::env::args().skip(1)) {
         return run_list_audio_devices();
     }
+
+    // -0.5. 親（engine）の死の監視（#996）。音声デバイスの初期化より**前に**張る — 初期化の途中で
+    // 止まった daemon も、親と一緒に終わるようにするため。engine が引数で有効にした時だけ働く。
+    arm_parent_watch();
 
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
@@ -100,7 +107,7 @@ async fn run() -> Result<(), i32> {
 （ランタイムの device 切替 `SelectAudioDevice` もこの thread に `mpsc` で委譲されます・#484 D2）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:152-163
+// rust/crates/orbit-audio-daemon/src/main.rs:157-168
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
@@ -424,7 +431,7 @@ client 側 `SIGTERM → SIGKILL` 停止や panic では `InstrumentChildSupervis
 child プロセスが孤児化し得ます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:21-30
+// rust/crates/orbit-audio-daemon/src/main.rs:22-31
 // 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
 // の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
 // まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts

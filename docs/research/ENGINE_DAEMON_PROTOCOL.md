@@ -55,6 +55,24 @@ daemon が起動中に失敗した場合（audio device 取得失敗、port bind
 6. WebSocket connect 成功 → handshake フレーム待ち最大 **5 秒**
 7. handshake timeout → 同様に stderr を確認してから報告
 
+### 2.1.2 親（client）の死の検知（#996）
+
+client が SIGKILL 等で落ちた時に daemon が残らないよう、daemon は親の死を自分で知って終了する。
+**client が引数で明示した時だけ**働く（古い client は stdin を `/dev/null` で渡すので、無条件に
+EOF を親の死とみなすと daemon が起動直後に終わる）。
+
+| 引数 | 意味 |
+|---|---|
+| `--exit-on-stdin-eof` | stdin の EOF を親の死とみなす。**stdin がパイプ（FIFO / socket）の時だけ**有効で、`/dev/null` や端末なら無視する |
+| `--parent-pid <pid>` | `getppid()` がこの値から変わったら（init / subreaper に付け替えられたら）親の死とみなす。250ms 周期。値が 1 以下・数でない時は無視する |
+
+- client は stdin を**パイプで渡し、生きている間は閉じない**（何も書かない）。engine は
+  `stdio: ['pipe', 'pipe', 'pipe']` + 上の 2 つの引数で起動する（`daemon-spawn.ts`）
+- 検知した daemon は stderr に `parent process is gone (<理由>); exiting` を出して即座に終了する
+  （SIGTERM と同じく後始末をしない `_exit`）
+- 監視は音声デバイスの初期化より前に張る。daemon は未知の引数を無視するので、新しい client と
+  古い daemon の組み合わせは従来どおり動く
+
 ### 2.2 認証 / 権限
 
 - `127.0.0.1` のみ bind（外部接続拒否）

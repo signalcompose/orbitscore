@@ -232,7 +232,7 @@ with them through shared memory. The children it may spawn are enumerated in
 and roles).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:104-113
+// rust/crates/orbit-audio-daemon/src/lib.rs:106-115
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",

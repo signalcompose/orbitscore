@@ -1,6 +1,7 @@
 //! orbit-audio-daemon entry point.
 //!
 //! 起動シーケンス:
+//! 0. engine が引数で有効にしていれば、親の死の監視を張る（#996・[`parent_watch`]）
 //! 1. audio output を初期化
 //! 2. localhost free port に WebSocket listener を bind
 //! 3. stdout に 1 行 JSON で port と protocol_version を出力
@@ -14,7 +15,7 @@ use orbit_audio_daemon::protocol::{
     Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC, ERROR_SEVERITY_FATAL,
     EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
 };
-use orbit_audio_daemon::server;
+use orbit_audio_daemon::{parent_watch, server};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -83,6 +84,10 @@ async fn run() -> Result<(), i32> {
     if has_list_audio_devices_flag(std::env::args().skip(1)) {
         return run_list_audio_devices();
     }
+
+    // -0.5. 親（engine）の死の監視（#996）。音声デバイスの初期化より**前に**張る — 初期化の途中で
+    // 止まった daemon も、親と一緒に終わるようにするため。engine が引数で有効にした時だけ働く。
+    arm_parent_watch();
 
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
@@ -198,6 +203,28 @@ fn start_engine_with_device_switch(
     ready_rx
         .recv()
         .expect("audio owner thread exited before reporting readiness")
+}
+
+/// 親の死を検知したら、その理由を stderr に残して即座に終わる（#996）。
+///
+/// 終わり方は engine の通常の止め方（SIGTERM・この daemon はハンドラを持たないので既定の動作 =
+/// 即終了）と揃えて `_exit` にする。`process::exit` は atexit と static destructor を、音声
+/// スレッドが走っている最中に回してしまう。out-of-process の child は自分の `ParentWatch` で、
+/// 残った shm は次の daemon の起動時の sweep で片付く（どちらも daemon の死に方を問わない経路）。
+fn arm_parent_watch() {
+    let options = parent_watch::ParentWatchOptions::from_args(std::env::args().skip(1));
+    let armed = parent_watch::start(options, |reason| {
+        tracing::warn!("parent process is gone ({reason}); exiting");
+        // SAFETY: _exit(2) は async-signal-safe で、どのスレッドから呼んでもプロセスを終える。
+        unsafe { libc::_exit(0) }
+    });
+    if armed != parent_watch::Armed::default() {
+        tracing::info!(
+            "parent watch armed: stdin_eof={} parent_pid={}",
+            armed.stdin_eof,
+            armed.parent_pid
+        );
+    }
 }
 
 /// argv に `--list-audio-devices` フラグが含まれるかを判定する純関数（#484 D3）。

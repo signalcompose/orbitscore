@@ -207,7 +207,7 @@ SIGINT handler, and the client's ordinary stop is that same SIGTERM, so `Capture
 `finalize` **does not run on the normal path either**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:21-25
+// rust/crates/orbit-audio-daemon/src/main.rs:22-26
 // 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
 // の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
 // まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts

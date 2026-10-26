@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): exit when the parent engine dies (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu-996`（#999 の上に積む） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
+
+設計 848 §4.7 の脅威モデルで見つかった、出荷済み 4.4.0 の daemon の穴の 2 つ目（設計 §4.4 F-1・台帳 P-05）。engine が SIGKILL で落ちると daemon が残っていた。
+
+- **親の死の検知**（`orbit-audio-daemon/src/parent_watch.rs`）: 主 = stdin の EOF / 補助 = `getppid()` の付け替え（250ms 周期・child 側 `ParentWatch` と同じ判定）。🔴 **engine が引数（`--exit-on-stdin-eof` / `--parent-pid <pid>`）で明示した時だけ**働き、さらに stdin がパイプ（FIFO / socket）でなければ EOF を見ない — 古い engine（stdin = `/dev/null`・引数なし）と組んだ daemon が起動直後に終わらないため。監視は音声デバイスの初期化より前に張る。検知したら理由を stderr に残して `_exit(0)`（SIGTERM の既定の動作と同じ終わり方）
+- **engine 側**: spawn の形を `daemon-spawn.ts` に切り出し、stdin を `'pipe'` にして閉じない + 上の 2 引数を渡す。`daemon-client.ts` は 782 → 779 コード行（ラチェットの baseline を下げた）
+- tokio の `stdin()` は使わない（blocking pool 上の取り消せない `read` が runtime の終了を止める）。stdin は専用の OS スレッドで読む
+- テスト: Rust 単体 7 件 / 実 daemon の結合 5 件（Linux では ALSA の既定 PCM を null に向けた HOME で起動するので CI の ubuntu でも走る）/ TS の spawn 配線 1 件（既存 2 件は argv の期待値を更新）/ engine の SIGKILL の実プロセステスト 1 件（`ORBIT_REAL_DAEMON=1` で gate）。daemon の 4 機構と engine の 3 配線を 1 つずつ外して red になることを確認した。途中で、**ready 前に終わった daemon を「起動できない環境」として skip していた**ため「パイプの確認を外す」変異が生き残ったので、skip の条件を「daemon が `"ready":false` を報告した時だけ」に絞った
+- dev 学習サイトの引用のずれのうち行ずれだけのものを `check-citations.mjs --fix` で再アンカーし、中身が変わった 2 箇所 × 2 言語（spawn と `run()`）は抜粋と説明を手で更新。`docs/research/ENGINE_DAEMON_PROTOCOL.md` に §2.1.2（親の死の検知）を追記
+- 🔴 未実施（帰国後に main が手元で）: macOS 実機のマージ前ゲート（ビルド + 実機 gated E2E 全件・cold install）、`#[cfg(target_os = "macos")]` のテスト、実 CoreAudio での「engine の SIGKILL → daemon が消える」
+
+Closes #996
+
+---
+
 ### fix(daemon): reject WebSocket handshakes that carry an Origin header (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `claude/bold-hamilton-90v8nu-996`（#999 の上に積む） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
