@@ -68,8 +68,10 @@ EOF を親の死とみなすと daemon が起動直後に終わる）。
 
 - client は stdin を**パイプで渡し、生きている間は閉じない**（何も書かない）。engine は
   `stdio: ['pipe', 'pipe', 'pipe']` + 上の 2 つの引数で起動する（`daemon-spawn.ts`）
-- 検知した daemon は stderr に `parent process is gone (<理由>); exiting` を出して即座に終了する
-  （SIGTERM と同じく後始末をしない `_exit`）
+- 検知した daemon は stderr に `parent process is gone (<理由>); exiting` を書いてから即座に終了する
+  （SIGTERM と同じく後始末をしない `_exit`）。🔴 書くのは best effort — engine が既に死んでいれば stderr の
+  読み手はおらず、この行はどこにも残らない（書き込みの失敗は握りつぶす `best_effort_stderr`）。終了の理由を
+  外から確かめられるのは、stderr を持っているテスト（`tests/parent_watch.rs`）だけ
 - 監視は音声デバイスの初期化より前に張る。daemon は未知の引数を無視するので、新しい client と
   古い daemon の組み合わせは従来どおり動く
 

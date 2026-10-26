@@ -40,6 +40,8 @@ jobs:
     defaults:
       run:
         working-directory: rust
+    env:
+      ORBIT_REQUIRE_REAL_DAEMON: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -85,8 +87,6 @@ jobs:
         run: cargo clippy -p orbit-audio-daemon --features outproc-effect,outproc-instrument --all-targets --locked -- -D warnings
 
       - name: Test (default features, gated tests auto-skipped)
-        env:
-          ORBIT_REQUIRE_REAL_DAEMON: "1"
         run: cargo test --workspace --locked
 
       - name: Test (clap-host feature, gated tests auto-skipped)

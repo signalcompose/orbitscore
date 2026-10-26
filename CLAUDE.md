@@ -733,6 +733,13 @@ cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib
 cargo build --manifest-path rust/Cargo.toml -p orbit-clap-instrument-child
 cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml
 cargo test --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-instrument --test outproc_instrument_gated -- --ignored
+
+# 🔴 daemon が親（engine）の死で自分から終わること（#996）。実デバイスで daemon を起動できないと
+# テストは skip して緑を装うので、ORBIT_REQUIRE_REAL_DAEMON=1 で skip を失敗にする。後半は実 Node の
+# engine（DaemonClient）を SIGKILL して実 daemon が消えることを見る（npx は遅い回線で safe-chain が
+# タイムアウトするので手元のバイナリを直接呼ぶ・memory `npx-safe-chain-times-out-on-slow-links`）
+ORBIT_REQUIRE_REAL_DAEMON=1 cargo test --manifest-path rust/Cargo.toml -p orbit-audio-daemon --locked --test parent_watch
+ORBIT_REAL_DAEMON=1 ./node_modules/.bin/vitest run --dir tests --config vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true audio/rust-engine/real-daemon-parent-death
 ```
 
 **この 3 行は無条件で回す。**（2026-10-26 改訂: 上の out-of-process の楽器の 3 行も同じく無条件）「rust を触った PR のみ」のような**条件分岐を付けない** —

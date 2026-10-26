@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const STAYS_ALIVE_FOR: Duration = Duration::from_millis(1500);
 /// 非親 PID が起動前から消えている場合は、250ms poll の数周期以内に終わる。
 const MISSING_NON_PARENT_EXIT_TIMEOUT: Duration = Duration::from_millis(750);
+static NEXT_TEMP_HOME: AtomicUsize = AtomicUsize::new(0);
 
 struct Daemon {
     child: Child,
@@ -127,7 +129,11 @@ impl Daemon {
 
 fn with_null_audio_on_linux(command: &mut Command) {
     if cfg!(target_os = "linux") {
-        let home = std::env::temp_dir().join(format!("orbit-parent-watch-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!(
+            "orbit-parent-watch-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_HOME.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&home).expect("temp HOME");
         std::fs::write(home.join(".asoundrc"), "pcm.!default { type null }\n").expect(".asoundrc");
         command.env("HOME", home);
