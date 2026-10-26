@@ -22,6 +22,7 @@ import {
   type SessionIo,
 } from '../../packages/session/src/session-main'
 
+import { fakeExecuteStatements } from './helpers/fake-execute-statements'
 import { RpcTestClient } from './helpers/rpc-test-client'
 
 interface FakeIo extends SessionIo {
@@ -56,7 +57,7 @@ function fakeIo(overrides: Partial<SessionIo> = {}): FakeIo {
     createInterpreter: () =>
       ({
         boot: async () => {},
-        execute: async () => {},
+        executeStatements: fakeExecuteStatements(),
         getGlobals: () => [],
         audioEngine: {
           quit: async () => {

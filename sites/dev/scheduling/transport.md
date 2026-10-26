@@ -327,7 +327,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 `InterpreterV2.execute()` には `skipTransportCommands` というオプションがあります。オプション型は §L1 と import (#456) で増えましたが、transport に関わる部分は冒頭と末尾だけです。
 
 ```typescript
-// packages/engine/src/interpreter/interpreter-v2.ts:133-231 (§L1 の記録・import・global/sequence init を // ... で省略)
+// packages/engine/src/interpreter/interpreter-v2.ts:133-220 (§L1 の記録・import・global/sequence init を // ... で省略)
   async execute(
     ir: AudioIR,
     options?: {

@@ -58,7 +58,7 @@ flowchart LR
 The entry point is the `parseAudioDSL()` function, a simple piece of code that just calls these two stages in order.
 
 ```typescript
-// packages/engine/src/parser/audio-parser.ts:123-128
+// packages/engine/src/parser/audio-parser.ts:146-151
 export function parseAudioDSL(source: string): AudioIR {
   const tokenizer = new AudioTokenizer(source)
   const tokens = tokenizer.tokenize()
@@ -297,27 +297,22 @@ export type Statement =
 
 The `AudioParser` class itself is marked `@deprecated` and described as "a thin wrapper around the parser modules." The actual syntactic analysis is handled by the `StatementParser` class.
 
-The processing of `parse()` is to read the token sequence from the start, repeatedly call `StatementParser`, and dispatch the returned statement to the appropriate field among `globalInit` / `sequenceInits` / `fileImports` / `statements`. Exactly one rule check is built in: it upholds the invariant that **file imports may only appear in the head region of the file (before the first non-import statement)** (IM.1).
+The processing of `parse()` is to read the token sequence from the start, repeatedly call `StatementParser`, and dispatch the returned statement to the appropriate field among `globalInit` / `sequenceInits` / `fileImports` / `statements`. The reading loop lives in `forEachStatement`, which `parseAudioDSLWithSpans` (used by OrbitStudio's layer 2 to get the statements in source order with their ranges, #997) also goes through. Exactly one rule check is built in: it upholds the invariant that **file imports may only appear in the head region of the file (before the first non-import statement)** (IM.1).
 
 ```typescript
-// packages/engine/src/parser/audio-parser.ts:90-111
+// packages/engine/src/parser/audio-parser.ts:99-115
       if (stmtResult.statement) {
-        // Handle different statement types
-        if (stmtResult.statement.type === 'global_init') {
-          result.globalInit = stmtResult.statement as GlobalInit
-        } else if (stmtResult.statement.type === 'seq_init') {
-          result.sequenceInits.push(stmtResult.statement as SequenceInit)
-        } else if (stmtResult.statement.type === 'file_import') {
-          if (seenNonImport) {
-            throw new Error(
-              `import "${(stmtResult.statement as FileImportStatement).path}": ` +
-                `import statements must appear before any other statement (IM.1).`,
-            )
-          }
-          result.fileImports!.push(stmtResult.statement as FileImportStatement)
-        } else {
-          result.statements.push(stmtResult.statement as Statement)
+        if (stmtResult.statement.type === 'file_import' && seenNonImport) {
+          throw new Error(
+            `import "${(stmtResult.statement as FileImportStatement).path}": ` +
+              `import statements must appear before any other statement (IM.1).`,
+          )
         }
+        visit(
+          stmtResult.statement as GlobalInit | SequenceInit | FileImportStatement | Statement,
+          this.statementStart,
+          this.pos,
+        )
         // import 文（stdlib / file の両方）だけが先頭領域を延長する — 不変条件はこの1行。
         if (stmtResult.statement.type !== 'import' && stmtResult.statement.type !== 'file_import') {
           seenNonImport = true

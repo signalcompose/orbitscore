@@ -25,6 +25,7 @@ import {
 } from '../../packages/session/src/rpc/runtime-dir'
 import { startRpcServer, type RpcServer } from '../../packages/session/src/rpc/server'
 
+import { fakeExecuteStatements } from './helpers/fake-execute-statements'
 import { RpcTestClient } from './helpers/rpc-test-client'
 
 interface FakeEngine {
@@ -44,7 +45,7 @@ function fakeInterpreter(
     boot: async (device?: string) => {
       calls.push(`boot ${device ?? '(default)'}`)
     },
-    execute: async () => {},
+    executeStatements: fakeExecuteStatements(),
     getGlobals: () => [{ stop: () => {}, saveAllPluginStates: async () => ({}) }],
     savePluginState: async (sequence: string, index: number) => {
       calls.push(`savePluginState ${sequence} ${index}`)

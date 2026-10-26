@@ -288,9 +288,10 @@ export function parseAudioDSLWithSpans(source: string): ParsedRequest  // 構文
 // packages/engine/src/interpreter/interpreter-v2.ts（既存のクラスに足す）
 async executeStatements(
   request: ParsedRequest,
-  options: { documentDirectory?: string; source: string; evalSource?: EvalSource; sourceFile?: string | null },
-  hooks?: { onStatementStart?(index: number): void },
+  options: { documentDirectory?: string; source?: string; evalSource?: EvalSource; sourceFile?: string | null },
+  hooks?: { onStatement?(index: number): void; onFailure?(index: number, message: string): void },
 ): Promise<Array<{ index: number; message: string }>>  // 実行時エラーの一覧（空 = すべて成功）
+// 改訂（10-26・N1-d1 の実装）: onFailure は失敗したその時に呼ぶ（層 2 が凍結版と同じ順でログへ出す）
 ```
 
 診断の形: 今の `{kind, message}` に、省略可能な `range`（`code` の座標）と `documentRange`（文書の座標・D-P2 と同じ条件で付く）を足す（🔴 プロトコルの追加 = MINOR・Q-5 に含める）。
@@ -325,6 +326,12 @@ async executeStatements(
 | V-18 | `kick.play(1); hat.play(1)`（実測 k） | 2 文・`ok` | Q-3 が A なら同じ。B なら何も実行せず `;` の診断 | D-E3 | 記録 |
 | V-19 | import 先が開いていて保存していない編集がある | ディスクの内容で鳴る | 同じ（Q-4 の推奨 A） | 差なし | unit |
 | V-20 | import が失敗する要求（存在しないファイル） | `execute()` が投げ、その要求の残りは実行されない | 同じ（D-I1 の例外）。診断に import 文の位置 | 差なし（位置だけ差） | 記録（位置の差）+ gated（#630 の I-4） |
+| V-21 | 要求の途中の行に構文エラー（差分テストの #607 の例: `global.play(([1, 5, 9]@v+10, 0))` ⏎ `global.tempo(120)`） | エラーを報告し、後ろの行は実行される | 何も実行せず、位置つきの診断（D-E1 の代わりに失うもの） | D-E1 | 記録 |
+| V-22 | 文が 1 つも無い評価（空・空行だけ・コメントだけ。コメント行を含む切り替えブロック） | 0 文の `execute()` が走り、バッチも開く | 何も実行せず、バッチも開かない（コメントは文ではない） | D-U2 | 記録 |
+| V-23 | 1 行に 2 つの文（`global.tempo(120) global.start()`） | 1 回の `execute()` | 2 つの文（実行される中身と順は同じ） | D-U2 | 記録 |
+| V-24 | 構文エラーの評価（未完のまま終わった入力を含む・#614 / #620 の例） | バッチを開いてから（または強制実行の時にバッチの外で）報告 | パースは実行の前なので、バッチを開かずに報告 | D-E1 | 記録 |
+
+（V-21〜V-24 は束 S-eval の N1-d1 で差分テストを「違いの記録」に書き換えた時に、実測の差から足した。）
 
 ### 6.2 owner の「バグ的な振る舞い」の例（🔴 owner と一緒に埋める）
 
@@ -358,6 +365,8 @@ S-eval の最初の小 PR は文書だけ（実装より先）:
 | N1-d0 | 7.1 の文書 | — |
 | N1-d1 | engine に `parseAudioDSLWithSpans` と `executeStatements` を足し、受付口を置き換える（D-U2 / D-U3 / D-E1 / D-E2 / D-I1）。足場の `PROVISIONAL(P-01)` とモジュールを消す | **P-01 を閉じる** |
 | N1-d2 | 差分テストを「違いの記録」に書き換える（期待値 = 凍結版との差の一覧・各件に §6 の番号。一覧に無い差は red） | **P-02 を「記録」へ**（削除は拡張版の退役） |
+
+改訂（10-26・実装）: **N1-d1 と N1-d2 は 1 本の小 PR にした**。受付口を置き換えた時点で段階 1 の「一致」の検査が落ちるので、同じ PR で「違いの記録」に書き換えないと小 PR ごとに緑を保てない。
 | N1-d3 | engine に型付きの出力の口（step / log / diagnostic / patternSet）を足し、層 2 の console の横取りを消す | **P-07 を閉じる** |
 | N1-d4 | 世代番号と `transport.step.source`（D-P1 / D-P2） | **P-04 の層 2 の側**（WebView の側は A-skeleton） |
 | N1-d5 | パーサを厳しくする（D-E3・Q-3 の結論どおり） | — |

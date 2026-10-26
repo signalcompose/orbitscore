@@ -9,13 +9,15 @@
  */
 import crypto from 'node:crypto'
 
-import type { AudioIR } from '@orbitscore/engine/dist/parser/audio-parser'
+import type { ParsedRequest } from '@orbitscore/engine/dist/parser/audio-parser'
 
 import {
   createEvaluationIntake,
   type EvaluationIntake,
   type IntakeContext,
+  type IntakeExecuteHooks,
   type IntakeExecuteOptions,
+  type StatementFailure,
 } from '../eval/evaluation-intake'
 import { LanguageServices, shimDocument, type DiagnosticEntry } from '../language/language-services'
 import { openPluginUiAtCursor } from '../language/plugin-ui-at-cursor'
@@ -122,8 +124,8 @@ export class SessionCore {
       workspaceRoot: options.workspaceRoot,
     })
     this.intake = createEvaluationIntake({
-      execute: (ir: AudioIR, executeOptions: IntakeExecuteOptions, context: IntakeContext) =>
-        this.execute(ir, executeOptions, context),
+      execute: (request, executeOptions, context, hooks) =>
+        this.execute(request, executeOptions, context, hooks),
       log: (line, context) =>
         this.logs.emit(classifySessionLine(line.kind, line.level, line.text), context),
       stallReportMs: options.stallReportMs,
@@ -474,15 +476,16 @@ export class SessionCore {
   }
 
   private async execute(
-    ir: AudioIR,
+    request: ParsedRequest,
     options: IntakeExecuteOptions,
     context: IntakeContext,
-  ): Promise<void> {
+    hooks: IntakeExecuteHooks,
+  ): Promise<StatementFailure[]> {
     const interpreter = this.options.engine.current()
     if (!interpreter) throw new Error('engine is not running — start the engine first')
     this.executing = context
     try {
-      await interpreter.execute(ir, options)
+      return await interpreter.executeStatements(request, options, hooks)
     } finally {
       this.executing = null
     }

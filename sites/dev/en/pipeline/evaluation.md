@@ -109,7 +109,7 @@ The `execute()` method takes an `AudioIR` and evaluation options. The options ex
 The body proceeds in a fixed order.
 
 ```typescript
-// packages/engine/src/interpreter/interpreter-v2.ts:171-231 (file import の本体と session-log hook の設置を省略)
+// packages/engine/src/interpreter/interpreter-v2.ts:163-220 (file import の本体と session-log hook の設置を省略)
     // Ensure the audio engine is booted
     await this.ensureBooted()
 

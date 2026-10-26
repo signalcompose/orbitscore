@@ -87,12 +87,15 @@ export const LEDGER: readonly LedgerEntry[] = [
     id: 'P-01',
     title: '評価の受付口の足場（凍結版の区切り方の写し・設計 §4.5.1 段階 1）',
     deadline: { kind: 'release-1' },
-    state: 'open',
+    state: 'closed',
+    closedBy:
+      'S-eval の N1-d1（#1022）: 受付口を #997 の評価のかたちで置き換え（engine の parseAudioDSLWithSpans / executeStatements）、足場の写しと印を消した。差分テストは同じ PR で「違いの記録」へ（P-02）',
     bundle: 'S-rpc（N1-a0）→ S-eval',
   },
   {
     id: 'P-02',
-    title: '凍結版 createReplSession との差分テスト（段階 1 = 一致 → 段階 2 = 違いの記録）',
+    title:
+      '凍結版 createReplSession との差分テスト（段階 1 = 一致 → 段階 2 = 違いの記録・#1022 の N1-d1 で記録へ書き換えた）',
     deadline: { kind: 'ext-retire' },
     state: 'open',
     bundle: 'S-rpc → S-eval → 退役',

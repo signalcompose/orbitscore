@@ -1,13 +1,13 @@
 /**
- * 評価の受付口（段階 1 の足場・`packages/session/src/eval/evaluation-intake.ts`）の単体テスト。
+ * 評価の受付口（#997 の評価のかたち・`packages/session/src/eval/evaluation-intake.ts`）の単体テスト。
  *
- * 凍結版との一致は `eval-intake-parity.spec.ts` が見る。ここで見るのは、凍結版と比べられない
- * 層 2 固有の約束: 応答の形（設計 848 §5.3.1）・出自（`evalSource`）・stderr の行が `log` の
+ * 凍結版との差は `eval-intake-parity.spec.ts` が「違いの記録」として見る。ここで見るのは層 2 の約束:
+ * 応答の形（設計 848 §5.3.1・診断の `range` は 1.1）・出自（`evalSource`）・ログの行が `log` の
  * どの `kind` に入るか（§5.3.6）・滞留の報告（#607）・想定外の失敗でキューが止まらないこと。
+ * 束 S-eval（#1022）で段階 1 の足場から置き換えた時に、各テストの期待値を新しい意味論へ更新した。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { AudioIR } from '../../packages/engine/src/parser/audio-parser'
 import {
   createEvaluationIntake,
   QUEUE_STALL_REPORT_MS,
@@ -16,20 +16,26 @@ import {
   type IntakeLogLine,
 } from '../../packages/session/src/eval/evaluation-intake'
 
+import { fakeExecuteStatements } from './helpers/fake-execute-statements'
+
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
-function harness(execute?: (options: IntakeExecuteOptions) => Promise<void> | void) {
-  const calls: IntakeExecuteOptions[] = []
+/** 実行された文 1 つ（`source` は文の文字列・残りは要求の options）。 */
+type StatementCall = IntakeExecuteOptions
+
+function harness(execute?: (call: StatementCall) => Promise<void> | void) {
+  const calls: StatementCall[] = []
   const logs: IntakeLogLine[] = []
   const batches: string[] = []
   const intake = createEvaluationIntake({
-    execute: async (_ir: AudioIR, options) => {
-      calls.push(options)
-      await execute?.(options)
-    },
+    execute: fakeExecuteStatements(async (text, options) => {
+      const call = { ...(options as IntakeExecuteOptions), source: text }
+      calls.push(call)
+      await execute?.(call)
+    }) as never,
     log: (line) => logs.push(line),
     batch: { begin: () => batches.push('begin'), end: () => batches.push('end') },
   })
@@ -87,7 +93,12 @@ describe('evaluation intake — response shape (design 848 §5.3.1)', () => {
     })
     expect(outcome.ok).toBe(false)
     expect(outcome.diagnostics).toEqual([
-      { kind: 'parse', message: 'Expected RPAREN but got AT at line 1, column 23' },
+      {
+        kind: 'parse',
+        message: 'Expected RPAREN but got AT at line 1, column 23',
+        // 1.1: 読めなかったトークンの位置（0 始まり・幅 0）
+        range: { start: { line: 0, character: 22 }, end: { line: 0, character: 22 } },
+      },
     ])
     expect(logs).toEqual([
       {
@@ -107,7 +118,14 @@ describe('evaluation intake — response shape (design 848 §5.3.1)', () => {
       documentDirectory: null,
       source: 'human',
     })
-    expect(outcome.diagnostics).toEqual([{ kind: 'runtime', message: 'Variable not found: drum' }])
+    expect(outcome.diagnostics).toEqual([
+      {
+        kind: 'runtime',
+        message: 'Variable not found: drum',
+        // 1.1: 失敗した文の範囲（2 行目の全体）
+        range: { start: { line: 1, character: 0 }, end: { line: 1, character: 12 } },
+      },
+    ])
     expect(calls.map((call) => call.source)).toEqual([
       'global.tempo(120)',
       'drum.play(1)',
@@ -115,7 +133,7 @@ describe('evaluation intake — response shape (design 848 §5.3.1)', () => {
     ])
   })
 
-  it('opens one batch per request and closes it before the end-of-request flush', async () => {
+  it('opens one batch per request (the whole request is one unit · E-6)', async () => {
     const { intake, batches } = harness()
     await intake.evaluate({
       code: 'a.play(1)\nb.play(1)',
@@ -130,7 +148,7 @@ describe('evaluation intake — response shape (design 848 §5.3.1)', () => {
     const batches: string[] = []
     let throwOnce = true
     const intake = createEvaluationIntake({
-      execute: async () => {},
+      execute: async () => [],
       // 報告の口そのものが壊れる（パース・実行の try/catch の外へ抜ける想定外の失敗）。
       log: () => {
         if (throwOnce) {
@@ -147,12 +165,32 @@ describe('evaluation intake — response shape (design 848 §5.3.1)', () => {
         source: 'human',
       }),
     ).rejects.toThrow('log sink crashed')
+    // 段階 2: 構文エラーは実行の前に分かるので、バッチを開かない（E-2）。
+    expect(batches).toEqual([])
+  })
+
+  it('closes the batch when the engine itself fails, and reports it as a runtime error without a range', async () => {
+    const batches: string[] = []
+    const intake = createEvaluationIntake({
+      execute: async () => {
+        throw new Error('engine exploded')
+      },
+      log: () => {},
+      batch: { begin: () => batches.push('begin'), end: () => batches.push('end') },
+    })
+    await expect(
+      intake.evaluate({ code: 'global.tempo(1)', documentDirectory: null, source: 'human' }),
+    ).resolves.toEqual({
+      ok: false,
+      diagnostics: [{ kind: 'runtime', message: 'engine exploded' }],
+      documentDirectory: null,
+    })
     expect(batches).toEqual(['begin', 'end'])
   })
 
   it('keeps the queue alive even if reporting the unexpected failure also throws', async () => {
     const intake = createEvaluationIntake({
-      execute: async () => {},
+      execute: async () => [],
       log: () => {
         throw new Error('log sink is down')
       },
@@ -197,7 +235,7 @@ describe('evaluation intake — the queue (#476 / #607)', () => {
     let calls = 0
     const logs: IntakeLogLine[] = []
     const intake = createEvaluationIntake({
-      execute: async () => {},
+      execute: async () => [],
       log: (line) => logs.push(line),
       batch: {
         begin: () => {
@@ -216,7 +254,7 @@ describe('evaluation intake — the queue (#476 / #607)', () => {
     expect(logs).toContainEqual({
       kind: 'session',
       level: 'error',
-      text: '[ERROR] unexpected REPL queue failure: batch exploded',
+      text: '[ERROR] unexpected evaluation queue failure: batch exploded',
     })
   })
 
@@ -245,9 +283,11 @@ describe('evaluation intake — the queue (#476 / #607)', () => {
     const stalls = logs.filter((line) => line.kind === 'stall')
     expect(stalls).toHaveLength(1)
     expect(stalls[0]!.level).toBe('error')
-    expect(stalls[0]!.text).toContain('REPL queue is still blocked after 60s by: global.start()')
-    // 待っているのは、同じ要求の残り 1 行 + その要求の最後の強制実行 + 後ろの要求の 1 行と強制実行
-    expect(stalls[0]!.text).toContain('— 4 line(s) are waiting behind it')
+    // 段階 2: 実行中の文を名指しする。待っているのは後ろの要求 1 つ（同じ要求の残りの文は数えない）
+    expect(stalls[0]!.text).toContain(
+      'evaluation queue is still blocked after 60s by: global.start()',
+    )
+    expect(stalls[0]!.text).toContain('— 1 request(s) are waiting behind it')
 
     await vi.advanceTimersByTimeAsync(QUEUE_STALL_REPORT_MS)
     expect(logs.filter((line) => line.kind === 'stall')).toHaveLength(2)
@@ -262,7 +302,7 @@ describe('evaluation intake — the queue (#476 / #607)', () => {
   })
 })
 
-describe('splitIntoReplLines — the frozen readline line rule', () => {
+describe('splitIntoReplLines — the LSP / readline line rule (range lines are counted this way)', () => {
   it.each([
     ['a', ['a']],
     ['a\n', ['a', '']],
