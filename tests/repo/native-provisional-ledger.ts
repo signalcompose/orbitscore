@@ -104,8 +104,8 @@ export const LEDGER: readonly LedgerEntry[] = [
       kind: 'none',
       reason: '第 1 リリースの後に外れる。切り替えは mcp-tools-v1.spec.ts が VERSION で自動で行う',
     },
-    state: 'planned',
-    enforcedBy: 'tests/protocol/mcp-tools-v1.spec.ts（S-mcp で新設・MCP_V1_GATE_UNTIL）',
+    state: 'open',
+    enforcedBy: 'tests/protocol/mcp-tools-v1.spec.ts（S-mcp の N1-b4 で新設・MCP_V1_GATE_UNTIL）',
     bundle: 'S-mcp',
   },
   {

@@ -44,7 +44,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterAll, beforeEach } from 'vitest'
 import { parse, stringify } from 'yaml'
 
 import {
@@ -107,6 +107,7 @@ import {
   userDataDirExceedsSocketLimit,
 } from './helpers/harness-processes'
 import { soloWindowLayer, WINDOW_LAYER_FLOATING, WINDOW_LAYER_NORMAL } from './helpers/window-layer'
+import { paritySkipReason } from './native-parity-ledger'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
@@ -141,6 +142,13 @@ const appAvailable =
     ? fs.existsSync(appPath)
     : // native は起動で理由つきで落とす（黙って skip しない）。headless は build 済みの層 2 が要る。
       gatedTarget === 'native' || fs.existsSync(SESSION_CLI_DIST)
+
+// 設計 848 §10.2: パリティ台帳の分類で、このターゲットに無い題名を理由つきで skip する
+// （headless の needs-editor など）。`vscode` では何も skip しない。
+beforeEach((context) => {
+  const reason = paritySkipReason(context.task.name, gatedTarget)
+  context.skip(reason !== null, reason ?? undefined)
+})
 
 /**
  * #611 E2E-4/E2E-5 (§8.3): the first output device that can carry >= 4 channels, or
