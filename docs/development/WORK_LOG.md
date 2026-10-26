@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): add the evaluation intake scaffold, its parity test and the provisional ledger (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1001-a0-eval-intake`（統合ブランチ `1001-session-rpc` 向けの小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-0 / C-1）
+
+OrbitStudio の層 2 `packages/session` を新設し、最初の小 PR（N1-a0）を入れた。クラウド（Linux）の作業で、音は出していない。
+
+- **評価の受付口の足場**（`packages/session/src/eval/evaluation-intake.ts`・台帳 P-01）: 凍結版 `createReplSession` の区切り方の写し。写す相手は MCP の経路（`writeCodeToEngine` の枠 + `//#evalMark`）。結果は構造化した値（`ok` / `diagnostics` / `documentDirectory`）で返し、stderr の行は `log`（`kind` = diagnostic / stall / session）へ。engine は `@orbitscore/engine/dist/<module>` で読み、テストでは vitest の alias で src に向ける（`npm test` は build より前に走る）
+- **差分テスト**（`tests/session/eval-intake-parity.spec.ts`・台帳 P-02）: 凍結版の側は拡張の本物の `writeCodeToEngine` が書いた行を流す。`execute()` の呼び出し・バッチの開閉・`[ERROR]` の行を起きた順に比べ、各評価の診断も比べる。コーパス 23 件（#607 / #612 / #614 / #476・#997 の検証ケース 8 件）。写しを 6 通りに壊すとそれぞれ該当ケースが red になることを確かめた
+- 計画 §2.1 と地図 §4.A に #1001 と統合ブランチ名を記録
+
+Part of #1001
+
+---
+
 ### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
