@@ -595,7 +595,7 @@ $ grep -rn "engineView\|EngineViewProvider" packages/vscode-extension/src/extens
 
 | 対象 | 改訂 | どの PR |
 |---|---|---|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1474-1477`（instrument slot pool の上限・「env を上げてエンジンを再起動する」） | #663 で**上限が消える**ので、「起動時に固定・env で拡張」から「実行中に伸びる・env は初期確保数」へ書き直す | PR-11 の**前** |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1480-1483`（instrument slot pool の上限・「env を上げてエンジンを再起動する」） | #663 で**上限が消える**ので、「起動時に固定・env で拡張」から「実行中に伸びる・env は初期確保数」へ書き直す | PR-11 の**前** |
 | 同 **新設「Engine Settings」節** | 32 変数の一覧と属性（§8）を core spec に置く。**UI と MCP と spec が同じ表を指す**（CLAUDE.md 運用規則 7） | PR-7 の**前** |
 | `docs/design/662-engine-visibility-and-limits.md` §6.1（live の見立て表） | 🟡 の行を**実測結果**に置き換える（正本 §6「未検証は未検証と書く」） | PR-11 / §17 (2) の後 |
 | `sites/user/getting-started/engine-settings.md`（日英） | #660 の指摘どおり「未実装」を実装に合わせる。**検証日の注記の扱いも直す**（古い注記が裏取りを止めた） | PR-6 |

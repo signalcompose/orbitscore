@@ -42,7 +42,7 @@
 | 能力抽象（state / param / preset / UI）とスレッド境界の契約は spec 済み | `PLUGIN_CAPABILITY_ABSTRACTION_v1.md` CAP.1 / CAP.5 |
 | ホストが使う規格拡張: CLAP `clap.render`（5 箇所）/ `CLAP_EXT_STATE`（4）/ VST3 `IAudioProcessor` `IHostApplication` `IComponentHandler` | grep（§13.3）|
 | child はすべて `std::hint::spin_loop()` で待つ（本番コード 6 箇所） | grep（§13.2）/ #667 |
-| 標準プラグインは同梱 CLAP・UI / state 無し・語彙として解決（SC.10.8 規範 (1)-(6)）。実例 `orbit-std-gain`・`ORBIT_STD_PLUGIN_DIR` | `SIGNAL_CHAIN_DSL_SPEC_v1.md:328-345` / `orbit-effect-rack-child/src/macos.rs:239` |
+| 標準プラグインは同梱 CLAP・UI / state 無し・語彙として解決（SC.10.8 規範 (1)-(6)）。実例 `orbit-std-gain`・`ORBIT_STD_PLUGIN_DIR` | `SIGNAL_CHAIN_DSL_SPEC_v1.md:334-351` / `orbit-effect-rack-child/src/macos.rs:239` |
 | LinkAudio は GPL 隔離 crate（workspace member にしない・feature `link-audio` default off）。Link テンポ FFI `orbit_link_set_tempo` / `orbit_link_session_tempo` は**ある** | `rust/Cargo.toml:26-34` / `orbit-link-audio/src/lib.rs:53-55` |
 | TS 側 `setLinkTempo` は feature 未ビルドなら warn + skip | `rust-engine-player.ts:927-935` / `global.ts:547-551` |
 | RT の「音を外へ流す」機構 = `PostMixSink` / `RingTapSink`（wait-free）+ `LinkChannelActivate`（reg-ring・readiness） | `link_audio_ring.rs:14-49` / `output.rs:547-565` |

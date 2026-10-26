@@ -286,14 +286,14 @@ export function pluginUiAddressFor(target: PluginUiCursorTarget):
 
 **`:428`「LLM は Cmd+Click できない」** → 「LLM は右クリックできない」に置換（意味は不変）。
 
-**`docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1452-1456`**（PH.2c）:
+**`docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1458-1462`**（PH.2c）:
 
 > - **主経路は右クリック**（SC.10.10 規範 2・#939）: 楽譜上のプラグイン名を右クリック → `OrbitScore: Open Plugin UI` で当該インスタンスの UI が開く。エディタがカーソル位置から receiver とチェーン内のパスを解決するので、**書き手が数えなくてよい**。**同名が複数あってもカーソルの 1 つだけ**を開く（`ui("名前")` は全部開く）。DSL の `ui()` を残すのは、**LLM が DSL 経路で駆動できる**ようにするため。
 >   - MCP からは `open_plugin_ui_at_cursor`（引数なし）が同じコマンドを起動する。
 
 「🔴 現在地（2026-08-28）: Cmd+Click は #633 で実装する」の 2 行は**削除**（#633 は実装せず、#939 が置き換えた）。
 
-**残存の列挙（D7 の対象）**: `SIGNAL_CHAIN_DSL_SPEC_v1.md:399, 403, 428` / `INSTRUCTION_ORBITSCORE_DSL.md:1452-1456`。`PLUGIN_UI_HOSTING_SPEC_v1.md:528, 553` は既に「右クリック」で無変更。`PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md` P5 は経緯文書なので本文は変えず、冒頭に「実装は `docs/design/939-plugin-ui-by-cursor-design.md`」の 1 行を足す。
+**残存の列挙（D7 の対象）**: `SIGNAL_CHAIN_DSL_SPEC_v1.md:405, 409, 434` / `INSTRUCTION_ORBITSCORE_DSL.md:1458-1462`。`PLUGIN_UI_HOSTING_SPEC_v1.md:528, 553` は既に「右クリック」で無変更。`PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md` P5 は経緯文書なので本文は変えず、冒頭に「実装は `docs/design/939-plugin-ui-by-cursor-design.md`」の 1 行を足す。
 
 ### 2.6 #474 の扱い
 

@@ -52,6 +52,7 @@ import {
   estimateFundamentalHz,
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
+import { isProcessRunning } from '../helpers/process-liveness'
 
 import { defaultOutputDeviceName, listOutputDevices } from './helpers/audio-devices'
 import {
@@ -6959,8 +6960,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // empty ledger either. Restarting into a fresh daemon/plugin process would be
   // silent regardless of whether the old process released its notes and is also
   // non-discriminating. T1 covers the observable engine-side release path; E2E-K3
-  // keeps the old daemon alive after engine SIGKILL and directly observes its
-  // disconnect fallback as a sounding-to-silent capture transition.
+  // verifies that #996 leaves no daemon behind after engine SIGKILL. protocol.rs covers
+  // the disconnect trigger through draining the daemon-side note ledger. Delivery of
+  // all-notes-off to a real child is covered by outproc_instrument_gated.rs's ignored
+  // outproc_instrument_all_notes_off_releases_live_note owner gate.
 
   const pluginNoteScore = (receiver: string, instrumentName: string, run: 'RUN' | 'LOOP') => [
     'var global = init GLOBAL',
@@ -7002,7 +7005,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#606 E2E-K3 releases notes when SIGKILL disconnects engine but daemon survives',
+    '#606 E2E-K3 the daemon exits by itself after engine SIGKILL (#996)',
     async () => {
       const session = requireOutputLineSession()
       const capturePath = session.captureWavPath('606-engine-sigkill-note-off')
@@ -7025,6 +7028,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         daemonPid = startedDaemonPids[0]
         const enginePid = parentPid(daemonPid!)
         expect(processCommand(enginePid)).toContain('cli-audio.js')
+        expect(isProcessRunning(daemonPid!)).toBe(true)
 
         // SAFETY: the PID delta excludes every daemon that existed before this test's
         // start. If a concurrent start makes the delta ambiguous, the length assertion
@@ -7032,25 +7036,18 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // OrbitScore cli-audio engine.
         process.kill(enginePid, 'SIGKILL')
         await waitForEngineState(session.client, false, 15_000, '#606 E2E-K3 engine SIGKILL')
-        await sleep(1000)
-        expect(processExists(daemonPid!), 'daemon must outlive its disconnected engine').toBe(true)
-
-        // Stop only the exact orphan daemon captured before SIGKILL so its WAV is finalized.
-        process.kill(daemonPid!, 'SIGTERM')
-        await waitUntil(() => Promise.resolve(!processExists(daemonPid!)), {
+        await waitUntil(() => !isProcessRunning(daemonPid!), {
           intervalMs: 100,
-          timeoutMs: 10_000,
-          label: '#606 E2E-K3 orphan daemon stopped',
+          timeoutMs: 5000,
+          label: '#606 E2E-K3 daemon exits after engine SIGKILL',
         })
         daemonPid = undefined
-        await sleep(500)
 
         const analysis = analyzeWavBuffer(fs.readFileSync(capturePath), { windowMs: 20 })
         expect(
           Math.max(...(analysis.windows ?? []).map((window) => window.rms)),
           'E2E-K3 must prove the LOOP instrument sounded before SIGKILL',
         ).toBeGreaterThan(0.01)
-        expect(analysisTailRms(analysis, 0.5)).toBeLessThan(0.01)
       } finally {
         if (daemonPid !== undefined && processExists(daemonPid)) {
           process.kill(daemonPid, 'SIGTERM')

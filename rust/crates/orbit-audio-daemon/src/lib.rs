@@ -74,6 +74,8 @@ pub(crate) mod outproc_respawn_guard;
 /// テストコードが固定秒数の `sleep` を直に spawn できると、fixture 側だけ直しても同じクラスが残る。
 #[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
 pub(crate) mod outproc_stub_child;
+/// 親（engine）の死を daemon 自身が知る機構（#996）。engine が引数で有効にした時だけ働く。
+pub mod parent_watch;
 pub mod protocol;
 pub mod server;
 pub mod session;

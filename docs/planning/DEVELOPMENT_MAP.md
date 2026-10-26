@@ -424,7 +424,7 @@ part 指定の DSL は #647（unit）と同じ語彙になるため **#647 と�
 | 問い | 答え | 根拠 |
 |---|---|---|
 | (1) #649 は master を「ライン」として扱っているか | **扱っている。** §2.3「バス / マスターも同じ記法（owner 確定: 案 A）」— `global.effect([...])` は seq と**同じ資格**。ただし master は同時に**合流点**でもあり、「全部が合流した後」という位置の意味は「**マスターという受け皿が持つ**」と書く。つまり master = **受け皿（合流点）+ その後ろのライン**。**ラインの終端が何を指すか（デバイス）は #649 に書かれていない** | `649-audio-line-design.md` §2.3 / §4「バス / マスターに gain が無い → チェーンに書ける」 |
-| (1') spec 側の先行決定 | **SC.2.1 は既に宛先を 1 つの軸に載せている**（2026-07-18 制定・当時未実装）: `var master = mix.output(1, 2)` = 「物理出力チャンネル対（出力エンドポイント）。複数宣言でマルチアウト」/ 決定 #78「**`master` は出力エンドポイント専用の予約名**」/ 規範 (4)「バス自身もレシーバ: プラグインチェーン・出力先指定を持てる」。**owner のスケッチは SC.2.1 の宣言モデルと同じ方向** | `SIGNAL_CHAIN_DSL_SPEC_v1.md:15, 57, 63, 67` |
+| (1') spec 側の先行決定 | **SC.2.1 は既に宛先を 1 つの軸に載せている**（2026-07-18 制定・当時未実装）: `var master = mix.output(1, 2)` = 「物理出力チャンネル対（出力エンドポイント）。複数宣言でマルチアウト」/ 決定 #78「**`master` は出力エンドポイント専用の予約名**」/ 規範 (4)「バス自身もレシーバ: プラグインチェーン・出力先指定を持てる」。**owner のスケッチは SC.2.1 の宣言モデルと同じ方向** | `SIGNAL_CHAIN_DSL_SPEC_v1.md:21, 63, 69, 73` |
 | (2) `global.gain()` は専用の「マスターフェーダー」概念か | **違う。** §2.4「`seq.gain()` / `global.gain()` は**チェーン末尾の `Gain` の糖衣**」。要素の 1 つ。専用概念は #649 の時点で既に無い | §2.4 / §4 |
 | (3) DSL で `output("master")` と書けるか | **文字列形では書けない（今日）。** `seq.output("master")` は `resolveSumBus` に一致せず（`mixer-manager.ts:263` が sum/aux 名 `master` を拒否）、**LinkAudio チャンネル名として記録される**（`sequence.ts:376-412` の文字列分岐）。**wire には予約語がある**（MX.2「`SetBusRouting` の `output` に `"master"` → sum への出力先指定を解除して master へ戻す」）。**SC.4 のチェーン形 `.master`** は `runtime.ts:285-291` が暗黙 output ノード `[1,2]` に解決するが、output エンドポイントは「receiver surface を持たない（#484 D4 が足す）」とコメントされており、**ルーティングまで通るかは未確認** ❓ | `sequence.ts:350-412` / `mixer-manager.ts:263-265` / MX.2 / `runtime.ts:285-300` |
 | (4) `output` を書かない時の既定 | **master。** `_sumOutputBus` が未設定なら `setBusRouting(bus, undefined, sends)`（`sequence.ts:527-529`）= MX.2「省略は既存の出力先を保持」で native の既定 `BusTarget::Master`（範囲外整数 → Master・#643 §5.4）。#649 §10.4 も既定ストリップ `[ラック → gain → pan → sends → output]` を「今日の挙動」として置く。**`output` が明示要素になっても、書かない時は暗黙の `output("master", through: false, db: 0)` とすれば互換は保てる**（案） | `sequence.ts:527-529, 546` / MX.2 / #643 §5.4 / #649 §10.4 |
@@ -498,7 +498,7 @@ part 指定の DSL は #647（unit）と同じ語彙になるため **#647 と�
 | 問い | 答え | 根拠 |
 |---|---|---|
 | (1) MX.2.1 の数値 render bus は何をするか | **記録するだけ（今日）。** `output(n)` は `_renderBus` に `"1"`〜`"16"` を記録し、`RenderScore` manifest（`sample_rate / duration_sec / block_frames / samples / buses / master / events / out_dir`）を daemon が**受理・検証**する。**WAV 書き出しは無い** — spec 自身が「P1 では記録のみ・WAV 書き出しは #598 P2」と書く。#598 の対応: **P1 = ✅ PR #612**（DSL/wire/manifest・VST3 offline process mode）/ **P2（`render_block` 再利用の OfflineRenderSession・per-bus WAV + master）= ○** / **P3（プラグインチェーン・instrument child の offline 駆動）= ○**（`git log` に P2/P3 の commit 無し） | MX.2.1 / `session.rs:555-562` / `MULTICHANNEL_RENDERING_DESIGN_598.md` §5 / merge `10f3594c` |
-| (2) instrument が render bus へ出せない理由 | **出口の問題ではなく、オフライン駆動の問題。** spec:1225「拒否（録音経路が未設計）」・`sequence.ts:378-384`「オフラインレンダ先は未設計（録音経路が別）」。#598 設計では、オフラインは TS の **score-mode ドライバ**が `[0, T]` のイベント列を作り（P2）、**instrument child は「イベント転記を本番 backing ring 経路に揃える」P3** で駆動する。つまり **instrument の音をオフラインで作る経路が P3 まで無い**から拒否している。**出口を一般化しても消えない**（DSL 表面は一様になるが、P3 が入るまで instrument の `output(n)` は「受理して無音」になる）。#598 P3 の仕事 | spec:1225 / `sequence.ts:376-384` / #598 設計 §5 P0-3・P3 |
+| (2) instrument が render bus へ出せない理由 | **出口の問題ではなく、オフライン駆動の問題。** spec:1340「拒否（録音経路が未設計）」・`sequence.ts:378-384`「オフラインレンダ先は未設計（録音経路が別）」。#598 設計では、オフラインは TS の **score-mode ドライバ**が `[0, T]` のイベント列を作り（P2）、**instrument child は「イベント転記を本番 backing ring 経路に揃える」P3** で駆動する。つまり **instrument の音をオフラインで作る経路が P3 まで無い**から拒否している。**出口を一般化しても消えない**（DSL 表面は一様になるが、P3 が入るまで instrument の `output(n)` は「受理して無音」になる）。#598 P3 の仕事 | spec:1225 / `sequence.ts:376-384` / #598 設計 §5 P0-3・P3 |
 | (3) オフライン（render）とリアルタイム（capture）の関係 | **別機構で、役割も別（今日）。** capture = `ORBIT_CAPTURE_WAV` で **master の post-mix を 1 本**の WAV へ off-thread で書く（`capture.rs` 冒頭「master 出力を WAV へ録る」・producer は `RingTapSink`）。render = `render_block` を実時間より速く block ループで回し、**各 bus buffer をそのまま stem** として書く（#598 設計 §4.2「stem の取り出しにエンジン変更は不要」）。**違いは「時計」（実時間 / 高速）であって「宛先」ではない。** owner の「各トラックパラ」は #598 P2 の per-bus stem そのもの。**「演奏しながら stem を書く」（`thru` の文脈）は今日どちらにも無い** — capture は master 1 本、render はオフライン | `capture.rs:1-9` / `output.rs:227-246` / #598 設計 §1・§4.2 |
 | (4) 宛先の書き方 | **数値のみ**（`output(1..16)`）。ファイル名は DSL に無く、manifest の `out_dir` + バス名で決まる。SC.2.1 との整合: 数値 render bus は**宣言されないノード**（MX.2.1「別の render bus 宣言は不要」）で、SC.2.1 (6) の**暗黙 master と同じ扱い**。`global.render(...)` のような宣言は**存在しない**（grep）。→ 🔴 **裁定済み（下の 4.A.3.1）** | MX.2.1 / `session.rs:562` `out_dir` / SC.2.1 (6) |
 
@@ -549,7 +549,7 @@ kick.effect(comp).output(stems, thru: true).output(master, db: -6)   // comp 後
 var kit = instrument("Battery", outs: { "kick": bd, "snare": sd, "oh": cue })
 ```
 
-`outs:` は spec に既にある（`SIGNAL_CHAIN_DSL_SPEC_v1.md:122`「ポート→バス割り当て」）。**値の型を増やさずに**バス・物理アウト・render を一様に指せる。
+`outs:` は spec に既にある（`SIGNAL_CHAIN_DSL_SPEC_v1.md:145`「ポート→バス割り当て」）。**値の型を増やさずに**バス・物理アウト・render を一様に指せる。
 
 **残る未決（owner・§9）**: プレースホルダの語彙（`%v` / `%d` / `%n`）/ 3ch 以上を 1 ファイルに書く形（main は**作らない**を推す）。
 
@@ -623,7 +623,7 @@ orbitscore replay <log> --render out.wav   # オフラインレンダー（faste
 
 | 事実 | 根拠 |
 |---|---|
-| gate は `ORBITSCORE_SESSION_LOG === '1'` のときだけ有効。**既定は dormant**（2.0.0 の意図的な段階 — core spec:63「dormant by default. Opt in with `ORBITSCORE_SESSION_LOG=1`」） | `cli/session-log-gate.ts:12-13` / core spec:63-64 |
+| gate は `ORBITSCORE_SESSION_LOG === '1'` のときだけ有効。**既定は dormant**（2.0.0 の意図的な段階 — core spec:69-70「dormant by default. Opt in with `ORBITSCORE_SESSION_LOG=1`」） | `cli/session-log-gate.ts:12-13` / core spec:69-70 |
 | gate を呼ぶのは **CLI の 2 箇所だけ**（`play-mode.ts:64` / `repl-mode.ts:44`） | grep |
 | **拡張は env を渡していない**（拡張が渡す env は `ORBITSCORE_ENGINE` / `MCP_PORT` / `DEBUG` / `DSL` の 4 種。`SESSION_LOG` は 0 件）。**OrbitScore から opt-in する手段が無い** | `packages/vscode-extension/src/extension.ts` の grep |
 | したがって **OrbitScore で書いている限り `.orbslog` は 1 本も生成されない**。spec §3.1「editor 経路は `untitled.<timestamp>.orbslog` フォールバック」は**その手前で成立していない**。`~/Src/proj_orbitscore` 配下に `.orbslog` は 0 件（`find`・深さ 4） | — |

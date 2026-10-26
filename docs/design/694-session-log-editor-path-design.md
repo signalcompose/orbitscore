@@ -493,7 +493,7 @@ owner:「後回しにすると負債が増える。きちんと比較ができ�
 
 | PR | 内容 | 依存 | 一方通行 |
 |---|---|---|---|
-| PR-L0 `docs(spec): session log v2 — dir, frame, purity, replay` | spec §2/§3/§3.1/§4 改訂（§11）+ core spec `:63` | — | — |
+| PR-L0 `docs(spec): session log v2 — dir, frame, purity, replay` | spec §2/§3/§3.1/§4 改訂（§11）+ core spec `:69-70` | — | — |
 | PR-L1 `feat(session-log): editor path enables logging, writes under <DIR>/` | 設定 + env（§3.1）/ `//#sourceFile`（§3.2）/ 純度 + 注入廃止（§3.3）/ `<DIR>/`（§3.4）/ stdout 通知（§3.5）/ `logVersion: 2` + 相対 `sourceFile`（§6）/ E2E-S1・S2・S4・S5・S6 | PR-L0 | **ディレクトリ名・形式 v2** |
 | PR-L2 `feat(repl): //#evalBegin/End frame — one selection, one execute` | §4 + E2E-S3。**doc 1 PR-O4 の前提** | PR-L1 | 意味論（§4.2） |
 | PR-L3 `feat(session-log): hook every GLOBAL; transport.global` | §5 + integration test | PR-L1 | 形式（加算のみ）|
@@ -519,7 +519,7 @@ PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integrat
 | 同 | §3.1 | 「`code` 粒度 = `execute()` 単位」→「**editor 経路はフレーム単位（1 選択 = 1 レコード）**・生 stdin は行単位・CLI play はファイル」。「editor は untitled フォールバック」→「`//#sourceFile` で伝達」。「単一 GLOBAL 前提」→ 削除（§5）|
 | 同 | §4 | `--score-dir` / `--until` v1 の意味（REPL 引き継ぎ）/ `--verify` v1 = capture 比較・イベント列比較は未実装 / `logVersion` 拒否 |
 | 同 | §8 | (3) は未決のまま。(2) プリアンブル保持期間は「直前の stop 以降」を実装が採っている（`:118-121` `preamble` は stop で消えないが start で drain）と明記 |
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:62-64` | session log 節 | 「dormant by default」→ 「**OrbitScore では既定 on（設定 `orbitscore.sessionLog`）・CLI は `ORBITSCORE_SESSION_LOG=1`**」（§13 (2) の裁定後に CLI 側を更新）|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:68-70` | session log 節 | 「dormant by default」→ 「**OrbitScore では既定 on（設定 `orbitscore.sessionLog`）・CLI は `ORBITSCORE_SESSION_LOG=1`**」（§13 (2) の裁定後に CLI 側を更新）|
 | `docs/design/611-output-line-design.md` §3.9 | フレーム | 「REPL メタ行群に追加」→「**PR-L2 で入る同じフレームを使う**」に差し替え |
 
 ---
@@ -540,7 +540,7 @@ PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integrat
 | # | 問い | 選択肢 | 推奨 | 影響範囲 |
 |---|---|---|---|---|
 | (1) ✅ **A `orbslog/`（owner 2026-09-03）** | `<DIR>/` の名前 | A `orbslog/`（拡張子と同じ語・見える）/ B `.orbslog/`（隠す）/ C `sessions/` | **A**。spec §1「命名・選別は事後の操作」= ユーザーが Finder で見つける前提なので隠さない。`.orbslog` 拡張子と同じ語で検索性が高い | 定数 `SESSION_LOG_DIRNAME` 1 箇所（§3.4）|
-| (2) ✅ **B opt-in のまま（owner 2026-09-03）** | CLI（`play` / `repl`）も既定 on にするか | A on（gate を `!== '0'` に）/ B opt-in のまま | **B（現状維持）**。拡張は値を明示するので editor 側は独立（§3.1）。CLI は開発・テストで多用され、譜面の隣にログが増えるのを望まない場面がある | `session-log-gate.ts:13` の 1 行 + core spec `:63` |
+| (2) ✅ **B opt-in のまま（owner 2026-09-03）** | CLI（`play` / `repl`）も既定 on にするか | A on（gate を `!== '0'` に）/ B opt-in のまま | **B（現状維持）**。拡張は値を明示するので editor 側は独立（§3.1）。CLI は開発・テストで多用され、譜面の隣にログが増えるのを望まない場面がある | `session-log-gate.ts:13` の 1 行 + core spec `:69-70` |
 | (3) ✅ **A 適用済み（owner 2026-09-03 夕 Q-694-3）** | `--until` が境界ちょうどの時、待機中の quantize 差し替えを適用してから引き継ぐか | A 適用済み / B 未適用 | **A**（§7.4 の具体例）| PR-L5（Phase A の仮想クロックを until まで**含めて**進める）|
 | (4) ✅ **B + C（owner 2026-09-03: 比較の仕組みを最初から）** → §7.5 に反映・PR-L6 | `--verify` の実体 | A capture 比較のみ（v1）/ B ライブ側にイベント列 sidecar（`type:'event'` を**別ファイル**に）を足して構造比較 / C `meta.assets` の sha256（start 時に非同期で） | **A を v1**。B/C は「原因のみ記録」（原則 1）との整合を owner が判断 | PR-L4 の範囲 |
 | (5) ✅ **A 露出する（owner 2026-09-03）** | replay を MCP tool（`replay_session_log`）として露出するか | A 露出（LLM 第一級）/ B CLI のみ | **A を後続**（#241 チェックリストに無い。E2E-R1 は CLI 動線で成立） | 新規 PR |

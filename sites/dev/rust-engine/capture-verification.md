@@ -198,7 +198,7 @@ const HEADER_SYNC_INTERVAL_SAMPLES: u64 = 48_000 * 2;
 通常停止もその SIGTERM なので、`CaptureWriter::Drop` → `finalize` は**通常の経路でも走りません**。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:21-25
+// rust/crates/orbit-audio-daemon/src/main.rs:22-26
 // 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
 // の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
 // まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts
@@ -443,7 +443,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:222-236
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:223-237
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -489,7 +489,7 @@ mtime 比較は「rebuild が no-op か」より弱い判定ですが、テス�
 そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:217-221
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:218-222
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
