@@ -374,7 +374,7 @@ gated E2E の側に、正反対の実測が記録されています。
 `server::serve` は accept loop で、接続ごとに独立タスクを spawn し `session::run` に処理を渡します。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/server.rs:26-72
+// rust/crates/orbit-audio-daemon/src/server.rs:27-73
 /// accept loop。各接続ごとに新タスクを spawn し、[`session::run`] で処理する。
 ///
 /// accept エラーはすべて永続化し得るため、短い backoff を挟んで tight spin を防ぐ。

@@ -725,9 +725,17 @@ cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib -- -
 # ので `--ignored` 付きだと `0 passed; 19 filtered out` で**実行されずに緑を装う**
 # （main が実測済み・2026-09-07）。`--ignored` を外した通常実行で拾う。
 cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib
+
+# 🔴 out-of-process の楽器 child へ全ノート停止が実際に届くこと（#606）。#996 で gated の
+# E2E-K3 が「daemon が自分で終わる」を見る形に変わり、実 child への配送を日常的に確かめる
+# テストがこれだけになった（main が 2026-10-26 に追加・実測 12 秒）。#[ignore] なので
+# ゲートに入れないと誰も回さない（memory `a-test-that-exists-may-never-run`）。
+cargo build --manifest-path rust/Cargo.toml -p orbit-clap-instrument-child
+cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml
+cargo test --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-instrument --test outproc_instrument_gated -- --ignored
 ```
 
-**この 3 行は無条件で回す。**「rust を触った PR のみ」のような**条件分岐を付けない** —
+**この 3 行は無条件で回す。**（2026-10-26 改訂: 上の out-of-process の楽器の 3 行も同じく無条件）「rust を触った PR のみ」のような**条件分岐を付けない** —
 条件付きの手動手順は飛ばされるのがこの repo の実測クラス（列挙が一段手前で止まる型）で、
 無条件 19〜67 秒の方が条件判定の認知コストより安い。
 

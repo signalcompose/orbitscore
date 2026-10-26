@@ -32,6 +32,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - その後の macOS 実機 gated で、`#606 E2E-K3` が「SIGKILL 後も daemon が生存する」という旧契約のため失敗。#996 の新契約に合わせ、kill 前の発音と 5 秒以内の daemon 自己終了を検証し、`_exit` で途中までになる WAV の末尾無音判定は外した
 - `/simplify`（4 観点）の整理: ゾンビを除く生存判定を `tests/helpers/process-liveness.ts` に 1 本化（gated と実 daemon のテストから使う）/ `check_parent` の非 direct 分岐を既存の `probe_pid_liveness` に置き換え（ESRCH だけを消失とみなす意味は同じ）/ Rust の結合テストの待ちループを `gated_common::wait_until` に・stdin の enum を `Stdio` に・後始末を `Drop` のガードに。見送り: 起動引数の 1 回の解析・終了経路の集約・起動ハーネスの共通化（差分の範囲外）
 - main が macOS で確認: daemon の lib 65・Origin 2・親の死 5（skip 0）/ 実 CoreAudio の parent-death 1 / `npm test` 2734 passed・87 skipped。dev サイトの引用 44 件は行ずれ（+1 / −10 / −12）だけを確認して `--fix`
+- PR #1007 ラウンド 1: `ps` の exit 1 + 空出力だけを消失とし、その他の検査失敗を消失として隠さないよう TS / Rust の生存判定を統一した。
+- 親 PID の境界ケースと socketpair EOF の結合テストを追加し、CI で実 daemon を必須化。child の stdin 継承と、意図した Origin 403 の二重 WARN も防いだ。
+- E2E-K3 の題名を確かめていること（daemon が自分で終わる）に合わせ、守り手の範囲をコメントで正確にした（切断が引き金になることは `protocol.rs`・実 child への配送は `outproc_instrument_gated.rs`）。その gated テスト（`#[ignore]`・実測 12 秒）を **CLAUDE.md のマージ前ゲートに無条件で追加**した（レビューで「守り手が手動テストにしか無い」と分かったため）。`outproc_instrument.rs` が file-size ラチェット（705）を 1 行超えたので、stdio の設定を 1 文にまとめて戻した
+- 見送り: 実プラグインで WebSocket だけを切る新しい gated テスト（設計の判断を含むので owner が決める）・`PARENT_PID_POLL_INTERVAL` への `PROVISIONAL(P-08)`（台帳は `rust/` を走査しない）・起動引数の 1 回の解析・終了経路の集約
 
 Closes #996
 

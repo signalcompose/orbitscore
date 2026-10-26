@@ -11,6 +11,8 @@
 mod gated_common;
 
 use std::io::{BufRead, BufReader, Read};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -24,6 +26,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// 「終わらない」ことを確かめる観察時間。PID の監視周期の数倍。
 const STAYS_ALIVE_FOR: Duration = Duration::from_millis(1500);
+/// 非親 PID が起動前から消えている場合は、250ms poll の数周期以内に終わる。
+const MISSING_NON_PARENT_EXIT_TIMEOUT: Duration = Duration::from_millis(750);
 
 struct Daemon {
     child: Child,
@@ -35,6 +39,15 @@ struct ParentAndDaemon {
     parent: Child,
     parent_reaped: bool,
     daemon_pid: Option<u32>,
+}
+
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 impl ParentAndDaemon {
@@ -139,6 +152,12 @@ fn skip_only_on_startup_error(stderr: &str, stdout_line: Option<String>) {
         stderr.contains(r#""ready":false"#),
         "daemon ended before ready without a startup error (stdout {stdout_line:?}): {stderr}"
     );
+    if std::env::var("ORBIT_REQUIRE_REAL_DAEMON").as_deref() == Ok("1") {
+        panic!(
+            "ORBIT_REQUIRE_REAL_DAEMON=1 but the daemon could not start \
+             (stdout {stdout_line:?}): {stderr}"
+        );
+    }
     eprintln!("skipping: the daemon cannot start here: {stderr}");
 }
 
@@ -168,7 +187,22 @@ fn is_running(pid: u32) -> bool {
         .expect("ps");
     let stat = String::from_utf8_lossy(&output.stdout);
     let stat = stat.trim();
-    !stat.is_empty() && !stat.starts_with('Z')
+    if output.status.success() {
+        assert!(
+            !stat.is_empty(),
+            "ps succeeded without reporting state for pid {pid}"
+        );
+        return !stat.starts_with('Z');
+    }
+    if output.status.code() == Some(1) && stat.is_empty() {
+        return false;
+    }
+    panic!(
+        "ps failed while checking pid {pid} (status {}, stdout {:?}, stderr {:?})",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn own_pid() -> String {
@@ -257,6 +291,105 @@ fn flag_with_dev_null_stdin_keeps_running() {
     );
 }
 
+/// 起動時から親ではなく、すでに消えている PID は最初の poll で拾う。
+#[test]
+fn exits_quickly_when_non_parent_pid_is_already_gone() {
+    let mut exited = Command::new("sh")
+        .arg("-c")
+        .arg("exit 0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn short-lived non-parent");
+    let exited_pid = exited.id();
+    exited.wait().expect("reap short-lived non-parent");
+
+    let mut command = Command::new(DAEMON);
+    command
+        .args(["--parent-pid", &exited_pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    with_null_audio_on_linux(&mut command);
+    let mut daemon = command.spawn().expect("spawn daemon");
+    let gone = wait_until(MISSING_NON_PARENT_EXIT_TIMEOUT, || {
+        daemon.try_wait().expect("try_wait").is_some()
+    });
+    if !gone {
+        let _ = daemon.kill();
+    }
+    let output = daemon.wait_with_output().expect("collect daemon output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains(r#""ready":false"#) {
+        skip_only_on_startup_error(&stderr, None);
+        return;
+    }
+    assert!(
+        gone,
+        "daemon did not exit within {MISSING_NON_PARENT_EXIT_TIMEOUT:?} for an already-gone \
+         non-parent pid {exited_pid} (stdout {stdout:?}, stderr {stderr:?})"
+    );
+    assert!(
+        stderr.contains(&format!("pid {exited_pid} no longer exists")),
+        "stderr: {stderr}"
+    );
+}
+
+/// 起動時から親でない PID でも、そのプロセスが生きている間は終了しない。
+#[test]
+fn keeps_running_while_non_parent_pid_is_alive() {
+    let watched = KillOnDrop(
+        Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn live non-parent"),
+    );
+    let watched_pid = watched.0.id();
+    let pid = watched_pid.to_string();
+    let Some(mut daemon) = Daemon::spawn(Stdio::null(), &["--parent-pid", &pid]) else {
+        return;
+    };
+    assert!(is_running(watched_pid), "watched non-parent must be alive");
+    assert!(
+        !wait_until(STAYS_ALIVE_FOR, || daemon
+            .child
+            .try_wait()
+            .expect("try_wait")
+            .is_some()),
+        "a live non-parent pid must keep the daemon running: {}",
+        daemon.stderr_text()
+    );
+}
+
+/// Node の `stdio: 'pipe'` と同じ socketpair でも、書き手の close を EOF として拾う。
+#[test]
+fn exits_when_socketpair_stdin_reaches_eof_with_the_flag() {
+    let (daemon_stdin, engine_stdin) = UnixStream::pair().expect("socketpair");
+    let daemon_stdin = Stdio::from(OwnedFd::from(daemon_stdin));
+    let Some(mut daemon) = Daemon::spawn(daemon_stdin, &["--exit-on-stdin-eof"]) else {
+        return;
+    };
+    drop(engine_stdin);
+    assert!(
+        wait_until(EXIT_TIMEOUT, || daemon
+            .child
+            .try_wait()
+            .expect("try_wait")
+            .is_some()),
+        "daemon must exit after the socketpair writer closes"
+    );
+    let stderr = daemon.stderr_text();
+    assert!(
+        stderr.contains("parent process is gone (stdin reached EOF)"),
+        "stderr: {stderr}"
+    );
+}
+
 /// 補助の機構: stdin の書き端を別のプロセス（ここではテスト）が握ったまま親だけが SIGKILL で
 /// 死んでも、`--parent-pid` で daemon は自分で終わる。
 #[test]
@@ -308,6 +441,10 @@ fn exits_when_the_parent_is_killed_even_if_stdin_stays_open() {
         return;
     }
 
+    assert!(
+        is_running(daemon_pid),
+        "daemon {daemon_pid} must be running before its parent is SIGKILLed"
+    );
     processes.kill_parent().expect("SIGKILL and reap sh");
     let gone = wait_until(EXIT_TIMEOUT, || !is_running(daemon_pid));
     if gone {

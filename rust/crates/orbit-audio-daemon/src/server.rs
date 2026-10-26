@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::{header::ORIGIN, StatusCode};
+use tokio_tungstenite::tungstenite::Error as WebSocketError;
 use tracing::{info, warn};
 
 use crate::engine_wrap::EngineWrap;
@@ -75,7 +76,15 @@ async fn handle_connection(
     stream: TcpStream,
     engine: Arc<EngineWrap>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws = tokio_tungstenite::accept_hdr_async(stream, reject_browser_origin).await?;
+    let ws = match tokio_tungstenite::accept_hdr_async(stream, reject_browser_origin).await {
+        Ok(ws) => ws,
+        // reject_browser_origin がすでに理由を WARN で残している。意図した 403 を
+        // 汎用の connection error として二重に報告しない。
+        Err(WebSocketError::Http(response)) if response.status() == StatusCode::FORBIDDEN => {
+            return Ok(())
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
     session::run(ws, engine).await?;
     Ok(())
 }

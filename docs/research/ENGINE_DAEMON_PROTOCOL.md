@@ -64,7 +64,7 @@ EOF を親の死とみなすと daemon が起動直後に終わる）。
 | 引数 | 意味 |
 |---|---|
 | `--exit-on-stdin-eof` | stdin の EOF を親の死とみなす。**stdin がパイプ（FIFO / socket）の時だけ**有効で、`/dev/null` や端末なら無視する |
-| `--parent-pid <pid>` | `getppid()` がこの値から変わったら（init / subreaper に付け替えられたら）親の死とみなす。250ms 周期。値が 1 以下・数でない時は無視する |
+| `--parent-pid <pid>` | 起動時にその PID が親なら、`getppid()` がその値から変わった時（init / subreaper に付け替えられた時）に親の死とみなす。起動時から親でなければ、`kill(pid, 0)` が `ESRCH` になった時に終了する（ゾンビは生存扱い）。250ms 周期。値が 1 以下・数でない時は無視する |
 
 - client は stdin を**パイプで渡し、生きている間は閉じない**（何も書かない）。engine は
   `stdio: ['pipe', 'pipe', 'pipe']` + 上の 2 つの引数で起動する（`daemon-spawn.ts`）

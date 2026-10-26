@@ -122,14 +122,13 @@ where
         match is_pipe_or_socket(io::stdin().as_fd()) {
             Ok(true) => {
                 let report = report.clone();
-                spawn_watcher("orbit-parent-stdin", move || {
+                armed.stdin_eof = spawn_watcher("orbit-parent-stdin", move || {
                     match read_until_eof(io::stdin().lock()) {
                         Ok(()) => report(ParentGone::StdinEof),
                         // 読めない stdin の終わりは親の死と区別できない。止めずに監視だけやめる。
                         Err(e) => warn!("stdin read failed ({e}); stdin EOF watch stopped"),
                     }
                 });
-                armed.stdin_eof = true;
             }
             Ok(false) => warn!(
                 "{EXIT_ON_STDIN_EOF_ARG}: stdin is not a pipe; its EOF is not treated as the parent's death"
@@ -148,25 +147,28 @@ where
             );
         }
         let report = report.clone();
-        spawn_watcher("orbit-parent-pid", move || loop {
+        armed.parent_pid = spawn_watcher("orbit-parent-pid", move || loop {
             if let Some(reason) = check_parent(expected, direct) {
                 report(reason);
                 return;
             }
             std::thread::sleep(PARENT_PID_POLL_INTERVAL);
         });
-        armed.parent_pid = true;
     }
 
     armed
 }
 
-fn spawn_watcher(name: &str, body: impl FnOnce() + Send + 'static) {
-    if let Err(e) = std::thread::Builder::new()
+fn spawn_watcher(name: &str, body: impl FnOnce() + Send + 'static) -> bool {
+    match std::thread::Builder::new()
         .name(name.to_string())
         .spawn(body)
     {
-        warn!("cannot spawn {name} thread ({e}); that parent watch is disabled");
+        Ok(_) => true,
+        Err(e) => {
+            warn!("cannot spawn {name} thread ({e}); that parent watch is disabled");
+            false
+        }
     }
 }
 

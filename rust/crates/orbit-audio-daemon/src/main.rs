@@ -205,7 +205,8 @@ fn start_engine_with_device_switch(
         .expect("audio owner thread exited before reporting readiness")
 }
 
-/// 親の死を検知したら、その理由を stderr に残して即座に終わる（#996）。
+/// 親の死を検知したら、読み手がまだ存在する場合の診断用に理由を stderr へ試み、
+/// 即座に終わる（#996）。engine が先に消えていれば stderr の読み手もいない。
 ///
 /// 終わり方は engine の通常の止め方（SIGTERM・この daemon はハンドラを持たないので既定の動作 =
 /// 即終了）と揃えて `_exit` にする。`process::exit` は atexit と static destructor を、音声

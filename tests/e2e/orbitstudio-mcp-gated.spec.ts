@@ -6960,8 +6960,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // empty ledger either. Restarting into a fresh daemon/plugin process would be
   // silent regardless of whether the old process released its notes and is also
   // non-discriminating. T1 covers the observable engine-side release path; E2E-K3
-  // verifies that #996 leaves no daemon behind after engine SIGKILL. A surviving
-  // daemon's WebSocket-disconnect fallback remains covered in protocol.rs.
+  // verifies that #996 leaves no daemon behind after engine SIGKILL. protocol.rs covers
+  // the disconnect trigger through draining the daemon-side note ledger. Delivery of
+  // all-notes-off to a real child is covered by outproc_instrument_gated.rs's ignored
+  // outproc_instrument_all_notes_off_releases_live_note owner gate.
 
   const pluginNoteScore = (receiver: string, instrumentName: string, run: 'RUN' | 'LOOP') => [
     'var global = init GLOBAL',
@@ -7003,7 +7005,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#606 E2E-K3 stops sound after engine SIGKILL because the daemon exits by itself (#996)',
+    '#606 E2E-K3 the daemon exits by itself after engine SIGKILL (#996)',
     async () => {
       const session = requireOutputLineSession()
       const capturePath = session.captureWavPath('606-engine-sigkill-note-off')
@@ -7026,6 +7028,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         daemonPid = startedDaemonPids[0]
         const enginePid = parentPid(daemonPid!)
         expect(processCommand(enginePid)).toContain('cli-audio.js')
+        expect(isProcessRunning(daemonPid!)).toBe(true)
 
         // SAFETY: the PID delta excludes every daemon that existed before this test's
         // start. If a concurrent start makes the delta ambiguous, the length assertion
