@@ -155,7 +155,7 @@ Set を使ったルックアップは `O(1)` なので、キーワードの数�
 この `KEYWORDS` は元々 private static でしたが、#668 PR-E4 で `ReadonlySet<string>` の public static になり、モジュール末尾に照合用の view が export されました。
 
 ```typescript
-// packages/engine/src/parser/tokenizer.ts:288-289
+// packages/engine/src/parser/tokenizer.ts:295-296
 /** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
 export const KEYWORDS = AudioTokenizer.KEYWORDS
 ```
@@ -325,7 +325,7 @@ export type Statement =
 では、`StatementParser.parseStatement()` の中を見てみましょう。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:54-81
+// packages/engine/src/parser/parse-statement.ts:54-78
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
@@ -349,19 +349,16 @@ export type Statement =
       return this.parseMethodCall()
     }
 
-    // Skip unknown tokens
-    const advanceResult = ParserUtils.advance(this.tokens, this.pos)
-    this.pos = advanceResult.newPos
-    return { statement: null, newPos: this.pos }
+    throw ParserUtils.unreadableStatement(token) // E-7・#965（以前はトークンを捨てて黙って進んだ）
   }
 ```
 
-先頭トークンの種類によってディスパッチしています。`VAR` なら変数宣言、`IMPORT` なら import 文 (`import chords` / `import { ... } from "..."` / `import * from "..."`)、`RUN`/`LOOP`/`MUTE` ならトランスポートコマンド、`IDENTIFIER` ならメソッド呼び出し (テンポ設定や再生命令) です。
+先頭トークンの種類によってディスパッチしています。`VAR` なら変数宣言、`IMPORT` なら import 文 (`import chords` / `import { ... } from "..."` / `import * from "..."`)、`RUN`/`LOOP`/`MUTE` ならトランスポートコマンド、`IDENTIFIER` ならメソッド呼び出し (テンポ設定や再生命令) です。どれでもなければ位置つきの構文エラーになります（spec「評価の単位」E-7・#965。以前はトークンを 1 つ捨てて黙って次へ進み、評価は成功と返っていました）。
 
 `VAR` の先、`parseVarDeclaration()` は右辺の先頭トークンを見て宣言の種類を決めます。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:97-100
+// packages/engine/src/parser/parse-statement.ts:94-97
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
     //   `init ...` → global / sequence initializer (below).
@@ -375,7 +372,7 @@ export type Statement =
 面白いのは、`<識別子>.メソッド(引数)` という形の文を解析したとき、**パーサーは常に `type: 'sequence'` を返す** という設計です。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:612-620
+// packages/engine/src/parser/parse-statement.ts:608-616
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.

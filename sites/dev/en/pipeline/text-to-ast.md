@@ -155,7 +155,7 @@ Set lookups are `O(1)`, so the speed does not change as the number of keywords g
 `KEYWORDS` was originally a private static. In #668 PR-E4 it became a public static typed `ReadonlySet<string>`, with a view exported at the end of the module for cross-checking.
 
 ```typescript
-// packages/engine/src/parser/tokenizer.ts:288-289
+// packages/engine/src/parser/tokenizer.ts:295-296
 /** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
 export const KEYWORDS = AudioTokenizer.KEYWORDS
 ```
@@ -325,7 +325,7 @@ The processing of `parse()` is to read the token sequence from the start, repeat
 Now let's look inside `StatementParser.parseStatement()`.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:54-81
+// packages/engine/src/parser/parse-statement.ts:54-78
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
@@ -349,19 +349,16 @@ Now let's look inside `StatementParser.parseStatement()`.
       return this.parseMethodCall()
     }
 
-    // Skip unknown tokens
-    const advanceResult = ParserUtils.advance(this.tokens, this.pos)
-    this.pos = advanceResult.newPos
-    return { statement: null, newPos: this.pos }
+    throw ParserUtils.unreadableStatement(token) // E-7・#965（以前はトークンを捨てて黙って進んだ）
   }
 ```
 
-Dispatch happens by the kind of the leading token. `VAR` means a variable declaration, `IMPORT` means an import statement (`import chords` / `import { ... } from "..."` / `import * from "..."`), `RUN` / `LOOP` / `MUTE` mean a transport command, and `IDENTIFIER` means a method call (a tempo setting or playback instruction).
+Dispatch happens by the kind of the leading token. `VAR` means a variable declaration, `IMPORT` means an import statement (`import chords` / `import { ... } from "..."` / `import * from "..."`), `RUN` / `LOOP` / `MUTE` mean a transport command, and `IDENTIFIER` means a method call (a tempo setting or playback instruction). Anything else is a syntax error with a position (spec "evaluation unit" E-7, #965 — the parser used to drop the token silently and the evaluation reported success).
 
 Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking at the first token of the right-hand side.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:97-100
+// packages/engine/src/parser/parse-statement.ts:94-97
     // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
     //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
     //   `init ...` → global / sequence initializer (below).
@@ -375,7 +372,7 @@ Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking
 What is interesting is that when parsing a statement of the form `<identifier>.method(args)`, **the parser always returns `type: 'sequence'`**.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:612-620
+// packages/engine/src/parser/parse-statement.ts:608-616
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.

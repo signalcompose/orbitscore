@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(parser): reject characters the DSL does not use, except ; (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d5-strict-parser`（同じ小 PR の 2 つ目のコミット）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d5 の後半・設計 997 Q-7 = A）
+
+- `tokenizer.ts`: 文字列とコメントの外の、DSL が使わない文字（`!` `?` 英字でない文字など）を、黙って捨てる代わりに `Unexpected character "…" at line L, column C` にした。`;` だけは文の区切りとして明示的に読み飛ばす（spec E-7）。文言に `EOF` を入れない（凍結版の REPL のため）
+- 🔴 **Q-7 は owner がまだ見ていない**（実装の着手時に見つけた — 設計 997 §4.2 の訂正）。Q-3 と同じ類として「推奨で進めて」の範囲で採ったが、**戻せるように独立したコミット**にした
+- `parseAudioDSLWithSpans` はトークナイザの失敗も位置つきの `DslSyntaxError` にする（トークン化を try の中へ）
+- dev 学習サイトの `KEYWORDS` の引用（日英）の行がずれたので `--fix` で付け直し、着地先を目で照合した
+- 既存テストは 1 件も落ちなかった。追跡されている `.orbs` の検査に新しい文言を足した。テスト 4 本を追加（3 つの入力の文言と位置・`;` と文字列・コメントは通る）
+
+### feat(parser): report unreadable statements as syntax errors (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1022-d5-strict-parser`（`1022-d1-intake` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d5・設計 997 Q-3 = A・#965）
+
+- `parse-statement.ts`: 文の頭が `var` / `import` / `RUN` / `LOOP` / `MUTE` / 識別子のどれでもない時（以前はトークンを 1 つ捨てて黙って進んだ）と、`.` の無い識別子（以前は黙って読み飛ばした）を、位置つきの構文エラーにした。文言は `parser-utils.ts` の `unreadableStatement` / `missingDot`（`parse-statement.ts` を太らせない — ファイルの大きさのラチェットの baseline を 648 → 646 に下げた）
+- 🔴 文言に `EOF` を入れない: パーサは凍結版の REPL も使い、REPL は `EOF` を含むパースのエラーを「入力の途中」と読んで次の行を待つ。`kick` だけの行が次の正しい行を巻き込まないよう、入力の終端は「the end of the input」と書く
+- パーサは凍結版と共有なので、差分テストの記録 5 件の**凍結版の側**も変わった（断片が 0 文で黙って通る代わりにエラーになる）。記録を更新し、#965 / #631 の 2 件は「差はバッチだけ」に理由を書き直した。記録を直す手間を減らすため、差分テストに `PRINT_EVAL_DIFFERENCES=<ファイル>` で今の観測を書き出す口を足した
+- dev 学習サイト（text-to-ast・日英）の `parseStatement` の抜粋を新しいコードに差し替え、「どれでもなければ構文エラー」の 1 文を足した。行のずれた引用 2 か所は `--fix` で付け直して着地先を目で照合
+- 新しいテスト `tests/parser/strict-statements.spec.ts` 7 本（4 つの入力の文言と位置・`EOF` を言わない・今まで通った書き方は通る・**追跡されている `.orbs` が新しいエラーに当たらない**）
+
 ### feat(session): replace the evaluation intake with the #997 model (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1022-d1-intake`（`1022-d0-docs` の上・stacked の draft）/ **Issue**: [#1022](https://github.com/signalcompose/orbitscore/issues/1022)（束 S-eval の N1-d1 + N1-d2）

@@ -28,7 +28,13 @@
  * - 人の経路（⌘Enter）の「未完の入力が次の評価へ持ち越される」振る舞い（層 2 は要求ごとに完結）
  * - `evalSource: 'agent'`（凍結版の REPL は常に `human` を渡す）
  * - `.orbslog` の記録の件数（要求 1 つ = 1 件。`tests/interpreter/execute-statements.spec.ts` が見る）
+ *
+ * 記録を直す時は `PRINT_EVAL_DIFFERENCES=<ファイル> npx vitest run tests/session/eval-intake-parity.spec.ts`
+ * で、各件の今の観測（凍結版と層 2）が 1 行 1 件の JSON でそのファイルへ書かれる。差の理由は
+ * 人が設計 997 §6 と照らして書く（出力をそのまま貼って通さない）。
  */
+import fs from 'node:fs'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createReplSession } from '../../packages/engine/src/cli/repl-mode'
@@ -475,9 +481,9 @@ const DIFFERENCES: Record<string, { reason: string; frozen: string[]; layer2: st
     frozen: [
       'begin',
       'error: [ERROR] Expected RPAREN but got EOF at line 1, column 13',
-      'run(/ws/piece): 0)',
+      'error: [ERROR] Cannot read a statement that starts with NUMBER "0" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
       'end',
-      'outcome 0: parse: Expected RPAREN but got EOF at line 1, column 13',
+      'outcome 0: parse: Expected RPAREN but got EOF at line 1, column 13 | parse: Cannot read a statement that starts with NUMBER "0" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
     ],
     layer2: ['begin', 'run(/ws/piece): drum.play(1,⏎⏎⏎0)', 'end', 'outcome 0: ok'],
   },
@@ -579,18 +585,23 @@ const DIFFERENCES: Record<string, { reason: string; frozen: string[]; layer2: st
   },
   '#997 / #965: 読めない文は 0 文の評価として黙って通り ok になる': {
     reason:
-      'V-1 / V-2: 読めない文は実行しない（N1-d5 = パーサを厳しくするまでは 0 文として何もせず ok。N1-d5 で位置つきの構文エラーへ）',
+      'V-1 / V-2 / V-24: 読めない文は位置つきの構文エラー（E-7。パーサは凍結版と共有なので文言は同じ）。差は構文エラーの評価がバッチを開かないことだけ',
     frozen: [
       'begin',
-      'run(/ws/piece): this is not orbitscore (((',
+      'error: [ERROR] Expected "." after this but got IDENTIFIER at line 1, column 6',
       'end',
       'begin',
-      'run(/ws/piece): kick play(1, 0)',
+      'error: [ERROR] Expected "." after kick but got IDENTIFIER at line 1, column 6',
       'end',
-      'outcome 0: ok',
-      'outcome 1: ok',
+      'outcome 0: parse: Expected "." after this but got IDENTIFIER at line 1, column 6',
+      'outcome 1: parse: Expected "." after kick but got IDENTIFIER at line 1, column 6',
     ],
-    layer2: ['outcome 0: ok', 'outcome 1: ok'],
+    layer2: [
+      'error: [ERROR] Expected "." after this but got IDENTIFIER at line 1, column 6',
+      'error: [ERROR] Expected "." after kick but got IDENTIFIER at line 1, column 6',
+      'outcome 0: parse: Expected "." after this but got IDENTIFIER at line 1, column 6',
+      'outcome 1: parse: Expected "." after kick but got IDENTIFIER at line 1, column 6',
+    ],
   },
   '#997 / #620: MCP の経路では診断は評価ごとに回収される（前の評価の構文エラーが次に付かない）': {
     reason: 'V-5 / V-24: 診断が評価ごとなのは同じ。差は構文エラーの評価がバッチを開かないことだけ',
@@ -651,10 +662,10 @@ const DIFFERENCES: Record<string, { reason: string; frozen: string[]; layer2: st
     frozen: [
       'begin',
       'error: [ERROR] Expected IDENTIFIER but got NEWLINE at line 1, column 9',
-      'run(/ws/piece): snare',
-      'run(/ws/piece): } from "./drums.orbs"',
+      'error: [ERROR] Expected "." after snare but got the end of the input at line 1, column 6',
+      'error: [ERROR] Cannot read a statement that starts with RBRACE "}" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
       'end',
-      'outcome 0: parse: Expected IDENTIFIER but got NEWLINE at line 1, column 9',
+      'outcome 0: parse: Expected IDENTIFIER but got NEWLINE at line 1, column 9 | parse: Expected "." after snare but got the end of the input at line 1, column 6 | parse: Cannot read a statement that starts with RBRACE "}" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
     ],
     layer2: [
       'error: [ERROR] Expected IDENTIFIER but got NEWLINE at line 1, column 9',
@@ -662,20 +673,27 @@ const DIFFERENCES: Record<string, { reason: string; frozen: string[]; layer2: st
     ],
   },
   '#997 / #631: alias はまだ無い構文で 0 文になる': {
-    reason:
-      'V-12: 読めない文は実行しない（N1-d5 までは 0 文として何もせず ok。N1-d5 で構文エラーへ）',
-    frozen: ['begin', 'run(/ws/piece): alias fx as effect', 'end', 'outcome 0: ok'],
-    layer2: ['outcome 0: ok'],
+    reason: 'V-12 / V-24: 読めない文は構文エラー（E-7・文言は凍結版と同じ）。差はバッチだけ',
+    frozen: [
+      'begin',
+      'error: [ERROR] Expected "." after alias but got IDENTIFIER at line 1, column 7',
+      'end',
+      'outcome 0: parse: Expected "." after alias but got IDENTIFIER at line 1, column 7',
+    ],
+    layer2: [
+      'error: [ERROR] Expected "." after alias but got IDENTIFIER at line 1, column 7',
+      'outcome 0: parse: Expected "." after alias but got IDENTIFIER at line 1, column 7',
+    ],
   },
   '#997: 複数行の文の中の空行 2 連は文を割り、残りの断片が 0 文で通る': {
     reason: 'V-14 / D-U2: 空行は文を切らない',
     frozen: [
       'begin',
       'error: [ERROR] Expected RPAREN but got EOF at line 2, column 8',
-      'run(/ws/piece): 0, 1',
-      'run(/ws/piece): )',
+      'error: [ERROR] Cannot read a statement that starts with NUMBER "0" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
+      'error: [ERROR] Cannot read a statement that starts with RPAREN ")" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
       'end',
-      'outcome 0: parse: Expected RPAREN but got EOF at line 2, column 8',
+      'outcome 0: parse: Expected RPAREN but got EOF at line 2, column 8 | parse: Cannot read a statement that starts with NUMBER "0" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…)) | parse: Cannot read a statement that starts with RPAREN ")" at line 1, column 1 (a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))',
     ],
     layer2: ['begin', 'run(/ws/piece): hh.play(⏎  1, 0,⏎⏎⏎  0, 1⏎)', 'end', 'outcome 0: ok'],
   },
@@ -692,6 +710,13 @@ describe('evaluation intake vs the frozen REPL (stage 2 = the record of differen
       expect(frozen.outcomes).toHaveLength(corpus.evaluations.length)
       expect(frozen.trace.some((event) => event.type === 'batch-begin')).toBe(true)
 
+      const printTo = process.env.PRINT_EVAL_DIFFERENCES
+      if (printTo) {
+        fs.appendFileSync(
+          printTo,
+          `${JSON.stringify({ name: corpus.name, frozen: summarize(frozen), layer2: summarize(intake) })}\n`,
+        )
+      }
       const expected = DIFFERENCES[corpus.name]
       if (!expected) {
         expect(summarize(intake)).toEqual(summarize(frozen))

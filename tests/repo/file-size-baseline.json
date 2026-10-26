@@ -7,7 +7,7 @@
     "packages/engine/src/core/sequence.ts": 1362,
     "packages/engine/src/interpreter/process-statement.ts": 520,
     "packages/engine/src/parser/parse-expression.ts": 977,
-    "packages/engine/src/parser/parse-statement.ts": 648,
+    "packages/engine/src/parser/parse-statement.ts": 646,
     "rust/crates/orbit-audio-daemon/src/outproc_effect.rs": 812,
     "rust/crates/orbit-audio-daemon/src/outproc_instrument.rs": 705,
     "rust/crates/orbit-audio-sandbox/src/events.rs": 520,
