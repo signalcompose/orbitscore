@@ -17,18 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### docs(license): put the DSL specification documents under Apache-2.0 (Oct 26, 2026)
+### docs(license): let anyone implement the DSL under Apache-2.0 while the spec documents keep their license (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon` / **Issue**: [#998](https://github.com/signalcompose/orbitscore/issues/998)
 
-owner 裁定（2026-10-26・設計 848 §14 (9) の延長）で、**DSL の仕様書（文法と意味の文書）だけ**を Apache-2.0 にした。実装（`packages/engine` 等）はルートの Signal compose Source-Available License のまま。
+最初は「DSL の仕様書の本文を Apache-2.0 に」で作ったが（SPDX・`LICENSES/Apache-2.0.txt`・LICENSE の例外の節）、同日 owner が方針を変えた（#998 冒頭の「改訂」・「ドキュメントはコピーライトを保持していいのでは？DSL自体はApache2.0でいいと思うけど。」）。同じブランチで作り直した。
 
-- **対象** 3 本: `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` / `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`。冒頭に SPDX の 2 行（`SPDX-FileCopyrightText` / `SPDX-License-Identifier: Apache-2.0`）を HTML コメントで置いた。issue の表のとおり `PROJECT_FILE_SPEC_v1.md` 等は対象外
-- **全文**: `LICENSES/Apache-2.0.txt`（apache.org の `LICENSE-2.0.txt`・sha256 `cfc7749b…`）
-- **書き分け**: ルートの `LICENSE` に「EXCEPTION: DSL SPECIFICATION DOCUMENTS」の節（対象の一覧と、実装は覆わないこと）、README の License 節に同じ一覧と `protocol/`（C-2 で追加予定）の扱い、`CONTRIBUTING.md` に「仕様書への貢献は Apache-2.0」
-- **検査** `tests/docs/dsl-spec-license.spec.ts`: `docs/core/` と `docs/specs-v2/` の `.md` を全件分類（未分類が増えたら red）/ 対象の冒頭の SPDX / 対象外に Apache の SPDX が無い / LICENSE・README の一覧が一致 / 全文の sha256 / `protocol/` が現れたら LICENSE が触れていること。SPDX を 1 本消す・一覧から 1 行消す・未分類の仕様書を足す・対象外に SPDX を付ける、の 5 通りで red を確認
-- 冒頭に 2 行足したので、dev サイトの機械検証の引用 4 本（`mixer-audio-line.md` の ja / en）を `check-citations.mjs --fix` で +2 し、着地先が同じ行であることを目で確かめた。散文の `path:line` は、ずれる前に正しかった `SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47`（SC.1）の ja / en だけ +2 した（ほかの散文の行番号は今回の前から既にずれていたので触っていない）
-- user サイトの DSL の章を含めるかは PR で owner に確認する（含めていない）
+- **仕様書の本文はルートのライセンスのまま**（© Signal compose）。SPDX・`LICENSES/`・LICENSE と CONTRIBUTING の例外の記述は main の状態に戻した
+- **実装の許諾**（案・未確定）: 仕様書 3 本（`INSTRUCTION_ORBITSCORE_DSL.md` / `PITCH_DSL_SPEC_v1.1.md` / `SIGNAL_CHAIN_DSL_SPEC_v1.md`）のタイトルの直下と README の License 節に、同じ文面の引用ブロック（英文 + 和文・英文が優先）。「文法と意味に沿った実装を、誰でも Apache License 2.0 の条件（第 3 条の特許の許諾を含む）で作り・使い・配布してよい。仕様書の本文の許諾ではない」。🔴 文面は法的な文書なので、確定は専門家か license@signalcompose.com の確認の後
+- **機械が読む言語の定義**（`syntaxes/orbitscore-audio.tmLanguage.json`・`language-configuration.json` など）は Apache-2.0 の候補として PR に列挙しただけ（確定は owner）
+- **検査** `tests/docs/dsl-implementation-grant.spec.ts`（12 件）: `docs/core/` と `docs/specs-v2/` の全文書の分類（未分類が増えたら red）/ 仕様書のタイトルの直下に節がある / 4 か所の文面が一致 / 仕様書の本文（節の外）に Apache の表記が無い / ほかの文書に節や Apache の SPDX が無い / README の一覧 / ルートの LICENSE が仕様書を切り出していない / `protocol/` が現れたら LICENSE が触れていること。節を消す・1 か所だけ文面を変える・SPDX を戻す・未分類の仕様書を足す・対象外に節を写す・README の一覧から消す、の 6 通りで red を確認
+- 節を足して行がずれた分、dev サイトの機械検証の引用 4 本を `check-citations.mjs --fix` で +6 し（着地先は同じ行）、ずれる前に正しかった散文の参照 `SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47`（SC.1）の ja / en を `42-53` にした
 
 Closes #998
 

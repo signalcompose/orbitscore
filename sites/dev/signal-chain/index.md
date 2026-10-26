@@ -1608,7 +1608,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 
 ## Sources
 
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:38-49` — SC.1 二層意味論（宣言層 / 信号層）
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:42-53` — SC.1 二層意味論（宣言層 / 信号層）
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 ライブコーディング意味論と失敗モデル (i)/(ii) の注記
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 ラック（形・無効化・削除・値・LCS・標準プラグイン・v1 の段階）
 - `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW リサーチ（4 状態・機構 B）と確定モデル

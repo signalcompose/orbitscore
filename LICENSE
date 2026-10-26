@@ -3,27 +3,6 @@ Signal compose Source-Available License v1.0
 Copyright (c) 2026 Signal compose Inc.
 
 ================================================================================
-EXCEPTION: DSL SPECIFICATION DOCUMENTS (APACHE LICENSE 2.0 ONLY)
-================================================================================
-
-The following documents define the grammar and semantics of the OrbitScore
-DSL. They are licensed under the Apache License, Version 2.0 only
-(SPDX-License-Identifier: Apache-2.0), without the Commons Clause, the Fair
-Revenue Clause, or any other additional condition of this license:
-
-- docs/core/INSTRUCTION_ORBITSCORE_DSL.md
-- docs/specs-v2/PITCH_DSL_SPEC_v1.1.md
-- docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md
-
-Each of these documents carries the notice "SPDX-License-Identifier:
-Apache-2.0" at its top. The full text of the Apache License 2.0 is in
-LICENSES/Apache-2.0.txt.
-
-This exception covers the specification documents only. The implementation
-of the DSL (for example the parser and interpreter in packages/engine) is not
-covered by it and remains under this license.
-
-================================================================================
 WHY THIS LICENSE
 ================================================================================
 
