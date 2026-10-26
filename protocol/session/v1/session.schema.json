@@ -598,9 +598,8 @@
       "type": "object",
       "properties": {
         "lines": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Trailing lines to return (default 50, capped at the ring capacity)."
+          "type": "number",
+          "description": "Trailing lines to return (default 50, capped at the ring capacity). Fractions are truncated and values below 1 return 1 line, as the v1 MCP get_log did."
         }
       },
       "additionalProperties": false
@@ -685,8 +684,11 @@
     "AnalyzeAudioParams": {
       "type": "object",
       "properties": {
-        "wavPath": { "type": "string", "minLength": 1 },
-        "windowMs": { "type": "number", "exclusiveMinimum": 0 },
+        "wavPath": { "type": "string" },
+        "windowMs": {
+          "type": "number",
+          "description": "Per-window series width. 0 or below adds no windows (as the v1 MCP analyze_audio did)."
+        },
         "perChannel": { "type": "boolean" }
       },
       "required": ["wavPath"],
@@ -1194,7 +1196,10 @@
       "type": "object",
       "properties": {
         "site": { "$ref": "#/$defs/DocsSite" },
-        "path": { "type": "string", "minLength": 1 }
+        "path": {
+          "type": "string",
+          "description": "Site-relative Markdown path. An empty or escaping path is DOC_NOT_FOUND."
+        }
       },
       "required": ["site", "path"],
       "additionalProperties": false

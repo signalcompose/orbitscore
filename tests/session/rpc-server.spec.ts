@@ -299,7 +299,8 @@ describe('handshake and dispatch (design 848 §5.2)', () => {
       code: -32601,
       data: { code: 'METHOD_NOT_FOUND', detail: expect.stringContaining('P-19') },
     })
-    expect((await client.request('session.getLog', { lines: -1 })).error).toMatchObject({
+    // `lines` は小数・0・負も受ける（凍結版の get_log と同じ・S-mcp の N1-b1）。型の違いは拒む。
+    expect((await client.request('session.getLog', { lines: 'ten' })).error).toMatchObject({
       code: -32602,
       data: { code: 'INVALID_PARAMS' },
     })

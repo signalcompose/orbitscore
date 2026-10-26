@@ -180,6 +180,10 @@ export interface RegisterMcpServerInput {
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
  * handlers can be re-hosted later by the WCTM pi harness (spec §3/§4.2).
+ *
+ * 層 2 の写し（設計 848 §6）: 凍結版で同期だった 5 本（`setSelection` / `getEditorState` /
+ * `getDocumentText` / `getDiagnostics` / `getLog`）を、他のメンバーと同じ `Promise<T> | T` に広げた。
+ * 中継は層 2 の RPC でこの型を満たすので、同期では返せない。
  */
 export interface OrbitScoreToolHandlers {
   evaluate(
@@ -196,14 +200,14 @@ export interface OrbitScoreToolHandlers {
   selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
   configureFlash(options: FlashConfigInput): Promise<FlashConfigResult> | FlashConfigResult
   openFile(path: string): Promise<CommandResult> | CommandResult
-  setSelection(range: SelectionInput): CommandResult
+  setSelection(range: SelectionInput): Promise<CommandResult> | CommandResult
   runSelection(): Promise<CommandResult> | CommandResult
   editReplace(args: EditReplaceInput): Promise<CommandResult> | CommandResult
-  getEditorState(): EditorState
+  getEditorState(): Promise<EditorState> | EditorState
   saveFile(): Promise<CommandResult> | CommandResult
-  getDocumentText(): DocumentText
-  getDiagnostics(path?: string): FileDiagnostics[]
-  getLog(lines?: number): string[]
+  getDocumentText(): Promise<DocumentText> | DocumentText
+  getDiagnostics(path?: string): Promise<FileDiagnostics[]> | FileDiagnostics[]
+  getLog(lines?: number): Promise<string[]> | string[]
   analyzeAudio(
     wavPath: string,
     windowMs?: number,
