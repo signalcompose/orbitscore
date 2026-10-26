@@ -228,7 +228,7 @@ host: both            # both | app | ext | both+split（§3.1）
 | `> **対応**:` の文法 | 上の 5 形以外（配布線の綴り・版の桁） |
 | `未リリース` の残存 | **タグ時（`release-app.yml` の preflight・`verify-app.sh`）に 1 件でも在れば red**。通常の `docs:check` では警告のみ（main には未リリースが**在ってよい**・§7） |
 | ja / en の対応 | ja の `> **対応**:` の件数 ≠ en の `> **Availability**:` の件数（翻訳の取りこぼし。`TRANSLATION_STATUS.md` の `outdated` 運用の機械化） |
-| **AV-HOST-SCOPE**（10-26 追加・§3.4） | `host: both` の章で、`OrbitStudio` を含む行が併記の行（`- **OrbitStudio**:`）にも、OrbitStudio の `> **対応**:` が付いた節にも入っていない（owner (20) の条件。en は `- **OrbitStudio**:` と `> **Availability**:` で同じ規則） |
+| **AV-HOST-SCOPE**（10-26 追加・§3.4） | `host: both` の章で、`OrbitStudio` を含む行が併記の行（`- **OrbitStudio**:`）にも、OrbitStudio の `> **対応**:` が付いた節にも入っていない（owner (20) の条件。en は `- **OrbitStudio**:` と `> **Availability**:` で同じ規則）。改訂（10-26・docs の連続 PR ①）: **`both+split` の章にも掛ける**（共通の節は両方の読者が読むので、条件は `both` と同じ）。大文字小文字を問わず、コードブロックと frontmatter も対象 |
 
 🔴 「ラチェット」にはしない: 行の**件数**は増減してよい（機能が増えれば増える）。検査するのは**形**と**タグ時の未リリース 0 件**だけ。CLAUDE.md「規律を足す時は仕組みを足す」に従い、文法を STYLE_GUIDE に書くと同時にこの lint を置く。
 
@@ -269,7 +269,7 @@ OrbitStudio.app/Contents/Resources/docs/
 ### 6.3 いつ生成するか — `make-bundle.sh` の段 2（設計 §9.2）
 
 1. `npm run docs:build -w @orbitscore/user-site`（既存・`sites/user/package.json`）
-2. **`scripts/build-docs-bundle.mjs`**（新設）: `sites/user/**.md` を frontmatter `host` で選別 → `both+split` の `ext` 節（節見出しに `<!-- host: ext -->` を置く規約）を落とす → `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` と `examples/` をコピー → `manifest.json` を書く（`git rev-parse HEAD`・`apps/OrbitStudio/VERSION`・日付）
+2. **`scripts/build-docs-bundle.mjs`**（新設）: `sites/user/**.md` を frontmatter `host` で選別 → `both+split` の `ext` 節（**見出しの次の行**に `<!-- host: ext -->` を置く規約。改訂 10-26: 見出しの行の中に置くと VitePress が見出しの `aria-label` に印の文字列を入れるので、次の行にした・`sites/user/STYLE_GUIDE.md`）を落とす → `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` と `examples/` をコピー → `manifest.json` を書く（`git rev-parse HEAD`・`apps/OrbitStudio/VERSION`・日付）
 3. `make-bundle.sh` が `Contents/Resources/docs/` へ置く → **署名の前**（656 裁定 7「署名の後にバンドルを触らない」）
 
 `deploy-sites.yml` とは**別経路**（Pages は `main` の push、同梱は R-app のタグ）。同じ `docs:build` を呼ぶので**ビルドの実装は 1 本**（656 §5.4「CI に別実装を書かない」と同じ原則）。
@@ -390,3 +390,4 @@ OrbitStudio.app/Contents/Resources/docs/
 | 2026-10-23 | 改訂（起案: fresh subagent / 審査: main・main `7410dcb0`・拡張 4.4.0）。崩れた前提「凍結版は docs を `.vsix` に同梱していない」を直した: 4.2.1（#954 / PR #955・2026-09-18 09:37）で user サイトは同梱済み、dev サイトは owner 決定で意図的に非同梱。§0 の 3 行・§6.1 の配信元の注記・§6.4 の cold-install の検査・§8 G-7・§9 の確信度の行を更新。比較元 `1276ab1f` の日付を 09-14 に訂正。§4.3 V-D のタグを「凍結線の最新タグ」に。裁定待ち (15)〜(21) の推奨は変えていない |
 | 2026-10-26 | §10 の 7 件を owner が裁定（全件 A・(20) は条件つき）。§10 の冒頭に記録（審査: main） |
 | 2026-10-26（第 2 回） | 改訂（起案: fresh subagent / 審査: main）。本体の暫定物の台帳（本体 §1.4）に合わせて 3 か所: (20) の条件を lint の規則 **AV-HOST-SCOPE** で強制する（§3.4・§5.4・台帳 P-13）/ 09-18 の暫定行の撤回を台帳 P-12 に載せ、リリースの preflight で検査する（§7.4）/ `未リリース` マーカーは既存の仕組み（§5.4・§6.4）のまま台帳 P-11 に記録。§10 の (20) の「未着手」はこれで仕組みが決まった（書き換え自体は docs の連続 PR ①・②） |
+| 2026-10-26（docs の連続 PR ①） | 実装（`sites/user/scripts/check-availability.mjs`・`sites/user/STYLE_GUIDE.md`）に合わせて 2 か所: §5.4 の AV-HOST-SCOPE を `both+split` の章にも掛ける / §6.3 の分割節の印を「見出しの次の行」に置く。en の 5 形と規則 ID の一覧は STYLE_GUIDE を正本にした |

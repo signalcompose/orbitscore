@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(user-site): add the availability notation grammar and its lint (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon-d1` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)（計画 `IMPLEMENTATION_PLAN_NATIVE.md` §7.1 の D-①・docs の連続 PR ①）
+
+user サイトを拡張版と OrbitStudio の両方に向けた 1 本の文書として保つための、可用性表記の文法と lint を入れた（別冊 `848-docs-structure-design.md` §3.4・§5・裁定 (16) A）。章への書き込みは次の PR（D-②）。
+
+- **文法**: `sites/user/STYLE_GUIDE.md` に「可用性表記」の節 — frontmatter `host:`（`both` / `app` / `ext` / `both+split`・必須）・分割節の印 `<!-- host: ext|app -->`（見出しの次の行）・段落の併記（`- **拡張版**:` / `- **OrbitStudio**:`）・可用性の行（`> **対応**:` / `> **Availability**:` の固定 5 形）。用語集に `拡張版` → `Extension` などを足した
+- **lint** `sites/user/scripts/check-availability.mjs` を `npm run docs:check` に連結（CI の `Check doc citations` で走る）。規則 `AV-HOST` / `AV-SYNTAX` / `AV-PLACE` / `AV-UNRELEASED`（`--release` で red）/ `AV-I18N` / **`AV-HOST-SCOPE`**（owner (20) の条件・台帳 P-13）/ `AV-TERM`
+- **設計との差 2 点**（別冊を同じ PR で改訂）: AV-HOST-SCOPE を `both+split` の章にも掛けた / 分割節の印を見出しの**次の行**に置く（見出しの行に置くと VitePress が `aria-label` に印の文字列を入れることを `createMarkdownRenderer` で確かめた）
+- **暫定**: 章にはまだ `host:` が無いので、lint の `HOST_MISSING_BASELINE`（42 章）で許し、D-② がこの一覧ごと消す。一覧は減らす方向にしか通らない（`host:` を持った章が残っていても、無い章が増えても red）
+- **テスト** `tests/docs/check-availability.spec.ts`（40 件）: 一時ディレクトリに章を作り `--root` で lint を走らせる。STYLE_GUIDE の 5 形 × 2 言語がそのまま通ることも検査する（文書と lint の二重管理を作らない）。lint 側を 6 通り壊して（AV-HOST-SCOPE の無効化・`both+split` 除外・下位の節への継承なし・併記の行を許さない・`--release` 無視・空行検査なし）それぞれ red を確認
+- `.husky/pre-push` の失敗文言に可用性表記の lint を足した
+
+Part of #848
+
+---
+
 ### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
