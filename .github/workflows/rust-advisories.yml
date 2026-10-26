@@ -69,10 +69,11 @@ jobs:
           tool: cargo-deny
 
       - name: cargo-deny check advisories
+        id: deny
         run: cargo deny check advisories
 
-      - name: Notify scheduled failure in tracking issue
-        if: failure() && github.event_name == 'schedule'
+      - name: Notify advisory workflow failure in tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,10 +81,17 @@ jobs:
           ISSUE_LABEL: rust-advisory
           ISSUE_TITLE: RustSec advisories failing on main
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DENY_OUTCOME: ${{ steps.deny.outcome }}
         run: |
           gh label create "$ISSUE_LABEL" \
             --description "Scheduled RustSec advisory failures" \
             --color D73A4A || true
+
+          if [ "$DENY_OUTCOME" = "failure" ]; then
+            body="RustSec の勧告が見つかりました。実行: $RUN_URL"
+          else
+            body="定期の advisory 検査そのものが失敗しました（勧告かどうか不明）。実行: $RUN_URL"
+          fi
 
           issue_number="$(
             gh issue list --label "$ISSUE_LABEL" --state open \
@@ -92,10 +100,10 @@ jobs:
 
           if [ -n "$issue_number" ]; then
             gh issue comment "$issue_number" \
-              --body "Scheduled RustSec advisory check failed again: $RUN_URL"
+              --body "$body"
           else
             gh issue create \
               --title "$ISSUE_TITLE" \
               --label "$ISSUE_LABEL" \
-              --body "The scheduled RustSec advisory check failed on main. Run: $RUN_URL"
+              --body "$body"
           fi
