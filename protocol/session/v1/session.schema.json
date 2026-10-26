@@ -1,0 +1,1296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orbitscore:protocol:session:v1",
+  "title": "OrbitScoreSessionProtocolV1",
+  "description": "OrbitScore session protocol v1: JSON-RPC 2.0 over WebSocket (/rpc). One text frame carries one message. Design: docs/design/848-native-orbitstudio-design.md section 5. This file is the single source of truth; protocol/gen/ is generated from it (npm run protocol:generate).",
+  "x-protocol-version": "1.0",
+  "x-surface-vocabulary": {
+    "gui": "The app's GUI calls this client-to-server method as a user operation.",
+    "mcp": "The MCP relay calls this method to implement the MCP tools listed in x-mcp-tools.",
+    "editor": "The editor client calls this method to keep layer 2's copy of its documents and to render language services in the editor. It is not an operation on the session.",
+    "infra": "Handshake, lifecycle and server-to-client events."
+  },
+  "x-errors": {
+    "PARSE_ERROR": -32700,
+    "INVALID_REQUEST": -32600,
+    "METHOD_NOT_FOUND": -32601,
+    "INVALID_PARAMS": -32602,
+    "INTERNAL_ERROR": -32603,
+    "PROTOCOL_VERSION_MISMATCH": -32010,
+    "EDITOR_ALREADY_ATTACHED": -32011,
+    "NO_EDITOR_ATTACHED": -32012,
+    "EDITOR_TIMEOUT": -32013,
+    "DOC_NOT_FOUND": -32020,
+    "DOCS_UNAVAILABLE": -32021,
+    "SHUTTING_DOWN": -32030
+  },
+  "x-methods": {
+    "session.hello": {
+      "direction": "server-to-client",
+      "kind": "notification",
+      "description": "The first message on every connection. Carries no secret.",
+      "params": { "$ref": "#/$defs/HelloParams" },
+      "x-surfaces": ["infra"]
+    },
+    "session.attach": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Must be the first request. Any other method before it closes the connection with 1008. The token is required on the TCP listener and ignored on the Unix socket.",
+      "params": { "$ref": "#/$defs/AttachParams" },
+      "result": { "$ref": "#/$defs/AttachResult" },
+      "x-surfaces": ["infra"]
+    },
+    "session.evaluate": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Stateless evaluation: documentDirectory is required on every call (null = no base). All clients share one FIFO.",
+      "params": { "$ref": "#/$defs/EvaluateParams" },
+      "result": { "$ref": "#/$defs/EvaluateResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["evaluate_orbitscore"]
+    },
+    "session.getState": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/SessionState" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["evaluate_orbitscore"]
+    },
+    "session.getLog": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/GetLogParams" },
+      "result": { "$ref": "#/$defs/GetLogResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["get_log"]
+    },
+    "session.registerMcp": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Registers the relay stub with an LLM client (stdio, no secret, no port).",
+      "params": { "$ref": "#/$defs/RegisterMcpParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["register_mcp_server"]
+    },
+    "session.shutdown": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Stops the engine (waits for the daemon to exit) and ends the session process.",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/EmptyResult" },
+      "x-surfaces": ["infra"]
+    },
+    "engine.start": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/StartEngineParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["start_engine"]
+    },
+    "engine.stop": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Responds only after the daemon process has exited.",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["stop_engine"]
+    },
+    "engine.getState": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/EngineState" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["get_engine_state"]
+    },
+    "engine.state": {
+      "direction": "server-to-client",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/EngineState" },
+      "x-surfaces": ["infra"]
+    },
+    "audio.listDevices": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/AudioDevicesResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["list_audio_devices"]
+    },
+    "audio.selectDevice": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/SelectDeviceParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["select_audio_device"]
+    },
+    "audio.analyze": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/AnalyzeAudioParams" },
+      "result": { "$ref": "#/$defs/AnalyzeAudioResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["analyze_audio"]
+    },
+    "plugin.saveState": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/PluginTarget" },
+      "result": { "$ref": "#/$defs/SavePluginStateResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["save_plugin_state"]
+    },
+    "plugin.openUi": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/OpenPluginUiParams" },
+      "result": { "$ref": "#/$defs/PluginUiResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["open_plugin_ui"]
+    },
+    "plugin.closeUi": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/PluginTarget" },
+      "result": { "$ref": "#/$defs/PluginUiResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["close_plugin_ui"]
+    },
+    "plugin.openUiAtCursor": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Layer 2 resolves the plugin name under the synced cursor (#939 / #940 rules). NO_EDITOR_ATTACHED without an editor client.",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/PluginUiAtCursorResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["open_plugin_ui_at_cursor"]
+    },
+    "plugin.list": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/ListPluginsResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["list_plugins"]
+    },
+    "plugin.rescan": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/RescanPluginsResult" },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["rescan_plugins"]
+    },
+    "editor.didOpen": {
+      "direction": "client-to-server",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/DidOpenParams" },
+      "x-surfaces": ["editor"]
+    },
+    "editor.didChange": {
+      "direction": "client-to-server",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/DidChangeParams" },
+      "x-surfaces": ["editor"]
+    },
+    "editor.didClose": {
+      "direction": "client-to-server",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/DidCloseParams" },
+      "x-surfaces": ["editor"]
+    },
+    "editor.didChangeSelection": {
+      "direction": "client-to-server",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/DidChangeSelectionParams" },
+      "x-surfaces": ["editor"]
+    },
+    "editor.didChangeActive": {
+      "direction": "client-to-server",
+      "kind": "notification",
+      "description": "The document of the front window (key window), or null when no document window is open.",
+      "params": { "$ref": "#/$defs/DidChangeActiveParams" },
+      "x-surfaces": ["editor"]
+    },
+    "editor.complete": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/CompleteParams" },
+      "result": { "$ref": "#/$defs/CompleteResult" },
+      "x-surfaces": ["editor"]
+    },
+    "editor.getDiagnostics": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Computed by layer 2 from the synced documents (the same result the editor.diagnostics notification carries).",
+      "params": { "$ref": "#/$defs/GetDiagnosticsParams" },
+      "result": { "$ref": "#/$defs/GetDiagnosticsResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["get_diagnostics"]
+    },
+    "editor.getState": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Answered from layer 2's synced copy. NO_EDITOR_ATTACHED without an editor client.",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/EditorState" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["get_editor_state", "evaluate_orbitscore"]
+    },
+    "editor.getDocumentText": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Answered from layer 2's synced copy. NO_EDITOR_ATTACHED without an editor client.",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/DocumentText" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["get_document_text"]
+    },
+    "editor.diagnostics": {
+      "direction": "server-to-client",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/EditorDiagnosticsParams" },
+      "x-surfaces": ["infra"]
+    },
+    "editor.openFile": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Layer 2 forwards the request to the attached editor client (x-editor-request). NO_EDITOR_ATTACHED without one, EDITOR_TIMEOUT when it does not answer.",
+      "params": { "$ref": "#/$defs/OpenFileParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-editor-request": "same",
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["open_file"]
+    },
+    "editor.setSelection": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/SelectionInput" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-editor-request": "same",
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["set_selection"]
+    },
+    "editor.runSelection": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "Layer 2 asks the editor client only for its selection (x-editor-request), resolves the subject block itself and evaluates the result. The editor client never awaits an RPC while answering (failure mode F-4).",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-editor-request": {
+        "params": { "$ref": "#/$defs/EmptyParams" },
+        "result": { "$ref": "#/$defs/SelectionSnapshot" }
+      },
+      "x-surfaces": ["gui", "mcp"],
+      "x-mcp-tools": ["run_selection"]
+    },
+    "editor.editReplace": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EditReplaceParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-editor-request": "same",
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["edit_replace"]
+    },
+    "editor.saveFile": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/EmptyParams" },
+      "result": { "$ref": "#/$defs/CommandResult" },
+      "x-editor-request": "same",
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["save_file"]
+    },
+    "editor.configureFlash": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/FlashConfigInput" },
+      "result": { "$ref": "#/$defs/FlashConfigResult" },
+      "x-editor-request": "same",
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["configure_flash"]
+    },
+    "docs.get": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "description": "DOC_NOT_FOUND when the page does not exist; DOCS_UNAVAILABLE for every call when the site is not present under --docs-dir (the dev site is not bundled in the app).",
+      "params": { "$ref": "#/$defs/DocsGetParams" },
+      "result": { "$ref": "#/$defs/DocsGetResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["get_user_doc", "get_dev_doc"]
+    },
+    "docs.search": {
+      "direction": "client-to-server",
+      "kind": "request",
+      "params": { "$ref": "#/$defs/DocsSearchParams" },
+      "result": { "$ref": "#/$defs/DocsSearchResult" },
+      "x-surfaces": ["mcp"],
+      "x-mcp-tools": ["search_user_docs", "search_dev_docs"]
+    },
+    "transport.step": {
+      "direction": "server-to-client",
+      "kind": "notification",
+      "description": "Broadcast to every client.",
+      "params": { "$ref": "#/$defs/TransportStepParams" },
+      "x-surfaces": ["infra"]
+    },
+    "transport.state": {
+      "direction": "server-to-client",
+      "kind": "notification",
+      "params": { "$ref": "#/$defs/TransportState" },
+      "x-surfaces": ["infra"]
+    },
+    "log.line": {
+      "direction": "server-to-client",
+      "kind": "notification",
+      "description": "Layer 2 classifies every line; clients never classify.",
+      "params": { "$ref": "#/$defs/LogLineParams" },
+      "x-surfaces": ["infra"]
+    }
+  },
+  "$defs": {
+    "EmptyParams": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "EmptyResult": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "Position": {
+      "description": "0-based line and UTF-16 character offset (LSP).",
+      "type": "object",
+      "properties": {
+        "line": { "type": "integer", "minimum": 0 },
+        "character": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["line", "character"],
+      "additionalProperties": false
+    },
+    "Range": {
+      "description": "LSP range; end is exclusive.",
+      "type": "object",
+      "properties": {
+        "start": { "$ref": "#/$defs/Position" },
+        "end": { "$ref": "#/$defs/Position" }
+      },
+      "required": ["start", "end"],
+      "additionalProperties": false
+    },
+    "DocumentUri": {
+      "description": "A document URI as the editor client knows it (file: for saved documents).",
+      "type": "string",
+      "minLength": 1
+    },
+    "ClientInfo": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" }
+      },
+      "required": ["name", "version"],
+      "additionalProperties": false
+    },
+    "ClientCapability": {
+      "type": "string",
+      "enum": ["editor", "observer"]
+    },
+    "ProtocolVersion": {
+      "description": "MAJOR.MINOR. MINOR adds only (new methods, new optional fields); MAJOR breaks.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "SuccessResult": {
+      "type": "object",
+      "properties": {
+        "ok": { "const": true },
+        "message": { "type": "string" }
+      },
+      "required": ["ok"],
+      "additionalProperties": false
+    },
+    "ErrorResult": {
+      "type": "object",
+      "properties": {
+        "ok": { "const": false },
+        "error": { "type": "string" }
+      },
+      "required": ["ok", "error"],
+      "additionalProperties": false
+    },
+    "DetailedErrorResult": {
+      "type": "object",
+      "properties": {
+        "ok": { "const": false },
+        "error": { "type": "string" },
+        "code": { "type": "string" },
+        "details": {}
+      },
+      "required": ["ok", "error"],
+      "additionalProperties": false
+    },
+    "CommandResult": {
+      "oneOf": [{ "$ref": "#/$defs/SuccessResult" }, { "$ref": "#/$defs/ErrorResult" }]
+    },
+    "ErrorData": {
+      "description": "The data member of a JSON-RPC error object. code is a key of x-errors.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "required": ["code"],
+      "additionalProperties": true
+    },
+    "HelloParams": {
+      "type": "object",
+      "properties": {
+        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "session_version": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["protocol_version", "session_version", "capabilities"],
+      "additionalProperties": false
+    },
+    "AttachParams": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "$ref": "#/$defs/ProtocolVersion",
+          "description": "The client's protocol version. A different MAJOR is rejected with PROTOCOL_VERSION_MISMATCH."
+        },
+        "token": {
+          "type": "string",
+          "description": "Required on the TCP listener (WebView only). Secret: never log it."
+        },
+        "client": { "$ref": "#/$defs/ClientInfo" },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ClientCapability" },
+          "uniqueItems": true
+        }
+      },
+      "required": ["protocol_version", "client", "capabilities"],
+      "additionalProperties": false
+    },
+    "AttachResult": {
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "minLength": 1 }
+      },
+      "required": ["clientId"],
+      "additionalProperties": false
+    },
+    "EvaluationSource": {
+      "type": "string",
+      "enum": ["human", "agent"]
+    },
+    "EvaluateTarget": {
+      "description": "Which document and range this evaluation came from. v1 uses it for attribution only; code stays the text that is evaluated.",
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "version": {
+          "type": "integer",
+          "description": "The editor.didChange version the range refers to. Required with range."
+        },
+        "range": { "$ref": "#/$defs/Range" }
+      },
+      "required": ["uri"],
+      "dependentRequired": { "range": ["version"] },
+      "additionalProperties": false
+    },
+    "EvaluateFrame": {
+      "description": "Extra attributes for the session log frame (.orbslog).",
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+    },
+    "EvaluateParams": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "documentDirectory": {
+          "type": ["string", "null"],
+          "description": "Required on every call. null = no base (clears the previous base)."
+        },
+        "source": { "$ref": "#/$defs/EvaluationSource" },
+        "target": { "$ref": "#/$defs/EvaluateTarget" },
+        "frame": { "$ref": "#/$defs/EvaluateFrame" }
+      },
+      "required": ["code", "documentDirectory", "source"],
+      "additionalProperties": false
+    },
+    "EvaluateDiagnostic": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["parse", "runtime"] },
+        "message": { "type": "string" }
+      },
+      "required": ["kind", "message"],
+      "additionalProperties": false
+    },
+    "EvalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "EvaluateResult": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "true only when diagnostics is empty."
+        },
+        "evalId": { "$ref": "#/$defs/EvalId" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EvaluateDiagnostic" }
+        },
+        "documentDirectory": {
+          "type": ["string", "null"],
+          "description": "The value that was actually used."
+        }
+      },
+      "required": ["ok", "evalId", "diagnostics", "documentDirectory"],
+      "additionalProperties": false
+    },
+    "SyncedDocument": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "version": { "type": "integer" }
+      },
+      "required": ["uri", "version"],
+      "additionalProperties": false
+    },
+    "SessionState": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "engine": { "$ref": "#/$defs/EngineState" },
+        "transport": { "$ref": "#/$defs/TransportState" },
+        "documents": { "type": "array", "items": { "$ref": "#/$defs/SyncedDocument" } },
+        "activeUri": { "type": ["string", "null"] },
+        "workspaceRoot": {
+          "type": ["string", "null"],
+          "description": "--workspace-root, or null when it was not given."
+        },
+        "editorAttached": { "type": "boolean" }
+      },
+      "required": [
+        "protocolVersion",
+        "engine",
+        "transport",
+        "documents",
+        "activeUri",
+        "workspaceRoot",
+        "editorAttached"
+      ],
+      "additionalProperties": false
+    },
+    "GetLogParams": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Trailing lines to return (default 50, capped at the ring capacity)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "GetLogResult": {
+      "type": "object",
+      "properties": {
+        "lines": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["lines"],
+      "additionalProperties": false
+    },
+    "RegisterMcpParams": {
+      "type": "object",
+      "properties": {
+        "scope": { "type": "string", "description": "user (default) or project." },
+        "port": {
+          "type": "integer",
+          "description": "Accepted for the v1 MCP tool shape and not used (the relay finds the session by its socket)."
+        }
+      },
+      "required": ["scope"],
+      "additionalProperties": false
+    },
+    "StartEngineParams": {
+      "type": "object",
+      "properties": {
+        "captureWav": { "type": "string" },
+        "audioDevice": { "type": "string" },
+        "debug": { "type": "boolean" },
+        "hostBundleId": {
+          "type": "string",
+          "description": "Defaults to the session's --host-bundle-id (the app's own bundle id)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "EngineState": {
+      "type": "object",
+      "properties": {
+        "running": { "type": "boolean" },
+        "liveCoding": { "type": "boolean" },
+        "output": { "type": "object" },
+        "callback": { "type": "object" },
+        "statusError": { "type": "string" }
+      },
+      "required": ["running", "liveCoding"],
+      "additionalProperties": false
+    },
+    "SelectDeviceParams": {
+      "type": "object",
+      "properties": {
+        "device": { "type": "string", "description": "Empty = the system default." }
+      },
+      "required": ["device"],
+      "additionalProperties": false
+    },
+    "AudioDeviceInfo": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string" },
+        "id": { "type": "integer" },
+        "description": { "type": "string" }
+      },
+      "required": ["label", "id", "description"],
+      "additionalProperties": false
+    },
+    "AudioDevicesResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "devices": { "type": "array", "items": { "$ref": "#/$defs/AudioDeviceInfo" } }
+          },
+          "required": ["ok", "devices"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/ErrorResult" }
+      ]
+    },
+    "AnalyzeAudioParams": {
+      "type": "object",
+      "properties": {
+        "wavPath": { "type": "string", "minLength": 1 },
+        "windowMs": { "type": "number", "exclusiveMinimum": 0 },
+        "perChannel": { "type": "boolean" }
+      },
+      "required": ["wavPath"],
+      "additionalProperties": false
+    },
+    "WavFormat": {
+      "type": "object",
+      "properties": {
+        "audioFormat": { "type": "integer" },
+        "channels": { "type": "integer" },
+        "sampleRate": { "type": "integer" },
+        "bitsPerSample": { "type": "integer" }
+      },
+      "required": ["audioFormat", "channels", "sampleRate", "bitsPerSample"],
+      "additionalProperties": false
+    },
+    "AudioWindow": {
+      "type": "object",
+      "properties": {
+        "startSec": { "type": "number" },
+        "peak": { "type": "number" },
+        "rms": { "type": "number" }
+      },
+      "required": ["startSec", "peak", "rms"],
+      "additionalProperties": false
+    },
+    "WavAnalysis": {
+      "type": "object",
+      "properties": {
+        "format": { "$ref": "#/$defs/WavFormat" },
+        "frames": { "type": "integer" },
+        "durationSec": { "type": "number" },
+        "peak": { "type": "number" },
+        "rms": { "type": "number" },
+        "onsets": { "type": "array", "items": { "type": "number" } },
+        "onsetGaps": { "type": "array", "items": { "type": "number" } },
+        "soundDetected": { "type": "boolean" },
+        "windows": { "type": "array", "items": { "$ref": "#/$defs/AudioWindow" } },
+        "channelWindows": {
+          "type": "array",
+          "items": { "type": "array", "items": { "$ref": "#/$defs/AudioWindow" } }
+        },
+        "channelRms": { "type": "array", "items": { "type": "number" } }
+      },
+      "required": [
+        "format",
+        "frames",
+        "durationSec",
+        "peak",
+        "rms",
+        "onsets",
+        "onsetGaps",
+        "soundDetected"
+      ],
+      "additionalProperties": false
+    },
+    "AnalyzeAudioResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "analysis": { "$ref": "#/$defs/WavAnalysis" }
+          },
+          "required": ["ok", "analysis"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/ErrorResult" }
+      ]
+    },
+    "PluginTarget": {
+      "type": "object",
+      "properties": {
+        "receiver": { "type": "string", "minLength": 1 },
+        "index": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["receiver", "index"],
+      "additionalProperties": false
+    },
+    "OpenPluginUiParams": {
+      "type": "object",
+      "properties": {
+        "receiver": { "type": "string", "minLength": 1 },
+        "index": { "type": "integer", "minimum": 0 },
+        "expectedName": { "type": "string" }
+      },
+      "required": ["receiver", "index"],
+      "additionalProperties": false
+    },
+    "SavePluginStateResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "saved": {}
+          },
+          "required": ["ok", "saved"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/DetailedErrorResult" }
+      ]
+    },
+    "PluginUiResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "result": {}
+          },
+          "required": ["ok", "result"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/DetailedErrorResult" }
+      ]
+    },
+    "PluginNameSite": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "integer" },
+        "startCol": { "type": "integer" },
+        "endCol": { "type": "integer" }
+      },
+      "required": ["line", "startCol", "endCol"],
+      "additionalProperties": false
+    },
+    "PluginUiAtCursorResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "receiver": { "type": "string" },
+            "index": { "type": "integer" },
+            "chain_path": { "type": "array", "items": { "type": "integer" } },
+            "normalizedName": { "type": "string" },
+            "site": { "$ref": "#/$defs/PluginNameSite" }
+          },
+          "required": ["ok", "receiver", "index", "chain_path", "normalizedName", "site"],
+          "additionalProperties": true
+        },
+        { "$ref": "#/$defs/DetailedErrorResult" }
+      ]
+    },
+    "PluginCatalogEntry": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "vendor": { "type": "string" },
+        "format": { "type": "string" },
+        "path": { "type": "string" },
+        "pluginId": { "type": "string" },
+        "roles": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["name", "vendor", "format", "path", "pluginId", "roles"],
+      "additionalProperties": false
+    },
+    "ListPluginsResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "plugins": { "type": "array", "items": { "$ref": "#/$defs/PluginCatalogEntry" } }
+          },
+          "required": ["ok", "plugins"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/ErrorResult" }
+      ]
+    },
+    "PluginScanFailure": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "hostArch": { "type": "string" },
+        "slices": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["path", "code", "message"],
+      "additionalProperties": false
+    },
+    "ScanDuration": {
+      "type": "object",
+      "properties": {
+        "p50": { "type": ["number", "null"] },
+        "p95": { "type": ["number", "null"] },
+        "max": { "type": ["number", "null"] }
+      },
+      "required": ["p50", "p95", "max"],
+      "additionalProperties": false
+    },
+    "PluginScanSummary": {
+      "type": "object",
+      "properties": {
+        "success": { "type": "integer" },
+        "pending": { "type": "integer" },
+        "failure": { "type": "integer" },
+        "failureReasons": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "durationMs": { "$ref": "#/$defs/ScanDuration" },
+        "timeouts": { "type": "integer" },
+        "crashes": { "type": "integer" },
+        "factoryVersions": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "cacheHits": { "type": "integer" },
+        "probeAttempts": { "type": "integer" }
+      },
+      "required": [
+        "success",
+        "pending",
+        "failure",
+        "failureReasons",
+        "durationMs",
+        "timeouts",
+        "crashes",
+        "factoryVersions",
+        "cacheHits",
+        "probeAttempts"
+      ],
+      "additionalProperties": false
+    },
+    "RescanPluginsResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "count": { "type": "integer" },
+            "artifactCount": { "type": "integer" },
+            "skipped": { "type": "array", "items": { "type": "string" } },
+            "failures": { "type": "array", "items": { "$ref": "#/$defs/PluginScanFailure" } },
+            "summary": { "$ref": "#/$defs/PluginScanSummary" }
+          },
+          "required": ["ok", "count", "artifactCount", "skipped", "failures", "summary"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/ErrorResult" }
+      ]
+    },
+    "DidOpenParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "version": { "type": "integer" },
+        "text": { "type": "string" },
+        "documentDirectory": {
+          "type": ["string", "null"],
+          "description": "Where the document lives. A record, not the evaluation base."
+        }
+      },
+      "required": ["uri", "version", "text", "documentDirectory"],
+      "additionalProperties": false
+    },
+    "TextChange": {
+      "description": "LSP TextDocumentContentChangeEvent: a range replacement, or the full text when range is absent.",
+      "type": "object",
+      "properties": {
+        "range": { "$ref": "#/$defs/Range" },
+        "text": { "type": "string" }
+      },
+      "required": ["text"],
+      "additionalProperties": false
+    },
+    "DidChangeParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "version": { "type": "integer" },
+        "changes": { "type": "array", "items": { "$ref": "#/$defs/TextChange" } }
+      },
+      "required": ["uri", "version", "changes"],
+      "additionalProperties": false
+    },
+    "DidCloseParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" }
+      },
+      "required": ["uri"],
+      "additionalProperties": false
+    },
+    "DidChangeSelectionParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "range": { "$ref": "#/$defs/Range" },
+        "cursor": {
+          "$ref": "#/$defs/Position",
+          "description": "Where the caret is (the active end of the selection). Defaults to range.end."
+        }
+      },
+      "required": ["uri", "range"],
+      "additionalProperties": false
+    },
+    "DidChangeActiveParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "type": ["string", "null"] }
+      },
+      "required": ["uri"],
+      "additionalProperties": false
+    },
+    "CompleteParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "position": { "$ref": "#/$defs/Position" }
+      },
+      "required": ["uri", "position"],
+      "additionalProperties": false
+    },
+    "CompletionItem": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string" },
+        "kind": { "type": "string" },
+        "detail": { "type": "string" },
+        "documentation": { "type": "string" },
+        "insertText": { "type": "string" },
+        "sortText": { "type": "string" }
+      },
+      "required": ["label"],
+      "additionalProperties": false
+    },
+    "CompleteResult": {
+      "type": "object",
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "#/$defs/CompletionItem" } }
+      },
+      "required": ["items"],
+      "additionalProperties": false
+    },
+    "GetDiagnosticsParams": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "A file path. Omitted = every synced document."
+        }
+      },
+      "additionalProperties": false
+    },
+    "DiagnosticEntry": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "integer" },
+        "character": { "type": "integer" },
+        "severity": { "type": "string", "enum": ["error", "warning", "info", "hint"] },
+        "message": { "type": "string" },
+        "code": { "type": ["string", "integer"] }
+      },
+      "required": ["line", "character", "severity", "message"],
+      "additionalProperties": false
+    },
+    "FileDiagnostics": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/DiagnosticEntry" } }
+      },
+      "required": ["path", "diagnostics"],
+      "additionalProperties": false
+    },
+    "GetDiagnosticsResult": {
+      "type": "object",
+      "properties": {
+        "files": { "type": "array", "items": { "$ref": "#/$defs/FileDiagnostics" } }
+      },
+      "required": ["files"],
+      "additionalProperties": false
+    },
+    "EditorDiagnosticsParams": {
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/DiagnosticEntry" } }
+      },
+      "required": ["uri", "items"],
+      "additionalProperties": false
+    },
+    "CursorPosition": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "integer" },
+        "character": { "type": "integer" }
+      },
+      "required": ["line", "character"],
+      "additionalProperties": false
+    },
+    "EditorSelection": {
+      "type": "object",
+      "properties": {
+        "start": { "$ref": "#/$defs/CursorPosition" },
+        "end": { "$ref": "#/$defs/CursorPosition" }
+      },
+      "required": ["start", "end"],
+      "additionalProperties": false
+    },
+    "EditorState": {
+      "description": "The MCP get_editor_state shape. Fields are null when no document is active.",
+      "type": "object",
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "languageId": { "type": ["string", "null"] },
+        "cursor": { "oneOf": [{ "$ref": "#/$defs/CursorPosition" }, { "type": "null" }] },
+        "selection": { "oneOf": [{ "$ref": "#/$defs/EditorSelection" }, { "type": "null" }] },
+        "lineCount": { "type": ["integer", "null"] },
+        "isDirty": { "type": ["boolean", "null"] }
+      },
+      "required": ["path", "languageId", "cursor", "selection", "lineCount", "isDirty"],
+      "additionalProperties": false
+    },
+    "DocumentText": {
+      "type": "object",
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "text": { "type": ["string", "null"] }
+      },
+      "required": ["path", "text"],
+      "additionalProperties": false
+    },
+    "OpenFileParams": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "required": ["path"],
+      "additionalProperties": false
+    },
+    "SelectionInput": {
+      "description": "1-based selection (matches the editor gutter), the MCP set_selection shape.",
+      "type": "object",
+      "properties": {
+        "startLine": { "type": "integer", "minimum": 1 },
+        "startChar": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "endChar": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["startLine"],
+      "additionalProperties": false
+    },
+    "SelectionSnapshot": {
+      "description": "What the editor client returns for editor.runSelection: where its selection is. Layer 2 reads the text from its synced copy at that version.",
+      "type": "object",
+      "properties": {
+        "uri": { "$ref": "#/$defs/DocumentUri" },
+        "version": { "type": "integer" },
+        "range": { "$ref": "#/$defs/Range" },
+        "documentDirectory": { "type": ["string", "null"] }
+      },
+      "required": ["uri", "version", "range", "documentDirectory"],
+      "additionalProperties": false
+    },
+    "EditReplaceParams": {
+      "type": "object",
+      "properties": {
+        "find": { "type": "string" },
+        "replace": { "type": "string" },
+        "all": { "type": "boolean" }
+      },
+      "required": ["find", "replace"],
+      "additionalProperties": false
+    },
+    "FlashConfigInput": {
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "duration": { "type": "number" },
+        "color": { "type": "string" },
+        "customColor": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "FlashConfig": {
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "duration": { "type": "number" },
+        "color": { "type": "string" },
+        "customColor": { "type": "string" }
+      },
+      "required": ["count", "duration", "color", "customColor"],
+      "additionalProperties": false
+    },
+    "FlashConfigResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "config": { "$ref": "#/$defs/FlashConfig" }
+          },
+          "required": ["ok", "config"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/ErrorResult" }
+      ]
+    },
+    "DocsSite": {
+      "type": "string",
+      "enum": ["user", "dev"]
+    },
+    "DocsGetParams": {
+      "type": "object",
+      "properties": {
+        "site": { "$ref": "#/$defs/DocsSite" },
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "required": ["site", "path"],
+      "additionalProperties": false
+    },
+    "DocsGetResult": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" }
+      },
+      "required": ["text"],
+      "additionalProperties": false
+    },
+    "DocsSearchParams": {
+      "type": "object",
+      "properties": {
+        "site": { "$ref": "#/$defs/DocsSite" },
+        "query": { "type": "string" },
+        "limit": {
+          "type": "number",
+          "description": "Default 10. Fractions are truncated and negatives become 0."
+        }
+      },
+      "required": ["site", "query"],
+      "additionalProperties": false
+    },
+    "DocsSearchMatch": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "line": { "type": "integer" },
+        "excerpt": { "type": "string" }
+      },
+      "required": ["path", "line", "excerpt"],
+      "additionalProperties": false
+    },
+    "DocsSearchResult": {
+      "type": "object",
+      "properties": {
+        "matches": { "type": "array", "items": { "$ref": "#/$defs/DocsSearchMatch" } }
+      },
+      "required": ["matches"],
+      "additionalProperties": false
+    },
+    "StepSource": {
+      "description": "Where the sounding call is, in the coordinates of the evalId request's code (0-based, UTF-16, end exclusive).",
+      "type": "object",
+      "properties": {
+        "evalId": { "$ref": "#/$defs/EvalId" },
+        "start": { "$ref": "#/$defs/Position" },
+        "end": { "$ref": "#/$defs/Position" }
+      },
+      "required": ["evalId", "start", "end"],
+      "additionalProperties": false
+    },
+    "TransportStepParams": {
+      "type": "object",
+      "properties": {
+        "seq": { "type": "string" },
+        "argPath": { "type": "string" },
+        "atEpochMs": { "type": "number" },
+        "source": {
+          "oneOf": [{ "$ref": "#/$defs/StepSource" }, { "type": "null" }],
+          "description": "Omitted or null = outside a document (MCP evaluation, an imported file, or not yet known)."
+        }
+      },
+      "required": ["seq", "argPath", "atEpochMs"],
+      "additionalProperties": false
+    },
+    "TransportState": {
+      "type": "object",
+      "properties": {
+        "playing": { "type": "boolean" },
+        "tempo": { "type": "number" }
+      },
+      "required": ["playing"],
+      "additionalProperties": false
+    },
+    "LogLevel": {
+      "type": "string",
+      "enum": ["error", "warn", "info", "debug"]
+    },
+    "LogKind": {
+      "type": "string",
+      "enum": ["diagnostic", "engine", "daemon", "stall", "session"]
+    },
+    "LogLineParams": {
+      "type": "object",
+      "properties": {
+        "level": { "$ref": "#/$defs/LogLevel" },
+        "kind": { "$ref": "#/$defs/LogKind" },
+        "text": { "type": "string" },
+        "ts": { "type": "number", "description": "Epoch milliseconds." },
+        "clientId": { "type": "string" },
+        "evalId": { "$ref": "#/$defs/EvalId" }
+      },
+      "required": ["level", "kind", "text", "ts"],
+      "additionalProperties": false
+    }
+  }
+}

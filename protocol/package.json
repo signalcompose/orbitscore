@@ -1,0 +1,8 @@
+{
+  "name": "@orbitscore/protocol",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OrbitScore session protocol definitions (JSON Schema 2020-12) and the types generated from them",
+  "license": "Apache-2.0",
+  "author": "Signal compose Inc."
+}

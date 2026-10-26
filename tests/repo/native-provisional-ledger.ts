@@ -280,7 +280,7 @@ export const LEDGER: readonly LedgerEntry[] = [
     id: 'P-18',
     title: 'protocol:check が TS 側だけ（N0-b で生成ツールが決まるまで）',
     deadline: { kind: 'when-exists', path: 'apps/OrbitStudio/Package.swift' },
-    state: 'planned',
+    state: 'open',
     check: (repoRoot) => {
       const ok = hasFiles(repoRoot, 'protocol/gen/swift')
       return {

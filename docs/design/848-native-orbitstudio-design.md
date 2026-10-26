@@ -875,6 +875,20 @@ log.line (S→C 通知 + ring)
 - `surfaces` 拡張キー: 各メソッドに `"x-surfaces": ["gui","mcp"]` を必須にし、D-4 の検査が読む
 - 🔴 **ライセンス（10-26・§14.0 (9)）**: `protocol/` の**定義**（`session/v1/*.schema.json` と生成物 `gen/`）だけを **Apache-2.0** にする。`protocol/LICENSE` を S-rpc の小 PR（N1-a1・スキーマを置く PR）で足す。リポジトリのルートのライセンス（Signal compose Source-Available License v1.0）はそれ以外にかかったまま。理由: 第三者が自分のクライアント（別のエディタ・コントローラ・可視化ツール）を作る時に定義を使えるようにする（裁定 6 の「公開したプロトコルに繋ぐ一般の窓口」の前提）。定義が公開されて使われ始めた後に変えると使った人に影響するので、**スキーマを置く PR と同じ PR で**入れる。owner の意見（原文）「そういう意味ではDSLもApache-2.0でいいと思います。」は**記録だけ**で、本書の他のライセンスの記述は変えない（範囲は §14.0 の第 2 回の記録・#998）
 
+### 5.9 スキーマを書いた時に補ったもの（2026-10-26・S-rpc の N1-a1〔#1001〕・🔴 owner の確認待ち）
+
+`protocol/session/v1/session.schema.json` を書いた時に、本書だけでは形が決まらなかった所を次のように補った。**束 S-rpc の締めで owner が確かめるまで確定ではない**（消費者がテストだけのうちに直せる・一方通行 N-1）。
+
+| # | 本書の記述 | 補ったもの | 理由 |
+|---|---|---|---|
+| S-1 | §5.8「`x-surfaces: ["gui","mcp"]` を必須に」/ D-4「GUI が呼ぶメソッド ⊆ MCP が呼ぶメソッド」 | 語彙を 4 つにした: `gui`（GUI の操作）/ `mcp`（中継がツールの実装に呼ぶ）/ `editor`（エディタのクライアントが文書の写しを保つための同期と、エディタに描く言語サービス = `editor.did*`・`editor.complete`）/ `infra`（握手・寿命・イベント）。D-4 は `gui` ⇒ `mcp` だけを検査する。あわせて `x-mcp-tools`（そのメソッドを使う MCP ツール）を足し、28 本と対応することを検査する | D-4 を字面どおりに読むと、文書の同期（§5.5）と補完（§5.3.4）が「GUI だけの経路」になる。どちらも操作ではない（同期は写しを保つため・補完は描画）。補完を MCP のツールにすると v1 関門（§6.1・28 本）を破る |
+| S-2 | §5.2「不一致は attach を拒否する（strict）」/ §6.2 RL-5「同じ MAJOR なら繋ぐ（MINOR は追加だけ）」 | `session.attach` の params に `protocol_version` を足し、**MAJOR が違う時だけ** `PROTOCOL_VERSION_MISMATCH` で拒否する。MINOR の違いは繋ぐ（知らないメソッドは `METHOD_NOT_FOUND` で黙らずに返る） | §5.2 の params にクライアントの版が無く、サーバが拒否できない。§5.2 と RL-5 は MINOR の扱いが食い違っていたので RL-5 に合わせた（自動更新の後の古い中継が MINOR 違いで締め出されない） |
+| S-3 | §5.5 `editor.didOpen({uri, text, documentDirectory})` | `version` を足した（LSP の `TextDocumentItem` と同じ） | §5.3.1 の `target.version` は「`editor.didChange` の version」で、最初の版が `didOpen` に無いと数え始められない |
+| S-4 | §5.5 `editor.didChangeSelection({uri, range})` | 省略可能な `cursor`（選択の動く側。省略時は `range.end`） | `get_editor_state` は `cursor` と `selection` を別に返す。範囲を正規化すると、後ろ向きの選択でカーソルの位置が失われる |
+| S-5 | §5.3.4 逆方向 `editor.*`（S→C） | 中継から届くのは C→S の同名のメソッドで、層 2 がエディタのクライアントへ転送する（スキーマの `x-editor-request`）。`editor.runSelection` だけは往復の中身が違う — エディタは選択の位置（`SelectionSnapshot`）だけを返し、層 2 が subject-block を解決して評価する（§5.4） | §5.3.4 は S→C の側しか書いておらず、中継（クライアント）がどのメソッドで頼むかが無かった |
+| S-6 | §5.3.6 の通知 `plugin.uiClosed` | v1 のスキーマに**まだ入れていない**（MINOR で足す） | daemon の `PluginUiClosed` は engine の中で処理され（`rust-engine-player.ts:655`）、層 2 が受け取る口が無い。台帳 P-07（型付きの出力の口・S-eval）で一緒に足すのを提案する |
+| S-7 | 構造化エラー（`NO_EDITOR_ATTACHED` ほか）の数値 | `x-errors` に数値を置いた（JSON-RPC のサーバ範囲 −32000〜−32099）。エラーの `data.code` に名前を入れる | 本書は名前だけだった |
+
 ---
 
 ## 6. MCP サーバの置き場 = 中継（コードは `packages/session/src/mcp/`）— 10-26 改訂（旧見出し「= 層 2」）

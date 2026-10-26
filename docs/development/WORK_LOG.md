@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(protocol): add the session protocol v1 schema, the generated TS types and the Apache-2.0 license (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1001-a1-protocol-schema`（`1001-a0-eval-intake` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-2 = N1-a1）
+
+- **正本** `protocol/session/v1/session.schema.json`（JSON Schema 2020-12）: 型（`$defs`）と、メソッドの一覧 `x-methods`（方向・種類・`x-surfaces`・`x-mcp-tools`・エディタへの転送 `x-editor-request`）とエラーコード `x-errors`。メソッドは設計 §5.3 の写像（`session.evaluate` の `target`・`evalId`・`transport.step` の `source`・`log.line` の `level` / `kind`・`session.attach` の `token`）
+- **生成** `scripts/protocol/generate.mjs`（`json-schema-to-typescript` 15.0.4・repo の prettier 設定で整形）→ `protocol/gen/ts/session/v1/session.d.ts`（型と、メソッド名 → 型の対応表）。`npm run protocol:generate` / `protocol:check`。`npm test` の `tests/protocol/generated-types.spec.ts` も差分ゼロを検査。N0-b までは TS 側だけ（台帳 P-18 を `open`・印は生成スクリプト）
+- **D-4**（`tests/protocol/surface-coverage.spec.ts`）: `gui` を持つメソッドは `mcp` も持つ。`x-mcp-tools` の和集合 = 凍結版の 28 本
+- **`protocol/LICENSE`** = Apache-2.0 の全文（一方通行 N-14）。sha256 を spec で固定。`protocol/` は npm workspace の `@orbitscore/protocol`（`license: Apache-2.0`）にし、層 2 は型を `@orbitscore/protocol/gen/ts/...` から読む
+- 設計 §5.9 に、スキーマを書いた時に補ったもの 7 件（`x-surfaces` の語彙・attach の版と MAJOR だけの拒否・`didOpen` の `version` ほか）を owner の確認待ちとして記録
+
+Part of #1001
+
+---
+
 ### feat(session): add the evaluation intake scaffold, its parity test and the provisional ledger (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1001-a0-eval-intake`（統合ブランチ `1001-session-rpc` 向けの小 PR・stacked の draft・PR #1005）/ **Issue**: [#1001](https://github.com/signalcompose/orbitscore/issues/1001)（束 S-rpc・計画 §7.1 の C-0 / C-1）
