@@ -104,14 +104,16 @@ primary source からの逸脱は禁止:
 
 仕様の真実は `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`。 不明点はそちらを当たる。
 
-## 可用性表記（拡張版 / OrbitStudio）
+## 可用性表記（OrbitScore / OrbitStudio）
 
 このサイトは **2 つの配布線**に向けた 1 本の文書です。
 
 | 配布線 | 指すもの | 書く語（ja / en） |
 |---|---|---|
-| **拡張版** | VS Code 拡張（`.vsix`・機能は凍結。bug fix の例外だけ出る） | `拡張版` / `Extension` |
-| **OrbitStudio** | macOS ネイティブ版アプリ | `OrbitStudio` / `OrbitStudio` |
+| **OrbitScore** | VS Code 拡張（`.vsix`・機能は凍結。bug fix の例外だけ出る） | `OrbitScore`（ja / en 共通） |
+| **OrbitStudio** | macOS ネイティブ版アプリ | `OrbitStudio`（ja / en 共通） |
+
+言語そのものは **OrbitScore DSL** と呼びます（owner 2026-10-26）。「拡張版」「Extension」は配布線の名前として書きません。
 
 違いは 2 種類あり、書き方を分けます（設計: `docs/design/848-docs-structure-design.md` §2〜§5）。
 
@@ -120,7 +122,7 @@ primary source からの逸脱は禁止:
 
 DSL の説明本文は 1 本のまま書きます。配布線ごとに本文を書き分けることはしません。
 
-🔴 owner の条件（2026-10-26・設計 848 §14 (20)）: **拡張版の読者が OrbitStudio の記述を自分の手順として読まないこと**（拡張版を退役させるまで）。下の規則 `AV-HOST-SCOPE` がこれを機械で守ります。
+🔴 owner の条件（2026-10-26・設計 848 §14 (20)）: **OrbitScore（VS Code 拡張）の読者が OrbitStudio の記述を自分の手順として読まないこと**（VS Code 拡張を退役させるまで）。下の規則 `AV-HOST-SCOPE` がこれを機械で守ります。
 
 ### lint — `npm run docs:check`
 
@@ -134,7 +136,7 @@ DSL の説明本文は 1 本のまま書きます。配布線ごとに本文を�
 | `AV-UNRELEASED` | `未リリース（…）` が残っている（通常は警告。`--release` を付けたリリースの preflight では red） |
 | `AV-I18N` | ja の章と en の章で `host`・可用性の行の数・分割節の印の数が違う |
 | `AV-HOST-SCOPE` | `host: both` / `both+split` の章で、OrbitStudio を含む行が下の「併記の行」にも「OrbitStudio の可用性の行が付いた節」にも入っていない |
-| `AV-TERM` | 拡張版を「OrbitStudio（凍結版）」と呼んでいる |
+| `AV-TERM` | VS Code 拡張を「OrbitStudio（凍結版）」と呼んでいる / 併記の行の名前が `- **拡張版**:` / `- **Extension**:` |
 
 ### frontmatter `host:`（必須）
 
@@ -143,7 +145,7 @@ DSL の説明本文は 1 本のまま書きます。配布線ごとに本文を�
 | `both` | 両方の配布線で同じ内容。操作が違う段落だけを併記する |
 | `both+split` | 章は共通だが、手順の節が配布線で分かれる（節に分割節の印を付ける） |
 | `app` | OrbitStudio だけの章 |
-| `ext` | 拡張版だけの章（`.vsix` の入れ方など）。アプリには同梱しない |
+| `ext` | OrbitScore（VS Code 拡張）だけの章（`.vsix` の入れ方など）。アプリには同梱しない |
 
 ja と en で同じ値にします。
 
@@ -166,37 +168,37 @@ ja と en で同じ値にします。
 
 ```markdown
 ::: tip カタログ名が候補に出ないとき
-- **拡張版**: コマンドパレットから **「OrbitScore: Rescan Plugin Catalog」** を実行します
+- **OrbitScore**: コマンドパレットから **「OrbitScore: Rescan Plugin Catalog」** を実行します
 :::
 ```
 
-en では `- **Extension**:` と `- **OrbitStudio**:` です。
+en でも `- **OrbitScore**:` と `- **OrbitStudio**:` です。
 
 - 🔴 **`AV-HOST-SCOPE`**: `host: both` / `both+split` の章では、OrbitStudio を含む行（大文字小文字を問わない。コードブロックと frontmatter も含む）は次のどちらかにしか置けません
   1. `- **OrbitStudio**:` で始まる併記の行
   2. 見出しの直下の可用性の行が OrbitStudio を含む節（その下位の節も含む）
-- **OrbitStudio の操作手順は、アプリの表面が決まるまで書きません**（設計 848 別冊 §7.4・§14 (20)「主語は A-parity 後」）。それまでは `- **拡張版**:` の行だけを置き、OrbitStudio の行は表面が決まってから足します
+- **OrbitStudio の操作手順は、アプリの表面が決まるまで書きません**（設計 848 別冊 §7.4・§14 (20)「主語は A-parity 後」）。それまでは `- **OrbitScore**:` の行だけを置き、OrbitStudio の行は表面が決まってから足します
 
 ### 可用性の行（固定文法・5 形）
 
 機能の**見出しの直下**に 1 行だけ置きます（章全体が 1 つの機能なら章のタイトルの直下）。行頭の `> **対応**:` が唯一のアンカーで、`grep -rn "> \*\*対応\*\*:" sites/user` の 1 本で全件を列挙できる形にしてあります。
 
 ```markdown
-> **対応**: 拡張版 4.2.0 以降 / OrbitStudio 0.1.0 以降
-> **対応**: OrbitStudio 0.2.0 以降（拡張版には入りません）
-> **対応**: 拡張版 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）
+> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降
+> **対応**: OrbitStudio 0.2.0 以降（OrbitScore には入りません）
+> **対応**: OrbitScore 4.2.0 以降（OrbitStudio では 0.1.0 から動作が変わります — 下記）
 > **対応**: 未リリース（OrbitStudio）— main にマージ済み・次のリリースから
-> **対応**: 未リリース（拡張版 4.2.1）— 凍結版の bug fix
+> **対応**: 未リリース（OrbitScore 4.2.1）— 凍結版の bug fix
 ```
 
 en（`sites/user/en/`）は `> **Availability**:` で同じ 5 形です。
 
 ```markdown
-> **Availability**: Extension 4.2.0 and later / OrbitStudio 0.1.0 and later
-> **Availability**: OrbitStudio 0.2.0 and later (not in the Extension)
-> **Availability**: Extension 4.2.0 and later (behaves differently in OrbitStudio from 0.1.0 — see below)
+> **Availability**: OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later
+> **Availability**: OrbitStudio 0.2.0 and later (not in OrbitScore)
+> **Availability**: OrbitScore 4.2.0 and later (behaves differently in OrbitStudio from 0.1.0 — see below)
 > **Availability**: Unreleased (OrbitStudio) — merged to main, ships in the next release
-> **Availability**: Unreleased (Extension 4.2.1) — bug fix for the frozen line
+> **Availability**: Unreleased (OrbitScore 4.2.1) — bug fix for the frozen line
 ```
 
 - 版は semver の 3 桁（`4.2.0`）。配布線の語は上の 2 つだけです
@@ -218,5 +220,5 @@ en（`sites/user/en/`）は `> **Availability**:` で同じ 5 形です。
 - [ ] 章番号と sidebar 構成が整合しているか
 - [ ] dead link がないか（VitePress build で自動検出）
 - [ ] frontmatter に `host:` があり、ja / en で同じ値か
-- [ ] 操作が配布線で違う段落を、`- **拡張版**:` の併記にしたか
+- [ ] 操作が配布線で違う段落を、`- **OrbitScore**:` の併記にしたか
 - [ ] OrbitStudio の記述が併記の行か OrbitStudio の可用性の行が付いた節の中にあるか（`npm run docs:check` が `AV-HOST-SCOPE` で検査）

@@ -4,8 +4,8 @@
  *
  * Enforces the fixed grammar of STYLE_GUIDE.md「可用性表記」(design:
  * docs/design/848-docs-structure-design.md §3.4 / §5). The site is one body
- * of text for two distribution lines — the frozen VS Code extension
- * (「拡張版」/ "Extension") and the native macOS app (OrbitStudio) — so the
+ * of text for two distribution lines — OrbitScore (the frozen VS Code
+ * extension) and OrbitStudio (the native macOS app) — so the
  * notation that tells them apart must be greppable by one fixed anchor and
  * must never let an extension reader take OrbitStudio text as their own
  * instructions (owner ruling (20) / ledger P-13).
@@ -36,9 +36,10 @@
  *                  `- **OrbitStudio**:` or inside a section whose availability
  *                  line names OrbitStudio. Applies to every line, code blocks
  *                  and frontmatter included.
- *   AV-TERM        never call the extension "OrbitStudio（凍結版" /
- *                  "OrbitStudio (frozen" (the 2026-09-18 interim wording;
- *                  OrbitStudio is the native app).
+ *   AV-TERM        the lines are named OrbitScore and OrbitStudio (owner,
+ *                  2026-10-26). Never call the extension "OrbitStudio（凍結版" /
+ *                  "OrbitStudio (frozen" (the 2026-09-18 interim wording), and
+ *                  never label a parallel line `- **拡張版**:` / `- **Extension**:`.
  *
  * Usage (from repo root or sites/user):
  *   node sites/user/scripts/check-availability.mjs             # ja + en
@@ -70,22 +71,22 @@ const AVAILABILITY = {
   ja: {
     anchor: '> **対応**: ',
     forms: [
-      String.raw`拡張版 ${V} 以降 / OrbitStudio ${V} 以降`,
-      String.raw`OrbitStudio ${V} 以降（拡張版には入りません）`,
-      String.raw`拡張版 ${V} 以降（OrbitStudio では ${V} から動作が変わります — 下記）`,
+      String.raw`OrbitScore ${V} 以降 / OrbitStudio ${V} 以降`,
+      String.raw`OrbitStudio ${V} 以降（OrbitScore には入りません）`,
+      String.raw`OrbitScore ${V} 以降（OrbitStudio では ${V} から動作が変わります — 下記）`,
       String.raw`未リリース（OrbitStudio）— main にマージ済み・次のリリースから`,
-      String.raw`未リリース（拡張版 ${V}）— 凍結版の bug fix`,
+      String.raw`未リリース（OrbitScore ${V}）— 凍結版の bug fix`,
     ],
     unreleased: '未リリース（',
   },
   en: {
     anchor: '> **Availability**: ',
     forms: [
-      String.raw`Extension ${V} and later / OrbitStudio ${V} and later`,
-      String.raw`OrbitStudio ${V} and later \(not in the Extension\)`,
-      String.raw`Extension ${V} and later \(behaves differently in OrbitStudio from ${V} — see below\)`,
+      String.raw`OrbitScore ${V} and later / OrbitStudio ${V} and later`,
+      String.raw`OrbitStudio ${V} and later \(not in OrbitScore\)`,
+      String.raw`OrbitScore ${V} and later \(behaves differently in OrbitStudio from ${V} — see below\)`,
       String.raw`Unreleased \(OrbitStudio\) — merged to main, ships in the next release`,
-      String.raw`Unreleased \(Extension ${V}\) — bug fix for the frozen line`,
+      String.raw`Unreleased \(OrbitScore ${V}\) — bug fix for the frozen line`,
     ],
     unreleased: 'Unreleased (',
   },
@@ -112,6 +113,8 @@ const LEGACY_EXTENSION_IDENTIFIERS = ['orbitstudio-mcp-gated.spec.ts', 'ORBIT_GA
 const mentionsOrbitStudio = (line) =>
   ORBITSTUDIO_RE.test(LEGACY_EXTENSION_IDENTIFIERS.reduce((t, id) => t.split(id).join(''), line))
 const FROZEN_TERM_RE = /OrbitStudio（凍結版|OrbitStudio \(frozen/
+/** The earlier labels for the extension line; the line is called OrbitScore now. */
+const OLD_LABEL_RE = /^\s*- \*\*(拡張版|Extension)\*\*:/
 
 const SKIP_DIRS = new Set(['node_modules', '.vitepress', 'public', 'scripts'])
 const SKIP_FILES = new Set(['STYLE_GUIDE.md', 'README.md'])
@@ -353,8 +356,11 @@ function checkTerms(ch) {
         ch.rel,
         i + 1,
         'AV-TERM',
-        'OrbitStudio is the native app; the frozen VS Code extension is 「拡張版」 / "Extension"',
+        'OrbitStudio is the native app; the frozen VS Code extension is OrbitScore',
       )
+    }
+    if (OLD_LABEL_RE.test(line)) {
+      report(errors, ch.rel, i + 1, 'AV-TERM', 'label the extension line `- **OrbitScore**:`')
     }
   })
 }
