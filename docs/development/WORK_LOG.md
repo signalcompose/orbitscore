@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): apply the owner's second-round rulings to the OrbitStudio design (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+第 1 回で owner が説明を求めた 7 件を裁定シート第 2 回で問い直し、全件が決まった（すべて推奨どおり）。設計・計画・地図・別冊をその裁定に合わせて改訂した。起案は fresh Opus subagent（xhigh）、審査は main。
+
+- **パリティの再定義**: 関門は「DSL が実行された結果は拡張版と同じ」（D-2）と能力。MCP ツールの名前・引数・戻りは v1（第 1 リリースまで）だけ関門で、`mcp-tools-v1.spec.ts` が版で自動的に切り替わる。評価の区切り方・画面・ログの文言は作り直してよい。拡張版の通信方式から来た制約（`document_path` の改行禁止）は引き継がない。拡張版の位置づけは「仕様書」から「回帰の検算台」へ
+- **段階移行と「最後まで移行する」仕組み**: owner の条件「動いて安心して終わってしまうことがあるので」に応えて、**暫定物の台帳**（設計 §1.4・P-01〜P-18）を新設。各行に強制の仕組み（`PROVISIONAL(P-xx)` の印 + `tests/repo/native-provisional-ledger.spec.ts` + リリースの preflight = D-11）を置いた。評価の受付口は段階 1（足場 + 差分テスト）→ 段階 2（#997 の評価のかたち・新しい束 S-eval）
+- **LLM の接続**: セキュリティの再検討（fresh Opus・一次ソース）を受けて、LLM の経路を **stdio の中継 = MCP サーバ → UDS（0700 / 0600）→ 層 2 の RPC** にした。TCP の `/mcp` は v1 で開かない。TCP の `/rpc`（WebView 専用）は Host + Origin（欠落も拒否）+ トークン。根拠は Claude Code の再接続の上限（HTTP 途中切断 5 回・初回 3 回・stdio 終了は手動）で、**トークンを外しても HTTP の登録では締め出しが残る**。中継の規則 RL-1〜8・締め出しの表 E1〜E13・D-12 を追加
+- **評価の要求**に省略可能な `target`（文書の uri・版・範囲）を追加。評価のかたちは #997 で設計する
+- **タイミング**: §4.6 を書き直し、測れる基準（capture のオンセット）と早い段階の測定（N0-d / T-1）、Rust の `ScheduleEvents` へ移す判断の規則を置いた
+- (7) 拡張版は書き直さない / (9) `protocol/` は Apache-2.0（DSL の仕様書の Apache-2.0 は #998）
+- **計画 §7**: クラウド（Linux）で続けて進める作業列 C-0〜C-12・D-①②と、帰国後に手元で行う L-1〜L-9
+- main の審査で足したもの: Swift のシェル自身は層 2 に **UDS** で繋ぐ（TCP の `/rpc` は WebView 専用で、Origin の欠落を拒否する規則がシェルにかからない・設計 §5.2）/ 計画 N-3 に `--mcp` の削除を記録。advisor に通信の形（中継・UDS）と `target` を確認し、妥当と判断した
+
+Part of #848
+
+---
+
 ### docs(design): record the owner's rulings on the OrbitStudio design (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `848-native-design-review` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
