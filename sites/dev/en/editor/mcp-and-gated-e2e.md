@@ -627,7 +627,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — stock VS Code and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:815-846
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:826-857
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -720,7 +720,7 @@ The pattern must never be widened to an app or process name, it says in more tha
 `killHarnessInstances()` is not only a teardown helper. `launchIsolatedOrbitStudio()` calls it **as its first step**, so any test that launches its own app carries a side effect: the moment it starts running, every harness-owned VS Code instance alive at that point is taken down. Most of the gated spec rides on the **shared session** that the `describe` setup launched once, so putting a self-launching test in the middle of that run leaves the shared-session tests behind it with nothing to connect to.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:7205-7208
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7211-7214
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -734,7 +734,7 @@ What makes this awkward is that the breakage is **invisible when the test runs a
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1543-1548
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1554-1559
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -915,7 +915,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2153-2167
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2164-2178
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1430,7 +1430,7 @@ export function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3249-3260
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3260-3271
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1446,13 +1446,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3268-3269
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3279-3280
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3325-3327
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3336-3338
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

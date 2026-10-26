@@ -29,6 +29,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - テスト: Rust 単体 7 件 / 実 daemon の結合 5 件（Linux では ALSA の既定 PCM を null に向けた HOME で起動するので CI の ubuntu でも走る）/ TS の spawn 配線 1 件（既存 2 件は argv の期待値を更新）/ engine の SIGKILL の実プロセステスト 1 件（`ORBIT_REAL_DAEMON=1` で gate）。daemon の 4 機構と engine の 3 配線を 1 つずつ外して red になることを確認した。途中で、**ready 前に終わった daemon を「起動できない環境」として skip していた**ため「パイプの確認を外す」変異が生き残ったので、skip の条件を「daemon が `"ready":false` を報告した時だけ」に絞った
 - dev 学習サイトの引用のずれのうち行ずれだけのものを `check-citations.mjs --fix` で再アンカーし、中身が変わった 2 箇所 × 2 言語（spawn と `run()`）は抜粋と説明を手で更新。`docs/research/ENGINE_DAEMON_PROTOCOL.md` に §2.1.2（親の死の検知）を追記
 - 🔴 未実施（帰国後に main が手元で）: macOS 実機のマージ前ゲート（ビルド + 実機 gated E2E 全件・cold install）、`#[cfg(target_os = "macos")]` のテスト、実 CoreAudio での「engine の SIGKILL → daemon が消える」
+- その後の macOS 実機 gated で、`#606 E2E-K3` が「SIGKILL 後も daemon が生存する」という旧契約のため失敗。#996 の新契約に合わせ、kill 前の発音と 5 秒以内の daemon 自己終了を検証し、`_exit` で途中までになる WAV の末尾無音判定は外した
 
 Closes #996
 

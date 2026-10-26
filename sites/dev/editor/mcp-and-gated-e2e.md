@@ -627,7 +627,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — stock VS Code と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:815-846
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:826-857
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -720,7 +720,7 @@ async function killHarnessInstances(): Promise<void> {
 `killHarnessInstances()` は teardown 専用の関数ではありません。`launchIsolatedOrbitStudio()` が **冒頭で** これを呼ぶので、自前のアプリを立てるテストは「走り出した瞬間に、そのとき生きているハーネス由来の VS Code をすべて落とす」という副作用を持ちます。gated spec の大半は `describe` のセットアップが 1 回だけ起動した**共有セッション**に相乗りしているので、自前アプリのテストをその並びの途中に置くと、後ろに残った共有セッションのテストは接続先を失います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:7205-7208
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:7211-7214
   // 🔴 **ここより下は自前のアプリを立てるテストである。** `launchIsolatedOrbitStudio` は
   // 冒頭で `killHarnessInstances()` を呼ぶので、**共有セッションを使うテストより後ろに
   // 置かなければならない**。上のブロックの真ん中に置いたところ、後続の `#606 T1` /
@@ -734,7 +734,7 @@ async function killHarnessInstances(): Promise<void> {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1543-1548
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1554-1559
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -915,7 +915,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2153-2167
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2164-2178
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1420,7 +1420,7 @@ export function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3249-3260
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3260-3271
       const dslLines = [
         'var global = init GLOBAL',
         // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
@@ -1436,13 +1436,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3268-3269
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3279-3280
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3325-3327
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3336-3338
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
