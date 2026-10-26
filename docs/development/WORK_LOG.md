@@ -25,6 +25,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - `needsEditor` / `app` は手で書くが、spec が **構文木の解析**（`helpers/gated-suite-analysis.ts`: `.call('<tool>'` を同じファイルの関数と helpers を辿って集める）と突き合わせる。基準タグが手元にあれば、台帳の題名 = タグの時点の題名も確かめる（CI の浅い clone にはタグが無い）
 - gated suite に `beforeEach` を 1 つ足し、台帳の分類でターゲットに無い題名を理由つきで skip（headless の needs-editor・先頭の題名が skip される時の shared。`vscode` では何もしない）
 - **MCP ツールの v1 関門** `tests/protocol/mcp-tools-v1.spec.ts`（設計 §6.1）: 中継の `tools/list`（名前・順序・input schema）を、凍結版の `startOrbitScoreMcpServer` に全 handler のスタブを渡して得た `tools/list` と比べる。例外の表は 2 件（`evaluate_orbitscore` / `register_mcp_server`・どちらも振る舞いの違い）。`MCP_V1_GATE_UNTIL`（未定 = null）と `apps/OrbitStudio/VERSION` で比べる相手をスナップショットへ自動で切り替える。台帳 P-03 を `open` に
+- dev 学習サイト（ja / en）の gated spec の引用 44 か所を、`beforeEach` と import で 8 行ずれた分だけ付け直した（`check-citations.mjs --fix`・すべて同じ中身への平行移動）
 - 🔴 判明: headless で残る題名は **1 件**（`#779`）。先頭の題名がエディタを使い、かつ後続の 49 題名が依る共有のアプリと状態（カタログの走査の結果など）を作るため（PR に選択肢と推奨を記録）
 
 Part of #1011
