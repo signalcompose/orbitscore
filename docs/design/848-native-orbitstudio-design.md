@@ -180,7 +180,7 @@ MCP ツールの名前・引数・戻りは **v1 だけ**関門で、v1 の後�
 #### 1.4.2 仕組み — `tests/repo/native-provisional-ledger.ts` と `.spec.ts`（N1-a0 で足す）
 
 - **印の文法**: `PROVISIONAL(P-01)`（コメントの中に置く。TS / Swift は `//`、シェルは `#`）。走査する場所: `packages/session/` `apps/OrbitStudio/` `protocol/` `scripts/` `tests/`（台帳のファイル自身は除く）。形を仮定した grep にしない — 文字列 `PROVISIONAL(` を唯一のアンカーにする（memory `version-sweep-fix-the-number-not-the-shape`）
-- **台帳のファイル**: 行ごとに `id` / `title` / `deadline`（上の 4 種。P-15 のように仕組みを置けない行だけ `none` + 理由）/ `state`（`planned` = まだコードに無い・`open` = コードに在る・`closed`）/ `closedBy`（PR 番号。作られずに済んだ行は理由）/ `markerless`（コードに印を置かない行の理由）/ `enforcedBy`（台帳の外の既存の仕組みが強制する行 = P-11・P-14。台帳の spec はその行を検査しない）/ `check`（`when-exists` の行と release モードで評価する関数）
+- **台帳のファイル**: 行ごとに `id` / `title` / `deadline`（上の 4 種。P-03 / P-11 / P-14 / P-15 のように期限が当てはまらない行は `none` + 理由）/ `state`（`planned` = まだコードに無い・`open` = コードに在る・`closed`）/ `closedBy`（PR 番号。作られずに済んだ行は理由）/ `markerless`（コードに印を置かない行の理由）/ `enforcedBy`（台帳の外の既存の仕組みが強制する行 = P-03・P-11・P-14。台帳の spec は名指しの仕組みとの対応を検査する）/ `check`（`when-exists` の行と release モードで評価する関数）
 - **検査**（`npm test` で毎回。release モードは `ORBIT_RELEASE_PREFLIGHT=1`）:
   1. コードの印の ID がすべて台帳に在り、その行が `planned` でない（**台帳に無い足場を作れない**・印を入れた PR が行を `open` にする）
   2. `closed` の行の印が 0 件（閉じたのに足場が残っている形を作れない）

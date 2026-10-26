@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/engine" },
-    { "path": "packages/vscode-extension" }
+    { "path": "packages/vscode-extension" },
+    { "path": "packages/session" }
   ]
 }

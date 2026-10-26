@@ -20,6 +20,12 @@ export default defineConfig({
   resolve: {
     alias: {
       vscode: path.resolve(__dirname, 'tests/mocks/vscode.ts'),
+      // 層 2（`packages/session`）は engine を出力のパス `@orbitscore/engine/dist/<module>` で
+      // import する（設計 848 §4.5.1: engine に barrel を足さない）。`npm test` は build より
+      // 前に走る（`.github/workflows/code-review.yml` の順序）ので、テストでは同じモジュールを
+      // src から読む。凍結版の REPL（src を相対で import する）と同じモジュールのインスタンス
+      // （`AudioLine` の静的なバッチ状態など）を共有させる意味もある。
+      '@orbitscore/engine/dist': path.resolve(__dirname, 'packages/engine/src'),
     },
   },
   test: {

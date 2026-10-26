@@ -179,7 +179,7 @@
 
 | 段 | 正本 | 現在地 | 前提 |
 |---|---|---|---|
-| プロトコル v1 + WebSocket サーバ + `session.evaluate` + イベント + CLI（改訂 10-23: 評価の単位の写し + 差分テスト・トークン + Origin・F-1 の機構・F-12 の層 2 側。改訂 10-26: 写しは**段階 1 の足場**・暫定物の台帳の仕組み・UDS + TCP の 2 リスナー・`target`・`protocol/LICENSE`） | 設計 §4・§5 / 計画 S-rpc | ○ | N0-b |
+| プロトコル v1 + WebSocket サーバ + `session.evaluate` + イベント + CLI（改訂 10-23: 評価の単位の写し + 差分テスト・トークン + Origin・F-1 の機構・F-12 の層 2 側。改訂 10-26: 写しは**段階 1 の足場**・暫定物の台帳の仕組み・UDS + TCP の 2 リスナー・`target`・`protocol/LICENSE`） | 設計 §4・§5 / 計画 S-rpc（#1001・統合ブランチ `1001-session-rpc`） | ○（2026-10-26 にクラウドで着手・小 PR は stacked の draft で未マージ） | N0-b |
 | MCP を層 2 へ（改訂 10-23: ツール **28**・4.2.1 で `get_user_doc` / `search_user_docs`。全ターゲットで凍結版と同じ順序に 28 本を登録・`/mcp` にトークン + Origin。改訂 10-26: MCP を話すのは**中継**〔stdio・UDS の RPC クライアント・RL-1〜RL-8〕で、TCP の `/mcp` は無い。ツールは v1 だけ凍結版と同じ〔`mcp-tools-v1.spec.ts`〕） | 設計 §6・§4.7 / 計画 S-mcp | ○（MCP 層 **8 ファイル 1,885 行が pure**・`OrbitScoreToolHandlers` を層 2 で実装する形・実測 2026-10-23） | S-rpc |
 | document 同期・診断・補完・subject-block・カーソル下プラグイン解決（層 2 の言語サービス） | 設計 §5.4-5.5 / 計画 S-editor | ○（`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts` は pure。`completion-context.ts` 290 行・`run-selection.ts` の `getLineSubject`・`plugin-ui-at-cursor.ts` の解決部が vscode 依存を剥がす対象） | S-mcp |
 | 同時性（FIFO・後勝ち・出自の記録・エディタは 1 つ） | 設計 §5.6 | 📐 | S-rpc で実装・S-mcp で実測 |

@@ -8,6 +8,7 @@
   "include": [
     "packages/engine/src/**/*.ts",
     "packages/vscode-extension/src/**/*.ts",
+    "packages/session/src/**/*.ts",
     "tests/**/*.ts"
   ]
 }
