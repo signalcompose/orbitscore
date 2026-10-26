@@ -151,5 +151,12 @@ jobs:
       # default グラフ(link-audio off)が GPL-free であることを assert する。
       # GPL 隔離 crate orbit-link-audio は [workspace] exclude かつ default-off feature
       # 経由でしか graph に入らないため、ここに GPL が現れたら隔離が壊れている。
-      - name: cargo-deny check
-        run: cargo deny check
+      #
+      # 🔴 advisories はここでは回さない（#1030）。bans / licenses / sources は Cargo.lock と
+      # deny.toml だけで結果が決まるので、全 PR で止めれば赤はその PR の差分の責任になる。
+      # advisories は**実行した日の RustSec DB** でも決まるので、勧告が 1 件公開された日から
+      # 依存を変えていない PR（docs だけの PR を含む）まで一斉に赤くなる（2026-10-26 の
+      # RUSTSEC-2026-0386 で全 PR が落ちた・#999）。advisories は rust-advisories.yml が
+      # 依存を変える PR と毎日の main で回す。
+      - name: cargo-deny check (bans / licenses / sources)
+        run: cargo deny check bans licenses sources

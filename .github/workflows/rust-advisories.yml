@@ -1,0 +1,111 @@
+name: Rust advisories
+
+# RustSec の勧告（`cargo deny check advisories`）を回す（#1030）。
+#
+# rust-ci.yml の `license / dependency gate` から分けた理由: advisories の結果は Cargo.lock
+# だけでなく**実行した日の RustSec DB** で決まる。全 PR で回すと、勧告が 1 件公開された日から
+# 依存を変えていない PR（docs だけの PR を含む）まで一斉に赤くなる。2026-10-26 に
+# RUSTSEC-2026-0386（tokio）が公開され、Rust CI が全 PR で落ちた（#999）。
+# 赤の帰属ができないゲートは慣れで死ぬ（#801 と同じクラス）。
+#
+# cargo-deny-action の README も "Recommended pipeline if using advisories, to avoid sudden
+# breakages" として advisories を bans / licenses / sources から分けている（あちらは
+# continue-on-error で赤を流す形。ここは無関係な PR では回さない形にした）。
+#
+# 何がいつ止まるか:
+# - **依存を変える PR**（下の paths）: その PR の lock に勧告のある版があれば赤。
+#   依存を触っている PR は `cargo update -p <crate>` で直せる位置にいる
+# - **毎日の main**（schedule）: 既存の依存に新しい勧告が出たら赤。新しい勧告を最初に
+#   知らせるのはこの経路（失敗時は `rust-advisory` ラベルの追跡 issue に通知する）
+# - **手動**（workflow_dispatch）: 直した後の確認用
+#
+# 🔴 このファイル自身も paths に入れる。このファイルを変える PR で検査が実際に走ることを
+# 確かめるため。main に既存の勧告があればその PR は赤くなるが、それは毎日の実行でも同じ赤。
+# 🔴 main の branch protection に required status checks は無い（2026-10-26 に `gh api` で確認）。
+# この検査はマージを機械的には止めない — 赤を見たら直すのは人。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'rust/Cargo.lock'
+      - 'rust/Cargo.toml'
+      - 'rust/**/Cargo.toml'
+      - 'rust/deny.toml'
+      - '.github/workflows/rust-advisories.yml'
+  schedule:
+    # 毎日 21:23 UTC = 06:23 JST（毎時 0 分は混むのでずらす）
+    - cron: '23 21 * * *'
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    name: advisory gate (RustSec)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      # rust-ci.yml の cargo-deny job と同じ理由（crates.io sparse-index の transient blip）。
+      CARGO_NET_RETRY: "10"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: cargo-deny check advisories
+        id: deny
+        run: cargo deny check advisories
+
+      - name: Notify advisory workflow failure in tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_LABEL: rust-advisory
+          ISSUE_TITLE: RustSec advisories failing on main
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DENY_OUTCOME: ${{ steps.deny.outcome }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          gh label create "$ISSUE_LABEL" \
+            --description "Scheduled RustSec advisory failures" \
+            --color D73A4A || true
+
+          if [ "$DENY_OUTCOME" = "failure" ]; then
+            body="cargo deny check advisories が失敗しました（勧告の検出、または DB / crates.io の取得失敗の可能性。ログで確認してください）。対象: $REF_NAME ($COMMIT_SHA)。実行: $RUN_URL"
+          else
+            body="定期の advisory 検査そのものが失敗しました（勧告かどうか不明）。対象: $REF_NAME ($COMMIT_SHA)。実行: $RUN_URL"
+          fi
+
+          issue_number="$(
+            gh issue list --label "$ISSUE_LABEL" --state open \
+              --json number --jq '.[0].number // empty'
+          )"
+
+          if [ -n "$issue_number" ]; then
+            gh issue comment "$issue_number" \
+              --body "$body"
+          else
+            gh issue create \
+              --title "$ISSUE_TITLE" \
+              --label "$ISSUE_LABEL" \
+              --body "$body"
+          fi
