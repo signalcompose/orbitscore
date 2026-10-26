@@ -156,6 +156,15 @@ const HOST_MARKER_LIKE_RE = /^<!--\s*host\s*:/
 const HOST_MARKER_RE = /^<!-- host: (ext|app) -->$/
 const PARALLEL_ORBITSTUDIO_RE = /^\s*- \*\*OrbitStudio\*\*:/
 const ORBITSTUDIO_RE = /orbitstudio/i
+/**
+ * Identifiers that still say "orbitstudio" but name the VS Code extension's
+ * test harness (CLAUDE.md, 2026-09-18: kept as they are until the harness is
+ * made target-neutral — design 848 §10.2). They carry no information about
+ * OrbitStudio the app, so AV-HOST-SCOPE does not count them.
+ */
+const LEGACY_EXTENSION_IDENTIFIERS = ['orbitstudio-mcp-gated.spec.ts', 'ORBIT_GATED_ORBITSTUDIO']
+const mentionsOrbitStudio = (line) =>
+  ORBITSTUDIO_RE.test(LEGACY_EXTENSION_IDENTIFIERS.reduce((t, id) => t.split(id).join(''), line))
 const FROZEN_TERM_RE = /OrbitStudio（凍結版|OrbitStudio \(frozen/
 
 const SKIP_DIRS = new Set(['node_modules', '.vitepress', 'public', 'scripts'])
@@ -388,7 +397,7 @@ function checkHostScope(ch, host) {
       const scoped = ch.kinds[j] === 'anchor' && ORBITSTUDIO_RE.test(ch.lines[j])
       stack.push({ level, scoped })
     }
-    if (!ORBITSTUDIO_RE.test(line)) return
+    if (!mentionsOrbitStudio(line)) return
     if (PARALLEL_ORBITSTUDIO_RE.test(line)) return
     if (stack.some((s) => s.scoped)) return
     report(

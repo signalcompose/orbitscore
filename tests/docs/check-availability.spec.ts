@@ -291,6 +291,18 @@ describe('check-availability.mjs', () => {
       expectRed(lint({ 'a.md': chapter('both', body) }), 'AV-HOST-SCOPE', 'a.md:13')
     })
 
+    it('ignores the legacy extension-harness identifiers that still say orbitstudio', () => {
+      // CLAUDE.md（2026-09-18）: 識別子は当面そのまま。拡張版のハーネスの名前で、ネイティブ版の情報ではない。
+      const body =
+        '`tests/e2e/orbitstudio-mcp-gated.spec.ts` の実測（`ORBIT_GATED_ORBITSTUDIO=1`）に記録しました。'
+      expectGreen(lint({ 'a.md': chapter('both', body) }))
+    })
+
+    it('still rejects other orbitstudio identifiers on the same line', () => {
+      const body = '`orbitstudio-mcp-gated.spec.ts` と `ORBITSTUDIO_RUNTIME_DIR`'
+      expectRed(lint({ 'a.md': chapter('both', body) }), 'AV-HOST-SCOPE', 'a.md:9')
+    })
+
     it('does not apply to app and ext chapters', () => {
       expectGreen(
         lint({
