@@ -83,6 +83,12 @@ import {
   waitForSound,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
+import {
+  headlessPgrepPattern,
+  launchHeadless,
+  resolveGatedTarget,
+  SESSION_CLI_DIST,
+} from './helpers/gated-target'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
 import {
@@ -127,8 +133,14 @@ const HARNESS_TMP_PREFIX = 'orbe2e-'
 const HARNESS_PGREP_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
+/** 設計 848 §10.2: 差は起動と MCP の取り方だけ。既定は `vscode`（凍結版・今日のまま）。 */
+const gatedTarget = gated ? resolveGatedTarget(process.env) : 'vscode'
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
-const appAvailable = fs.existsSync(appPath)
+const appAvailable =
+  gatedTarget === 'vscode'
+    ? fs.existsSync(appPath)
+    : // native は起動で理由つきで落とす（黙って skip しない）。headless は build 済みの層 2 が要る。
+      gatedTarget === 'native' || fs.existsSync(SESSION_CLI_DIST)
 
 /**
  * #611 E2E-4/E2E-5 (§8.3): the first output device that can carry >= 4 channels, or
@@ -328,8 +340,19 @@ const TEARDOWN_TIMEOUT_MS = 30_000
  * Uses execFileSync (no shell, fixed argv) rather than exec/execSync.
  */
 function harnessPids(): number[] {
+  // headless は層 2 と中継のプロセスも数える（`--runtime-dir` がハーネスの tmp の下のもの）。
+  if (gatedTarget !== 'vscode') {
+    return [
+      ...harnessPidsMatching(HARNESS_PGREP_PATTERN),
+      ...harnessPidsMatching(headlessPgrepPattern(HARNESS_TMP_PREFIX)),
+    ]
+  }
+  return harnessPidsMatching(HARNESS_PGREP_PATTERN)
+}
+
+function harnessPidsMatching(pattern: string): number[] {
   try {
-    return execFileSync('pgrep', ['-f', HARNESS_PGREP_PATTERN], { encoding: 'utf8' })
+    return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' })
       .trim()
       .split(/\s+/)
       .filter(Boolean)
@@ -811,6 +834,26 @@ async function launchIsolatedOrbitStudio({
     ) + '\n',
   )
   await prepareWorkspace?.(tmpRoot)
+
+  if (gatedTarget !== 'vscode') {
+    // PROVISIONAL(P-23): native ターゲットは apps/OrbitStudio（束 N2）が要る。それまでは理由つきで落とす。
+    if (gatedTarget === 'native') {
+      fs.rmSync(tmpRoot, RM_TREE)
+      throw new Error('ORBIT_GATED_TARGET=native needs apps/OrbitStudio (bundle N2); use headless')
+    }
+    try {
+      const launched = await launchHeadless({
+        tmpRoot,
+        openWorkspace,
+        settings: resolvedSettings,
+        env,
+      })
+      return { child: launched.child, client: launched.client, tmpRoot }
+    } catch (error) {
+      fs.rmSync(tmpRoot, RM_TREE)
+      throw error
+    }
+  }
 
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(

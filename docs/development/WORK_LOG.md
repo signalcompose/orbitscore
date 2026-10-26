@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): add the headless gated target that talks to layer 2 through the relay (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1011-b3-harness`（`1011-b2-relay` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-8 = N1-b3）
+
+- `ORBIT_GATED_TARGET = vscode | headless | native`（既定 `vscode` = 今日のまま・設計 §10.2）。差は起動と MCP の取り方だけで、シナリオ本体は 1 文字も変えていない
+- `headless`: `node packages/session/dist/cli.js session --runtime-dir <tmpRoot>/r [--workspace-root <tmpRoot>] --docs-dir <repo>`（TCP なし）+ 中継 `cli.js relay` を stdio で起こす。runtime-dir は 0700・ソケットのパスは実体で 103 バイト以内を確かめる。凍結版の拡張が起動時に行う engine の自動起動（`orbitscore.audioDevice`）は、アプリと同じく RPC の `engine.start` で層 2 に頼む
+- `helpers/mcp-client.ts` に `StdioMcpClient`（`McpClient` の派生・シナリオの型はそのまま）、`helpers/gated-target.ts` に起動とプロセスの見つけ方。teardown の sweep は headless の時だけ層 2 と中継のプロセスも数える
+- `native` は起動で「apps/OrbitStudio（束 N2）が要る」と落ちる（黙って skip しない）→ 台帳 **P-23** を新設（`apps/OrbitStudio/Package.swift` が現れた時に印が残っていれば red）
+- unit（ゲートの外・11 件）: 既定が `vscode`・runtime-dir・起動引数・設定の写し・sweep の正規表現・本物の headless の起動（vite-node で src を起こす）
+
+Part of #1011
+
+---
+
 ### feat(session): add the orbitscore relay (stdio MCP server) and session.registerMcp (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1011-b2-relay`（`1011-b1b-mcp-tools` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-7 = N1-b2）

@@ -325,6 +325,24 @@ export const LEDGER: readonly LedgerEntry[] = [
     state: 'open',
     bundle: 'S-mcp（N1-b2）→ N0-c / N2',
   },
+  {
+    id: 'P-23',
+    title:
+      'ハーネスの native ターゲットが未実装（起動すると理由つきで失敗する・apps/OrbitStudio が要る）',
+    deadline: { kind: 'when-exists', path: 'apps/OrbitStudio/Package.swift' },
+    state: 'open',
+    check: (repoRoot) => {
+      const source = read(repoRoot, 'tests/e2e/orbitstudio-mcp-gated.spec.ts') ?? ''
+      const ok = !source.includes('PROVISIONAL(P-23)')
+      return {
+        ok,
+        reason: ok
+          ? 'gated suite の native の分岐が足場でない'
+          : 'apps/OrbitStudio があるのに、gated suite の native ターゲットがまだ「未実装」で落ちる',
+      }
+    },
+    bundle: 'S-mcp（N1-b3）→ N2',
+  },
 ]
 
 // ---------------------------------------------------------------------------
