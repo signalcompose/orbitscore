@@ -233,7 +233,7 @@ N4 完了 ∧ engine 線 K（ラック #635 / #636 / #669）完了 ∧ 改訂（
 | (6) Swift の CI | ✅ A + owner の条件（10-26・設計 §9.4: クラウドの作業は手元で引き継いでゲート。tag 時の GitHub は頻度とコストで決める） | **R-app の N4-b**（tag 時のみ）。手元ゲートは裁定不要 |
 | (7) 拡張を薄いクライアントに | ✅ **書き直さない**（10-26 第 2 回。凍結のまま退役まで保つ） | なし（着手しない） |
 | (8) 複数エディタ | ✅ A（10-26・1 クライアントが複数の document を持つ・設計 §5.4） | なし（1 つまでで実装） |
-| (9) `protocol/` のライセンス | ✅ **定義だけ Apache-2.0**（10-26 第 2 回。owner の意見「DSLもApache-2.0でいい」の範囲 = DSL の仕様書だけ・#998 で扱う。実装 `packages/engine` はルートのライセンスのまま） | **S-rpc の N1-a1**（スキーマを置く PR に `protocol/LICENSE` を入れる・N-14） |
+| (9) `protocol/` のライセンス | ✅ **定義だけ Apache-2.0**（10-26 第 2 回。実装 `packages/engine` はルートのライセンスのまま）。🔴 **DSL 側の扱いは #998 で変わった** — PR [#1003](https://github.com/signalcompose/orbitscore/pull/1003)（merge `13bdc2e`・2026-10-26）は**仕様書の本文を Apache-2.0 にせず**、言語の実装を許す「実装の許諾」（案）を仕様書 3 本と README に置き、機械が読む言語の定義 2 つを Apache-2.0 にした。`protocol/` の決定はこれに影響されない（README の License 節が明記） | **S-rpc の N1-a1**（スキーマを置く PR に `protocol/LICENSE` を入れる・N-14） |
 | (10) bundle id / 名前 / 配布物名 | ✅ A `com.signalcompose.orbitstudio`（10-26） | **R-app の N4-a**（初回署名の前） |
 | (11) not-applicable の表面（改訂 10-23: `showCommands` を追加） | ✅ 推奨どおり 5 項目とも（10-26） | **A-parity の N3-c2**（それまで台帳は `native-required` として保持） |
 | (12) issue 本文の出力先 `847` → `848` | main | なし |
