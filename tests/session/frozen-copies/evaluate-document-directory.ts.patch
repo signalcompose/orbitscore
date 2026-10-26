@@ -1,0 +1,52 @@
+@@ -12,10 +12,16 @@
+  * （前面のタブはエージェントから指定できない状態で、`open_file` で変えると人の画面を奪う）。
+  *
+  * vscode に依存しない純関数にしてある（ファイルの存在確認だけ注入する）。
++ *
++ * 層 2 の写し（設計 848 §5.3.1・§6.1 の裁定による例外）: 改行の制約を写さない。凍結版は基準を
++ * 1 行の `//#documentDirectory` メタ行で運んだので改行を拒んだが、層 2 は `session.evaluate` の
++ * 引数で運ぶので理由が無い。`isOrbitscoreDocument` は凍結版 `diagnostics-analysis.ts` の 1 行。
+  */
+ import * as path from 'path'
+ 
+-import { isOrbitscoreDocument } from './diagnostics-analysis'
++function isOrbitscoreDocument(document: { languageId: string }): boolean {
++  return document.languageId === 'orbitscore'
++}
+ 
+ export interface ActiveEditorDocument {
+   languageId: string
+@@ -54,10 +60,6 @@
+       }
+       absolute = path.resolve(workspaceRoot, documentPath)
+     }
+-    // The base travels as one `//#documentDirectory` meta line, which a line break would split.
+-    if (/[\r\n]/.test(absolute)) {
+-      return { ok: false, error: 'document_path must not contain a line break' }
+-    }
+     // 🔴 黙って dirname を取らない。打ち間違いのパスで評価すると、基準だけがずれて
+     // 原因の遠い `[SAMPLE_NOT_FOUND]` 等として現れる（#966 の症状そのもの）。
+     let isFile: boolean
+@@ -74,21 +76,7 @@
+   }
+ 
+   if (activeEditor && isOrbitscoreDocument(activeEditor) && activeEditor.scheme === 'file') {
+-    const activeDirectory = path.dirname(activeEditor.fsPath)
+-    if (/[\r\n]/.test(activeDirectory)) {
+-      return {
+-        ok: false,
+-        error: 'active OrbitScore editor path must not contain a line break',
+-      }
+-    }
+-    return { ok: true, documentDirectory: activeDirectory }
+-  }
+-
+-  if (workspaceRoot && /[\r\n]/.test(workspaceRoot)) {
+-    return {
+-      ok: false,
+-      error: 'workspace folder path must not contain a line break',
+-    }
++    return { ok: true, documentDirectory: path.dirname(activeEditor.fsPath) }
+   }
+ 
+   return { ok: true, documentDirectory: workspaceRoot || null }

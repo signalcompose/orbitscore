@@ -10,10 +10,12 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@orbitscore/engine": "0.0.1",
     "@orbitscore/protocol": "1.0.0",
     "ajv": "^8.17.1",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

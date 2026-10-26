@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(session): move the MCP tool layer into layer 2 and back its handlers with the session RPC (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `1011-b1b-mcp-tools`（`1011-b1-layer2-methods` の上に積んだ小 PR・stacked の draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-6 = N1-b1 の後半）
+
+- **MCP 層の写し**（`packages/session/src/mcp/`）: `mcp-sdk` / `mcp-tools-engine` / `mcp-tools-plugins` はそのまま。`mcp-types`（同期だった handler 5 本を `Promise<T> | T` に広げた）/ `mcp-tools-editor`（その 5 か所を `await`・docs 系 4 本は層 2 の `docs.*` を読む `DocsToolSource`）/ `evaluate-document-directory`（改行の制約を写さない・§6.1 の裁定による例外）は差を `tests/session/frozen-copies/*.patch` に記録し、写し = 原本 + パッチであることを `git diff --no-index` で検査する（パッチの無い写しは差 0）
+- `build-server.ts`: 凍結版と同じ engine → editor → plugins → docs の順で登録（`tools/list` の 28 本・同じ順序）。handler が**投げた**失敗（層 2 に届かない等）は凍結版の `errorResult` と同じ封筒で返す
+- `rpc-tool-handlers.ts`: `OrbitScoreToolHandlers` を層 2 の RPC で満たす（28 本すべて）。`evaluate_orbitscore` の IM.6 は中継側で `session.getState`（engine・`activeUri`・`--workspace-root`）+ `editor.getState`（パス・言語）から組み立て、凍結版と同じく engine の確認を IM.6 のエラーより先に行う。`document_path` があれば `target: { uri }` を付ける
+- `rpc/client.ts`: UDS の RPC クライアント（`session.hello` → MAJOR の確認 → `session.attach`）。失敗を「層 2 のエラー / 送った後に切れた（RL-4）/ MAJOR 違い（RL-5）/ 届かない（RL-3）」に分ける
+- スキーマ: `session.getLog` の `lines`（小数・0・負）・`audio.analyze` の `wavPath` / `windowMs`・`docs.get` の `path` の制約を、凍結版の MCP ツールが受けていた範囲に緩めた（受ける範囲を広げるだけ）
+- 移した unit: IM.6（16 件・改行のケースは「改行を含む実在のパスが解決される」に置き換え）/ `buildServer`（20 件・HTTP の節は v1 に `/mcp` が無いので移さない）/ 端から端まで（23 件: MCP クライアント → RPC → 本物の RPC サーバ → `SessionCore`）
+- 設計 §6 に「同じ型のうち 5 本は同期で満たせない」を追記
+
+Part of #1011
+
+---
+
 ### feat(session): add the layer-2 audio, plugin and docs methods with the docs HTTP routes (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `1011-b1-layer2-methods`（統合ブランチ `1011-session-mcp` の最初の小 PR・draft）/ **Issue**: [#1011](https://github.com/signalcompose/orbitscore/issues/1011)（束 S-mcp・計画 §7.1 の C-6 = N1-b1 の前半）

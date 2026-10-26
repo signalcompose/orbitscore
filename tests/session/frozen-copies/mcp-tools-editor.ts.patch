@@ -1,0 +1,204 @@
+@@ -3,15 +3,28 @@
+  * get_user_doc / search_user_docs は #954 で追加 — LLM が user サイト（DSL の使い方）を
+  * 読む経路が無かった欠落を埋める）。
+  *
+- * 🔴 **`registerTool` の呼び出し本文は 1 行も書き換えていない。**
++ * 🔴 **`registerTool` の呼び出し本文は 1 行も書き換えていない。**（凍結版の分割 #887 について）
++ *
++ * 層 2 の写し（設計 848 §6）で凍結版と違うのは 2 つだけ（差は `tests/session/frozen-copies/` の
++ * パッチが固定する）: (1) 凍結版で同期だった 5 本の handler（`setSelection` / `getEditorState` /
++ * `getDocumentText` / `getDiagnostics` / `getLog`）を `await` する (2) docs 系 4 本は
++ * `DocsToolSource`（層 2 の `docs.*`）を読む。ツールの名前・順序・引数・説明文は同じ。
+  *
+  * 🔴 **このファイルは `register*Tools` を 2 本持つ。** 理由は下の
+  * `registerDocsTools` の doc に書いた（分割前の `tools/list` の順序を再現するため）。
+  */
+-import type { DevDocsLocation, UserDocsLocation } from './mcp-docs'
+-import { DEV_DOCS_UNAVAILABLE_MESSAGE, readDevDoc, searchDevDocs } from './mcp-docs'
+ import { errorResult, type McpServerLike, toToolResult, z } from './mcp-sdk'
+-import type { OrbitScoreToolHandlers } from './mcp-types'
++import type { DevDocSearchMatch, OrbitScoreToolHandlers } from './mcp-types'
++
++/**
++ * 層 2 の写し（設計 848 §5.3.5・§6）: docs は中継のプロセスでは読まず、層 2 の `docs.get` /
++ * `docs.search` を呼ぶ（在りかは層 2 の `--docs-dir`）。「見つからない」「この環境に無い」は層 2 が
++ * 凍結版と同じ文言のエラーで返し、`buildServer` がそれを `errorResult` の封筒に包む。
++ */
++export interface DocsToolSource {
++  get(site: 'dev' | 'user', relativePath: string): Promise<string>
++  search(site: 'dev' | 'user', query: string, limit: number): Promise<DevDocSearchMatch[]>
++}
+ 
+ export function registerEditorTools(server: McpServerLike, handlers: OrbitScoreToolHandlers): void {
+   server.registerTool(
+@@ -61,7 +74,7 @@
+         return errorResult('start_line is required')
+       }
+       return toToolResult(
+-        handlers.setSelection({
++        await handlers.setSelection({
+           startLine,
+           startChar: typeof args.start_char === 'number' ? args.start_char : undefined,
+           endLine: typeof args.end_line === 'number' ? args.end_line : undefined,
+@@ -119,7 +132,9 @@
+         'range (all 1-based), line count, and dirty state. Fields are null when no ' +
+         'editor is active.',
+     },
+-    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEditorState()) }] }),
++    async () => ({
++      content: [{ type: 'text', text: JSON.stringify(await handlers.getEditorState()) }],
++    }),
+   )
+ 
+   server.registerTool(
+@@ -147,7 +162,9 @@
+         'buffer against the file on disk. path and text are both null when no editor ' +
+         'is active.',
+     },
+-    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getDocumentText()) }] }),
++    async () => ({
++      content: [{ type: 'text', text: JSON.stringify(await handlers.getDocumentText()) }],
++    }),
+   )
+ 
+   server.registerTool(
+@@ -166,7 +183,7 @@
+     async (args) => {
+       const filePath = typeof args.path === 'string' ? args.path : undefined
+       return {
+-        content: [{ type: 'text', text: JSON.stringify(handlers.getDiagnostics(filePath)) }],
++        content: [{ type: 'text', text: JSON.stringify(await handlers.getDiagnostics(filePath)) }],
+       }
+     },
+   )
+@@ -190,7 +207,7 @@
+     },
+     async (args) => {
+       const lines = typeof args.lines === 'number' ? args.lines : undefined
+-      return { content: [{ type: 'text', text: handlers.getLog(lines).join('\n') }] }
++      return { content: [{ type: 'text', text: (await handlers.getLog(lines)).join('\n') }] }
+     },
+   )
+ }
+@@ -216,20 +233,16 @@
+ }
+ 
+ /**
+- * Register one `get_<site>_doc` tool. `unavailableMessage`, when set, means the
+- * site doesn't exist in this environment at all (#954 — the dev site is never
+- * bundled into a cold-installed .vsix) — every call short-circuits to that
+- * reason instead of silently returning "not found", which used to be
+- * indistinguishable from a typo'd path.
++ * Register one `get_<site>_doc` tool. 凍結版の `unavailableMessage`（dev サイトが同梱されない
++ * 環境では毎回その理由を返す・#954）は層 2 の `DOCS_UNAVAILABLE` が持つ。
+  */
+ function registerDocGetTool(
+   server: McpServerLike,
+   name: string,
+   title: string,
+   siteLabel: string,
+-  sourceRoot: string,
+-  notFoundMessage: string,
+-  unavailableMessage: string | undefined,
++  site: 'dev' | 'user',
++  docs: DocsToolSource,
+ ): void {
+   server.registerTool(
+     name,
+@@ -241,24 +254,20 @@
+       },
+     },
+     async (args) => {
+-      if (unavailableMessage !== undefined) return errorResult(unavailableMessage)
+       const relativePath = typeof args.path === 'string' ? args.path : ''
+-      const content = readDevDoc(sourceRoot, relativePath)
+-      return content === null
+-        ? errorResult(notFoundMessage)
+-        : { content: [{ type: 'text', text: content }] }
++      return { content: [{ type: 'text', text: await docs.get(site, relativePath) }] }
+     },
+   )
+ }
+ 
+-/** Register one `search_<site>_docs` tool. Same `unavailableMessage` contract as above. */
++/** Register one `search_<site>_docs` tool. Same unavailable contract as above. */
+ function registerDocSearchTool(
+   server: McpServerLike,
+   name: string,
+   title: string,
+   siteLabel: string,
+-  sourceRoot: string,
+-  unavailableMessage: string | undefined,
++  site: 'dev' | 'user',
++  docs: DocsToolSource,
+ ): void {
+   server.registerTool(
+     name,
+@@ -271,11 +280,10 @@
+       },
+     },
+     async (args) => {
+-      if (unavailableMessage !== undefined) return errorResult(unavailableMessage)
+       const query = typeof args.query === 'string' ? args.query : ''
+       const limit = parseSearchLimit(args)
+       return {
+-        content: [{ type: 'text', text: JSON.stringify(searchDevDocs(sourceRoot, query, limit)) }],
++        content: [{ type: 'text', text: JSON.stringify(await docs.search(site, query, limit)) }],
+       }
+     },
+   )
+@@ -284,47 +292,29 @@
+ export function registerDocsTools(
+   server: McpServerLike,
+   handlers: OrbitScoreToolHandlers,
+-  devDocs: DevDocsLocation,
+-  userDocs: UserDocsLocation,
++  docs: DocsToolSource,
+ ): void {
+-  const devUnavailable = devDocs.available ? undefined : DEV_DOCS_UNAVAILABLE_MESSAGE
+-  registerDocGetTool(
+-    server,
+-    'get_dev_doc',
+-    'Get Dev Doc',
+-    'development-site',
+-    devDocs.sourceRoot,
+-    'development document not found',
+-    devUnavailable,
+-  )
++  registerDocGetTool(server, 'get_dev_doc', 'Get Dev Doc', 'development-site', 'dev', docs)
+   registerDocSearchTool(
+     server,
+     'search_dev_docs',
+     'Search Dev Docs',
+     'development-site',
+-    devDocs.sourceRoot,
+-    devUnavailable,
++    'dev',
++    docs,
+   )
+ 
+   // #954: the end-user site (DSL usage docs) is bundled into every .vsix, so
+   // there is no "unavailable" case here short of a broken install — unlike
+   // get_dev_doc/search_dev_docs above, these two always attempt the read.
+-  registerDocGetTool(
+-    server,
+-    'get_user_doc',
+-    'Get User Doc',
+-    'end-user-site',
+-    userDocs.sourceRoot,
+-    'user document not found',
+-    undefined,
+-  )
++  registerDocGetTool(server, 'get_user_doc', 'Get User Doc', 'end-user-site', 'user', docs)
+   registerDocSearchTool(
+     server,
+     'search_user_docs',
+     'Search User Docs',
+     'end-user-site',
+-    userDocs.sourceRoot,
+-    undefined,
++    'user',
++    docs,
+   )
+ 
+   // Optional handler (see OrbitScoreToolHandlers.registerMcpServer): the tool

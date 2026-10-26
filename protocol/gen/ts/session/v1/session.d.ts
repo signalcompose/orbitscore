@@ -370,7 +370,7 @@ export interface TransportState {
  */
 export interface GetLogParams {
   /**
-   * Trailing lines to return (default 50, capped at the ring capacity).
+   * Trailing lines to return (default 50, capped at the ring capacity). Fractions are truncated and values below 1 return 1 line, as the v1 MCP get_log did.
    */
   lines?: number
 }
@@ -433,6 +433,9 @@ export interface AudioDeviceInfo {
  */
 export interface AnalyzeAudioParams {
   wavPath: string
+  /**
+   * Per-window series width. 0 or below adds no windows (as the v1 MCP analyze_audio did).
+   */
   windowMs?: number
   perChannel?: boolean
 }
@@ -787,6 +790,9 @@ export interface FlashConfig {
  */
 export interface DocsGetParams {
   site: DocsSite
+  /**
+   * Site-relative Markdown path. An empty or escaping path is DOC_NOT_FOUND.
+   */
   path: string
 }
 /**
