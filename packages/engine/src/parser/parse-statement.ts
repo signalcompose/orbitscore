@@ -74,10 +74,7 @@ export class StatementParser {
       return this.parseMethodCall()
     }
 
-    // Skip unknown tokens
-    const advanceResult = ParserUtils.advance(this.tokens, this.pos)
-    this.pos = advanceResult.newPos
-    return { statement: null, newPos: this.pos }
+    throw ParserUtils.unreadableStatement(token) // E-7・#965（以前はトークンを捨てて黙って進んだ）
   }
 
   /**
@@ -491,7 +488,7 @@ export class StatementParser {
   /**
    * Parse method call (dispatcher)
    */
-  private parseMethodCall(): { statement: Statement | null; newPos: number } {
+  private parseMethodCall(): { statement: Statement; newPos: number } {
     const targetResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = targetResult.newPos
     const target = targetResult.token.value
@@ -510,8 +507,7 @@ export class StatementParser {
     }
 
     if (ParserUtils.current(this.tokens, this.pos).type !== 'DOT') {
-      // Identifier without method call (invalid syntax, skip it)
-      return { statement: null, newPos: this.pos }
+      throw ParserUtils.missingDot(target, ParserUtils.current(this.tokens, this.pos)) // E-7・#965
     }
 
     const dotResult = ParserUtils.advance(this.tokens, this.pos)

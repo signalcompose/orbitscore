@@ -80,6 +80,30 @@ export class ParserUtils {
   }
 
   /**
+   * 文として読めないトークン（spec「評価の単位」E-7・#965）。以前のパーサはトークンを 1 つ捨てて
+   * 黙って次へ進んでいた。🔴 文言に `EOF` を入れない — 凍結版の REPL は `EOF` を含むパースの
+   * エラーを「入力の途中」と読んで次の行を待つ（`repl-mode.ts` の #607 の判定）。
+   */
+  static unreadableStatement(token: AudioToken): Error {
+    return new Error(
+      `Cannot read a statement that starts with ${token.type} ${JSON.stringify(token.value)} ` +
+        `at line ${token.line}, column ${token.column} ` +
+        `(a statement starts with var, import, RUN, LOOP, MUTE, or <name>.<method>(…))`,
+    )
+  }
+
+  /**
+   * `.` の無い識別子（E-7・#965）。入力の終端でも `EOF` と書かない（上と同じ理由 — `kick` だけの
+   * 行が REPL で次の行を巻き込まないように）。
+   */
+  static missingDot(target: string, next: AudioToken): Error {
+    const got = next.type === 'EOF' ? 'the end of the input' : next.type
+    return new Error(
+      `Expected "." after ${target} but got ${got} at line ${next.line}, column ${next.column}`,
+    )
+  }
+
+  /**
    * Skip newline tokens
    */
   static skipNewlines(tokens: AudioToken[], pos: number): number {
