@@ -736,7 +736,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 respawn 後は `mode: 'rebuild'` で全段 load の plan を再発行します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1411-1421
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1413-1423
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)

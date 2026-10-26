@@ -362,7 +362,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `RustEnginePlayer` が engine 側の境界面です。`boot()` は `DaemonClient.start()` を呼び、そのあとで transport clock の anchor を確立します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:580-587
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:582-589
   async boot(outputDevice?: string): Promise<void> {
     await this.daemon.start({
       daemonPath: this.daemonPath,

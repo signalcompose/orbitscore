@@ -3,6 +3,7 @@
  * Handles sequence state management and inspection
  */
 
+import { advancePatternGeneration } from '../../../audio/engine-backend'
 import { AudioSlice } from '../../../audio/types'
 import { PlayElement } from '../../../parser/audio-parser'
 import { TimedEvent } from '../../../timing/calculation'
@@ -103,6 +104,7 @@ export class StateManager {
    */
   setPlayPattern(pattern: PlayElement[]): void {
     this._playPattern = pattern
+    advancePatternGeneration(this._name)
   }
 
   /**

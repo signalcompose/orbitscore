@@ -755,7 +755,7 @@ The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` an
 respawn re-issues a plan that loads every stage with `mode: 'rebuild'`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1411-1421
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1413-1423
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)

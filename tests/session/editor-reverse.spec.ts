@@ -213,9 +213,9 @@ describe('editor.runSelection: the editor gives the selection, layer 2 evaluates
     const session = await start(options)
     const evaluated: EvaluateParams[] = []
     const evaluate = session.core.evaluate.bind(session.core)
-    vi.spyOn(session.core, 'evaluate').mockImplementation(async (params, client) => {
+    vi.spyOn(session.core, 'evaluate').mockImplementation(async (params, client, codeLines) => {
       evaluated.push(params)
-      return evaluate(params, client)
+      return evaluate(params, client, codeLines)
     })
     const editor = await session.editorClient()
     editor.notify('editor.didOpen', { uri, version: 3, text: TEXT, documentDirectory: '/ws/piece' })

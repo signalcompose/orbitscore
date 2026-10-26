@@ -1305,13 +1305,14 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1661
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1653-1662
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       host.step({
         seq: play.sequenceName,
         argPath: play.argPath,
         atEpochMs: Math.round(this.startTime + play.time),
+        generation: play.generation,
       })
     }
   }
@@ -1320,11 +1321,13 @@ The audio-side source is a single place in `rust-engine-player.ts`.
 This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer piece for SIGMUS was played on the real device, only the single `audio()` gong layer stepped the playhead while the six Kontakt layers sat frozen. Not a regression but **one-winged from the start** — only the audio path emitted `[STEP]`; the MIDI side discarded `argPath` in Stage C of `sequence.ts`. The fix was TypeScript only: a marker-only action was added to `MidiScheduler`.
 
 ```typescript
-// packages/engine/src/midi/midi-scheduler.ts:173-178
+// packages/engine/src/midi/midi-scheduler.ts:173-180
   scheduleStepMarker(time: number, owner: string, argPath: string): void {
     const atEpochMs = Math.round(time)
+    // 設計 997 D-P1: 世代はスケジュールした時点で読む（鳴る時点ではない）。
+    const generation = patternGenerationOf(owner)
     this.enqueue(time, owner, () => {
-      host.step({ seq: owner, argPath, atEpochMs })
+      host.step({ seq: owner, argPath, atEpochMs, generation })
     })
   }
 ```

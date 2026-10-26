@@ -855,7 +855,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 だけになっています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:655-683
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:657-685
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -915,7 +915,7 @@ TS はこれとは別に `UI_CLOSED_DONE` の event frame を待ち受けます�
 タスクなので、DONE が ack を追い抜くことがあるからです。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:886-900
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:888-902
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -940,7 +940,7 @@ pending が reject され、「保存完了」を偽って返すことはあり�
 変異検証がこの穴を見つけ、テストを足しています）。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:333-334
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```

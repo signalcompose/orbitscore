@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-import { setHostOutput, type EngineStepEvent } from '../../packages/engine/src/audio/engine-backend'
+import {
+  setHostOutput,
+  type EnginePatternEvent,
+  type EngineStepEvent,
+} from '../../packages/engine/src/audio/engine-backend'
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
@@ -113,21 +117,72 @@ describe('#654 live playhead markers for note sequences', () => {
 
   it('hands the markers to the host output as typed steps, not as text (#1022)', async () => {
     const typed: EngineStepEvent[] = []
+    const patterns: EnginePatternEvent[] = []
     setHostOutput({
       log: () => {},
       warn: () => {},
       error: () => {},
       step: (event) => typed.push(event),
+      pattern: (event) => patterns.push(event),
     })
     try {
       await playDsl('p.play(1, 3)')
     } finally {
       setHostOutput(null)
     }
+    // 設計 997 D-P1: play() が世代を 1 つ振り、その世代の step がそれを持つ。
+    expect(patterns).toEqual([{ seq: 'piano', generation: expect.any(Number) }])
+    const generation = patterns[0]!.generation
     expect(typed).toEqual([
-      { seq: 'piano', argPath: '0', atEpochMs: T0 + LEAD_IN_MS },
-      { seq: 'piano', argPath: '1', atEpochMs: T0 + LEAD_IN_MS + 1000 },
+      { seq: 'piano', argPath: '0', atEpochMs: T0 + LEAD_IN_MS, generation },
+      { seq: 'piano', argPath: '1', atEpochMs: T0 + LEAD_IN_MS + 1000, generation },
     ])
+  })
+
+  it('keeps the generation a marker was scheduled with when play() replaces the pattern (#1022)', async () => {
+    const typed: EngineStepEvent[] = []
+    const patterns: EnginePatternEvent[] = []
+    setHostOutput({
+      log: () => {},
+      warn: () => {},
+      error: () => {},
+      step: (event) => typed.push(event),
+      pattern: (event) => patterns.push(event),
+    })
+    try {
+      const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+      seq.play(...(parseAudioDSL('p.play(1, 3)').statements[0].args as never[]))
+      await seq.run()
+      // The bar is scheduled; a new pattern must not relabel the markers already in flight.
+      seq.play(...(parseAudioDSL('p.play(5, 6, 7, 8)').statements[0].args as never[]))
+      await vi.advanceTimersByTimeAsync(BAR_MS + 100)
+    } finally {
+      setHostOutput(null)
+    }
+    expect(patterns.map((p) => p.seq)).toEqual(['piano', 'piano'])
+    const [first, second] = patterns.map((p) => p.generation)
+    expect(second).toBeGreaterThan(first!)
+    expect(typed.map((s) => `${s.argPath}@${s.generation}`)).toEqual([`0@${first}`, `1@${first}`])
+  })
+
+  it('advances the generation on play() only — tempo() re-times the same pattern (#1022)', async () => {
+    const patterns: EnginePatternEvent[] = []
+    setHostOutput({
+      log: () => {},
+      warn: () => {},
+      error: () => {},
+      step: () => {},
+      pattern: (event) => patterns.push(event),
+    })
+    try {
+      const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+      seq.play(...(parseAudioDSL('p.play(1, 3)').statements[0].args as never[]))
+      seq.tempo(140)
+      seq.play(...(parseAudioDSL('p.play(5)').statements[0].args as never[]))
+    } finally {
+      setHostOutput(null)
+    }
+    expect(patterns.map((p) => p.seq)).toEqual(['piano', 'piano'])
   })
 
   it('emits no markers for an unnamed sequence (the line would not parse)', async () => {

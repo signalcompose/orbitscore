@@ -7,7 +7,7 @@
  * `tests/session/selection-block-parity.spec.ts` が凍結版の `runSelection` を vscode の mock で走らせて
  * 突き合わせる。**ここを変える時は凍結版と食い違わないこと**（⌘Enter で評価される範囲がずれる）。
  */
-import { lineStarts, offsetAt, type Position, type Range } from './document-store'
+import { lineStarts, offsetAt, positionAt, type Position, type Range } from './document-store'
 
 /**
  * 行が操作する変数の名前。単独の命令とコメントは null（凍結版 `getLineSubject` と同じ規則）。
@@ -31,6 +31,36 @@ export interface SelectionBlock {
   code: string
   /** 評価した範囲（エディタが flash する範囲・`session.evaluate` の `target.range`）。 */
   range: Range
+  /**
+   * `code` の行 i が始まる文書の位置（設計 997 D-P2）。subject-block は離れた行を繋ぐので `range` からは
+   * 戻らない。診断と `transport.step.source` を文書の座標へ写すのに使う（wire には載せない）。
+   */
+  lines: Position[]
+}
+
+/** LSP と同じ行の規則で数えた `code` の行数。 */
+function lineCount(code: string): number {
+  return code.split(/\r\n|\r|\n/).length
+}
+
+/**
+ * 文書の `range` のテキスト（またはその前後の空白を落としたもの）が `code` の時、`code` の各行が始まる
+ * 文書の位置。そうでなければ undefined（`code` は文書のその範囲から取ったものではない）。
+ */
+export function contiguousCodeLines(
+  text: string,
+  range: Range,
+  code: string,
+): Position[] | undefined {
+  const starts = lineStarts(text)
+  const startOffset = offsetAt(text, range.start, starts)
+  const raw = text.slice(startOffset, offsetAt(text, range.end, starts))
+  if (raw !== code && raw.trim() !== code) return undefined
+  const lead = raw === code ? 0 : raw.length - raw.trimStart().length
+  const first = positionAt(text, startOffset + lead, starts)
+  return Array.from({ length: lineCount(code) }, (_, i) =>
+    i === 0 ? first : { line: first.line + i, character: 0 },
+  )
 }
 
 /** 括弧の深さの差（凍結版と同じく文字列やコメントの中も数える）。 */
@@ -51,10 +81,14 @@ export function resolveSelectionBlock(text: string, selection: Range): Selection
   const starts = lineStarts(text)
   const slice = (range: Range) =>
     text.slice(offsetAt(text, range.start, starts), offsetAt(text, range.end, starts))
+  const contiguous = (range: Range): SelectionBlock => {
+    const code = slice(range).trim()
+    return { code, range, lines: contiguousCodeLines(text, range, code) ?? [] }
+  }
   const isEmpty =
     selection.start.line === selection.end.line &&
     selection.start.character === selection.end.character
-  if (!isEmpty) return { code: slice(selection).trim(), range: selection }
+  if (!isEmpty) return contiguous(selection)
 
   const lines = text.split(/\r\n|\r|\n/)
   const lineRange = (first: number, last: number): Range => ({
@@ -72,8 +106,7 @@ export function resolveSelectionBlock(text: string, selection: Range): Selection
       endLine++
       balance += parenDelta(lines[endLine] ?? '')
     }
-    const range = lineRange(currentLine, endLine)
-    return { code: slice(range).trim(), range }
+    return contiguous(lineRange(currentLine, endLine))
   }
 
   // 同じ変数の行（宣言とメソッド呼び出し）を文書の全体から集める。括弧が開いたままの行は続きの行も。
@@ -90,12 +123,13 @@ export function resolveSelectionBlock(text: string, selection: Range): Selection
   }
   const first = collected[0] ?? currentLine
   const last = collected[collected.length - 1] ?? currentLine
+  const joined = collected.map((line) => lines[line] ?? '').join('\n')
+  // 先頭の行は subject の行（空でない）なので、trim が落とすのはその行の頭の空白だけ。
+  const lead = joined.length - joined.trimStart().length
   return {
-    code: collected
-      .map((line) => lines[line] ?? '')
-      .join('\n')
-      .trim(),
+    code: joined.trim(),
     range: lineRange(first, last),
+    lines: collected.map((line, i) => ({ line, character: i === 0 ? lead : 0 })),
   }
 }
 
