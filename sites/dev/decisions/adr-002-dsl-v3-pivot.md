@@ -286,7 +286,7 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 ## Sources
 
 - `packages/engine/src/version.ts:15-18` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '2.0'` (audio line v3.0 とは別軸)
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:2315-2370` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:2343-2398` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:502-637` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:371-468` — §5 片記号方式 (unidirectional toggle) の仕様
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL 仕様書アーカイブ (2025-10-06 アーカイブ)

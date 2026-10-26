@@ -288,7 +288,7 @@ In v3.0, "which sound to play" is determined by the file name, and "at what timi
 ## Sources
 
 - `packages/engine/src/version.ts:15-18` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '2.0'` (a separate axis from the audio line v3.0)
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:2315-2370` — §13 Versioning: change history of v0.1-v3.0 and v1.1 Pitch DSL, and Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:2343-2398` — §13 Versioning: change history of v0.1-v3.0 and v1.1 Pitch DSL, and Migration Notes
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:502-637` — §7 the v3.0 underscore prefix pattern specification
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:371-468` — §5 the unidirectional toggle specification
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — the v1.0 MIDI DSL specification archive (archived 2025-10-06)

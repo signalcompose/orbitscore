@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest'
  *
  * ## 新しい仕様書を足した時に漏れないように
  *
- * `docs/core/` と `docs/specs-v2/` の `.md` / `.markdown` / `.mdx` は、下位ディレクトリも含めて
+ * `docs/core/` と `docs/specs-v2/` の文書は、下位ディレクトリも含めて
  * **すべて**下の 2 つの表のどちらかに分類する。表に無いファイルが増えたら red になるので、
  * 「DSL の仕様書を足したのに節を忘れた」は分類の時点で止まる
  * （`tests/interpreter/signal-chain-dispatch.spec.ts` の未分類 red と同じ形）。
@@ -42,16 +42,17 @@ import { describe, expect, it } from 'vitest'
  */
 const repoRoot = path.resolve(__dirname, '../..')
 
-/** ignore 済みの生成物を除く、追跡済み・未追跡のリポジトリ内ファイル。 */
+/** index にあるリポジトリ内ファイル。手元の git 管理外ファイルで検査を赤くしない。
+ * pre-commit は git add の後に走るため、新しい仕様書も index に入って検査される。 */
 const repoFiles = childProcess
-  .execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+  .execFileSync('git', ['ls-files', '--cached', '--exclude-standard', '-z'], {
     cwd: repoRoot,
   })
   .toString()
   .split('\0')
   .filter((rel) => rel !== '' && fs.existsSync(path.join(repoRoot, rel)))
 
-/** 分類の対象。ここに置かれた `.md` は必ずどちらかの表に入る。 */
+/** 分類の対象。ここに置かれた対象拡張子の文書は必ずどちらかの表に入る。 */
 const SPEC_DIRS = ['docs/core', 'docs/specs-v2'] as const
 
 /** DSL の文法と意味を定める仕様書（実装の許諾の節を持つ）。値は分類の理由。 */
@@ -82,8 +83,11 @@ const NOT_DSL_SPEC: Record<string, string> = {
 /** 節の 1 行目の先頭（文面の確定で「（案・未確定 / draft）」が外れても変わらない部分）。 */
 const GRANT_ANCHOR = '> **実装の許諾 / Implementation grant**'
 
+/** README の正本の許諾節（確定時に外れる先頭ラベルを除く）の sha256。 */
+const GRANT_TEXT_SHA256 = 'f994d9eff0d2f450075d010235591089d8d79cb1e42f3af344169ebe57d9c00f'
+
 /** 文書のどこに書かれていても Apache-2.0 の SPDX 表記として扱う。 */
-const SPDX_APACHE_NOTICE = /SPDX-License-Identifier:\s*Apache-2\.0/i
+const SPDX_APACHE_NOTICE = /SPDX-License-Identifier\s*:[^\n]*\bApache-2\.0/i
 
 /** SPDX 表記そのものを説明する散文。追加する場合はファイルごとの理由を必須にする。 */
 const SPDX_APACHE_PROSE_EXCEPTIONS: Record<string, string> = {}
@@ -107,27 +111,83 @@ const SIDECAR = [
 /** apache.org の `LICENSE-2.0.txt`（2026-10-26 に取得）の sha256。全文を 1 文字でも変えたら red。 */
 const APACHE_TEXT_SHA256 = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
 
+/** ルート LICENSE の例外節（見出し直後の区切りから、次の区切りまで）の sha256。 */
+const LICENSE_EXCEPTION_SHA256 = '742793112409058804348b1e84366c11cb83d18acae07c6b74999853c1db481d'
+
 /** 言語の定義に当たるファイル名。ここに当たるのに表に無いものは red。 */
 const LANGUAGE_DEFINITION_NAME =
   /(?:\.tmLanguage(?:\.(?:json|ya?ml))?|\.sublime-syntax|^language-configuration.*\.json)$/i
 
 const MARKDOWN_NAME = /\.(?:md|markdown|mdx)$/i
+const SPEC_DOCUMENT_NAME = /\.(?:md|markdown|mdx|html?|txt|rst|adoc)$/i
+
+const ROOT_LICENSE_APACHE_LINES = [
+  'This software is licensed under the Apache License, Version 2.0 (the "Base',
+  'You may obtain a copy of the Apache License at:',
+  'https://www.apache.org/licenses/LICENSE-2.0',
+  'All rights granted under the Apache License 2.0 (use, copy, modify, distribute)',
+  'granted by the Apache License 2.0. In the event of a conflict, these',
+  'additional conditions take precedence over the Apache License 2.0. Because',
+  'IMPLIED. See the Apache License 2.0 for the full disclaimer and limitation of',
+]
+
+const README_IMPLEMENTATION_LEAD =
+  'The DSL specification documents stay under this license. Separately, the language they define may be implemented by anyone:'
+const README_LICENSE_SUMMARY_APACHE_LINE = '- **Base**: Apache License 2.0'
+const README_APACHE_LINES = [
+  'The machine-readable definitions of the language — the files editors and other tools use to handle OrbitScore DSL — are licensed under the [Apache License 2.0](LICENSES/Apache-2.0.txt) only (see the exception at the top of [LICENSE](LICENSE)):',
+  'The session protocol definitions for OrbitStudio (the native macOS app), which will be added under `protocol/`, will be licensed under the Apache License 2.0 and carry their own `LICENSE`.',
+]
+
+const sha256 = (text: string | Buffer): string =>
+  crypto.createHash('sha256').update(text).digest('hex')
+
+function isLicenseControlFile(rel: string): boolean {
+  const basename = path.basename(rel)
+  return (
+    /^(?:LICEN[CS]E|COPYING|NOTICE)(?:\.(?:txt|md))?$/i.test(basename) ||
+    /(?:^|\/)LICENSES\//i.test(rel) ||
+    /^REUSE\.toml$/i.test(basename) ||
+    /(?:^|\/)\.reuse\//i.test(rel) ||
+    /\.license$/i.test(rel)
+  )
+}
+
+function hasApacheFrontmatter(text: string): boolean {
+  const lines = text.split('\n')
+  if (lines[0]?.trim() !== '---') return false
+  const end = lines.findIndex((line, i) => i > 0 && line.trim() === '---')
+  return end > 0 && lines.slice(1, end).some((line) => /^license\s*:.*apache/i.test(line))
+}
 
 /** ルートの LICENSE の「EXCEPTION: MACHINE-READABLE LANGUAGE DEFINITIONS」の節。 */
-function licenseDefinitionSection(): string[] {
+function licenseDefinitionBounds(): { end: number; lines: string[]; start: number } {
   const lines = read('LICENSE').split('\n')
-  const start = lines.findIndex((l) =>
-    l.startsWith('EXCEPTION: MACHINE-READABLE LANGUAGE DEFINITIONS'),
+  const headings = lines
+    .map((line, i) => ({ i, line }))
+    .filter(({ line }) => line.startsWith('EXCEPTION:'))
+  if (headings.length !== 1) {
+    throw new Error(
+      `LICENSE の EXCEPTION: 見出しは 1 つでなければなりません（${headings.length} 個）`,
+    )
+  }
+  const start = lines.findIndex(
+    (l) => l === 'EXCEPTION: MACHINE-READABLE LANGUAGE DEFINITIONS (APACHE LICENSE 2.0 ONLY)',
   )
   if (start === -1) {
     throw new Error('LICENSE に言語定義の例外の見出しがありません')
   }
-  const body: string[] = []
-  for (const l of lines.slice(start + 2)) {
-    if (l.startsWith('====')) break
-    body.push(l)
+  if (!lines[start + 1]?.startsWith('====')) {
+    throw new Error('LICENSE の言語定義の例外の見出し直後に区切りがありません')
   }
-  return body
+  const end = lines.findIndex((line, i) => i > start + 1 && line.startsWith('===='))
+  if (end === -1) throw new Error('LICENSE の言語定義の例外の終端がありません')
+  return { lines, start, end }
+}
+
+function licenseDefinitionSection(): string[] {
+  const { end, lines, start } = licenseDefinitionBounds()
+  return lines.slice(start + 2, end)
 }
 
 /** 上の例外の節に列挙された言語定義。 */
@@ -169,19 +229,19 @@ describe('DSL implementation grant (#998)', () => {
   it('classifies every document under docs/core and docs/specs-v2', () => {
     const onDisk = sorted(
       repoFiles.filter(
-        (rel) => SPEC_DIRS.some((dir) => rel.startsWith(`${dir}/`)) && MARKDOWN_NAME.test(rel),
+        (rel) => SPEC_DIRS.some((dir) => rel.startsWith(`${dir}/`)) && SPEC_DOCUMENT_NAME.test(rel),
       ),
     )
     const classified = sorted([...Object.keys(DSL_SPECS), ...Object.keys(NOT_DSL_SPEC)])
+    for (const rel of Object.keys(DSL_SPECS)) {
+      expect(NOT_DSL_SPEC[rel], `${rel} が両方の表にあります`).toBeUndefined()
+    }
     expect(
       onDisk,
       '分類されていない文書（または消えた文書）があります。DSL の文法と意味の文書なら DSL_SPECS に、\n' +
         'そうでなければ NOT_DSL_SPEC に、理由と一緒に足してください（DSL_SPECS に足したら、\n' +
         'タイトルの直下に実装の許諾の節を置き、README の License 節の一覧にも足す）',
     ).toEqual(classified)
-    for (const rel of Object.keys(DSL_SPECS)) {
-      expect(NOT_DSL_SPEC[rel], `${rel} が両方の表にあります`).toBeUndefined()
-    }
   })
 
   it.each(Object.keys(DSL_SPECS))(
@@ -209,6 +269,10 @@ describe('DSL implementation grant (#998)', () => {
     expect(text).toContain('Apache License 2.0 の条件（第 3 条の特許の許諾を含む）')
     expect(text).toContain('仕様書の本文の許諾ではありません')
     expect(text).not.toMatch(/not the Apache License/i)
+    expect(
+      sha256(canonical.slice(1).join('\n')),
+      '実装の許諾の文面を確定・変更したら golden を更新してください（法務の確認の後）',
+    ).toBe(GRANT_TEXT_SHA256)
     for (const rel of Object.keys(DSL_SPECS)) {
       expect(grantUnderTitle(rel)?.block, `${rel} の節の文面が README と違います`).toEqual(
         canonical,
@@ -233,7 +297,10 @@ describe('DSL implementation grant (#998)', () => {
 
   it('keeps every other document under the root license', () => {
     const docs = repoFiles.filter((rel) => /^(?:docs|sites)\//.test(rel) && MARKDOWN_NAME.test(rel))
-    const withSpdx = docs.filter((rel) => SPDX_APACHE_NOTICE.test(read(rel)))
+    const withSpdx = docs.filter((rel) => {
+      const text = read(rel)
+      return SPDX_APACHE_NOTICE.test(text) || hasApacheFrontmatter(text)
+    })
     expect(sorted(withSpdx)).toEqual(sorted(Object.keys(SPDX_APACHE_PROSE_EXCEPTIONS)))
     for (const [rel, reason] of Object.entries(SPDX_APACHE_PROSE_EXCEPTIONS)) {
       expect(reason.trim(), `${rel} の SPDX 表記を許す理由がありません`).not.toBe('')
@@ -261,7 +328,20 @@ describe('DSL implementation grant (#998)', () => {
 
   it('does not carve the specification documents out of the root LICENSE', () => {
     const license = read('LICENSE')
-    expect(license).not.toMatch(/\b(?:docs|sites)\//i)
+    const { end, lines, start } = licenseDefinitionBounds()
+    const exceptionBlock = lines.slice(start + 1, end + 1).join('\n')
+    expect(
+      sha256(exceptionBlock),
+      'LICENSE の言語定義の例外節を変更したら golden を意図的に更新してください',
+    ).toBe(LICENSE_EXCEPTION_SHA256)
+    const outsideApache = lines.filter((line, i) => /apache/i.test(line) && (i < start || i > end))
+    expect(outsideApache, 'LICENSE の例外節の外に Apache の言及を追加しないでください').toEqual(
+      ROOT_LICENSE_APACHE_LINES,
+    )
+    expect(license).not.toMatch(/\b(?:docs\/core|docs\/specs-v2|sites\/)/i)
+    for (const rel of Object.keys(DSL_SPECS)) {
+      expect(license).not.toContain(path.basename(rel))
+    }
     const exception = licenseDefinitionSection().join('\n')
     expect(exception).toContain('licensed under the Apache License, Version 2.0 only')
     expect(exception).toContain('without the Commons Clause')
@@ -275,6 +355,32 @@ describe('DSL implementation grant (#998)', () => {
         '言語の定義に当たるファイルが表と違います。Apache-2.0 にするなら LANGUAGE_DEFINITIONS に足し、\n' +
           '`<file>.license`・LICENSE の例外の節・README の一覧も同じ PR で直す',
       ).toEqual(sorted(Object.keys(LANGUAGE_DEFINITIONS)))
+    })
+
+    it('classifies every language-definition path declared by extension packages', () => {
+      const declared = repoFiles
+        .filter((rel) => /^packages\/[^/]+\/package\.json$/.test(rel))
+        .flatMap((rel) => {
+          const manifest = JSON.parse(read(rel)) as {
+            contributes?: {
+              grammars?: { path?: string }[]
+              languages?: { configuration?: string }[]
+            }
+          }
+          const paths = [
+            ...(manifest.contributes?.grammars ?? []).map((entry) => entry.path),
+            ...(manifest.contributes?.languages ?? []).map((entry) => entry.configuration),
+          ].filter((value): value is string => typeof value === 'string')
+          return paths.map((value) =>
+            path.posix.normalize(path.posix.join(path.posix.dirname(rel), value)),
+          )
+        })
+      for (const rel of declared) {
+        expect(
+          LANGUAGE_DEFINITIONS[rel],
+          `${rel} は package.json が指す言語定義ですが LANGUAGE_DEFINITIONS にありません`,
+        ).toBeDefined()
+      }
     })
 
     it.each(Object.keys(LANGUAGE_DEFINITIONS))('%s has its Apache-2.0 .license file', (rel) => {
@@ -297,6 +403,18 @@ describe('DSL implementation grant (#998)', () => {
       expect(repoFiles.filter((rel) => rel === 'REUSE.toml' || rel === '.reuse/dep5')).toEqual([])
     })
 
+    it('has exactly the approved license-control files', () => {
+      const allowed = [
+        'LICENSE',
+        'LICENSES/Apache-2.0.txt',
+        ...Object.keys(LANGUAGE_DEFINITIONS).map((rel) => `${rel}.license`),
+      ]
+      if (repoFiles.includes('protocol/LICENSE')) allowed.push('protocol/LICENSE')
+      expect(sorted(repoFiles.filter(isLicenseControlFile))).toEqual(sorted(allowed))
+      expect(isLicenseControlFile('.claude/license.local.md')).toBe(false)
+      expect(isLicenseControlFile('rust/crates/orbit-child-runtime/src/notice.rs')).toBe(false)
+    })
+
     it('lists the same files in the root LICENSE exception', () => {
       expect(sorted(licenseDefinitionList())).toEqual(sorted(Object.keys(LANGUAGE_DEFINITIONS)))
     })
@@ -313,7 +431,7 @@ describe('DSL implementation grant (#998)', () => {
 
     it('ships the unmodified Apache License 2.0 text', () => {
       const text = fs.readFileSync(path.join(repoRoot, 'LICENSES/Apache-2.0.txt'))
-      expect(crypto.createHash('sha256').update(text).digest('hex')).toBe(APACHE_TEXT_SHA256)
+      expect(sha256(text)).toBe(APACHE_TEXT_SHA256)
     })
 
     it('tells contributors that these files are Apache-2.0', () => {
@@ -321,7 +439,23 @@ describe('DSL implementation grant (#998)', () => {
     })
   })
 
-  it.skipIf(!fs.existsSync(path.join(repoRoot, 'protocol')))(
+  it('allows only the reviewed Apache references in the README License section', () => {
+    const section = readmeLicenseSection()
+    const heading = section.findIndex((line) => line === '### Implementing the OrbitScore DSL')
+    expect(heading).toBeGreaterThan(-1)
+    const grantAt = section.findIndex((line) => line.startsWith(GRANT_ANCHOR))
+    const grant = blockFrom(section, grantAt)
+    const outsideGrant = section.filter((_line, i) => i < grantAt || i >= grantAt + grant.length)
+    expect(outsideGrant.filter((line) => /apache/i.test(line))).toEqual([
+      README_LICENSE_SUMMARY_APACHE_LINE,
+      ...README_APACHE_LINES,
+    ])
+    expect(
+      section.slice(heading + 1).filter((line) => /may be implemented by/i.test(line)),
+    ).toEqual([README_IMPLEMENTATION_LEAD])
+  })
+
+  it.skipIf(!repoFiles.some((rel) => rel.startsWith('protocol/')))(
     'names protocol/ in the root LICENSE once protocol/ exists',
     () => {
       // 設計 848 の裁定（§14 (9)）で `protocol/` は Apache-2.0 になる（計画 §7.1 の C-2 が
@@ -331,8 +465,9 @@ describe('DSL implementation grant (#998)', () => {
         fs.existsSync(path.join(repoRoot, 'protocol/LICENSE')),
         'protocol/LICENSE がありません',
       ).toBe(true)
-      expect(read('protocol/LICENSE')).toContain('Apache License')
-      expect(read('protocol/LICENSE')).toContain('Version 2.0')
+      expect(sha256(fs.readFileSync(path.join(repoRoot, 'protocol/LICENSE')))).toBe(
+        APACHE_TEXT_SHA256,
+      )
       expect(read('LICENSE'), 'ルートの LICENSE に protocol/ の扱いを書いてください').toContain(
         'protocol/',
       )

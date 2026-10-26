@@ -549,7 +549,7 @@ kick.effect(comp).output(stems, thru: true).output(master, db: -6)   // comp 後
 var kit = instrument("Battery", outs: { "kick": bd, "snare": sd, "oh": cue })
 ```
 
-`outs:` は spec に既にある（`SIGNAL_CHAIN_DSL_SPEC_v1.md:128`「ポート→バス割り当て」）。**値の型を増やさずに**バス・物理アウト・render を一様に指せる。
+`outs:` は spec に既にある（`SIGNAL_CHAIN_DSL_SPEC_v1.md:145`「ポート→バス割り当て」）。**値の型を増やさずに**バス・物理アウト・render を一様に指せる。
 
 **残る未決（owner・§9）**: プレースホルダの語彙（`%v` / `%d` / `%n`）/ 3ch 以上を 1 ファイルに書く形（main は**作らない**を推す）。
 
