@@ -176,6 +176,7 @@ MCP ツールの名前・引数・戻りは **v1 だけ**関門で、v1 の後�
 | **P-16** | **凍結版 4.4.0 の `/mcp` の Origin 未検証**（#996 に記録だけ・§4.7） | 凍結の例外として直すか、退役まで残すか（owner） | owner の判断が #996 に記録されている | issue **#996**（OPEN）+ 台帳の spec の `ext-retire` | `ext-retire` | — |
 | **P-17** | **Monaco へのパッチ**（N0-a で要ると決まった場合のみ。D-6 の上流の修正 microsoft/vscode#333909 が未マージの間） | 上流の修正を含む Monaco の版へ上げ、パッチを消す | パッチのファイルが無い | 🔴 **期限を機械で切れない**（上流の都合）。代わりに、パッチの適用を Monaco の版に結びつけ、**版を上げた時にパッチが当たらなければ build が落ちる**形にする（N0-a で決める）。パッチのファイルに `PROVISIONAL(P-17)` | `external` | N0-a → 上流 |
 | **P-18** | **`protocol:check` が TS 側だけ**（N0-b で生成ツールが決まるまで。クラウドで先に進める S-rpc の N1-a1・計画 §7.1 の C-2） | TS と Swift の両方を生成し、`protocol:check` が両方の差分ゼロを検査する | `protocol/gen/swift/` に生成物があり、N0-b の往復テスト（3 メッセージ）が緑 | 台帳の spec: `apps/OrbitStudio/Package.swift` が現れた時点で `protocol/gen/swift/` が空なら red（Swift のコードが生成物を使い始める前に閉じる） | `when-exists:apps/OrbitStudio/Package.swift` | S-rpc（N1-a1）→ N0-b |
+| **P-19** | （2026-10-26・S-rpc の N1-a2 で追加）**スキーマにあって層 2 がまだ実装していないメソッド**。v1 のスキーマ（§5.3）は全メソッドを宣言するが、S-rpc の層 2 が実装するのは `session.evaluate` / `getState` / `getLog` / `shutdown` と `engine.*` だけで、残り（audio・plugin・editor・docs・`session.registerMcp`）は `METHOD_NOT_FOUND`（`data.detail` に「後の束で実装」）を返す | 全メソッドを実装する（S-mcp・S-editor） | `session.evaluate` 以外の C→S メソッドがすべて層 2 のハンドラを持つ | サーバの「未実装」の分岐に `PROVISIONAL(P-19)` + **リリースの preflight**（D-11）。束をまたいで main に入る間の状態なので、S-editor の最後の小 PR で閉じる | `release-1` | S-rpc（N1-a2）→ S-mcp / S-editor |
 
 #### 1.4.2 仕組み — `tests/repo/native-provisional-ledger.ts` と `.spec.ts`（N1-a0 で足す）
 
@@ -888,6 +889,9 @@ log.line (S→C 通知 + ring)
 | S-5 | §5.3.4 逆方向 `editor.*`（S→C） | 中継から届くのは C→S の同名のメソッドで、層 2 がエディタのクライアントへ転送する（スキーマの `x-editor-request`）。`editor.runSelection` だけは往復の中身が違う — エディタは選択の位置（`SelectionSnapshot`）だけを返し、層 2 が subject-block を解決して評価する（§5.4） | §5.3.4 は S→C の側しか書いておらず、中継（クライアント）がどのメソッドで頼むかが無かった |
 | S-6 | §5.3.6 の通知 `plugin.uiClosed` | v1 のスキーマに**まだ入れていない**（MINOR で足す） | daemon の `PluginUiClosed` は engine の中で処理され（`rust-engine-player.ts:655`）、層 2 が受け取る口が無い。台帳 P-07（型付きの出力の口・S-eval）で一緒に足すのを提案する |
 | S-7 | 構造化エラー（`NO_EDITOR_ATTACHED` ほか）の数値 | `x-errors` に数値を置いた（JSON-RPC のサーバ範囲 −32000〜−32099）。エラーの `data.code` に名前を入れる | 本書は名前だけだった |
+| S-8（N1-a2） | engine が起動していない時の `session.evaluate`（§5.3.1 に記述なし） | エラー `ENGINE_NOT_RUNNING`（−32031・文言は凍結版と同じ「engine is not running — start the engine first」）。評価しない | `InterpreterV2.execute` は起動していなければ自分で daemon を起こす（`ensureBooted`・`interpreter-v2.ts`）。評価が暗黙に engine を起こすと、利用者の操作なしに音の経路が立つ（RL-6・§14.0 (25) と同じ考え）。凍結版の `evaluate_orbitscore` も評価せずに同じ文言を返す（`agent-handlers.ts`） |
+
+**N1-a2 で確かめた事実**（§5.3.2 の「未確認」への答え・2026-10-26・`packages/engine/src/audio/rust-engine/daemon-client.ts`）: `DaemonClient.quit()` は `killChildGracefully` で SIGTERM を送り、**子の `exit` を待ってから**返る。ただし `DEFAULT_KILL_TIMEOUT_MS` を過ぎて SIGKILL へ昇格した経路は、SIGKILL を送った直後に `exit` を待たずに返り、`child.killed` が既に true の時も待たずに返る。層 2 の `engine.stop` は `quit()` の後に応答するので、ふつうの経路では daemon の消滅を待っている。昇格の経路の待ちは層 2 からは足せない（daemon の PID は `@internal` の `childPid` でしか取れない）ので、engine 線で `killChildGracefully` が SIGKILL の後も `exit` を待つようにするのを提案する（層 1 の手前の engine の変更・アプリ線は触らない）。
 
 ---
 

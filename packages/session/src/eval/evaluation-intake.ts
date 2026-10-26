@@ -73,10 +73,19 @@ export interface IntakeExecuteOptions {
   documentDirectory: string
 }
 
+/**
+ * 層 2 が要求に添える帰属（`evalId` / `clientId`）。受付口は解釈せず、その要求の処理中に呼ぶ
+ * `execute` と `log` へそのまま渡す（`log.line` の `evalId` / `clientId` のため）。
+ */
+export interface IntakeContext {
+  evalId?: string
+  clientId?: string
+}
+
 export interface EvaluationIntakeDeps {
   /** `InterpreterV2.execute` を呼ぶ口。 */
-  execute(ir: AudioIR, options: IntakeExecuteOptions): Promise<void>
-  log(line: IntakeLogLine): void
+  execute(ir: AudioIR, options: IntakeExecuteOptions, context: IntakeContext): Promise<void>
+  log(line: IntakeLogLine, context: IntakeContext): void
   /** 既定は engine の `parseAudioDSL`。 */
   parse?: (code: string) => AudioIR
   /** 既定は `AudioLine.beginBatchAll()` / `endBatchAll()`（#611 §5.7）。 */
@@ -86,7 +95,7 @@ export interface EvaluationIntakeDeps {
 }
 
 export interface EvaluationIntake {
-  evaluate(request: EvaluationRequest): Promise<EvaluationOutcome>
+  evaluate(request: EvaluationRequest, context?: IntakeContext): Promise<EvaluationOutcome>
   /** キューが空になるまで待つ（テスト・shutdown 用）。 */
   idle(): Promise<void>
 }
@@ -113,6 +122,7 @@ interface RequestContext {
   documentDirectory: string
   evalSource: EvaluationSource
   diagnostics: EvaluationDiagnostic[]
+  context: IntakeContext
 }
 
 export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIntake {
@@ -129,8 +139,12 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
   /** 受け付けたがまだ始まっていない段の数（全要求の行 + 各要求の最後の強制実行）。 */
   let waitingSteps = 0
 
-  const reportError = (kind: IntakeLogLine['kind'], text: string): void => {
-    deps.log({ kind, level: 'error', text })
+  const reportError = (
+    kind: IntakeLogLine['kind'],
+    text: string,
+    context: IntakeContext = {},
+  ): void => {
+    deps.log({ kind, level: 'error', text }, context)
   }
 
   async function executeCurrentBuffer(
@@ -154,7 +168,7 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
       if (!clearOnIncomplete && /\bEOF\b/.test(String(error.message ?? ''))) {
         return
       }
-      reportError('diagnostic', `[ERROR] ${error.message}`)
+      reportError('diagnostic', `[ERROR] ${error.message}`, ctx.context)
       ctx.diagnostics.push({ kind: 'parse', message: String(error.message) })
       buffer = ''
       return
@@ -162,13 +176,13 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
 
     // ここから先は入力が完結している — 失敗しても保留せず必ず報告してバッファを捨てる。
     try {
-      await deps.execute(ir, {
-        source: code,
-        evalSource: ctx.evalSource,
-        documentDirectory: ctx.documentDirectory,
-      })
+      await deps.execute(
+        ir,
+        { source: code, evalSource: ctx.evalSource, documentDirectory: ctx.documentDirectory },
+        ctx.context,
+      )
     } catch (error: any) {
-      reportError('diagnostic', `[ERROR] ${error.message}`)
+      reportError('diagnostic', `[ERROR] ${error.message}`, ctx.context)
       ctx.diagnostics.push({ kind: 'runtime', message: String(error.message) })
     }
     buffer = ''
@@ -192,7 +206,11 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
   }
 
   /** 1 段が [`stallReportMs`] を超えても終わらないあいだ、繰り返し報告する（#607）。 */
-  async function runWithStallReport(preview: string, step: () => Promise<void>): Promise<void> {
+  async function runWithStallReport(
+    preview: string,
+    context: IntakeContext,
+    step: () => Promise<void>,
+  ): Promise<void> {
     const startedAt = Date.now()
     const shown = preview.trim().slice(0, 120)
     const timer = setInterval(() => {
@@ -202,6 +220,7 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
         `[ERROR] REPL queue is still blocked after ${seconds}s by: ${shown}` +
           ` — ${waitingSteps} line(s) are waiting behind it and will not run until it finishes.` +
           ` They are accepted but NOT executed.`,
+        context,
       )
     }, stallReportMs)
     timer.unref?.()
@@ -215,11 +234,13 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
   async function runRequest(
     request: EvaluationRequest,
     lines: string[],
+    context: IntakeContext,
   ): Promise<EvaluationOutcome> {
     const ctx: RequestContext = {
       documentDirectory: request.documentDirectory ?? '',
       evalSource: request.source,
       diagnostics: [],
+      context,
     }
     let notStarted = lines.length + 1
     try {
@@ -233,7 +254,7 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
         for (const line of lines) {
           notStarted--
           waitingSteps--
-          await runWithStallReport(line, () => handleCodeLine(line, ctx))
+          await runWithStallReport(line, context, () => handleCodeLine(line, ctx))
         }
       } finally {
         // #611 §5.7 guard 2 と同じ保証: 1 行の失敗でもバッチは必ず閉じる。
@@ -243,7 +264,7 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
       notStarted--
       waitingSteps--
       if (buffer.trim()) {
-        await runWithStallReport(buffer, () => executeCurrentBuffer(true, ctx))
+        await runWithStallReport(buffer, context, () => executeCurrentBuffer(true, ctx))
         emptyLineCount = 0
       }
     } finally {
@@ -257,10 +278,10 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
   }
 
   return {
-    evaluate(request: EvaluationRequest): Promise<EvaluationOutcome> {
+    evaluate(request: EvaluationRequest, context: IntakeContext = {}): Promise<EvaluationOutcome> {
       const lines = splitIntoReplLines(request.code)
       waitingSteps += lines.length + 1
-      const run = queue.then(() => runRequest(request, lines))
+      const run = queue.then(() => runRequest(request, lines, context))
       // 1 件の想定外の失敗で以後の評価が全停止しないように、チェーン自体は reject を握る。
       // 黙って握ると劣化が見えなくなるので、必ず痕跡を残す（凍結版 `pushLine` の catch と同じ）。
       queue = run.then(

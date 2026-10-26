@@ -10,3 +10,4 @@
 - **凍結版への変更**: `packages/vscode-extension/**` と `packages/engine/src/cli/repl-mode.ts` は触らない（設計 §10.3・F-10）
 - **GUI だけの近道**。GUI が呼ぶ RPC メソッドは MCP からも届くこと（D-4）
 - **最終形でないまま動くものを、台帳に載せずに置くこと**。暫定物は同じ PR で `tests/repo/native-provisional-ledger.ts` に行を足し、コードに台帳の ID つきの `PROVISIONAL` の印を置く（文法は設計 §1.4.2。この文書に文法の実例を書くと検査が拾う）
+- **`console` への書き込み**。engine が `console` に書く行は層 2 が横取りして分類する（台帳 P-07）ので、層 2 自身の行は `LogHub`（`SessionCore.sessionLog`）へ直接渡す

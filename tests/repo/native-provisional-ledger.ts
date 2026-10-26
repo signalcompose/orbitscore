@@ -147,7 +147,7 @@ export const LEDGER: readonly LedgerEntry[] = [
     id: 'P-07',
     title: 'engine の console 出力を in-process で受け取る経路（console の横取り）',
     deadline: { kind: 'release-1' },
-    state: 'planned',
+    state: 'open',
     bundle: 'S-rpc（N1-a2）→ S-eval',
   },
   {
@@ -291,6 +291,14 @@ export const LEDGER: readonly LedgerEntry[] = [
       }
     },
     bundle: 'S-rpc（N1-a1）→ N0-b',
+  },
+  {
+    id: 'P-19',
+    title:
+      'スキーマにあって層 2 がまだ実装していないメソッド（METHOD_NOT_FOUND と「後の束で実装」の detail を返す）',
+    deadline: { kind: 'release-1' },
+    state: 'open',
+    bundle: 'S-rpc（N1-a2）→ S-mcp / S-editor',
   },
 ]
 
