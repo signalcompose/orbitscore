@@ -28,6 +28,20 @@ docs 追従ルーチン。#1003 は「仕様書の本文は Apache-2.0 にしな
 - `docs/research/WCTM_COMPOSITION_SKILL_RESEARCH.md` の `INSTRUCTION_ORBITSCORE_DSL.md:14` を `:20` に（許諾の節で 6 行ずれた。着地先は同じ `**Implementation Status**` の行）
 - 🔴 仕様（DSL の構文・意味）は変わっていないので `docs/specs-v2/` と `docs/core/` の本文・`sites/user/`・`docs/user/` は触っていない。`sites/dev/` の引用は #1003 が `--fix` で直し済み（`docs:check` 緑で確認）
 
+---
+
+### docs(dev-site): follow up #1007 with the Origin rejection and the daemon-side parent watch (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/docs-sync-pr1007` / **追従元**: PR [#1007](https://github.com/signalcompose/orbitscore/pull/1007)（マージコミット `42ec6a2`） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
+
+PR #1007 の追従。元 PR は `docs/research/ENGINE_DAEMON_PROTOCOL.md`（§2.1.2 / §2.2）・`docs/design/606-*.md`・WORK_LOG を直し、dev 学習サイトは**引用の再アンカーと spawn / `run()` の 2 箇所**だけを更新していた。残っていた 2 つの表面を dev サイトへ足す（実装・テストは触らない）。
+
+- `sites/dev/rust-engine/index.md`（+ `en/`）の「boot 〜 teardown ライフサイクル」に **`Origin` ヘッダのある接続の 403 拒否**の節を追加（`server.rs:92-110` の `reject_browser_origin` と `:79-87` の `handle_connection` 側の畳み込みを引用）。元 PR は `server.rs` の引用を `serve` の行ずれ更新だけで通しており、`handle_connection` に入った関門はサイトのどこにも書かれていなかった
+- 同章に **親（engine）の死の検知**の節を追加（`parent_watch.rs:7-18` / `daemon-spawn.ts:21-28` / `main.rs:208-229`）。主 = stdin の EOF・補助 = 親 PID の 2 段構え、引数による opt-in と前後互換、`_exit(0)` なので **#448 の `Drop` ギャップは閉じていない**ことを明記。元 PR が足したのは `run()` の段 -0.5 の 3 行コメントだけだった
+- `sites/dev/rust-engine/oop-children.md`（+ `en/`）の `ParentWatch` 節に、daemon 側へ同名の兄弟が入ったことと **`orbit_audio_sandbox::ParentWatch` を共有しない 2 つの理由**（構築時の `getppid()` しか持たない・`outproc-*` feature の optional 依存）の相互参照を追加（`parent_watch.rs:9-12` を引用）
+- `index.md` の Sources を `server.rs:1-79` → `1-110` に直し、`parent_watch.rs` と #996 / PR #1007 を追加。`index.md` の frontmatter は `verified-against: 42ec6a2` / `verified-at: 2026-10-26`（読み直したのは accept 経路と起動段だけ、と Note に明記）。`oop-children.md` は相互参照 1 節だけなので frontmatter は据え置き
+- 追従不要と判断: `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` と `docs/specs-v2/`（DSL の構文・意味論・`.orbslog` は不変）/ `sites/user/` `docs/user/` と `sites/dev/editor/`（MCP ツールの引数・返り値・エラー挙動は不変。daemon の argv と stdio は利用者が書く語ではない）/ `.github/workflows/rust-ci.yml`・`CLAUDE.md`・`tests/`（ゲート手順と env の追加で、文書化は元 PR が済ませている）
+
 ### docs: archive the September 2026 WORK_LOG entries (Oct 27, 2026)
 
 **Date**: 2026-10-27 / **ブランチ**: `1033-worklog-archive-2026-09` / **Issue**: [#1033](https://github.com/signalcompose/orbitscore/issues/1033)
