@@ -601,9 +601,12 @@ gh pr merge <number> --merge
 **自動マージにはしない。** #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
 存在しない」— 実際は `code-review.yml` が `npm test` を実行している）。**人が読む前提は変えない。**
 
-⚠️ **ルーティンは機械が見ていない層を見ている。** `docs:check` は**引用のアンカーしか検査せず**、
-引用を囲む**本文**と **`## Sources` の行範囲**は検査しない。#716 はまさにそこ（#714 でガードの
-走査範囲を変えたのに本文が古いまま）を検出した。だから生成を止めてはいけない。
+⚠️ **ルーティンは機械が見ていない層を見ている。** `docs:check` が検査するのは**形**だけである —
+dev サイト側は**引用のアンカー**（`sites/dev/scripts/check-citations.mjs`）、user サイト側は
+**可用性表記の文法**（`sites/user/scripts/check-availability.mjs`・#848 で `docs:check` に連結）で、
+どちらも引用を囲む**本文**・**`## Sources` の行範囲**・可用性の行が名乗る**版番号の正しさ**は見ない。
+#716 はまさにそこ（#714 でガードの走査範囲を変えたのに本文が古いまま）を検出した。
+だから生成を止めてはいけない。
 
 **Important:**
 - **ALWAYS create a branch before starting work** - never commit directly to main

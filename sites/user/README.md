@@ -31,8 +31,28 @@ npm run docs:dev      # http://localhost:5173 (HMR 付き)
 - `basics/` — 章 4-8 (パターン、複数シーケンス、ポリリズム、オーディオ操作、ライブコーディング)
 - `reference/` — 章 9 (メソッド早見表)
 - `troubleshooting.md` — 章 10
-- `STYLE_GUIDE.md` — 執筆規約 (ですます調、子供扱いしない、コードのみ)
+- `STYLE_GUIDE.md` — 執筆規約 (ですます調、子供扱いしない、コードのみ、可用性表記)
+- `scripts/check-availability.mjs` — 可用性表記の lint (`npm run docs:check`)
+- `.translation-glossary.md` — ja → en の訳語表
 - `.vitepress/` — VitePress 設定 (config, sidebar, theme)
+
+## 可用性表記の検査
+
+各章は frontmatter `host:`（`both` / `both+split` / `app` / `ext`）を持ち、機能ごとの可用性を
+`> **対応**:`（en は `> **Availability**:`）の固定 5 形で書きます。規約は
+[`STYLE_GUIDE.md`](STYLE_GUIDE.md) の「可用性表記（OrbitScore / OrbitStudio）」、
+検査は `scripts/check-availability.mjs` です。リポジトリルートで:
+
+```bash
+npm run docs:check                               # dev サイトの引用検証と合わせて全章を検査
+node sites/user/scripts/check-availability.mjs   # user サイトだけを検査
+node sites/user/scripts/check-availability.mjs --release   # 未リリースの行を red にする（リリース前）
+```
+
+FAIL 行の末尾に規則 ID（`AV-HOST` / `AV-SYNTAX` / `AV-PLACE` / `AV-UNRELEASED` / `AV-I18N` /
+`AV-HOST-SCOPE` / `AV-TERM`）が出るので、STYLE_GUIDE の同名の規則を読んで直します。
+CI では `code-review.yml` の `Check doc citations and user-site availability notation` が、
+手元では `.husky/pre-push` が同じ `docs:check` を走らせます。
 
 ## 公開 URL
 
