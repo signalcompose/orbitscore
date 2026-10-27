@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: document the AV-HOST-SCOPE legacy-identifier exemption in the user-site style guide (Oct 27, 2026)
+
+**Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1006` / **追従元**: PR [#1006](https://github.com/signalcompose/orbitscore/pull/1006)（マージコミット `25c1ab5`） / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)（計画 §7.1 の D-②）
+
+docs 追従ルーチン。#1006 は user サイトの全 42 章に frontmatter `host:` を入れ、`HOST_MISSING_BASELINE`（D-① の暫定の免除一覧）を仕組みごと削除した。実装・テストは触っていない。
+
+- `sites/user/STYLE_GUIDE.md:180` の `AV-HOST-SCOPE` の説明に「**数えない語**」の項を足した。lint は旧称の識別子 `orbitstudio-mcp-gated.spec.ts` と `ORBIT_GATED_ORBITSTUDIO` を OrbitStudio（アプリ）の言及として数えないが（`sites/user/scripts/check-availability.mjs:192-200` の `LEGACY_EXTENSION_IDENTIFIERS`）、STYLE_GUIDE は「OrbitStudio を含む行（大文字小文字を問わない。コードブロックと frontmatter も含む）」と書くだけで除外に触れていなかった。#1006 が `midi/link-audio.md` を `host: both` にしたことでこの除外が初めて load-bearing になり、規約だけを読んだ書き手は「実測の出典にハーネスのファイル名を書くと red になる」と読める状態だった（除外の実装自体は D-① = #1004 に入っている）
+- STYLE_GUIDE は ja 単体のファイルで `sites/user/en/` に対応物を持たないため、en の追従は無い（`sites/user/.vitepress/config.ts` の `srcExclude` 対象）
+- 追従不要と判断: `docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（DSL の構文・意味論・`.orbslog` は不変。差分に `packages/engine/` も `rust/` も無い）/ `sites/dev/`（内部構造・評価経路は不変。dev サイトの引用が指すコードを 1 行も動かしていない。`check-availability.mjs` への引用は 0 件）/ `sites/user/` の章本文と `docs/user/ja/USER_MANUAL.md`（#1006 自身が章を直した PR であり、DSL の語は 1 つも変わっていない）/ `CLAUDE.md:666` と `sites/user/README.md:39-55`（どちらも規則の詳細を STYLE_GUIDE に委ねており、免除一覧には触れていないので #1006 で古くならない）/ `docs/design/848-docs-structure-design.md`（過去の設計書は後から辻褄を合わせない。§3.2 の集計行の数え違いは PR 本文で報告）
+
+Part of #848
+
+---
+
 ### docs: follow the user-site availability lint into the command and tooling references (Oct 27, 2026)
 
 **Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1004` / **追従元**: PR [#1004](https://github.com/signalcompose/orbitscore/pull/1004)（マージコミット `526c1e3`） / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
