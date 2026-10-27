@@ -50,7 +50,7 @@ export interface LedgerEntry {
   closedBy?: string
   /** コードに印を置かない理由（`open` の行で印が無い時に必須）。 */
   markerless?: string
-  /** 台帳の外の既存の仕組みが強制する行（台帳の spec はその行を検査しない）。 */
+  /** 台帳の外の既存の仕組み。名指しのパスが現れたら、そのファイルにこの行の ID が必要。 */
   enforcedBy?: string
   /** `when-exists` の行と、release モードで評価する検査。 */
   check?: (repoRoot: string) => CheckResult
@@ -77,9 +77,14 @@ const read = (repoRoot: string, relative: string): string | undefined => {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined
 }
 
-const hasFiles = (repoRoot: string, relative: string): boolean => {
+const hasNonPlaceholderFiles = (repoRoot: string, relative: string): boolean => {
   const dir = path.join(repoRoot, relative)
-  return fs.existsSync(dir) && fs.readdirSync(dir).some((name) => !name.startsWith('.'))
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return false
+  return fs.readdirSync(dir, { withFileTypes: true }).some((entry) => {
+    if (entry.name.startsWith('.') || /^readme(?:\.[^.]+)?$/i.test(entry.name)) return false
+    if (entry.isFile()) return true
+    return entry.isDirectory() && hasNonPlaceholderFiles(repoRoot, path.join(relative, entry.name))
+  })
 }
 
 export const LEDGER: readonly LedgerEntry[] = [
@@ -88,6 +93,14 @@ export const LEDGER: readonly LedgerEntry[] = [
     title: '評価の受付口の足場（凍結版の区切り方の写し・設計 §4.5.1 段階 1）',
     deadline: { kind: 'release-1' },
     state: 'open',
+    check: (repoRoot) => {
+      const relative = 'packages/session/src/eval/evaluation-intake.ts'
+      const ok = !fs.existsSync(path.join(repoRoot, relative))
+      return {
+        ok,
+        reason: ok ? '評価の受付口の足場が消えている' : `${relative} が残っている`,
+      }
+    },
     bundle: 'S-rpc（N1-a0）→ S-eval',
   },
   {
@@ -133,7 +146,7 @@ export const LEDGER: readonly LedgerEntry[] = [
       '期限が切るのは判定の記録（docs/research/848-timing-baseline.md）なので印を置かない',
     check: (repoRoot) => {
       const doc = read(repoRoot, 'docs/research/848-timing-baseline.md')
-      const ok = doc !== undefined && /判定: (ゲート|ゲートにしない)/.test(doc)
+      const ok = doc !== undefined && /判定: (ゲートにしない|ゲート)\s*$/m.test(doc)
       return {
         ok,
         reason: ok
@@ -282,7 +295,7 @@ export const LEDGER: readonly LedgerEntry[] = [
     deadline: { kind: 'when-exists', path: 'apps/OrbitStudio/Package.swift' },
     state: 'open',
     check: (repoRoot) => {
-      const ok = hasFiles(repoRoot, 'protocol/gen/swift')
+      const ok = hasNonPlaceholderFiles(repoRoot, 'protocol/gen/swift')
       return {
         ok,
         reason: ok
@@ -308,16 +321,24 @@ export interface MarkerScan {
   markers: Marker[]
   /** `PROVISIONAL(` の後ろが `P-\d{2})` で閉じていない箇所（印の書き損じ）。 */
   malformed: Marker[]
+  /** 実際に走査した（存在する）root。 */
+  rootsScanned: string[]
+  /** 除外対象の台帳自身を除き、内容を読んだファイル数。 */
+  filesRead: number
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.build', '.vitepress', 'coverage'])
 const MARKER_ANCHOR = 'PROVISIONAL('
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return
+  if (!fs.existsSync(dir)) throw new Error(`marker scan root does not exist: ${dir}`)
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(entry.name)) continue
+    if (entry.isSymbolicLink()) {
+      throw new Error(`marker scan does not follow symbolic links: ${path.join(dir, entry.name)}`)
+    }
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name), out)
+      walk(path.join(dir, entry.name), out)
     } else if (entry.isFile()) {
       out.push(path.join(dir, entry.name))
     }
@@ -327,12 +348,22 @@ function walk(dir: string, out: string[]): void {
 /** 印を数える。文字列 `PROVISIONAL(` を唯一のアンカーにし、続く形を検査する。 */
 export function scanMarkers(repoRoot: string): MarkerScan {
   const files: string[] = []
-  for (const root of MARKER_SCAN_ROOTS) walk(path.join(repoRoot, root), files)
+  const rootsScanned = MARKER_SCAN_ROOTS.filter((root) => fs.existsSync(path.join(repoRoot, root)))
+  if (rootsScanned.length === 0) {
+    throw new Error(`none of the marker scan roots exist under: ${repoRoot}`)
+  }
+  for (const root of rootsScanned) walk(path.join(repoRoot, root), files)
   const self = new Set(LEDGER_SELF_FILES.map((file) => path.join(repoRoot, file)))
-  const scan: MarkerScan = { markers: [], malformed: [] }
+  const scan: MarkerScan = {
+    markers: [],
+    malformed: [],
+    rootsScanned: [...rootsScanned],
+    filesRead: 0,
+  }
   for (const file of files) {
     if (self.has(file)) continue
     const buffer = fs.readFileSync(file)
+    scan.filesRead++
     if (buffer.includes(0)) continue // バイナリ
     const text = buffer.toString('utf8')
     if (!text.includes(MARKER_ANCHOR)) continue
@@ -397,9 +428,19 @@ export function ledgerViolations(input: LedgerInput): string[] {
     }
   }
   for (const entry of ledger) {
-    // 台帳の外の既存の仕組みが強制する行（P-03 / P-11 / P-14）は二重に検査しない。
-    if (entry.enforcedBy) continue
     const markers = markersOf(entry.id)
+    if (entry.enforcedBy) {
+      if (entry.deadline.kind === 'release-1') {
+        violations.push(`[6] release-1 の行に enforcedBy は使えない: ${entry.id}`)
+      }
+      const namedPaths =
+        entry.enforcedBy.match(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9]+/g) ?? []
+      for (const namedPath of namedPaths) {
+        if (exists(namedPath) && !(read(repoRoot, namedPath) ?? '').includes(entry.id)) {
+          violations.push(`[1] enforcedBy のファイルに行の ID が無い: ${entry.id} at ${namedPath}`)
+        }
+      }
+    }
     // 2. closed の行の印は 0 件
     if (entry.state === 'closed' && markers.length > 0) {
       violations.push(

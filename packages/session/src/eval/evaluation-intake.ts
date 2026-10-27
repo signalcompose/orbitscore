@@ -25,18 +25,23 @@
  * 写さないもの（メタ行の通信路から来たもの。設計 §5.3 の「引き継がない」）:
  * - メタ行そのもの。評価するコードの中に `//#…` の行があっても、ここでは DSL のコメントとして
  *   パーサへ渡す（凍結版では帯域外の命令として解釈される）
- * - `//#documentDirectory` の行が 1 行として実行される空の評価（`execute()` の呼び出しが 1 回
- *   多い）。基準は各 `execute()` の `documentDirectory` で渡す
  * - 拡張が DSL として注入する `global.setDocumentDirectory(...)`。in-process では `execute()` が
  *   自分で設定する（`interpreter-v2.ts` の `documentDirectory` の処理）
  * - 改行や前後の空白を含む `documentDirectory` の加工（メタ行が 1 行であるための制約）
+ * - 人の経路が未保存の文書に送る `documentDirectory: '.'`。層 2 の WebView は保存先が無ければ
+ *   `null` を送り、受付口も契約どおり絶対パスか `null` だけを受ける（設計 §5.3.1）
+ * - 凍結版が常に `evalSource: 'human'` を渡すこと。層 2 は要求の `source` を渡す（doc 694 G4）
+ * - MCP の経路に無い振る舞い。差分テストは MCP の経路だけを駆動するため、#620 の人の経路の
+ *   診断漏れと、2 回に分けた選択実行で未完の入力を持ち越す振る舞いは段階 1 では観測しない
  *
  * 出力は構造化した値で返す: 診断は応答の `diagnostics`、凍結版が stderr に書く行は `log` へ
  * （`log.line` の `kind` は設計 §5.3.6）。凍結版が stdout に書く `✓` は応答の `ok` に吸収する。
  */
 
-import { parseAudioDSL, type AudioIR } from '@orbitscore/engine/dist/parser/audio-parser'
+import path from 'node:path'
+
 import { AudioLine } from '@orbitscore/engine/dist/core/sequence/audio-line'
+import { parseAudioDSL, type AudioIR } from '@orbitscore/engine/dist/parser/audio-parser'
 
 export type EvaluationSource = 'human' | 'agent'
 
@@ -99,15 +104,22 @@ export interface EvaluationIntake {
 export const QUEUE_STALL_REPORT_MS = 60_000
 
 /**
- * 凍結版の stdin を readline が分ける規則（`\n` / `\r` / `\r\n`）でコードを行に分ける。
+ * 出荷物の Node 24 以上で readline が分ける規則
+ * （`\n` / `\r` / `\r\n` / U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR）で行に分ける。
  * 凍結版はコードの後ろに `\n//#evalEnd` を続けて送るので、コードの最後の行はその `\n` で
  * 終わる（コードが `\r` で終わる時は `\r\n` が 1 つの改行になる）。
  */
 export function splitIntoReplLines(code: string): string[] {
-  const parts = `${code}\n`.split(/\r\n|\r|\n/)
+  const parts = `${code}\n`.split(/\r?\n|\r(?!\n)|\u2028|\u2029/)
   parts.pop()
   return parts
 }
+
+const messageOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+const documentDirectoryMeta = (documentDirectory: string | null): string =>
+  `//#documentDirectory${documentDirectory === null ? '' : ` ${documentDirectory}`}`
 
 interface RequestContext {
   documentDirectory: string
@@ -126,11 +138,20 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
   let buffer = ''
   let emptyLineCount = 0
   let queue: Promise<void> = Promise.resolve()
-  /** 受け付けたがまだ始まっていない段の数（全要求の行 + 各要求の最後の強制実行）。 */
+  /** 受け付けたがまだ始まっていない段の数（要求のメタ行・コード行をすべて含む）。 */
   let waitingSteps = 0
 
   const reportError = (kind: IntakeLogLine['kind'], text: string): void => {
-    deps.log({ kind, level: 'error', text })
+    try {
+      deps.log({ kind, level: 'error', text })
+    } catch (error: unknown) {
+      // `diagnostics` が主、log は従。従の sink が壊れても評価を壊さず、別の口に痕跡を残す。
+      try {
+        process.stderr.write(`[ERROR] evaluation intake log sink failed: ${messageOf(error)}\n`)
+      } catch {
+        // stderr 自体の故障には安全な第 3 の同期出力先が無い。timer から例外だけは漏らさない。
+      }
+    }
   }
 
   async function executeCurrentBuffer(
@@ -148,14 +169,15 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
     let ir: AudioIR
     try {
       ir = parse(code)
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = messageOf(error)
       // 🔴 #607: 「未完」と判定してよいのはパーサが入力の終端（EOF）に達した場合だけ。
       // 行の途中の不正トークンを未完として保留すると、以後の入力が合体して永久に止まる。
-      if (!clearOnIncomplete && /\bEOF\b/.test(String(error.message ?? ''))) {
+      if (!clearOnIncomplete && /\bEOF\b/.test(message)) {
         return
       }
-      reportError('diagnostic', `[ERROR] ${error.message}`)
-      ctx.diagnostics.push({ kind: 'parse', message: String(error.message) })
+      ctx.diagnostics.push({ kind: 'parse', message })
+      reportError('diagnostic', `[ERROR] ${message}`)
       buffer = ''
       return
     }
@@ -167,11 +189,28 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
         evalSource: ctx.evalSource,
         documentDirectory: ctx.documentDirectory,
       })
-    } catch (error: any) {
-      reportError('diagnostic', `[ERROR] ${error.message}`)
-      ctx.diagnostics.push({ kind: 'runtime', message: String(error.message) })
+    } catch (error: unknown) {
+      const message = messageOf(error)
+      ctx.diagnostics.push({ kind: 'runtime', message })
+      reportError('diagnostic', `[ERROR] ${message}`)
     }
     buffer = ''
+  }
+
+  async function executeDocumentDirectoryMeta(meta: string, ctx: RequestContext): Promise<void> {
+    emptyLineCount = 0
+    const ir: AudioIR = { sequenceInits: [], statements: [], fileImports: [] }
+    try {
+      await deps.execute(ir, {
+        source: meta,
+        evalSource: ctx.evalSource,
+        documentDirectory: ctx.documentDirectory,
+      })
+    } catch (error: unknown) {
+      const message = messageOf(error)
+      ctx.diagnostics.push({ kind: 'runtime', message })
+      reportError('diagnostic', `[ERROR] ${message}`)
+    }
   }
 
   /** 凍結版 `handleLine` のうち、メタ行でない行の処理（`repl-mode.ts` の末尾 2 分岐）。 */
@@ -216,64 +255,79 @@ export function createEvaluationIntake(deps: EvaluationIntakeDeps): EvaluationIn
     request: EvaluationRequest,
     lines: string[],
   ): Promise<EvaluationOutcome> {
-    const ctx: RequestContext = {
-      documentDirectory: request.documentDirectory ?? '',
-      evalSource: request.source,
-      diagnostics: [],
-    }
-    let notStarted = lines.length + 1
+    // 凍結版でキューに載る evalBegin / documentDirectory / code / evalEnd / evalMark の全段。
+    let notStarted = lines.length + 4
     try {
-      batch.begin()
-      // 凍結版では `//#documentDirectory` の行がここで 1 行として処理され、空行の数え上げを
-      // 0 に戻してバッファを捨てる。ふつうは前の要求の強制実行の後に空白しか残らないので
-      // 何も変えないが、想定外の失敗で途中のまま終わった要求のバッファを次の要求へ持ち越さない。
-      buffer = ''
-      emptyLineCount = 0
-      try {
-        for (const line of lines) {
-          notStarted--
-          waitingSteps--
-          await runWithStallReport(line, () => handleCodeLine(line, ctx))
-        }
-      } finally {
-        // #611 §5.7 guard 2 と同じ保証: 1 行の失敗でもバッチは必ず閉じる。
-        batch.end()
+      const ctx: RequestContext = {
+        documentDirectory: request.documentDirectory ?? '',
+        evalSource: request.source,
+        diagnostics: [],
       }
-      // `//#evalMark` は提出の境界 — 未完のまま残った入力を強制実行してから報告する（#614）。
-      notStarted--
-      waitingSteps--
-      if (buffer.trim()) {
-        await runWithStallReport(buffer, () => executeCurrentBuffer(true, ctx))
-        emptyLineCount = 0
+
+      // 凍結版の pushLine は 1 行ごとに想定外の失敗を握って次の行へ進む。evalMark まで進めて
+      // 応答を返すことを、ここでも要求単位の reject より優先する。
+      const runLine = async (preview: string, step: () => Promise<void> | void): Promise<void> => {
+        notStarted--
+        waitingSteps--
+        try {
+          await runWithStallReport(preview, async () => step())
+        } catch (error: unknown) {
+          reportError('session', `[ERROR] unexpected REPL queue failure: ${messageOf(error)}`)
+        }
+      }
+
+      await runLine('//#evalBegin', () => batch.begin())
+
+      // メタ行は batch の内側で最初に空の IR として execute される。これにより、コードが空でも
+      // 全行が parse error でも、要求ごとに基準を設定（null は空文字でクリア）する。
+      const meta = documentDirectoryMeta(request.documentDirectory)
+      await runLine(meta, () => executeDocumentDirectoryMeta(meta, ctx))
+
+      for (const line of lines) {
+        await runLine(line, () => handleCodeLine(line, ctx))
+      }
+      await runLine('//#evalEnd', () => batch.end())
+      await runLine('//#evalMark', async () => {
+        // `//#evalMark` は提出の境界 — 未完のまま残った入力を強制実行してから報告する（#614）。
+        if (buffer.trim()) {
+          await executeCurrentBuffer(true, ctx)
+          emptyLineCount = 0
+        }
+      })
+
+      return {
+        ok: ctx.diagnostics.length === 0,
+        diagnostics: ctx.diagnostics,
+        documentDirectory: request.documentDirectory,
       }
     } finally {
       waitingSteps -= notStarted
-    }
-    return {
-      ok: ctx.diagnostics.length === 0,
-      diagnostics: ctx.diagnostics,
-      documentDirectory: request.documentDirectory,
     }
   }
 
   return {
     evaluate(request: EvaluationRequest): Promise<EvaluationOutcome> {
+      if (typeof request?.code !== 'string') {
+        return Promise.reject(new TypeError('evaluation code must be a string'))
+      }
+      if (
+        request.documentDirectory !== null &&
+        (typeof request.documentDirectory !== 'string' ||
+          !path.isAbsolute(request.documentDirectory))
+      ) {
+        return Promise.reject(
+          new TypeError('evaluation documentDirectory must be an absolute path or null'),
+        )
+      }
       const lines = splitIntoReplLines(request.code)
-      waitingSteps += lines.length + 1
+      waitingSteps += lines.length + 4
       const run = queue.then(() => runRequest(request, lines))
       // 1 件の想定外の失敗で以後の評価が全停止しないように、チェーン自体は reject を握る。
       // 黙って握ると劣化が見えなくなるので、必ず痕跡を残す（凍結版 `pushLine` の catch と同じ）。
       queue = run.then(
         () => undefined,
-        (error: any) => {
-          try {
-            reportError(
-              'session',
-              `[ERROR] unexpected REPL queue failure: ${error?.message ?? String(error)}`,
-            )
-          } catch {
-            // 報告の口まで壊れていてもキューは止めない（失敗そのものは呼び出し元へ reject で届く）。
-          }
+        (error: unknown) => {
+          reportError('session', `[ERROR] unexpected REPL queue failure: ${messageOf(error)}`)
         },
       )
       return run

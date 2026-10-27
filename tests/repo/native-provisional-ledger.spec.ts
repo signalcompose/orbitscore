@@ -9,9 +9,10 @@
  * 通さないため）。
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   designLedgerIds,
@@ -25,7 +26,42 @@ import {
 
 const repoRoot = path.resolve(__dirname, '../..')
 const DESIGN = 'docs/design/848-native-orbitstudio-design.md'
-const releaseMode = process.env.ORBIT_RELEASE_PREFLIGHT === '1'
+const releasePreflightValue = process.env.ORBIT_RELEASE_PREFLIGHT
+if (
+  releasePreflightValue !== undefined &&
+  releasePreflightValue !== '' &&
+  releasePreflightValue !== '1'
+) {
+  throw new Error(
+    `ORBIT_RELEASE_PREFLIGHT must be "1" when set; got ${JSON.stringify(releasePreflightValue)}`,
+  )
+}
+const releaseMode = releasePreflightValue === '1'
+const temporaryRepositories: string[] = []
+
+afterEach(() => {
+  for (const temporaryRepository of temporaryRepositories.splice(0)) {
+    fs.rmSync(temporaryRepository, { recursive: true, force: true })
+  }
+})
+
+function temporaryRepository(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-ledger-'))
+  temporaryRepositories.push(root)
+  return root
+}
+
+function writeFixture(root: string, relative: string, contents: string | Buffer): void {
+  const file = path.join(root, relative)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, contents)
+}
+
+function ledgerRow(id: LedgerEntry['id']): LedgerEntry {
+  const row = LEDGER.find((candidate) => candidate.id === id)
+  if (!row) throw new Error(`missing ledger row in test: ${id}`)
+  return row
+}
 
 function realInput(overrides: Partial<LedgerInput> = {}): LedgerInput {
   return {
@@ -46,10 +82,10 @@ describe('native provisional ledger (design 848 §1.4)', () => {
     expect(ids).toContain('P-01')
   })
 
-  it('finds the markers of the scaffolds that exist today', () => {
-    const ids = scanMarkers(repoRoot).markers.map((marker) => marker.id)
-    expect(ids).toContain('P-01')
-    expect(ids).toContain('P-02')
+  it('scans at least one existing root and reads files in the real repository', () => {
+    const scan = scanMarkers(repoRoot)
+    expect(scan.rootsScanned.length).toBeGreaterThan(0)
+    expect(scan.filesRead).toBeGreaterThan(0)
   })
 
   it('has no violation in the repository (checks 1–5 and 7)', () => {
@@ -58,6 +94,57 @@ describe('native provisional ledger (design 848 §1.4)', () => {
 
   it.runIf(releaseMode)('release preflight: every release-1 row is closed (check 6 · D-11)', () => {
     expect(ledgerViolations(realInput({ releaseMode: true }))).toEqual([])
+  })
+})
+
+describe('scanMarkers fixtures', () => {
+  it('finds valid, malformed, mid-line and repeated markers while honoring exclusions', () => {
+    const root = temporaryRepository()
+    writeFixture(
+      root,
+      'packages/session/src/markers.ts',
+      [
+        '// PROVISIONAL(P-01)',
+        'const middle = true // PROVISIONAL(P-02)',
+        '// PROVISIONAL(P-03) and PROVISIONAL(P-04)',
+        '// PROVISIONAL(P-1)',
+      ].join('\n'),
+    )
+    writeFixture(root, 'packages/session/node_modules/ignored.ts', '// PROVISIONAL(P-90)')
+    writeFixture(
+      root,
+      'scripts/binary.bin',
+      Buffer.concat([Buffer.from([0]), Buffer.from('PROVISIONAL(P-88)')]),
+    )
+    writeFixture(root, 'tests/repo/native-provisional-ledger.ts', '// PROVISIONAL(P-91)')
+    writeFixture(root, 'tests/repo/native-provisional-ledger.spec.ts', '// PROVISIONAL(P-92)')
+
+    const scan = scanMarkers(root)
+    expect(scan.markers.map(({ id, line }) => [id, line])).toEqual([
+      ['P-01', 1],
+      ['P-02', 2],
+      ['P-03', 3],
+      ['P-04', 3],
+    ])
+    expect(scan.malformed).toEqual([
+      { id: 'PROVISIONAL(P-1)', file: 'packages/session/src/markers.ts', line: 4 },
+    ])
+    expect(scan.rootsScanned).toEqual(['packages/session', 'scripts', 'tests'])
+    expect(scan.filesRead).toBe(2)
+  })
+
+  it('fails when none of the scan roots exists', () => {
+    expect(() => scanMarkers(temporaryRepository())).toThrow('none of the marker scan roots exist')
+  })
+
+  it('fails instead of silently skipping a symbolic link', () => {
+    const root = temporaryRepository()
+    writeFixture(root, 'packages/session/src/target.ts', 'export {}')
+    fs.symlinkSync(
+      path.join(root, 'packages/session/src/target.ts'),
+      path.join(root, 'packages/session/src/link.ts'),
+    )
+    expect(() => scanMarkers(root)).toThrow('does not follow symbolic links')
   })
 })
 
@@ -78,7 +165,7 @@ describe('native provisional ledger — each check goes red on its shape', () =>
     overrides: Partial<LedgerInput> = {},
   ): LedgerInput => ({
     ledger,
-    scan: { markers: [], malformed: [], ...scan },
+    scan: { markers: [], malformed: [], rootsScanned: [], filesRead: 0, ...scan },
     exists: () => true,
     repoRoot,
     designIds: ledger.map((row) => row.id),
@@ -138,6 +225,15 @@ describe('native provisional ledger — each check goes red on its shape', () =>
         ),
       ),
     ).toEqual(['[5]'])
+    expect(
+      ledgerViolations(
+        input(
+          [entry({ deadline: { kind: 'ext-retire' }, state: 'closed', closedBy: '#1' })],
+          {},
+          { exists: (relative) => relative !== 'packages/vscode-extension' },
+        ),
+      ),
+    ).toEqual([])
   })
 
   it('[6] release mode: a release-1 row that is open or planned, or still marked', () => {
@@ -159,6 +255,15 @@ describe('native provisional ledger — each check goes red on its shape', () =>
     expect(ledgerViolations(input([entry({})]))).toEqual([])
   })
 
+  it('[6] release mode rejects a closed row whose check is false', () => {
+    const row = entry({
+      state: 'closed',
+      closedBy: '#1',
+      check: () => ({ ok: false, reason: 'scaffold still exists' }),
+    })
+    expect(codes(ledgerViolations(input([row], {}, { releaseMode: true })))).toEqual(['[6]'])
+  })
+
   it('[6] on the real repository, release mode names every release-1 row that is not closed', () => {
     // 仕組みが生きていることの確認（今は足場 P-01 などが開いているので、リリースの preflight は落ちる）。
     // 第 1 リリースの時に全部が閉じれば、期待する一覧は空になり、この it はそのまま緑で残る。
@@ -166,7 +271,6 @@ describe('native provisional ledger — each check goes red on its shape', () =>
     const notClosed = LEDGER.filter(
       (row) => row.deadline.kind === 'release-1' && row.state !== 'closed',
     ).map((row) => row.id)
-    expect(notClosed).toContain('P-01')
     for (const id of notClosed) {
       expect(violations.some((line) => line.startsWith('[6]') && line.includes(`${id} `))).toBe(
         true,
@@ -179,5 +283,71 @@ describe('native provisional ledger — each check goes red on its shape', () =>
     expect(
       codes(ledgerViolations(input([entry({})], {}, { designIds: ['P-90', 'P-92'] }))),
     ).toEqual(['[7]'])
+  })
+
+  it('does not allow enforcedBy on a release-1 row', () => {
+    const row = entry({ enforcedBy: 'tests/gate.ts' })
+    expect(codes(ledgerViolations(input([row], {}, { exists: () => false })))).toEqual(['[6]'])
+  })
+
+  it('requires an existing enforcedBy path to name its ledger ID', () => {
+    const root = temporaryRepository()
+    const row = entry({
+      deadline: { kind: 'none', reason: 'synthetic' },
+      enforcedBy: 'tests/gate.ts',
+    })
+    writeFixture(root, 'tests/gate.ts', '// some other gate')
+    const overrides = {
+      repoRoot: root,
+      exists: (relative: string) => fs.existsSync(path.join(root, relative)),
+    }
+    expect(codes(ledgerViolations(input([row], {}, overrides)))).toEqual(['[1]'])
+    writeFixture(root, 'tests/gate.ts', '// gate for P-90')
+    expect(ledgerViolations(input([row], {}, overrides))).toEqual([])
+  })
+})
+
+describe('ledger row checks against fixture repositories', () => {
+  it('P-01 closes only after the evaluation intake scaffold disappears', () => {
+    const root = temporaryRepository()
+    const check = ledgerRow('P-01').check!
+    expect(check(root).ok).toBe(true)
+    writeFixture(root, 'packages/session/src/eval/evaluation-intake.ts', 'export {}')
+    expect(check(root)).toMatchObject({ ok: false })
+  })
+
+  it('P-06 accepts only a complete decision line at the end of a line', () => {
+    const root = temporaryRepository()
+    const check = ledgerRow('P-06').check!
+    expect(check(root).ok).toBe(false)
+    writeFixture(root, 'docs/research/848-timing-baseline.md', '判定: ゲートではない')
+    expect(check(root).ok).toBe(false)
+    writeFixture(root, 'docs/research/848-timing-baseline.md', '測定\n判定: ゲートにしない  \n')
+    expect(check(root).ok).toBe(true)
+  })
+
+  it('P-12 requires the canonical document and rejects either provisional phrase', () => {
+    const root = temporaryRepository()
+    const check = ledgerRow('P-12').check!
+    expect(check(root).ok).toBe(false)
+    writeFixture(root, 'docs/development/DOCS_SYNC_ROUTINE.md', '追従対象外')
+    expect(check(root).ok).toBe(false)
+    writeFixture(root, 'docs/development/DOCS_SYNC_ROUTINE.md', '現在の同期手順')
+    expect(check(root).ok).toBe(true)
+  })
+
+  it('P-18 rejects a file path, an empty directory and README-only placeholders', () => {
+    const root = temporaryRepository()
+    const check = ledgerRow('P-18').check!
+    writeFixture(root, 'protocol/gen/swift', 'not a directory')
+    expect(() => check(root)).not.toThrow()
+    expect(check(root).ok).toBe(false)
+    fs.rmSync(path.join(root, 'protocol/gen/swift'))
+    fs.mkdirSync(path.join(root, 'protocol/gen/swift'), { recursive: true })
+    expect(check(root).ok).toBe(false)
+    writeFixture(root, 'protocol/gen/swift/README.md', 'placeholder')
+    expect(check(root).ok).toBe(false)
+    writeFixture(root, 'protocol/gen/swift/Session.swift', 'struct Session {}')
+    expect(check(root).ok).toBe(true)
   })
 })

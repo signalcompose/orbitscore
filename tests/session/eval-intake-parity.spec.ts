@@ -8,14 +8,13 @@
  * 段階 2（束 S-eval・#997）で期待値を「凍結版との差の一覧」に書き換え、拡張版の退役で消す。
  *
  * 🔴 凍結版の側は**本物の経路**で作る: 拡張の `writeCodeToEngine`（`engine-process.ts`）が
- * 書く行の列と、`evaluateForAgent` が続けて送る `//#evalMark` の行を、readline と同じ規則で
- * 行に分けて凍結版の `createReplSession` に流す。凍結版の枠の付け方が bug fix で変われば、
+ * 書く行の列と、`evaluateForAgent` が続けて送る `//#evalMark` の行を、本物の
+ * `readline.createInterface` + `PassThrough` で行に分けて凍結版の `createReplSession` に流す。
+ * 凍結版の枠の付け方が bug fix で変われば、
  * この検査が red になる（その時は同じ PR で `packages/session/src/eval/` の写しを直す）。
  *
  * 比べる前に凍結版の観測から落とすもの（メタ行の通信路から来たもの・写しの冒頭の注釈と同じ）:
- * 1. `//#documentDirectory` の行だけを source とする `execute()`（中身は空の評価。落とす前に
- *    文が 0 であることを確かめる）
- * 2. 拡張が DSL として注入する `global.setDocumentDirectory("…")` の `execute()`（in-process では
+ * 1. 拡張が DSL として注入する `global.setDocumentDirectory("…")` の `execute()`（in-process では
  *    `execute()` の `documentDirectory` が同じことをする）
  *
  * コーパスに入れないもの（凍結版と層 2 で意図して違う。理由は写しの冒頭の注釈）:
@@ -24,8 +23,17 @@
  * - 人の経路（⌘Enter）の「未完の入力が次の評価へ持ち越される」振る舞い（層 2 は要求の終わりで
  *   強制実行する・設計 §5.3.1）。凍結版の側は MCP の経路（`//#evalMark` つき）で作る
  * - `evalSource: 'agent'`（凍結版の REPL は常に `human` を渡す。層 2 は要求の `source` を渡す ——
- *   `evaluation-intake.spec.ts` が別に確かめる）
+ *   doc 694 G4 の意図を `evaluation-intake.spec.ts` が別に確かめる）
+ * - 差分テストが駆動するのは MCP の経路だけ。#620 の人の経路の診断漏れと、2 回に分けた
+ *   選択実行で未完の入力を持ち越す振る舞いは段階 1 の観測外
+ *
+ * 出荷物の観測（要件ではなく、VS Code の更新で変わりうる）: 2026-10-26、VS Code 1.143.1 /
+ * Electron 43.7.7 / Node v24.21.0。Node 24 で readline に U+2028 / U+2029 が加わったため、
+ * そのコーパスだけはテストを走らせる Node の major が 24 以上の時に駆動する。
  */
+import { PassThrough } from 'node:stream'
+import readline from 'node:readline'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createReplSession } from '../../packages/engine/src/cli/repl-mode'
@@ -53,6 +61,14 @@ interface CorpusCase {
   runtimeErrorFor?: (source: string) => string | undefined
   /** この source の `execute()` を遅らせる（FIFO の再現）。 */
   delayMsFor?: (source: string) => number
+  /** Node 24 で readline に加わった区切り規則を使うケース。 */
+  node24Only?: boolean
+  /** 同じ parser を両側が呼んでも固定できない、今日の明示的な期待。 */
+  expected?: {
+    outcomes: Array<{ ok: boolean; diagnostics: EvaluationDiagnostic[] }>
+    codeExecuteSources: string[]
+    codeIrEmpty: boolean[]
+  }
 }
 
 /** 観測した出来事を起きた順に並べたもの。stderr の `[ERROR]` の行も同じ列に置く。 */
@@ -65,9 +81,11 @@ type TraceEvent =
 interface Observation {
   trace: TraceEvent[]
   outcomes: Array<{ ok: boolean; diagnostics: EvaluationDiagnostic[] }>
+  executeIrs: AudioIR[]
 }
 
 const WS = '/ws/piece'
+const NODE_MAJOR = Number(process.versions.node.split('.')[0])
 
 /**
  * 差分テストのコーパス。設計 §4.5.1 の列挙: 複数行の文・未完・構文エラー・実行時エラー・
@@ -99,6 +117,14 @@ const CORPUS: CorpusCase[] = [
     ],
   },
   {
+    name: '要求頭の基準設定は、正常 → 構文エラーだけ → null の空評価でも毎回実行される',
+    evaluations: [
+      { code: 'var global = init GLOBAL', documentDirectory: '/ws/a' },
+      { code: 'global.play((@', documentDirectory: '/ws/b' },
+      { code: '', documentDirectory: null },
+    ],
+  },
+  {
     name: '複数行にまたがる文（入力の終端で未完 → 溜めて完結した時に 1 回だけ実行）',
     evaluations: [
       {
@@ -110,6 +136,10 @@ const CORPUS: CorpusCase[] = [
   {
     name: '空行 1 つは複数行の文を切らない',
     evaluations: [{ code: ['drum.play(1,', '', '0)'].join('\n'), documentDirectory: WS }],
+  },
+  {
+    name: '空白だけの行も空行として数え、複数行の文を切らない',
+    evaluations: [{ code: ['drum.play(1,', '  ', '\t', '0)'].join('\n'), documentDirectory: WS }],
   },
   {
     name: '空行 2 連は未完の文を強制実行して切る（行単位の区切りの事例）',
@@ -187,11 +217,19 @@ const CORPUS: CorpusCase[] = [
     ],
   },
   {
+    name: 'Node 24 readline: U+2028 / U+2029 も行を分け、コメント後の文を実行する',
+    evaluations: [
+      { code: '// note\u2028global.tempo(120)', documentDirectory: WS },
+      { code: '// note\u2029global.tempo(90)', documentDirectory: WS },
+    ],
+    node24Only: true,
+  },
+  {
     name: '1 行に 2 つの文',
     evaluations: [{ code: 'global.tempo(120) global.start()', documentDirectory: WS }],
   },
   {
-    name: '前の評価の末尾の空行は次の評価の空行の数え上げに持ち越されない',
+    name: '末尾の改行がある評価の次でも、先頭の空行を含む複数行の文を同じ列で実行する',
     evaluations: [
       { code: 'drum.play(1, 0)\n', documentDirectory: WS },
       { code: ['', 'drum.play(1,', '', '0)'].join('\n'), documentDirectory: WS },
@@ -205,6 +243,14 @@ const CORPUS: CorpusCase[] = [
       { code: 'this is not orbitscore (((', documentDirectory: WS },
       { code: 'kick play(1, 0)', documentDirectory: WS },
     ],
+    expected: {
+      outcomes: [
+        { ok: true, diagnostics: [] },
+        { ok: true, diagnostics: [] },
+      ],
+      codeExecuteSources: ['this is not orbitscore (((', 'kick play(1, 0)'],
+      codeIrEmpty: [true, true],
+    },
   },
   {
     name: '#997 / #620: MCP の経路では診断は評価ごとに回収される（前の評価の構文エラーが次に付かない）',
@@ -212,6 +258,22 @@ const CORPUS: CorpusCase[] = [
       { code: 'kick.play(1 0)', documentDirectory: WS },
       { code: 'global.tempo(120)', documentDirectory: WS },
     ],
+    expected: {
+      outcomes: [
+        {
+          ok: false,
+          diagnostics: [
+            {
+              kind: 'parse',
+              message: 'Expected comma or closing parenthesis but got NUMBER at line 1, column 13',
+            },
+          ],
+        },
+        { ok: true, diagnostics: [] },
+      ],
+      codeExecuteSources: ['global.tempo(120)'],
+      codeIrEmpty: [false],
+    },
   },
   {
     name: '#997 / #695: 1 回の選択の文は 1 行ずつ別の評価（execute）になる',
@@ -221,6 +283,11 @@ const CORPUS: CorpusCase[] = [
         documentDirectory: WS,
       },
     ],
+    expected: {
+      outcomes: [{ ok: true, diagnostics: [] }],
+      codeExecuteSources: ['hh.play(1, 0, 0, 1)', 'kick.play(1, 0)', 'LOOP(hh, kick)'],
+      codeIrEmpty: [false, false, false],
+    },
   },
   {
     name: '#997 / #987: コメントだけの行も 0 文の評価になる（切り替えブロック）',
@@ -234,6 +301,15 @@ const CORPUS: CorpusCase[] = [
         documentDirectory: WS,
       },
     ],
+    expected: {
+      outcomes: [{ ok: true, diagnostics: [] }],
+      codeExecuteSources: [
+        '// 切り替えブロック（このブロックだけを流す）',
+        'hh.play(1, 0, 0, 1, 0, 1, 0, 0)',
+        'LOOP(hh)',
+      ],
+      codeIrEmpty: [true, false, false],
+    },
   },
   {
     name: '#997 / #630 (i): 行ごとのパースでは「import は先頭」（IM.1）が選択の評価に効かない',
@@ -243,6 +319,11 @@ const CORPUS: CorpusCase[] = [
         documentDirectory: WS,
       },
     ],
+    expected: {
+      outcomes: [{ ok: true, diagnostics: [] }],
+      codeExecuteSources: ['var global = init GLOBAL', 'import { kick } from "./drums.orbs"'],
+      codeIrEmpty: [false, false],
+    },
   },
   {
     name: '#997 / #630 (iii): 複数行の import はエラーの後に残りの断片が 0 文で黙って通る',
@@ -252,25 +333,62 @@ const CORPUS: CorpusCase[] = [
         documentDirectory: WS,
       },
     ],
+    expected: {
+      outcomes: [
+        {
+          ok: false,
+          diagnostics: [
+            {
+              kind: 'parse',
+              message: 'Expected IDENTIFIER but got NEWLINE at line 1, column 9',
+            },
+          ],
+        },
+      ],
+      codeExecuteSources: ['snare', '} from "./drums.orbs"'],
+      codeIrEmpty: [true, true],
+    },
   },
   {
     name: '#997 / #631: alias はまだ無い構文で 0 文になる',
     evaluations: [{ code: 'alias fx as effect', documentDirectory: WS }],
+    expected: {
+      outcomes: [{ ok: true, diagnostics: [] }],
+      codeExecuteSources: ['alias fx as effect'],
+      codeIrEmpty: [true],
+    },
   },
   {
     name: '#997: 複数行の文の中の空行 2 連は文を割り、残りの断片が 0 文で通る',
     evaluations: [
       { code: ['hh.play(', '  1, 0,', '', '', '  0, 1', ')'].join('\n'), documentDirectory: WS },
     ],
+    expected: {
+      outcomes: [
+        {
+          ok: false,
+          diagnostics: [
+            { kind: 'parse', message: 'Expected RPAREN but got EOF at line 2, column 8' },
+          ],
+        },
+      ],
+      codeExecuteSources: ['0, 1', ')'],
+      codeIrEmpty: [true, true],
+    },
   },
 ]
 
-/** readline と同じ規則（`\n` / `\r` / `\r\n`）でチャンクの列を行に分ける。 */
-function toReplLines(chunks: string[]): string[] {
-  const parts = chunks.join('').split(/\r\n|\r|\n/)
-  // 末尾は改行で終わっているので最後の要素は空文字（行ではない）。
-  expect(parts.pop()).toBe('')
-  return parts
+/** 凍結版の engine と同じ `readline.Interface` に、拡張が書いたチャンクをそのまま通す。 */
+async function toReplLines(chunks: string[]): Promise<string[]> {
+  const input = new PassThrough()
+  const lines: string[] = []
+  const rl = readline.createInterface({ input, terminal: false })
+  const closed = new Promise<void>((resolve) => rl.once('close', resolve))
+  rl.on('line', (line) => lines.push(line))
+  for (const chunk of chunks) input.write(chunk)
+  input.end()
+  await closed
+  return lines
 }
 
 function irIsEmpty(ir: AudioIR): boolean {
@@ -352,7 +470,7 @@ async function observeFrozen(corpus: CorpusCase): Promise<Observation> {
       injected.add(injectedSetDocumentDirectory(evaluation.documentDirectory))
     }
   })
-  for (const line of toReplLines(chunks)) session.pushLine(line)
+  for (const line of await toReplLines(chunks)) session.pushLine(line)
   await session.idle()
 
   const normalized = trace.filter((event, index) => {
@@ -361,10 +479,15 @@ async function observeFrozen(corpus: CorpusCase): Promise<Observation> {
       expect(irIsEmpty(irs.get(index)!), `meta-only execute must be empty: ${event.source}`).toBe(
         true,
       )
-      return false
     }
     return !injected.has(event.source)
   })
+  const executeIrs = normalized
+    .map((event) => {
+      const index = trace.indexOf(event)
+      return event.type === 'execute' ? irs.get(index) : undefined
+    })
+    .filter((ir): ir is AudioIR => ir !== undefined)
   const outcomes = logs
     .filter((line) => line.trim().startsWith('{"evalMark"'))
     .map((line) => {
@@ -374,7 +497,7 @@ async function observeFrozen(corpus: CorpusCase): Promise<Observation> {
         diagnostics: mark.diagnostics as EvaluationDiagnostic[],
       }
     })
-  return { trace: normalized, outcomes }
+  return { trace: normalized, outcomes, executeIrs }
 }
 
 /** 層 2: `createEvaluationIntake` に同じ評価を同時に並べる。 */
@@ -393,7 +516,14 @@ async function observeIntake(corpus: CorpusCase): Promise<Observation> {
   )
   const results = await Promise.all(pending)
   await intake.idle()
-  return { trace, outcomes: results.map(({ ok, diagnostics }) => ({ ok, diagnostics })) }
+  const executeIrs = trace
+    .map((event, index) => (event.type === 'execute' ? irs.get(index) : undefined))
+    .filter((ir): ir is AudioIR => ir !== undefined)
+  return {
+    trace,
+    outcomes: results.map(({ ok, diagnostics }) => ({ ok, diagnostics })),
+    executeIrs,
+  }
 }
 
 beforeEach(() => {
@@ -408,7 +538,9 @@ afterEach(() => {
 
 describe('evaluation intake parity with the frozen REPL (stage 1 = identical · ledger P-02)', () => {
   for (const corpus of CORPUS) {
-    it(corpus.name, async () => {
+    // U+2028 / U+2029 は Node 24 の readline で初めて区切りになった。Node 22 の CI では、
+    // 出荷物ではない古い readline と足場を比べない（固定規則は unit が Node の版によらず見る）。
+    it.skipIf(corpus.node24Only === true && NODE_MAJOR < 24)(corpus.name, async () => {
       const frozen = await observeFrozen(corpus)
       vi.restoreAllMocks()
       const intake = await observeIntake(corpus)
@@ -419,12 +551,30 @@ describe('evaluation intake parity with the frozen REPL (stage 1 = identical · 
 
       expect(intake.trace).toEqual(frozen.trace)
       expect(intake.outcomes).toEqual(frozen.outcomes)
+      expect(intake.executeIrs).toHaveLength(frozen.executeIrs.length)
+      intake.executeIrs.forEach((ir, index) => expect(ir).toEqual(frozen.executeIrs[index]))
+
+      if (corpus.expected) {
+        expect(intake.outcomes).toEqual(corpus.expected.outcomes)
+        let irIndex = 0
+        const codeExecutions = intake.trace.flatMap((event) => {
+          if (event.type !== 'execute') return []
+          const ir = intake.executeIrs[irIndex++]!
+          return event.source.startsWith('//#documentDirectory')
+            ? []
+            : [{ source: event.source, ir }]
+        })
+        expect(codeExecutions.map(({ source }) => source)).toEqual(
+          corpus.expected.codeExecuteSources,
+        )
+        expect(codeExecutions.map(({ ir }) => irIsEmpty(ir))).toEqual(corpus.expected.codeIrEmpty)
+      }
     })
   }
 
-  it('the normalization drops only meta-line artifacts (both kinds are observed)', async () => {
-    // 落とす規則が空振りしていないこと: 基準ありの評価は注入を、どの評価もメタ行の空の
-    // 評価を、凍結版の生の観測に必ず含む。
+  it('the normalization drops only the injected DSL command and keeps meta-line executes', async () => {
+    // 落とす規則が空振りしていないこと: 基準ありの評価は注入とメタ行の空の評価を、
+    // 凍結版の生の観測に必ず含む。差分観測には後者を残す。
     const corpus: CorpusCase = {
       name: 'probe',
       evaluations: [
@@ -448,10 +598,36 @@ describe('evaluation intake parity with the frozen REPL (stage 1 = identical · 
     for (const evaluation of corpus.evaluations) {
       writeCodeToEngine(evaluation.code, evaluation.documentDirectory)
     }
-    for (const line of toReplLines(chunks)) session.pushLine(line)
+    for (const line of await toReplLines(chunks)) session.pushLine(line)
     await session.idle()
 
     expect(raw.filter((source) => source.startsWith('//#documentDirectory'))).toHaveLength(2)
     expect(raw.filter((source) => source === injectedSetDocumentDirectory(WS))).toHaveLength(2)
+
+    vi.restoreAllMocks()
+    const frozen = await observeFrozen(corpus)
+    expect(
+      frozen.trace.filter(
+        (event) => event.type === 'execute' && event.source.startsWith('//#documentDirectory'),
+      ),
+    ).toHaveLength(2)
+    expect(
+      frozen.trace.filter(
+        (event) => event.type === 'execute' && event.source === injectedSetDocumentDirectory(WS),
+      ),
+    ).toHaveLength(0)
+  })
+
+  it('passes an absolute documentDirectory through the intake without trimming it', async () => {
+    const observation = await observeIntake({
+      name: 'documentDirectory passthrough',
+      evaluations: [{ code: '', documentDirectory: '/ws/ piece ' }],
+    })
+    expect(observation.trace).toContainEqual({
+      type: 'execute',
+      source: '//#documentDirectory /ws/ piece ',
+      documentDirectory: '/ws/ piece ',
+      evalSource: 'human',
+    })
   })
 })
