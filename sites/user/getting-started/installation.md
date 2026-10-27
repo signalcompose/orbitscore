@@ -1,6 +1,7 @@
 ---
 title: インストール
 description: OrbitScore VS Code 拡張機能を .vsix ファイル経由でインストールする手順
+host: ext
 ---
 
 # インストール

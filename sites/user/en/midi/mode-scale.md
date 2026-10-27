@@ -1,6 +1,7 @@
 ---
 title: Modes & Scales
 description: Defining custom pitch lattices with mode(), and applying them to a group with (..).mode(name)
+host: both
 ---
 
 # Modes & Scales

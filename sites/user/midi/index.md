@@ -1,6 +1,7 @@
 ---
 title: MIDI 出力
 description: OrbitScore から IAC 経由で MIDI を送る方法と、基本的なシーケンスの作り方を説明します
+host: both
 ---
 
 # MIDI 出力

@@ -1,6 +1,7 @@
 ---
 title: はじめての音
 description: OrbitScore で最初の音を鳴らすまでの手順
+host: both+split
 ---
 
 # はじめての音
@@ -9,7 +10,7 @@ VS Code 拡張機能のインストールが終わったら、いよいよ音を
 
 ## 用意するもの
 
-- インストール済みの OrbitScore VS Code 拡張機能（[インストール](./installation.md)を参照）
+- **OrbitScore**: インストール済みの OrbitScore VS Code 拡張機能（[インストール](./installation.md)を参照）
 - `.wav` 形式のオーディオファイルが入ったフォルダ。今回は kick（バスドラム）の音 1 つあれば十分です
 
 オーディオファイルがまだ手元にない場合は、[freesound.org](https://freesound.org/) などから無料のキックサンプルをダウンロードしてください。ファイル名は何でも構いませんが、本ページでは `kick.wav` という名前で進めます。
@@ -27,12 +28,14 @@ orbitscore-practice/
 ```
 
 ## ステップ 2: VS Code でフォルダを開く
+<!-- host: ext -->
 
 VS Code を起動し、メニューから **File → Open Folder...** を選んで、先ほど作った `orbitscore-practice` フォルダを開きます。
 
 ## ステップ 3: `.orbs` ファイルを作る
+<!-- host: ext -->
 
-サイドバーの作業フォルダのところで右クリックし、**New File** を選びます。ファイル名は `first-sound.orbs` とします（拡張子は必ず `.orbs` にしてください）。
+VS Code のサイドバーの作業フォルダのところで右クリックし、**New File** を選びます。ファイル名は `first-sound.orbs` とします（拡張子は必ず `.orbs` にしてください）。
 
 ## ステップ 4: コードを書く
 
@@ -94,6 +97,7 @@ global.audioPath("/Users/yourname/orbitscore-practice/audio")
 `audio/` フォルダの中に `kick.wav` がちゃんと存在するかを確認してください。ファイル名のスペルミスにも注意してください。
 
 ### VS Code 拡張機能が起動しているか
+<!-- host: ext -->
 
 ステータスバー（VS Code 画面下部の青いバー）に `🎵 OrbitScore: Ready` と表示されているはずです。表示されていない場合は、ステータスバーのその部分をクリックすると拡張機能が起動します。
 

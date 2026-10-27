@@ -1,6 +1,7 @@
 ---
 title: リファレンス（メソッド一覧）
 description: OrbitScore の全メソッドをカテゴリ別にまとめた早見表です
+host: both
 ---
 
 # リファレンス（メソッド一覧）

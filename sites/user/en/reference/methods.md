@@ -1,6 +1,7 @@
 ---
 title: Reference (Method List)
 description: A quick-lookup table of all OrbitScore methods, organized by category
+host: both
 ---
 
 # Reference (Method List)

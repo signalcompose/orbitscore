@@ -1,6 +1,7 @@
 ---
 title: Voicing & Voice Leading
 description: Voicing operators that reshape chord positions, adding randomness, smooth voice leading, and the comp rhythm feature
+host: both
 ---
 
 # Voicing & Voice Leading

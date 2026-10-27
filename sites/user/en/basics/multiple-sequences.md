@@ -1,6 +1,7 @@
 ---
 title: Multiple Sequences
 description: How to play multiple sequences such as kick, snare, and hi-hat at the same time
+host: both
 ---
 
 # Multiple Sequences

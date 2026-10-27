@@ -1,6 +1,7 @@
 ---
 title: MIDI Output
 description: How to send MIDI from OrbitScore via IAC, and how to build basic sequences
+host: both
 ---
 
 # MIDI Output
