@@ -177,6 +177,7 @@ en でも `- **OrbitScore**:` と `- **OrbitStudio**:` です。
 - 🔴 **`AV-HOST-SCOPE`**: `host: both` / `both+split` の章では、OrbitStudio を含む行（大文字小文字を問わない。コードブロックと frontmatter も含む）は次のどちらかにしか置けません
   1. `- **OrbitStudio**:` で始まる併記の行
   2. 見出しの直下の可用性の行が OrbitStudio を含む節（その下位の節も含む）
+  - **数えない語**: VS Code 拡張のハーネスを指す旧称の識別子 `orbitstudio-mcp-gated.spec.ts` と `ORBIT_GATED_ORBITSTUDIO` は、OrbitStudio（アプリ）の言及として数えません（`sites/user/scripts/check-availability.mjs` の `LEGACY_EXTENSION_IDENTIFIERS`）。実測の出典としてこの 2 語を挙げる行は、`host: both` の章にそのまま置けます（`midi/link-audio.md` が該当）。識別子を旧称のまま据え置く理由は `CLAUDE.md`（2026-09-18）と設計 848 §10.2 です
 - **OrbitStudio の操作手順は、アプリの表面が決まるまで書きません**（設計 848 別冊 §7.4・§14 (20)「主語は A-parity 後」）。それまでは `- **OrbitScore**:` の行だけを置き、OrbitStudio の行は表面が決まってから足します
 
 ### 可用性の行（固定文法・5 形）
