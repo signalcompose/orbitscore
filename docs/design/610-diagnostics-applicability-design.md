@@ -117,8 +117,8 @@ export type MethodChain      = { method: string; args: any[]; invocation?: 'bare
 | `pan` | | 🟡`warn` R:ignore | `ok` R:apply（バス経由） | `error` | `error` | 同上（`pan()`）。`gain(random)`/`pan(random)` は今日どおり発音側のまま |
 | `defaultPan` | | 🟡`warn` R:ignore | 🟡`warn` R:ignore | `error` | `error` | 同上 |
 | `output(sum名)` | | 🔴`error` R:throw | | `error` | `error` | `sequence.ts:362-367` |
-| `output(数値)` | | 🟡`warn` R:ignore ⟨**裁定待ち §15 (1)**⟩ | 🔴`error` R:throw | `error` | `error` | `:381-386`（instrument）/ midi は素通り。core spec `:1225` と一致 |
-| `output("名前")` | | 🟡`warn` R:ignore ⟨同上⟩ | 🔴`error` R:throw | `error` | `error` | `:405-410` / core spec `:1226` |
+| `output(数値)` | | 🟡`warn` R:ignore ⟨**裁定待ち §15 (1)**⟩ | 🔴`error` R:throw | `error` | `error` | `:381-386`（instrument）/ midi は素通り。core spec `:1340` と一致 |
+| `output("名前")` | | 🟡`warn` R:ignore ⟨同上⟩ | 🔴`error` R:throw | `error` | `error` | `:405-410` / core spec `:1341` |
 | `send` | | 🔴`error` R:throw | | `error` | `error` | `:459-464` |
 | `effect` | | 🔴`error` R:throw | | | `error` | `:713-718` / バスは `BUS_DSL_METHODS`（`runtime.ts:74`） |
 | `ui` | 🟡`warn` R:ignore | 🟡`warn` R:ignore | | | `error` | `sequence.ts:678-693`: 引数無しは `openPluginUiIdempotent(name, 0)` = instrument 前提。**引数ありの catalog effect UI は audio でも意味がある**ので §15 (4) |
@@ -135,9 +135,9 @@ export type MethodChain      = { method: string; args: any[]; invocation?: 'bare
 
 | # | spec | 実装 | 判定 |
 |---|---|---|---|
-| (a) | core spec `:1225-1226`「`output(数値)` / `output("名前")` は midi で**素通り**（#644 で診断予定）」 | 一致 | 表の `warn` 行として**実装で表現**する（予定を消す） |
-| (b) | core spec `:941` `seq.root(1)` … `:953`「**`seq.root()` は numeric-degree-only**（`seq.root(1)`, `seq.root(b6)`）」 | 🔴 **`seq.root(b6)` も動かない**。`b6` は `parseArgument` → ACCIDENTAL → `parsePitch()`（`parse-expression.ts:478-488`）で `PlayPitch` オブジェクトになり、`Sequence.root(degree: number)`（`:906-920`）の `Number.isInteger` を通らない。そもそも signature に alteration が無い | **新規の乖離**（#280 の派生・§7.1） |
-| (c) | `specs-v2/PITCH_DSL_SPEC_v1.1.md:160` `seq.root(C)` | 拒否（#280） | specs-v2 が古い。core spec `:953` は既に実装側へ倒してある（**#280 の裁定は片方の spec にだけ入っている**） |
+| (a) | core spec `:1340-1341`「`output(数値)` / `output("名前")` は midi で**素通り**（#644 で診断予定）」 | 一致 | 表の `warn` 行として**実装で表現**する（予定を消す） |
+| (b) | core spec `:1006` `seq.root(1)` … `:1018-1020`「**`seq.root()` is numeric-degree-only**（`seq.root(1)`, `seq.root(b6)`）」 | 🔴 **`seq.root(b6)` も動かない**。`b6` は `parseArgument` → ACCIDENTAL → `parsePitch()`（`parse-expression.ts:478-488`）で `PlayPitch` オブジェクトになり、`Sequence.root(degree: number)`（`:906-920`）の `Number.isInteger` を通らない。そもそも signature に alteration が無い | **新規の乖離**（#280 の派生・§7.1） |
+| (c) | `specs-v2/PITCH_DSL_SPEC_v1.1.md:168` `seq.root(C)` | 拒否（#280） | specs-v2 が古い。core spec `:1018-1020` は既に実装側へ倒してある（**#280 の裁定は片方の spec にだけ入っている**） |
 | (d) | core spec §3「Slice-to-Slot Fitting」 | ✅ 済（#665 B'・`ee782327`） | — |
 
 ### 3.4 型と signature（貼れる形）
@@ -418,8 +418,8 @@ function resolveAudioFilePath(audioFilePath: string, sequenceName: string): stri
 | 事実 | 根拠 |
 |---|---|
 | `seq.root(C)` は runtime 拒否 | `sequence.ts:911-919` / `parse-expression.ts:809-813` |
-| **core spec は既に実装側へ倒してある**（`:953`「numeric-degree-only」・「Using a note name at seq level is an error (#280)」） | `INSTRUCTION_ORBITSCORE_DSL.md:953-955` |
-| **specs-v2 は倒していない**（`seq.root(C) // シーケンス既定のピッチコンテキスト`） | `PITCH_DSL_SPEC_v1.1.md:160` |
+| **core spec は既に実装側へ倒してある**（`:1018-1020`「numeric-degree-only」・「Using a note name at seq level is an error (#280)」） | `INSTRUCTION_ORBITSCORE_DSL.md:1018-1020` |
+| **specs-v2 は倒していない**（`seq.root(C) // シーケンス既定のピッチコンテキスト`） | `PITCH_DSL_SPEC_v1.1.md:168` |
 | 🔴 core spec 自身の例 `seq.root(b6)` も**動かない**（§3.3 (b)） | `parse-expression.ts:478-488` → `sequence.ts:911` |
 
 **#280 は「どちらに倒すか owner 判断」（地図 §4.F）だが、core spec は既に片方へ倒れている。**
@@ -428,7 +428,7 @@ function resolveAudioFilePath(audioFilePath: string, sequenceName: string): stri
 owner:「既に実装されているならそれを使ってよい。キーと関係なく矯正できる」。帰結:
 - `sequence.ts:906-920` の signature を `root(value: number | PlayPitch)` に広げ、note-name は**絶対ピッチ**として解決（`key` と無関係に root を固定できる = owner の「矯正」）
 - `parse-statement` の引数解釈は既に `PlayPitch` を作る（`parse-expression.ts:478-488`）ので、runtime 拒否（`:911`）を外す側の変更
-- core spec `:953-955` を「numeric-degree-only」から「数値 = 度数・note-name = 絶対ピッチ」へ**戻す**（specs-v2 `:160` はそのまま正）
+- core spec `:1018-1020` を「numeric-degree-only」から「数値 = 度数・note-name = 絶対ピッチ」へ**戻す**（specs-v2 `:168` はそのまま正）
 - 表: `root × seq-*` は `ok`。引数型の検査は表ではなく引数スキーマ（§14 の予想どおり「引数スキーマ欄」が要る）
 - PR: **PR-D7** `feat(dsl): accept note names in seq.root()`（PR-D1 の後・E2E: `seq.root(C)` と `seq.root(b6)` で capture の基本周波数が変わる = `estimateFundamentalHz`）
 
@@ -647,10 +647,10 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 
 | spec | 節 | 改訂 |
 |---|---|---|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | 新設（PH.4 の表 `:1223-1226` の位置） | 🔴 **適用可否の表**を §3.3 の形で本文に置く。今の表は「midi × instrument」の 2 列 3 行だけで、audio 列も `hold` 系の行も無い。「素通り（#644 で診断予定）」→「**素通り（エディタが Warning）**」 |
-| 同 | `:953-955`（P.5） | `seq.root(b6)` を例から**外す**（§3.3 (b)・実装が受けない）。または #15 (2) の裁定で実装側を直す |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | 新設（PH.1 の表 `:1337-1341` の位置） | 🔴 **適用可否の表**を §3.3 の形で本文に置く。今の表は「midi × instrument」の 2 列 3 行だけで、audio 列も `hold` 系の行も無い。「素通り（#644 で診断予定）」→「**素通り（エディタが Warning）**」 |
+| 同 | `:1018-1020`（P.5） | `seq.root(b6)` を例から**外す**（§3.3 (b)・実装が受けない）。または #15 (2) の裁定で実装側を直す |
 | 同 | §8.1.2（LinkAudio strict mode） | 「`.output()` 未設定は**ハードエラー**」→「**エディタが Error・実行時は無音でスキップしてログに出す**」（#645） |
-| `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` | `:160` | `seq.root(C)` を core spec `:953` と揃える（**2 つの spec が違うことを言っている**のが今の状態） |
+| `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` | `:168` | `seq.root(C)` を core spec `:1018-1020` と揃える（**2 つの spec が違うことを言っている**のが今の状態） |
 | 同 | §6 / §6.5 | #255-1 の決定（未束縛名 = 休符 1 スロット保持 + warning）を**明記**する。実装は済んでいるのに spec に無い |
 | `docs/design/611-output-line-design.md` | §3.7 | 「`mixerNodeReceiver` が output で throw」を解く時、**本書 §3.3 の `output-node` 列を同じ PR で書き換える**と 1 行足す（後追いを防ぐ） |
 | `docs/design/598-render-endpoint-design.md` | §3.1 | 同様に `render-node` 列（裁定 7「レシーバにならない」）を参照させる |
@@ -667,7 +667,7 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 | **PR-D3** `feat(diagnostics): applicability table drives the editor warnings` | §3 全部 + §4.3 | #644 の全項 / #665 (A) | `parser/types.ts` + `parse-statement.ts` 4 箇所（span）/ `diagnostics/applicability.ts`（新規 200）/ `analyze-source.ts`（+90）/ `signal-chain-dispatch.spec.ts`（+120） | PR-D2 | **E2E-D3 / -D4 / -D5**・全数テスト・照合テスト | 診断の増加 |
 | **PR-D4** `fix(interpreter): loud diagnostics for name collisions and aux output` | §7.3 (i)(ii) | #583 の受け入れ 2 項 | `global.ts`（+15）/ `mixer-manager.ts`（+10）/ `sequence.ts`（+12）/ `analyze-source.ts`（+20） | PR-D3（表が要る） | **E2E-D6** | (i) は挙動変更（§15 (5)） |
 | **PR-D5** `feat(dsl): distribute stack-level @v to voices; empty pattern binding guidance` | §7.2-2 / §7.4（**owner 裁定 A: 実装**） | #255-2 / #609 | `parse-expression.ts`（+50）/ `analyze-source.ts`（+15）/ `PITCH_DSL_SPEC` §2.5 | PR-D3 | E2E: `[1,5,9]@v+10` と per-voice 展開の capture RMS 一致 | DSL 表面（加算） |
-| **PR-D7** `feat(dsl): accept note names in seq.root()` | §7.1（**owner 裁定 B**） | #280 | `sequence.ts:906-920`（+20）/ core spec `:953-955` / 表の引数スキーマ欄 | PR-D1 | E2E: `seq.root(C)` / `seq.root(b6)` で `estimateFundamentalHz` が期待値 | DSL 表面（加算） |
+| **PR-D7** `feat(dsl): accept note names in seq.root()` | §7.1（**owner 裁定 B**） | #280 | `sequence.ts:906-920`（+20）/ core spec `:1018-1020` / 表の引数スキーマ欄 | PR-D1 | E2E: `seq.root(C)` / `seq.root(b6)` で `estimateFundamentalHz` が期待値 | DSL 表面（加算） |
 | **PR-D6** `fix(engine): attribute diagnostics to the submission that caused them` | §6 | #620 | `repl-mode.ts` / `extension.ts` | **#694 PR-L2 または #611 PR**（フレーム） | **E2E-620-A**（先に再現） | — |
 
 **PR-D3 の後**に、正規表現アナライザの整理（§4.4 PR-D3 段）を別 PR で行う。E2E-D1〜D6 が
@@ -697,7 +697,7 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 | # | 問い | 選択肢 | 推奨 | 影響範囲 |
 |---|---|---|---|---|
 | (1) ✅ **A 据え置き（owner 2026-09-03）** | 🔴 **midi の `output(数値)` / `output("名前")` を拒否するか**（`sequence.ts:378-384` / `:402-404` のコメントが「破壊的変更になるため owner 確認待ちで据え置き」と明記） | A 据え置き（表は `warn` = 黄線のみ）/ B 拒否（`error` + throw・instrument と対称） | **A**。裁定 2「エンジンは触らない」と整合し、#644 の受け入れ（赤線が出て実行は止まらない）も満たす。B は既存譜面が落ちる | 表の 2 行 + `sequence.ts` 2 箇所。**この裁定が出るまで PR-D3 は A で実装できる**（表の値を変えるだけ） |
-| (2) ✅ **B 実装を spec に（owner 2026-09-03・推奨から変更）** → §7.1 改訂・PR-D7 | #280 をどちらに倒すか | A spec を実装に（core spec `:953` は既にこれ。`seq.root()` は数値のみ）/ B 実装を spec に（note-name と `b6` を受ける） | **A**。ただし core spec `:953` の `seq.root(b6)` は**どちらでも直す必要がある**（§3.3 (b)） | A なら docs 2 ファイル。B なら `sequence.ts:906-920` の signature 変更 + `parse-statement` の引数解釈 |
+| (2) ✅ **B 実装を spec に（owner 2026-09-03・推奨から変更）** → §7.1 改訂・PR-D7 | #280 をどちらに倒すか | A spec を実装に（core spec `:1018-1020` は既にこれ。`seq.root()` は数値のみ）/ B 実装を spec に（note-name と `b6` を受ける） | **A**。ただし core spec `:1018` の `seq.root(b6)` は**どちらでも直す必要がある**（§3.3 (b)） | A なら docs 2 ファイル。B なら `sequence.ts:906-920` の signature 変更 + `parse-statement` の引数解釈 |
 | (3) ✅ **A（owner 2026-09-03:「オーディオ機能はオーディオのラインで動かす」）** | `gain` / `pan` が note シーケンスで効かないのを **診断で言う**か、**効くようにする**か | A 表で `warn`（本書）/ B #611 §2.4 の `LineOp::Gain` を待つ（効くようになる） | **A を今・B が来たら表の行を `ok` に**。#611 は大きく、`must-fix` の診断を待たせる理由が無い | 表の 4 行。#611 側に「本書の表を更新する」と 1 行 |
 | (4) ✅ **A（owner 2026-09-03）** | `seq.ui()` の引数無し形を audio シーケンスで `warn` にするか | A する（instrument 前提なので）/ B しない（catalog effect の UI は audio でも開く） | **A**（引数無しのみ）。引数ありは `ok` のまま。`sequence.ts:678-693` の分岐と一致する | 表の 1 セル |
 | (5) ✅ **確定（owner 2026-09-03「それでいいです」）: 赤線（`error`）+ 評価時はその文だけ `[ERROR]` でスキップし既存の名前が勝つ**（フレームの残りは実行する・演奏中に throw で全体を止めない）。black-hole にしないため `get_log` に必ず出す → PR-D4 の仕様 | #583 (i) の「同名 seq と sum/aux の併存を throw にする」は破壊的変更か | A 破壊的として扱い据え置き / B 「今日すでに壊れている」ので loud 化してよい | **B**。node-decl 形は既に throw する（`runtime.ts:196-206`）ので、文字列形だけ黙っているのが非対称 | `global.ts` / `mixer-manager.ts` 各 1 箇所 |
@@ -715,7 +715,7 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 | **#645** | 「呼び出し元は `sequence.ts:1467` / `:1549` / `:1570`」「`sequence.ts:1505`」 | 🔴 **変更**: 行番号が古い。実際は throw が `:1609`、呼び出し元は `:1571` / `:1653` / `:1674` / `:1721`。さらに **`seamlessParameterUpdate`（`:273`）と `unmute()`（`:1839`）という issue に無い実害経路がある** | 本書 §5.1 / §5.2（grep 実測・§9） |
 | **#645** | 「ループタイマー経路も throw で止まる」（本文の含意） | 🔴 **不要**: ループタイマー経路は **`safeSchedule`（`loop-sequence.ts:115-126`）が既に catch している**。文言を揃えるだけ | 本書 §5.2 の 4 行目 |
 | **#583** | 「`process-statement.ts:66-74`」 | 🔴 **変更**: 現在は `:69-86` | 本書 §2.3 |
-| **#280** | 「対応方針（どちらかを選ぶ）」 | 🔴 **変更**: **core spec は既に選択肢 2（spec を実装に合わせる）で改訂済み**（`:953-955`）。未解決なのは (a) specs-v2 が未追従（`:160`）と (b) **core spec 自身の例 `seq.root(b6)` も動かない**という新しい乖離 | 本書 §3.3 (b)(c) / §7.1 |
+| **#280** | 「対応方針（どちらかを選ぶ）」 | 🔴 **変更**: **core spec は既に選択肢 2（spec を実装に合わせる）で改訂済み**（`:1018-1020`）。未解決なのは (a) specs-v2 が未追従（`:168`）と (b) **core spec 自身の例 `seq.root(b6)` も動かない**という新しい乖離 | 本書 §3.3 (b)(c) / §7.1 |
 | **#665** | 「A を #644 の表の 1 行として扱う」 | ✅ そのとおり（本書 §3.3 最終行・§7.5）。追加の判定なし | 地図 §4.F「統合」 |
 | **#644** | 「`gain` / `pan` / `quantize` の各種での意味論の確定 → 表を作る過程で精査し、不明なら『適用される』側に倒す」 | ✅ **精査した**: `quantize` は種に依らず `ok`、**`gain` / `pan` / `defaultGain` / `defaultPan` は midi・instrument とも `warn`**（不明ではなく、効かないことが確定した） | 本書 §2.3 / §3.3（読み手 3 箇所の全列挙） |
 | **#609** | 「採らない場合: 誘導エラーで十分（#610 と連動）」 | ✅ **#610 が入れば赤線は自動で出る**。誘導文言だけ数行で足せるので、仕様裁定を待たずに着手可能 | 本書 §7.4 |

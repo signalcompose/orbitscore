@@ -55,7 +55,7 @@
 | `shutdown()` は `global.stop()` の note-off（fire-and-forget）と `audioEngine.quit()` / `process.exit(0)` を**待ち合わせない** | `shutdown.ts:33` / `:70` / `:76`・`plugin-note-output.ts:75-86` の `void` | §3.3 |
 | `compressor` / `limiter` / `normalizer` は語彙にあり、実行すると `warnOnce` + no-op | `runtime.ts:29-31` / `global.ts:619-639` / `effects-manager.ts:110-179` / `rust-engine-player.ts:1379-1388` | §7 |
 | **3 語を書いている `.orbs` は 1 本だけ**（コメントアウト以外）: `test-assets/scores/test-all-features.orbs:112,115,118,121,122,123`。`test-mastering-effects.orbs` と `examples/performance-demo.orbs` は**全行コメント** | `grep -rn "compressor\|limiter\|normalizer" --include=*.orbs .`（§9 に貼付） | §7.1 |
-| core spec は 3 語を**機能一覧に記載している**（#669 本文の「リファレンス未記載」は core spec には当たらない） | `INSTRUCTION_ORBITSCORE_DSL.md:1874-1876`（機能一覧）/ `:1242`（PH.2 の参照）/ `:1991`（changelog・履歴なので触らない） | §12 |
+| core spec は 3 語を**機能一覧に記載している**（#669 本文の「リファレンス未記載」は core spec には当たらない） | `INSTRUCTION_ORBITSCORE_DSL.md:1880-1882`（機能一覧）/ `:1248`（PH.2 の参照）/ `:1997`（changelog・履歴なので触らない） | §12 |
 | 標準プラグインの解決は `<child exe>/std-plugins/<name>.clap`、`ORBIT_STD_PLUGIN_DIR` で上書き | `rack-child lib.rs:86-101` / `macos.rs:239` | §7.2 |
 | `Gain` 以外の標準プラグイン名は**明示エラー**（TS 側で弾かれ、wire に出ない） | `rack.ts:124-131` | §7.3 |
 | ブロックは**インターリーブ stereo**、`MAX_FRAMES = 4096` / `CHANNELS = 2` / `BUF_LEN = 8192` | `orbit-audio-sandbox/src/transport.rs:56-60` | §4.3 |
@@ -443,8 +443,8 @@ await this.audioEngine.pluginAllNotesOff?.(`plugin:${seqName}#${branchIndex}`)
 | `packages/engine/src/core/global/effects-manager.ts:102-180` | 該当実装を削除 |
 | `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1379-1396` | `addEffect` / `removeEffect` の no-op warn を削除（呼び出し元が消える） |
 | `tests/e2e/dsl-e2e-coverage.spec.ts:89-101` | `GLOBAL_UNCOVERED_BASELINE` から 3 語を削除（**減らす方向なので許される**）。残さないと「語彙に無いのに未カバー扱い」の死んだ行になる |
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1873-1876` | 機能一覧から「Global Mastering Effects」節を削除。**`:1991` の changelog は履歴なので触らない** |
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1242` | PH.2 の「global master effects（compressor / limiter / normalizer）と同じ役割分担」という参照を書き換える（参照先が消えるため） |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1879-1882` | 機能一覧から「Global Mastering Effects」節を削除。**`:1997` の changelog は履歴なので触らない** |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1248` | PH.2 の「global master effects（compressor / limiter / normalizer）と同じ役割分担」という参照を書き換える（参照先が消えるため） |
 | `test-assets/scores/test-all-features.orbs:110-123` | 🔴 **実測: 唯一の実使用**（§9）。3 語の呼び出し行を削除する |
 
 **削除後の挙動**: DSL 語彙から外れると `Unknown chain method` 系のエラー経路に乗る。🔴 **これを実機 E2E で確かめる**（#669 コメント 1）— 「黙って無視される形に落ちないこと」。#528 の `setDocumentDirectory` は**除外リストへの誤分類でユニットテストが緑のまま実行時だけ壊れた**ので、机上では判定できない。

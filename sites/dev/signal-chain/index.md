@@ -721,7 +721,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:508-515
+// packages/engine/src/audio/rust-engine/daemon-client.ts:509-516
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -1502,7 +1502,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5412-5419
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5413-5420
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -1608,9 +1608,9 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 
 ## Sources
 
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47` — SC.1 二層意味論（宣言層 / 信号層）
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 ライブコーディング意味論と失敗モデル (i)/(ii) の注記
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 ラック（形・無効化・削除・値・LCS・標準プラグイン・v1 の段階）
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:42-53` — SC.1 二層意味論（宣言層 / 信号層）
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:178-198` — SC.5 ライブコーディング意味論と失敗モデル (i)/(ii) の注記
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:225-447` — SC.10 ラック（形・無効化・削除・値・LCS・標準プラグイン・v1 の段階）
 - `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW リサーチ（4 状態・機構 B）と確定モデル
 - `docs/archive/design/628-rack-chain-implementation-design.md:127-291,751-774` — 採用機構と却下案・決定事項 20 項目
 - `docs/archive/design/628-plan-reset.md:57-120` — 実機ゲートの前倒し検出（ゲイン定数の純 unit）

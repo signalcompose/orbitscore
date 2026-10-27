@@ -511,7 +511,7 @@ parse-statement.ts:140-149（lookahead）/ :453-487（parseMixerNodeDecl）/ par
 |---|---|
 | core spec MX.2.1 | 数値 `output(n)` を**削除**し、`mix.render(<path>)` 宣言 + `output(node, thru, db)` に置換。§4.4.1 の非対称規則を削除（doc 1 §11 の MX 改訂と同じ PR）|
 | core spec SC.2.1 | mixer node の種類に `render` を足す（宣言のみ・レシーバにならない）|
-| `SIGNAL_CHAIN_DSL_SPEC_v1.md:122` `outs:` | 値に render ノードを含む |
+| `SIGNAL_CHAIN_DSL_SPEC_v1.md:145` `outs:` | 値に render ノードを含む |
 | `MULTICHANNEL_RENDERING_DESIGN_598.md` §4.3 / §4.4 | manifest v2（§6.2）・DSL 表面を本書へ参照 / §4.3 末尾「別フロントエンド」→ #241（§8）|
 | `SESSION_LOG_SPEC_v1.md` §4 | `--render` は本書 §8 |
 

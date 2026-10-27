@@ -66,7 +66,7 @@
 | **A2** | `output.rs`（`validate_line_program :1316-1320` 解除・`execute_master_line :1834` と post-loop `:2287` の Pan 実行・`current_gain` を `AtomicU32` 化 `:1003-1007`・seed 付き構築 `:1012-1044`）・`scheduler.rs:105` を `pub` + `lib.rs:19` re-export・`engine_wrap.rs`（bus ごとの shadow `Vec<LineOp>` と seed 計算）・cargo test | 約 450 | 可逆 |
 | **B1** | `core/sequence/audio-line.ts`（新）・`sequence.ts`（`:144-150, 381-604, 1759, 1807, 1955-1978`）・`global.ts:513-523`・`mixer-manager.ts:74-84, 300-345`・`audio/types.ts:217-221`・`rust-engine-player.ts`（`setBusLine` + intent cache + replay `:790-794, 1011-1023`）・既存 spec 5 本（doc 611 §7.1）の書き直し・`audio-line.spec.ts`（新） | 約 900 | — |
 | **B2** | `sequence.ts`（`output()` 解決順・`send(aux, db)`・`gain/pan` の line 化）・`event-scheduler.ts:38-70, 125, 238`・`evaluate-method.ts:58-85`（`NAMED_ARG_SCHEMA`）・`process-statement.ts:181-250`・`runtime.ts:74, 302-314`・`parse-statement.ts:453-480` + `parser/types.ts:105-111`（mono）・`dsl-surface.ts`・fixtures（`tests/fixtures/mcp-e2e/` 4〜5 譜面）・gated spec（E2E 8 本）・`output-line-expectations.ts` | 約 950 | 🔴 DSL 表面 |
-| **B3** | core spec MX.2〜MX.5 の「v1 の現在地」注記（`:1737-1940`）・§8.1.2（`:689-691`）・SC.4 注記（`:153-157`）・doc 610 §3 行（`:115-116`）・`dsl-e2e-coverage.spec.ts:76`（`pan` を baseline から外す）・地図・WORK_LOG | 約 150 | — |
+| **B3** | core spec MX.2〜MX.5 の「v1 の現在地」注記（`:1737-1940`）・§8.1.2（`:695-697`）・SC.4 注記（`:153-157`）・doc 610 §3 行（`:115-116`）・`dsl-e2e-coverage.spec.ts:76`（`pan` を baseline から外す）・地図・WORK_LOG | 約 150 | — |
 
 **合計**: 束 A ≈ 750・束 B ≈ 2,000。
 

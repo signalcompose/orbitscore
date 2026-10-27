@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: f2245bb
-verified-at: "2026-09-13"
+verified-against: 42ec6a2
+verified-at: "2026-10-26"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`).> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to ruling D′ of #921 / `#851` B-3 (PR [#922](https://github.com/signalcompose/orbitscore/pull/922)) on 2026-09-13 — moving both the source stage and the line stage to the attenuate-only `balance_pan` (this follow-up re-read only the places that concern the pan law and their citations; every other section is still the reading of the previous `verified-against`). On 2026-10-26 it followed #996 (PR [#1007](https://github.com/signalcompose/orbitscore/pull/1007)) — rejecting handshakes that carry an `Origin` header, and the daemon learning of its parent’s (the engine’s) death by itself (this follow-up re-read only the accept path in `server.rs` and the startup stages in `parent_watch.rs` / `main.rs`; every other section is unchanged).> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The On 2026-09-12 it followed the `session.rs` / `output.rs` split of #888 child 2 ([#896](https://github.com/signalcompose/orbitscore/pull/896)), re-anchoring the code pointers in the prose and in "Code consulted" onto the modules they moved into. code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -28,10 +28,13 @@ line to connect. Let us look at `run()`. Compared with the 2026-07-17 version, t
 `--list-audio-devices` / `--audio-device` (#484 D1 / D3) was added at the top, and engine startup
 is delegated to a dedicated thread. On 2026-09-06 a further stage (0.5) was added that reclaims
 shared memory left behind by dead daemons **before the first shm is created** (#779); that ordering
-is what makes the "delete leftovers carrying my own PID" rule sound.
+is what makes the "delete leftovers carrying my own PID" rule sound. On 2026-10-26 a stage (-0.5)
+was added that arms the watch for the parent (engine) dying **before** the audio device is
+initialised (#996). It works only when the engine passes `--exit-on-stdin-eof` / `--parent-pid`, and
+it also takes down a daemon that is stuck in the middle of initialisation together with its parent.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:78-136
+// rust/crates/orbit-audio-daemon/src/main.rs:79-141
 async fn run() -> Result<(), i32> {
     // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
     // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
@@ -40,6 +43,10 @@ async fn run() -> Result<(), i32> {
     if has_list_audio_devices_flag(std::env::args().skip(1)) {
         return run_list_audio_devices();
     }
+
+    // -0.5. 親（engine）の死の監視（#996）。音声デバイスの初期化より**前に**張る — 初期化の途中で
+    // 止まった daemon も、親と一緒に終わるようにするため。engine が引数で有効にした時だけ働く。
+    arm_parent_watch();
 
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
@@ -104,7 +111,7 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 `mpsc` channel — #484 D2).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:152-163
+// rust/crates/orbit-audio-daemon/src/main.rs:157-168
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
@@ -358,7 +365,7 @@ stay silent (the registration path is treated as the single authority). The spec
 The gated E2E suite records the opposite measurement.
 
 ```ts
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5933-5939
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5934-5940
   // **A comment is not evidence of implementation behavior** — main's real run found
   // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
   // get_log at all, meaning the assumed fallback does not actually happen (or does not
@@ -379,7 +386,7 @@ a capturable `hardware` dispatch (mixing being disallowed by design), which cont
 hands off to `session::run`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/server.rs:24-70
+// rust/crates/orbit-audio-daemon/src/server.rs:27-73
 /// accept loop。各接続ごとに新タスクを spawn し、[`session::run`] で処理する。
 ///
 /// accept エラーはすべて永続化し得るため、短い backoff を挟んで tight spin を防ぐ。
@@ -429,6 +436,62 @@ pub async fn serve(listener: TcpListener, engine: Arc<EngineWrap>) {
 }
 ```
 
+### Rejecting handshakes that carry an `Origin` header (#996)
+
+`handle_connection` is what upgrades an accepted connection to a WebSocket, and on 2026-10-26 a gate
+was placed just before that upgrade: a handshake carrying an `Origin` header is turned away with 403.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/server.rs:92-110
+/// **Origin ヘッダのある**ハンドシェイクを 403 で拒否する（#996・設計 848 §4.7）。
+///
+/// WebSocket のハンドシェイクには CORS の preflight が無く、利用者のブラウザで開いた任意のページから
+/// `ws://127.0.0.1:<port>` に届きうる。RFC 6455 §10.2 は、特定のページ以外からの入力を扱わない
+/// サーバは Origin を検証すべき（SHOULD）としている。daemon は `LoadPlugin { path }`（ネイティブ
+/// コードの読み込み）を受け付けるので、ブラウザからの接続を通してはいけない。ブラウザは Origin を
+/// 必ず付け（RFC 6455 §4.1）、ページのスクリプトからは外せない。daemon のクライアントは engine
+/// （Node の `ws`）だけで、Origin を付けない。値は見ない — `null`（sandbox の iframe・`file://`）も拒否する。
+// 戻り値の型は tungstenite の `handshake::server::Callback` が決めている（変えられない）。
+#[allow(clippy::result_large_err)]
+fn reject_browser_origin(request: &Request, response: Response) -> Result<Response, ErrorResponse> {
+    let Some(origin) = request.headers().get(ORIGIN) else {
+        return Ok(response);
+    };
+    warn!("rejected a WebSocket handshake with Origin {origin:?}: only non-browser clients may connect");
+    let mut rejection = ErrorResponse::new(Some("Origin header is not allowed".to_string()));
+    *rejection.status_mut() = StatusCode::FORBIDDEN;
+    Err(rejection)
+}
+```
+
+Why is it needed? The daemon binds `127.0.0.1` only, so nothing from the outside network reaches it.
+The viewer's own browser is the exception: a WebSocket handshake has no CORS preflight, so a script
+on any page they have open can try to connect to `ws://127.0.0.1:<port>`. The daemon's command table
+includes `LoadPlugin` (loading native code), so that door must stay shut.
+
+What makes the check work is that **a browser always attaches an Origin** (RFC 6455 §4.1), and a
+page's script cannot remove the value. The daemon's only client, on the other hand, is the engine
+(Node's `ws`), which attaches no Origin unless it is given the `origin` option. That is why the
+decision can be made **on presence alone, without looking at the value** — `null` (a sandboxed
+iframe, `file://`) is rejected just the same.
+
+All that is left behind on a rejection is one WARN line; `handle_connection` folds the 403 into
+`Ok(())` as an intended refusal, so that it is not reported a second time as a generic connection
+error.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/server.rs:79-87
+    let ws = match tokio_tungstenite::accept_hdr_async(stream, reject_browser_origin).await {
+        Ok(ws) => ws,
+        // reject_browser_origin がすでに理由を WARN で残している。意図した 403 を
+        // 汎用の connection error として二重に報告しない。
+        Err(WebSocketError::Http(response)) if response.status() == StatusCode::FORBIDDEN => {
+            return Ok(())
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
+```
+
 The teardown side has a known gap, documented in a comment referencing Issue #448. This daemon
 has no SIGTERM/SIGINT handler, and its panic hook calls `process::exit(1)` directly, so under
 either a normal client-side `SIGTERM → SIGKILL` stop or a panic, the `Drop` impls of
@@ -436,7 +499,7 @@ either a normal client-side `SIGTERM → SIGKILL` stop or a panic, the `Drop` im
 out-of-process children) never run, and the child processes can be orphaned.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:21-30
+// rust/crates/orbit-audio-daemon/src/main.rs:22-31
 // 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
 // の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
 // まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts
@@ -452,6 +515,98 @@ out-of-process children) never run, and the child processes can be orphaned.
 The primary defense against this daemon-side shutdown gap lives on the child side
 (`ParentWatch`, which lets a child detect its parent's death on its own) — covered in the
 [RE-2](/en/rust-engine/oop-children) chapter.
+
+### The daemon learning of its parent's (the engine's) death by itself (#996)
+
+The hole the child-side `ParentWatch` fills is "a child left behind when the daemon dies". So what
+about the hole where **the daemon is left behind when the engine dies**? What stops the daemon is the
+engine's `killChildGracefully`, so if the engine goes down to a SIGKILL there is nobody to call it.
+As the comment above says, the daemon has neither a SIGTERM handler nor a graceful shutdown, so the
+only thing that can stop a leftover daemon is the daemon itself (it stays behind holding the audio
+device — the double daemon of #624). On 2026-10-26 that mechanism was added on the daemon side.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/parent_watch.rs:7-18
+//! - **主 = stdin の EOF**（[`EXIT_ON_STDIN_EOF_ARG`]）: engine は stdin をパイプで渡し、自分が
+//!   終わるまで閉じない。engine がどう死んでもカーネルが書き端を閉じるので、daemon は EOF を受ける
+//! - **補助 = 親 PID**（[`PARENT_PID_ARG`]）: 書き端を別のプロセスが握ったまま（fd の継承）親だけが
+//!   死ぬと EOF は来ない。その形を周期的な `getppid()` で拾う（child 側の
+//!   `orbit_audio_sandbox::ParentWatch` と同じ判定）
+//! `orbit_audio_sandbox::ParentWatch` は構築時の `getppid()` しか記録せず engine 指定の期待 PID（daemon 起動前に死んだ engine の検知）を扱えず、sandbox 自体も daemon では `outproc-*` feature の optional 依存なので使わない。
+//!
+//! 🔴 **どちらも engine が引数で明示した時だけ働く。** 古い engine は stdin を `'ignore'`
+//! （= `/dev/null`）で渡し、引数も付けない。EOF を無条件に親の死とみなすと、古い engine と
+//! 組み合わせた daemon は起動した瞬間に終了する。引数があっても stdin がパイプ（FIFO /
+//! socket）でなければ EOF は見ない — 端末や `/dev/null` の EOF は親の死を意味しない
+//! （設計 848 §4.4 の「stdin がパイプの時だけ」と同じ考え）。
+```
+
+It comes in two tiers, a primary and an auxiliary. The primary is EOF on stdin: the engine passes
+stdin as a pipe and does not close it while it is alive (it writes nothing). However the engine
+dies, the kernel closes the write end, so the daemon receives EOF. The auxiliary watches the parent
+PID, picking up — with a `getppid()` every 250ms — the shape where another process holds the write
+end (an inherited fd) and only the parent dies, so no EOF arrives.
+
+| Argument | What it watches |
+|---|---|
+| `--exit-on-stdin-eof` | EOF on stdin, but **only while stdin is a pipe (FIFO / socket)**; EOF on a terminal or on `/dev/null` does not mean the parent died, so it is ignored. Node's `stdio: 'pipe'` is a socketpair on Unix, so looking at FIFOs alone would miss the engine's stdin |
+| `--parent-pid <pid>` | If that PID really is the parent at startup, the moment `getppid()` changes away from it (reparenting to init / a subreaper). If it is not the parent at startup, the moment that PID stops existing (`kill(pid, 0)` giving `ESRCH`; a zombie counts as alive). A value of 1 or less, or a non-number, disables the watch |
+
+🔴 **Both work only when the engine asks for them by argument.** An older engine passes stdin as
+`'ignore'` (= `/dev/null`) and passes no arguments, so a daemon that treated EOF unconditionally as
+the parent's death would exit the instant it was paired with one. The other direction — a new engine
+with an old daemon — works as before, since the daemon ignores arguments it does not know and never
+reads stdin. The argv the engine passes is gathered in `daemon-spawn.ts`.
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-spawn.ts:21-28
+export function daemonSpawnArgs(audioDevice: string | undefined, parentPid: number): string[] {
+  return [
+    ...(audioDevice ? ['--audio-device', audioDevice] : []),
+    '--exit-on-stdin-eof',
+    '--parent-pid',
+    String(parentPid),
+  ]
+}
+```
+
+As a smaller detail, stdin is read on a dedicated OS thread rather than through tokio's `stdin()`.
+What sits inside tokio's `stdin()` is an uncancellable `read` on the blocking pool, which holds up
+the runtime's shutdown until that `read` returns.
+
+The way it ends after a detection is deliberate too.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/main.rs:208-229
+/// 親の死を検知したら、読み手がまだ存在する場合の診断用に理由を stderr へ試み、
+/// 即座に終わる（#996）。engine が先に消えていれば stderr の読み手もいない。
+///
+/// 終わり方は engine の通常の止め方（SIGTERM・この daemon はハンドラを持たないので既定の動作 =
+/// 即終了）と揃えて `_exit` にする。`process::exit` は atexit と static destructor を、音声
+/// スレッドが走っている最中に回してしまう。out-of-process の child は自分の `ParentWatch` で、
+/// 残った shm は次の daemon の起動時の sweep で片付く（どちらも daemon の死に方を問わない経路）。
+fn arm_parent_watch() {
+    let options = parent_watch::ParentWatchOptions::from_args(std::env::args().skip(1));
+    let armed = parent_watch::start(options, |reason| {
+        tracing::warn!("parent process is gone ({reason}); exiting");
+        // SAFETY: _exit(2) は async-signal-safe で、どのスレッドから呼んでもプロセスを終える。
+        unsafe { libc::_exit(0) }
+    });
+    if armed != parent_watch::Armed::default() {
+        tracing::info!(
+            "parent watch armed: stdin_eof={} parent_pid={}",
+            armed.stdin_eof,
+            armed.parent_pid
+        );
+    }
+}
+```
+
+Because it chooses `_exit(0)`, **`Drop` does not run on this path either** — the #448 gap above is
+therefore not closed. It rests on the same assumptions as before: an out-of-process child leaves
+through its own `ParentWatch`, and shm left behind is cleaned up by stage 0.5 (#779) the next time a
+daemon starts. `process::exit` would run atexit handlers and static destructors while the audio
+thread is still running.
 
 Processes are not the only thing left orphaned. When `Drop` does not run, neither does the removal
 of the shm file, so the shared memory used for out-of-process children stays behind in `$TMPDIR`.
@@ -1169,7 +1324,8 @@ D′ changed the source stage and the line stage, and feeds are summed as-is.
 ## Sources
 
 - `rust/crates/orbit-audio-daemon/src/main.rs:1-265` — daemon entry point. Boot sequence (CLI args → audio owner thread → bind WebSocket → emit ready line → accept loop), panic hook (#605), known shutdown gap (#448)
-- `rust/crates/orbit-audio-daemon/src/server.rs:1-79` — WebSocket accept loop (`bind_localhost` / `serve` / `handle_connection`)
+- `rust/crates/orbit-audio-daemon/src/server.rs:1-110` — WebSocket accept loop (`bind_localhost` / `serve` / `handle_connection`) and `reject_browser_origin`, which turns away a handshake carrying an `Origin` header with 403 (#996)
+- `rust/crates/orbit-audio-daemon/src/parent_watch.rs:1-208` — detecting the parent’s (the engine’s) death (resolving argv, the stdin EOF watcher, the periodic `getppid()` check). The argv and stdio on the engine side are in `packages/engine/src/audio/rust-engine/daemon-spawn.ts:1-44`
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:1-195` — wire protocol type definitions (`Handshake` / `Command` / `OkResponse` / `ErrorResponse` / `Event` / error code constants). Contract source of truth: `docs/research/ENGINE_DAEMON_PROTOCOL.md`
 - `rust/crates/orbit-audio-daemon/src/session/run_loop.rs:9-591` — `session::run` (handshake, writer task, UI event forwarding)
 - `rust/crates/orbit-audio-daemon/src/session/dispatch.rs:12-466` — `handle_command` and the `match method.as_str()` arms (source of the command table). Plugin methods branch out first into `handle_plugin_command` (`session/dispatch_plugin.rs:21`) and transport methods into `handle_transport_command` (`session/dispatch_transport.rs:12`)
@@ -1189,6 +1345,7 @@ D′ changed the source stage and the line stage, and feeds are summed as-is.
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — the master fader defect (#643)
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm` (the thin shell stage 0.5 calls, plus its one-line `tracing::info!` summary)
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure
+- Issue [#996](https://github.com/signalcompose/orbitscore/issues/996) / PR [#1007](https://github.com/signalcompose/orbitscore/pull/1007) — the `Origin` rejection and the parent-death watch (stage -0.5)
 - Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — reclaiming orphaned shm at startup (stage 0.5)
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device enumeration, selection and runtime switching (D1 / D2 / D3)
 - Issue [#605](https://github.com/signalcompose/orbitscore/issues/605) — best-effort stderr in the panic hook
