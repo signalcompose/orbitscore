@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the user-site availability lint into the command and tooling references (Oct 27, 2026)
+
+**Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1004` / **追従元**: PR [#1004](https://github.com/signalcompose/orbitscore/pull/1004)（マージコミット `526c1e3`） / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)
+
+docs 追従ルーチン。#1004 は `npm run docs:check` を **dev サイトの引用検証 + user サイトの可用性表記 lint** の 2 本立てに変えた（`package.json:17`）が、`docs:check` を「引用の検証」とだけ説明している文書が 2 つ残り、user サイトの運用文書には新設の `scripts/` が載っていなかった。実装・テストは触っていない。
+
+- `CLAUDE.md:208` の Development Commands の `docs:check` の説明に user サイトの可用性表記 lint を足した（`package.json:17` の `&&` に対応）
+- `CLAUDE.md` の「これらは仕組みで強制されている」表に `sites/user/scripts/check-availability.mjs` の行を足した。同表は「規律を足す時は、同時にそれを守らせる仕組みを足すこと」の台帳で、#1004 が足したのはまさにその形の仕組み（FAIL 行に `AV-…` の規則 ID が出る）
+- `docs/core/PROJECT_RULES.md:604-606` の「`docs:check` は**引用のアンカーしか検査せず**」を、dev 側（引用のアンカー）と user 側（可用性表記の文法）の 2 本に分けて書き直した。**どちらも形しか見ない**という段落の主張は変えていない（可用性の行が名乗る版番号の正しさを見ないことを足した）
+- `sites/user/README.md` のディレクトリ構成に `scripts/check-availability.mjs` と `.translation-glossary.md` を足し、「可用性表記の検査」節（規則 ID の一覧・`--release`・CI と pre-push の走り先）を追加した。README は `srcExclude` 対象（`sites/user/.vitepress/config.ts:16`）で en ミラーを持たないため ja のみ
+- `docs/development/USER_LEARNING_SITE.md:84-87` のディレクトリ図に `scripts/check-availability.mjs` を足し、`STYLE_GUIDE.md` の説明に可用性表記を加えた
+- 追従不要と判断: `docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（DSL の構文・意味論・`.orbslog` は不変。差分に `packages/engine/` も `rust/` も無い）/ `sites/user/` の章本文と `docs/user/ja/USER_MANUAL.md`（#1004 は文法と lint だけで、章への `host:` と可用性の行の書き込みは D-② = #1006）/ `sites/dev/`（内部構造・評価経路は不変。dev サイトの引用が指すコードを 1 行も動かしていない）/ `docs/design/848-docs-structure-design.md`（元 PR が同じ PR で改訂済み・過去の設計書は後から辻褄を合わせない）
+
+---
+
 ### docs: follow the DSL implementation grant into the planning documents (Oct 27, 2026)
 
 **Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1003` / **追従元**: PR [#1003](https://github.com/signalcompose/orbitscore/pull/1003)（merge `13bdc2e`・`Closes #998`）

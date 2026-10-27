@@ -81,8 +81,10 @@ sites/user/                  ← VitePress project root
 │   └── theme/
 │       └── index.ts         ← default theme re-export
 ├── index.md                 ← 章 1 「OrbitScore とは」 兼 landing
-├── STYLE_GUIDE.md           ← user 用簡易 style guide (srcExclude 対象)
+├── STYLE_GUIDE.md           ← user 用簡易 style guide + 可用性表記の文法 (srcExclude 対象)
 ├── README.md                ← サイト運用 README
+├── scripts/
+│   └── check-availability.mjs ← 可用性表記の lint (`npm run docs:check`・#848)
 ├── getting-started/
 │   ├── installation.md      ← 章 2
 │   └── first-sound.md       ← 章 3
