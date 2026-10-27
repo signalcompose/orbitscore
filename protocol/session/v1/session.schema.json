@@ -1,9 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:orbitscore:protocol:session:v1",
-  "title": "OrbitScoreSessionProtocolV1",
+  "title": "OrbitScoreSessionProtocol",
   "description": "OrbitScore session protocol v1: JSON-RPC 2.0 over WebSocket (/rpc). One text frame carries one message. Design: docs/design/848-native-orbitstudio-design.md section 5. This file is the single source of truth; protocol/gen/ is generated from it (npm run protocol:generate).",
   "x-protocol-version": "1.0",
+  "x-compatibility": {
+    "sender": "The canonical schema is the strict sender contract: additionalProperties false and every enum remain enforced when validating values produced locally.",
+    "receiver": "Only peer results, server-to-client notifications, and errors use createReceiverSchema. That copy removes additionalProperties false and removes enum only where x-open-enum is true. Ajv removeAdditional must not be used.",
+    "minor": "A MINOR may add methods, optional fields, notifications, error names, and values to x-open-enum enums. Every addition made after 1.0 carries x-since with the MAJOR.MINOR that introduced it. Senders must not use additions newer than the peer's MINOR.",
+    "major": "Removing or changing a field or enum value, adding a required field, or adding a value to a closed enum requires a MAJOR. The protocol_version field in session.hello and session.attach keeps the same name and ProtocolVersion shape in every MAJOR."
+  },
+  "x-closed-enums": {
+    "#/$defs/Diagnostic/properties/severity": "LSP and Monaco have the same fixed four diagnostic severities; a fifth meaning would require an explicit MAJOR mapping."
+  },
   "x-surface-vocabulary": {
     "gui": "The app's GUI calls this client-to-server method as a user operation.",
     "mcp": "The MCP relay calls this method to implement the MCP tools listed in x-mcp-tools.",
@@ -52,7 +61,7 @@
     "session.getState": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/SessionState" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["evaluate_orbitscore"]
@@ -78,8 +87,8 @@
       "direction": "client-to-server",
       "kind": "request",
       "description": "Stops the engine (waits for the daemon to exit) and ends the session process.",
-      "params": { "$ref": "#/$defs/EmptyParams" },
-      "result": { "$ref": "#/$defs/EmptyResult" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
+      "result": { "$ref": "#/$defs/EmptyObject" },
       "x-surfaces": ["infra"]
     },
     "engine.start": {
@@ -94,7 +103,7 @@
       "direction": "client-to-server",
       "kind": "request",
       "description": "Responds only after the daemon process has exited.",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/CommandResult" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["stop_engine"]
@@ -102,7 +111,7 @@
     "engine.getState": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/EngineState" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["get_engine_state"]
@@ -116,7 +125,7 @@
     "audio.listDevices": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/AudioDevicesResult" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["list_audio_devices"]
@@ -165,7 +174,7 @@
       "direction": "client-to-server",
       "kind": "request",
       "description": "Layer 2 resolves the plugin name under the synced cursor (#939 / #940 rules). NO_EDITOR_ATTACHED without an editor client.",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/PluginUiAtCursorResult" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["open_plugin_ui_at_cursor"]
@@ -173,7 +182,7 @@
     "plugin.list": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/ListPluginsResult" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["list_plugins"]
@@ -181,7 +190,7 @@
     "plugin.rescan": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/RescanPluginsResult" },
       "x-surfaces": ["gui", "mcp"],
       "x-mcp-tools": ["rescan_plugins"]
@@ -237,7 +246,7 @@
       "direction": "client-to-server",
       "kind": "request",
       "description": "Answered from layer 2's synced copy. NO_EDITOR_ATTACHED without an editor client.",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/EditorState" },
       "x-surfaces": ["mcp"],
       "x-mcp-tools": ["get_editor_state", "evaluate_orbitscore"]
@@ -246,7 +255,7 @@
       "direction": "client-to-server",
       "kind": "request",
       "description": "Answered from layer 2's synced copy. NO_EDITOR_ATTACHED without an editor client.",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/DocumentText" },
       "x-surfaces": ["mcp"],
       "x-mcp-tools": ["get_document_text"]
@@ -270,7 +279,8 @@
     "editor.setSelection": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/SelectionInput" },
+      "description": "The wire range is 0-based LSP form. The MCP relay converts its 1-based set_selection input before calling this method.",
+      "params": { "$ref": "#/$defs/Range" },
       "result": { "$ref": "#/$defs/CommandResult" },
       "x-editor-request": "same",
       "x-surfaces": ["mcp"],
@@ -280,10 +290,10 @@
       "direction": "client-to-server",
       "kind": "request",
       "description": "Layer 2 asks the editor client only for its selection (x-editor-request), resolves the subject block itself and evaluates the result. The editor client never awaits an RPC while answering (failure mode F-4).",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/CommandResult" },
       "x-editor-request": {
-        "params": { "$ref": "#/$defs/EmptyParams" },
+        "params": { "$ref": "#/$defs/EmptyObject" },
         "result": { "$ref": "#/$defs/SelectionSnapshot" }
       },
       "x-surfaces": ["gui", "mcp"],
@@ -301,7 +311,7 @@
     "editor.saveFile": {
       "direction": "client-to-server",
       "kind": "request",
-      "params": { "$ref": "#/$defs/EmptyParams" },
+      "params": { "$ref": "#/$defs/EmptyObject" },
       "result": { "$ref": "#/$defs/CommandResult" },
       "x-editor-request": "same",
       "x-surfaces": ["mcp"],
@@ -355,11 +365,7 @@
     }
   },
   "$defs": {
-    "EmptyParams": {
-      "type": "object",
-      "additionalProperties": false
-    },
-    "EmptyResult": {
+    "EmptyObject": {
       "type": "object",
       "additionalProperties": false
     },
@@ -386,7 +392,12 @@
     "DocumentUri": {
       "description": "A document URI as the editor client knows it (file: for saved documents).",
       "type": "string",
-      "minLength": 1
+      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+    },
+    "AbsolutePath": {
+      "description": "An absolute POSIX path. Values are records and are not trimmed or normalized on the wire.",
+      "type": "string",
+      "pattern": "^/"
     },
     "ClientInfo": {
       "type": "object",
@@ -402,9 +413,155 @@
       "enum": ["editor", "observer"]
     },
     "ProtocolVersion": {
-      "description": "MAJOR.MINOR. MINOR adds only (new methods, new optional fields); MAJOR breaks.",
+      "description": "MAJOR.MINOR. MINOR follows x-compatibility and adds only; MAJOR breaks. The protocol_version properties in session.hello and session.attach retain this shape in every MAJOR.",
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "JsonRpcId": {
+      "description": "A request id. null is never a valid request id.",
+      "type": ["string", "integer"]
+    },
+    "JsonRpcRequest": {
+      "description": "A single JSON-RPC request. Batch arrays are rejected as INVALID_REQUEST.",
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/JsonRpcId" },
+        "method": { "type": "string", "minLength": 1 },
+        "params": { "type": "object" }
+      },
+      "required": ["jsonrpc", "id", "method"],
+      "additionalProperties": false
+    },
+    "JsonRpcNotification": {
+      "description": "A single JSON-RPC notification. It has no id and never receives a response.",
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "method": { "type": "string", "minLength": 1 },
+        "params": { "type": "object" }
+      },
+      "required": ["jsonrpc", "method"],
+      "additionalProperties": false
+    },
+    "JsonRpcSuccessResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["string", "integer", "null"] },
+        "result": {}
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" },
+        "data": { "$ref": "#/$defs/ErrorData" }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "JsonRpcErrorResponse": {
+      "description": "id is null only when no request id can be recovered (PARSE_ERROR or INVALID_REQUEST).",
+      "type": "object",
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["string", "integer", "null"] },
+        "error": { "$ref": "#/$defs/JsonRpcError" }
+      },
+      "required": ["jsonrpc", "id", "error"],
+      "additionalProperties": false
+    },
+    "JsonRpcResponse": {
+      "oneOf": [
+        { "$ref": "#/$defs/JsonRpcSuccessResponse" },
+        { "$ref": "#/$defs/JsonRpcErrorResponse" }
+      ]
+    },
+    "ErrorName": {
+      "description": "A symbolic key of x-errors. Receivers fall back to the numeric JSON-RPC code for unknown names.",
+      "type": "string",
+      "enum": [
+        "PARSE_ERROR",
+        "INVALID_REQUEST",
+        "METHOD_NOT_FOUND",
+        "INVALID_PARAMS",
+        "INTERNAL_ERROR",
+        "PROTOCOL_VERSION_MISMATCH",
+        "EDITOR_ALREADY_ATTACHED",
+        "NO_EDITOR_ATTACHED",
+        "EDITOR_TIMEOUT",
+        "DOC_NOT_FOUND",
+        "DOCS_UNAVAILABLE",
+        "SHUTTING_DOWN"
+      ],
+      "x-open-enum": true
+    },
+    "StartupErrorCode": {
+      "description": "A startup failure name. Hosts must retain unknown names and show the accompanying message.",
+      "type": "string",
+      "enum": [
+        "BAD_ARGUMENTS",
+        "RUNTIME_DIR_UNSAFE",
+        "SOCKET_PATH_TOO_LONG",
+        "SESSION_ALREADY_RUNNING",
+        "TOKEN_FILE_UNSAFE",
+        "LISTEN_FAILED"
+      ],
+      "x-open-enum": true
+    },
+    "ReadyLineOk": {
+      "description": "The only stdout line emitted when the session has bound its listeners.",
+      "type": "object",
+      "properties": {
+        "ready": { "const": true },
+        "socket": { "$ref": "#/$defs/AbsolutePath" },
+        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+        "token": {
+          "type": ["string", "null"],
+          "minLength": 32,
+          "x-secret": true
+        }
+      },
+      "required": ["ready", "socket", "protocol_version", "port", "token"],
+      "if": {
+        "type": "object",
+        "properties": { "port": { "type": "null" } }
+      },
+      "then": {
+        "type": "object",
+        "properties": { "token": { "type": "null" } }
+      },
+      "else": {
+        "type": "object",
+        "properties": { "token": { "type": "string", "minLength": 32 } }
+      },
+      "additionalProperties": false
+    },
+    "ReadyLineError": {
+      "description": "The single stderr line emitted when session startup fails; it never contains a secret.",
+      "type": "object",
+      "properties": {
+        "ready": { "const": false },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": { "$ref": "#/$defs/StartupErrorCode" },
+            "message": { "type": "string" }
+          },
+          "required": ["code", "message"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["ready", "error"],
+      "additionalProperties": false
+    },
+    "ReadyLine": {
+      "oneOf": [{ "$ref": "#/$defs/ReadyLineOk" }, { "$ref": "#/$defs/ReadyLineError" }]
     },
     "SuccessResult": {
       "type": "object",
@@ -439,16 +596,17 @@
       "oneOf": [{ "$ref": "#/$defs/SuccessResult" }, { "$ref": "#/$defs/ErrorResult" }]
     },
     "ErrorData": {
-      "description": "The data member of a JSON-RPC error object. code is a key of x-errors.",
+      "description": "The data member of a JSON-RPC error object. code is a symbolic key of x-errors; its numeric peer is authoritative.",
       "type": "object",
       "properties": {
-        "code": { "type": "string" },
+        "code": { "$ref": "#/$defs/ErrorName" },
         "detail": { "type": "string" }
       },
       "required": ["code"],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "HelloParams": {
+      "description": "Handshake sent first by the server. The protocol_version property keeps this name and ProtocolVersion shape in every MAJOR.",
       "type": "object",
       "properties": {
         "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
@@ -459,15 +617,14 @@
       "additionalProperties": false
     },
     "AttachParams": {
+      "description": "Handshake request sent first by the client. The protocol_version property keeps this name and ProtocolVersion shape in every MAJOR; a different MAJOR is rejected with PROTOCOL_VERSION_MISMATCH.",
       "type": "object",
       "properties": {
-        "protocol_version": {
-          "$ref": "#/$defs/ProtocolVersion",
-          "description": "The client's protocol version. A different MAJOR is rejected with PROTOCOL_VERSION_MISMATCH."
-        },
+        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
         "token": {
           "type": "string",
-          "description": "Required on the TCP listener (WebView only). Secret: never log it."
+          "description": "Required on the TCP listener (WebView only). Secret: never log it.",
+          "x-secret": true
         },
         "client": { "$ref": "#/$defs/ClientInfo" },
         "capabilities": {
@@ -516,7 +673,7 @@
       "properties": {
         "code": { "type": "string" },
         "documentDirectory": {
-          "type": ["string", "null"],
+          "oneOf": [{ "$ref": "#/$defs/AbsolutePath" }, { "type": "null" }],
           "description": "Required on every call. null = no base (clears the previous base)."
         },
         "source": { "$ref": "#/$defs/EvaluationSource" },
@@ -529,7 +686,11 @@
     "EvaluateDiagnostic": {
       "type": "object",
       "properties": {
-        "kind": { "type": "string", "enum": ["parse", "runtime"] },
+        "kind": {
+          "type": "string",
+          "enum": ["parse", "runtime"],
+          "x-open-enum": true
+        },
         "message": { "type": "string" }
       },
       "required": ["kind", "message"],
@@ -552,7 +713,7 @@
           "items": { "$ref": "#/$defs/EvaluateDiagnostic" }
         },
         "documentDirectory": {
-          "type": ["string", "null"],
+          "oneOf": [{ "$ref": "#/$defs/AbsolutePath" }, { "type": "null" }],
           "description": "The value that was actually used."
         }
       },
@@ -575,9 +736,11 @@
         "engine": { "$ref": "#/$defs/EngineState" },
         "transport": { "$ref": "#/$defs/TransportState" },
         "documents": { "type": "array", "items": { "$ref": "#/$defs/SyncedDocument" } },
-        "activeUri": { "type": ["string", "null"] },
+        "activeUri": {
+          "oneOf": [{ "$ref": "#/$defs/DocumentUri" }, { "type": "null" }]
+        },
         "workspaceRoot": {
-          "type": ["string", "null"],
+          "oneOf": [{ "$ref": "#/$defs/AbsolutePath" }, { "type": "null" }],
           "description": "--workspace-root, or null when it was not given."
         },
         "editorAttached": { "type": "boolean" }
@@ -627,7 +790,7 @@
     "StartEngineParams": {
       "type": "object",
       "properties": {
-        "captureWav": { "type": "string" },
+        "captureWav": { "$ref": "#/$defs/AbsolutePath" },
         "audioDevice": { "type": "string" },
         "debug": { "type": "boolean" },
         "hostBundleId": {
@@ -684,7 +847,7 @@
     "AnalyzeAudioParams": {
       "type": "object",
       "properties": {
-        "wavPath": { "type": "string", "minLength": 1 },
+        "wavPath": { "$ref": "#/$defs/AbsolutePath" },
         "windowMs": { "type": "number", "exclusiveMinimum": 0 },
         "perChannel": { "type": "boolean" }
       },
@@ -803,16 +966,6 @@
         { "$ref": "#/$defs/DetailedErrorResult" }
       ]
     },
-    "PluginNameSite": {
-      "type": "object",
-      "properties": {
-        "line": { "type": "integer" },
-        "startCol": { "type": "integer" },
-        "endCol": { "type": "integer" }
-      },
-      "required": ["line", "startCol", "endCol"],
-      "additionalProperties": false
-    },
     "PluginUiAtCursorResult": {
       "oneOf": [
         {
@@ -823,10 +976,10 @@
             "index": { "type": "integer" },
             "chain_path": { "type": "array", "items": { "type": "integer" } },
             "normalizedName": { "type": "string" },
-            "site": { "$ref": "#/$defs/PluginNameSite" }
+            "site": { "$ref": "#/$defs/Range" }
           },
           "required": ["ok", "receiver", "index", "chain_path", "normalizedName", "site"],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         { "$ref": "#/$defs/DetailedErrorResult" }
       ]
@@ -933,7 +1086,7 @@
         "version": { "type": "integer" },
         "text": { "type": "string" },
         "documentDirectory": {
-          "type": ["string", "null"],
+          "oneOf": [{ "$ref": "#/$defs/AbsolutePath" }, { "type": "null" }],
           "description": "Where the document lives. A record, not the evaluation base."
         }
       },
@@ -969,14 +1122,12 @@
       "additionalProperties": false
     },
     "DidChangeSelectionParams": {
+      "description": "The range and optional caret use 0-based LSP coordinates. cursor is the active end and defaults to range.end.",
       "type": "object",
       "properties": {
         "uri": { "$ref": "#/$defs/DocumentUri" },
         "range": { "$ref": "#/$defs/Range" },
-        "cursor": {
-          "$ref": "#/$defs/Position",
-          "description": "Where the caret is (the active end of the selection). Defaults to range.end."
-        }
+        "cursor": { "$ref": "#/$defs/Position" }
       },
       "required": ["uri", "range"],
       "additionalProperties": false
@@ -984,7 +1135,9 @@
     "DidChangeActiveParams": {
       "type": "object",
       "properties": {
-        "uri": { "type": ["string", "null"] }
+        "uri": {
+          "oneOf": [{ "$ref": "#/$defs/DocumentUri" }, { "type": "null" }]
+        }
       },
       "required": ["uri"],
       "additionalProperties": false
@@ -1022,38 +1175,36 @@
     "GetDiagnosticsParams": {
       "type": "object",
       "properties": {
-        "path": {
-          "type": "string",
-          "description": "A file path. Omitted = every synced document."
-        }
+        "uri": { "$ref": "#/$defs/DocumentUri" }
       },
       "additionalProperties": false
     },
-    "DiagnosticEntry": {
+    "DiagnosticTag": {
+      "description": "LSP diagnostic tags, represented by stable names on the wire.",
+      "type": "string",
+      "enum": ["unnecessary", "deprecated"],
+      "x-open-enum": true
+    },
+    "Diagnostic": {
       "type": "object",
       "properties": {
-        "line": { "type": "integer" },
-        "character": { "type": "integer" },
+        "range": { "$ref": "#/$defs/Range" },
         "severity": { "type": "string", "enum": ["error", "warning", "info", "hint"] },
         "message": { "type": "string" },
-        "code": { "type": ["string", "integer"] }
+        "code": { "type": ["string", "integer"] },
+        "source": { "type": "string" },
+        "tags": { "type": "array", "items": { "$ref": "#/$defs/DiagnosticTag" } }
       },
-      "required": ["line", "character", "severity", "message"],
-      "additionalProperties": false
-    },
-    "FileDiagnostics": {
-      "type": "object",
-      "properties": {
-        "path": { "type": "string" },
-        "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/DiagnosticEntry" } }
-      },
-      "required": ["path", "diagnostics"],
+      "required": ["range", "severity", "message"],
       "additionalProperties": false
     },
     "GetDiagnosticsResult": {
       "type": "object",
       "properties": {
-        "files": { "type": "array", "items": { "$ref": "#/$defs/FileDiagnostics" } }
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EditorDiagnosticsParams" }
+        }
       },
       "required": ["files"],
       "additionalProperties": false
@@ -1062,27 +1213,10 @@
       "type": "object",
       "properties": {
         "uri": { "$ref": "#/$defs/DocumentUri" },
-        "items": { "type": "array", "items": { "$ref": "#/$defs/DiagnosticEntry" } }
+        "version": { "type": "integer" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/Diagnostic" } }
       },
-      "required": ["uri", "items"],
-      "additionalProperties": false
-    },
-    "CursorPosition": {
-      "type": "object",
-      "properties": {
-        "line": { "type": "integer" },
-        "character": { "type": "integer" }
-      },
-      "required": ["line", "character"],
-      "additionalProperties": false
-    },
-    "EditorSelection": {
-      "type": "object",
-      "properties": {
-        "start": { "$ref": "#/$defs/CursorPosition" },
-        "end": { "$ref": "#/$defs/CursorPosition" }
-      },
-      "required": ["start", "end"],
+      "required": ["uri", "version", "items"],
       "additionalProperties": false
     },
     "EditorState": {
@@ -1091,8 +1225,8 @@
       "properties": {
         "path": { "type": ["string", "null"] },
         "languageId": { "type": ["string", "null"] },
-        "cursor": { "oneOf": [{ "$ref": "#/$defs/CursorPosition" }, { "type": "null" }] },
-        "selection": { "oneOf": [{ "$ref": "#/$defs/EditorSelection" }, { "type": "null" }] },
+        "cursor": { "oneOf": [{ "$ref": "#/$defs/Position" }, { "type": "null" }] },
+        "selection": { "oneOf": [{ "$ref": "#/$defs/Range" }, { "type": "null" }] },
         "lineCount": { "type": ["integer", "null"] },
         "isDirty": { "type": ["boolean", "null"] }
       },
@@ -1111,21 +1245,9 @@
     "OpenFileParams": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "minLength": 1 }
+        "path": { "$ref": "#/$defs/AbsolutePath" }
       },
       "required": ["path"],
-      "additionalProperties": false
-    },
-    "SelectionInput": {
-      "description": "1-based selection (matches the editor gutter), the MCP set_selection shape.",
-      "type": "object",
-      "properties": {
-        "startLine": { "type": "integer", "minimum": 1 },
-        "startChar": { "type": "integer", "minimum": 1 },
-        "endLine": { "type": "integer", "minimum": 1 },
-        "endChar": { "type": "integer", "minimum": 1 }
-      },
-      "required": ["startLine"],
       "additionalProperties": false
     },
     "SelectionSnapshot": {
@@ -1135,7 +1257,9 @@
         "uri": { "$ref": "#/$defs/DocumentUri" },
         "version": { "type": "integer" },
         "range": { "$ref": "#/$defs/Range" },
-        "documentDirectory": { "type": ["string", "null"] }
+        "documentDirectory": {
+          "oneOf": [{ "$ref": "#/$defs/AbsolutePath" }, { "type": "null" }]
+        }
       },
       "required": ["uri", "version", "range", "documentDirectory"],
       "additionalProperties": false
@@ -1273,11 +1397,13 @@
     },
     "LogLevel": {
       "type": "string",
-      "enum": ["error", "warn", "info", "debug"]
+      "enum": ["error", "warn", "info", "debug"],
+      "x-open-enum": true
     },
     "LogKind": {
       "type": "string",
-      "enum": ["diagnostic", "engine", "daemon", "stall", "session"]
+      "enum": ["diagnostic", "engine", "daemon", "stall", "session"],
+      "x-open-enum": true
     },
     "LogLineParams": {
       "type": "object",

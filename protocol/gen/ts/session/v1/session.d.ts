@@ -11,39 +11,95 @@ export type ProtocolVersionLiteral = '1.0'
 /**
  * A document URI as the editor client knows it (file: for saved documents).
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocumentUri".
  */
 export type DocumentUri = string
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * An absolute POSIX path. Values are records and are not trimmed or normalized on the wire.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "AbsolutePath".
+ */
+export type AbsolutePath = string
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "ClientCapability".
  */
 export type ClientCapability = 'editor' | 'observer'
 /**
- * MAJOR.MINOR. MINOR adds only (new methods, new optional fields); MAJOR breaks.
+ * MAJOR.MINOR. MINOR follows x-compatibility and adds only; MAJOR breaks. The protocol_version properties in session.hello and session.attach retain this shape in every MAJOR.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "ProtocolVersion".
  */
 export type ProtocolVersion = string
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * A request id. null is never a valid request id.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcId".
+ */
+export type JsonRpcId = string | number
+/**
+ * A symbolic key of x-errors. Receivers fall back to the numeric JSON-RPC code for unknown names.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "ErrorName".
+ */
+export type ErrorName =
+  | 'PARSE_ERROR'
+  | 'INVALID_REQUEST'
+  | 'METHOD_NOT_FOUND'
+  | 'INVALID_PARAMS'
+  | 'INTERNAL_ERROR'
+  | 'PROTOCOL_VERSION_MISMATCH'
+  | 'EDITOR_ALREADY_ATTACHED'
+  | 'NO_EDITOR_ATTACHED'
+  | 'EDITOR_TIMEOUT'
+  | 'DOC_NOT_FOUND'
+  | 'DOCS_UNAVAILABLE'
+  | 'SHUTTING_DOWN'
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcResponse".
+ */
+export type JsonRpcResponse = JsonRpcSuccessResponse | JsonRpcErrorResponse
+/**
+ * A startup failure name. Hosts must retain unknown names and show the accompanying message.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "StartupErrorCode".
+ */
+export type StartupErrorCode =
+  | 'BAD_ARGUMENTS'
+  | 'RUNTIME_DIR_UNSAFE'
+  | 'SOCKET_PATH_TOO_LONG'
+  | 'SESSION_ALREADY_RUNNING'
+  | 'TOKEN_FILE_UNSAFE'
+  | 'LISTEN_FAILED'
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "ReadyLine".
+ */
+export type ReadyLine = ReadyLineOk | ReadyLineError
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "CommandResult".
  */
 export type CommandResult = SuccessResult | ErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvaluationSource".
  */
 export type EvaluationSource = 'human' | 'agent'
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvalId".
  */
 export type EvalId = string
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AudioDevicesResult".
  */
 export type AudioDevicesResult =
@@ -53,7 +109,7 @@ export type AudioDevicesResult =
     }
   | ErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AnalyzeAudioResult".
  */
 export type AnalyzeAudioResult =
@@ -63,7 +119,7 @@ export type AnalyzeAudioResult =
     }
   | ErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "SavePluginStateResult".
  */
 export type SavePluginStateResult =
@@ -73,7 +129,7 @@ export type SavePluginStateResult =
     }
   | DetailedErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "PluginUiResult".
  */
 export type PluginUiResult =
@@ -83,7 +139,7 @@ export type PluginUiResult =
     }
   | DetailedErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "PluginUiAtCursorResult".
  */
 export type PluginUiAtCursorResult =
@@ -93,12 +149,11 @@ export type PluginUiAtCursorResult =
       index: number
       chain_path: number[]
       normalizedName: string
-      site: PluginNameSite
-      [k: string]: unknown | undefined
+      site: Range
     }
   | DetailedErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "ListPluginsResult".
  */
 export type ListPluginsResult =
@@ -108,7 +163,7 @@ export type ListPluginsResult =
     }
   | ErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "RescanPluginsResult".
  */
 export type RescanPluginsResult =
@@ -122,7 +177,14 @@ export type RescanPluginsResult =
     }
   | ErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * LSP diagnostic tags, represented by stable names on the wire.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "DiagnosticTag".
+ */
+export type DiagnosticTag = 'unnecessary' | 'deprecated'
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "FlashConfigResult".
  */
 export type FlashConfigResult =
@@ -132,17 +194,17 @@ export type FlashConfigResult =
     }
   | ErrorResult
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocsSite".
  */
 export type DocsSite = 'user' | 'dev'
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "LogLevel".
  */
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug'
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "LogKind".
  */
 export type LogKind = 'diagnostic' | 'engine' | 'daemon' | 'stall' | 'session'
@@ -150,23 +212,18 @@ export type LogKind = 'diagnostic' | 'engine' | 'daemon' | 'stall' | 'session'
 /**
  * OrbitScore session protocol v1: JSON-RPC 2.0 over WebSocket (/rpc). One text frame carries one message. Design: docs/design/848-native-orbitstudio-design.md section 5. This file is the single source of truth; protocol/gen/ is generated from it (npm run protocol:generate).
  */
-export interface OrbitScoreSessionProtocolV1 {
+export interface OrbitScoreSessionProtocol {
   [k: string]: unknown | undefined
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "EmptyParams".
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "EmptyObject".
  */
-export interface EmptyParams {}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "EmptyResult".
- */
-export interface EmptyResult {}
+export interface EmptyObject {}
 /**
  * 0-based line and UTF-16 character offset (LSP).
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "Position".
  */
 export interface Position {
@@ -176,7 +233,7 @@ export interface Position {
 /**
  * LSP range; end is exclusive.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "Range".
  */
 export interface Range {
@@ -184,7 +241,7 @@ export interface Range {
   end: Position
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "ClientInfo".
  */
 export interface ClientInfo {
@@ -192,7 +249,95 @@ export interface ClientInfo {
   version: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * A single JSON-RPC request. Batch arrays are rejected as INVALID_REQUEST.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcRequest".
+ */
+export interface JsonRpcRequest {
+  jsonrpc: '2.0'
+  id: JsonRpcId
+  method: string
+  params?: {}
+}
+/**
+ * A single JSON-RPC notification. It has no id and never receives a response.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcNotification".
+ */
+export interface JsonRpcNotification {
+  jsonrpc: '2.0'
+  method: string
+  params?: {}
+}
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcSuccessResponse".
+ */
+export interface JsonRpcSuccessResponse {
+  jsonrpc: '2.0'
+  id: string | number | null
+  result: unknown
+}
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcError".
+ */
+export interface JsonRpcError {
+  code: number
+  message: string
+  data?: ErrorData
+}
+/**
+ * The data member of a JSON-RPC error object. code is a symbolic key of x-errors; its numeric peer is authoritative.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "ErrorData".
+ */
+export interface ErrorData {
+  code: ErrorName
+  detail?: string
+}
+/**
+ * id is null only when no request id can be recovered (PARSE_ERROR or INVALID_REQUEST).
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "JsonRpcErrorResponse".
+ */
+export interface JsonRpcErrorResponse {
+  jsonrpc: '2.0'
+  id: string | number | null
+  error: JsonRpcError
+}
+/**
+ * The only stdout line emitted when the session has bound its listeners.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "ReadyLineOk".
+ */
+export interface ReadyLineOk {
+  ready: true
+  socket: AbsolutePath
+  protocol_version: ProtocolVersion
+  port: number | null
+  token: string | null
+}
+/**
+ * The single stderr line emitted when session startup fails; it never contains a secret.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "ReadyLineError".
+ */
+export interface ReadyLineError {
+  ready: false
+  error: {
+    code: StartupErrorCode
+    message: string
+  }
+}
+/**
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "SuccessResult".
  */
 export interface SuccessResult {
@@ -200,7 +345,7 @@ export interface SuccessResult {
   message?: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "ErrorResult".
  */
 export interface ErrorResult {
@@ -208,7 +353,7 @@ export interface ErrorResult {
   error: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DetailedErrorResult".
  */
 export interface DetailedErrorResult {
@@ -218,18 +363,9 @@ export interface DetailedErrorResult {
   details?: unknown
 }
 /**
- * The data member of a JSON-RPC error object. code is a key of x-errors.
+ * Handshake sent first by the server. The protocol_version property keeps this name and ProtocolVersion shape in every MAJOR.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "ErrorData".
- */
-export interface ErrorData {
-  code: string
-  detail?: string
-  [k: string]: unknown | undefined
-}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "HelloParams".
  */
 export interface HelloParams {
@@ -238,14 +374,13 @@ export interface HelloParams {
   capabilities: string[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * Handshake request sent first by the client. The protocol_version property keeps this name and ProtocolVersion shape in every MAJOR; a different MAJOR is rejected with PROTOCOL_VERSION_MISMATCH.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AttachParams".
  */
 export interface AttachParams {
-  /**
-   * MAJOR.MINOR. MINOR adds only (new methods, new optional fields); MAJOR breaks.
-   */
-  protocol_version: string
+  protocol_version: ProtocolVersion
   /**
    * Required on the TCP listener (WebView only). Secret: never log it.
    */
@@ -254,7 +389,7 @@ export interface AttachParams {
   capabilities: ClientCapability[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AttachResult".
  */
 export interface AttachResult {
@@ -263,7 +398,7 @@ export interface AttachResult {
 /**
  * Which document and range this evaluation came from. v1 uses it for attribution only; code stays the text that is evaluated.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvaluateTarget".
  */
 export interface EvaluateTarget {
@@ -277,14 +412,14 @@ export interface EvaluateTarget {
 /**
  * Extra attributes for the session log frame (.orbslog).
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvaluateFrame".
  */
 export interface EvaluateFrame {
   [k: string]: (string | number | boolean | null) | undefined
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvaluateParams".
  */
 export interface EvaluateParams {
@@ -292,13 +427,13 @@ export interface EvaluateParams {
   /**
    * Required on every call. null = no base (clears the previous base).
    */
-  documentDirectory: string | null
+  documentDirectory: AbsolutePath | null
   source: EvaluationSource
   target?: EvaluateTarget
   frame?: EvaluateFrame
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvaluateDiagnostic".
  */
 export interface EvaluateDiagnostic {
@@ -306,7 +441,7 @@ export interface EvaluateDiagnostic {
   message: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EvaluateResult".
  */
 export interface EvaluateResult {
@@ -319,10 +454,10 @@ export interface EvaluateResult {
   /**
    * The value that was actually used.
    */
-  documentDirectory: string | null
+  documentDirectory: AbsolutePath | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "SyncedDocument".
  */
 export interface SyncedDocument {
@@ -330,7 +465,7 @@ export interface SyncedDocument {
   version: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "SessionState".
  */
 export interface SessionState {
@@ -338,15 +473,15 @@ export interface SessionState {
   engine: EngineState
   transport: TransportState
   documents: SyncedDocument[]
-  activeUri: string | null
+  activeUri: DocumentUri | null
   /**
    * --workspace-root, or null when it was not given.
    */
-  workspaceRoot: string | null
+  workspaceRoot: AbsolutePath | null
   editorAttached: boolean
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EngineState".
  */
 export interface EngineState {
@@ -357,7 +492,7 @@ export interface EngineState {
   statusError?: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "TransportState".
  */
 export interface TransportState {
@@ -365,7 +500,7 @@ export interface TransportState {
   tempo?: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "GetLogParams".
  */
 export interface GetLogParams {
@@ -375,14 +510,14 @@ export interface GetLogParams {
   lines?: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "GetLogResult".
  */
 export interface GetLogResult {
   lines: string[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "RegisterMcpParams".
  */
 export interface RegisterMcpParams {
@@ -396,11 +531,11 @@ export interface RegisterMcpParams {
   port?: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "StartEngineParams".
  */
 export interface StartEngineParams {
-  captureWav?: string
+  captureWav?: AbsolutePath
   audioDevice?: string
   debug?: boolean
   /**
@@ -409,7 +544,7 @@ export interface StartEngineParams {
   hostBundleId?: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "SelectDeviceParams".
  */
 export interface SelectDeviceParams {
@@ -419,7 +554,7 @@ export interface SelectDeviceParams {
   device: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AudioDeviceInfo".
  */
 export interface AudioDeviceInfo {
@@ -428,16 +563,16 @@ export interface AudioDeviceInfo {
   description: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AnalyzeAudioParams".
  */
 export interface AnalyzeAudioParams {
-  wavPath: string
+  wavPath: AbsolutePath
   windowMs?: number
   perChannel?: boolean
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "WavFormat".
  */
 export interface WavFormat {
@@ -447,7 +582,7 @@ export interface WavFormat {
   bitsPerSample: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "AudioWindow".
  */
 export interface AudioWindow {
@@ -456,7 +591,7 @@ export interface AudioWindow {
   rms: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "WavAnalysis".
  */
 export interface WavAnalysis {
@@ -473,7 +608,7 @@ export interface WavAnalysis {
   channelRms?: number[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "PluginTarget".
  */
 export interface PluginTarget {
@@ -481,7 +616,7 @@ export interface PluginTarget {
   index: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "OpenPluginUiParams".
  */
 export interface OpenPluginUiParams {
@@ -490,16 +625,7 @@ export interface OpenPluginUiParams {
   expectedName?: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "PluginNameSite".
- */
-export interface PluginNameSite {
-  line: number
-  startCol: number
-  endCol: number
-}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "PluginCatalogEntry".
  */
 export interface PluginCatalogEntry {
@@ -511,7 +637,7 @@ export interface PluginCatalogEntry {
   roles: string[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "PluginScanFailure".
  */
 export interface PluginScanFailure {
@@ -522,7 +648,7 @@ export interface PluginScanFailure {
   slices?: string[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "ScanDuration".
  */
 export interface ScanDuration {
@@ -531,7 +657,7 @@ export interface ScanDuration {
   max: number | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "PluginScanSummary".
  */
 export interface PluginScanSummary {
@@ -551,7 +677,7 @@ export interface PluginScanSummary {
   probeAttempts: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DidOpenParams".
  */
 export interface DidOpenParams {
@@ -561,12 +687,12 @@ export interface DidOpenParams {
   /**
    * Where the document lives. A record, not the evaluation base.
    */
-  documentDirectory: string | null
+  documentDirectory: AbsolutePath | null
 }
 /**
  * LSP TextDocumentContentChangeEvent: a range replacement, or the full text when range is absent.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "TextChange".
  */
 export interface TextChange {
@@ -574,7 +700,7 @@ export interface TextChange {
   text: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DidChangeParams".
  */
 export interface DidChangeParams {
@@ -583,37 +709,32 @@ export interface DidChangeParams {
   changes: TextChange[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DidCloseParams".
  */
 export interface DidCloseParams {
   uri: DocumentUri
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * The range and optional caret use 0-based LSP coordinates. cursor is the active end and defaults to range.end.
+ *
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DidChangeSelectionParams".
  */
 export interface DidChangeSelectionParams {
   uri: DocumentUri
   range: Range
-  cursor?: Position1
+  cursor?: Position
 }
 /**
- * 0-based line and UTF-16 character offset (LSP).
- */
-export interface Position1 {
-  line: number
-  character: number
-}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DidChangeActiveParams".
  */
 export interface DidChangeActiveParams {
-  uri: string | null
+  uri: DocumentUri | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "CompleteParams".
  */
 export interface CompleteParams {
@@ -621,7 +742,7 @@ export interface CompleteParams {
   position: Position
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "CompletionItem".
  */
 export interface CompletionItem {
@@ -633,88 +754,63 @@ export interface CompletionItem {
   sortText?: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "CompleteResult".
  */
 export interface CompleteResult {
   items: CompletionItem[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "GetDiagnosticsParams".
  */
 export interface GetDiagnosticsParams {
-  /**
-   * A file path. Omitted = every synced document.
-   */
-  path?: string
+  uri?: DocumentUri
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "DiagnosticEntry".
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
+ * via the `definition` "Diagnostic".
  */
-export interface DiagnosticEntry {
-  line: number
-  character: number
+export interface Diagnostic {
+  range: Range
   severity: 'error' | 'warning' | 'info' | 'hint'
   message: string
   code?: string | number
+  source?: string
+  tags?: DiagnosticTag[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "FileDiagnostics".
- */
-export interface FileDiagnostics {
-  path: string
-  diagnostics: DiagnosticEntry[]
-}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "GetDiagnosticsResult".
  */
 export interface GetDiagnosticsResult {
-  files: FileDiagnostics[]
+  files: EditorDiagnosticsParams[]
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EditorDiagnosticsParams".
  */
 export interface EditorDiagnosticsParams {
   uri: DocumentUri
-  items: DiagnosticEntry[]
-}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "CursorPosition".
- */
-export interface CursorPosition {
-  line: number
-  character: number
-}
-/**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "EditorSelection".
- */
-export interface EditorSelection {
-  start: CursorPosition
-  end: CursorPosition
+  version: number
+  items: Diagnostic[]
 }
 /**
  * The MCP get_editor_state shape. Fields are null when no document is active.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EditorState".
  */
 export interface EditorState {
   path: string | null
   languageId: string | null
-  cursor: CursorPosition | null
-  selection: EditorSelection | null
+  cursor: Position | null
+  selection: Range | null
   lineCount: number | null
   isDirty: boolean | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocumentText".
  */
 export interface DocumentText {
@@ -722,38 +818,26 @@ export interface DocumentText {
   text: string | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "OpenFileParams".
  */
 export interface OpenFileParams {
-  path: string
-}
-/**
- * 1-based selection (matches the editor gutter), the MCP set_selection shape.
- *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
- * via the `definition` "SelectionInput".
- */
-export interface SelectionInput {
-  startLine: number
-  startChar?: number
-  endLine?: number
-  endChar?: number
+  path: AbsolutePath
 }
 /**
  * What the editor client returns for editor.runSelection: where its selection is. Layer 2 reads the text from its synced copy at that version.
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "SelectionSnapshot".
  */
 export interface SelectionSnapshot {
   uri: DocumentUri
   version: number
   range: Range
-  documentDirectory: string | null
+  documentDirectory: AbsolutePath | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "EditReplaceParams".
  */
 export interface EditReplaceParams {
@@ -762,7 +846,7 @@ export interface EditReplaceParams {
   all?: boolean
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "FlashConfigInput".
  */
 export interface FlashConfigInput {
@@ -772,7 +856,7 @@ export interface FlashConfigInput {
   customColor?: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "FlashConfig".
  */
 export interface FlashConfig {
@@ -782,7 +866,7 @@ export interface FlashConfig {
   customColor: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocsGetParams".
  */
 export interface DocsGetParams {
@@ -790,14 +874,14 @@ export interface DocsGetParams {
   path: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocsGetResult".
  */
 export interface DocsGetResult {
   text: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocsSearchParams".
  */
 export interface DocsSearchParams {
@@ -809,7 +893,7 @@ export interface DocsSearchParams {
   limit?: number
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocsSearchMatch".
  */
 export interface DocsSearchMatch {
@@ -818,7 +902,7 @@ export interface DocsSearchMatch {
   excerpt: string
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "DocsSearchResult".
  */
 export interface DocsSearchResult {
@@ -827,7 +911,7 @@ export interface DocsSearchResult {
 /**
  * Where the sounding call is, in the coordinates of the evalId request's code (0-based, UTF-16, end exclusive).
  *
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "StepSource".
  */
 export interface StepSource {
@@ -836,7 +920,7 @@ export interface StepSource {
   end: Position
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "TransportStepParams".
  */
 export interface TransportStepParams {
@@ -849,7 +933,7 @@ export interface TransportStepParams {
   source?: StepSource | null
 }
 /**
- * This interface was referenced by `OrbitScoreSessionProtocolV1`'s JSON-Schema
+ * This interface was referenced by `OrbitScoreSessionProtocol`'s JSON-Schema
  * via the `definition` "LogLineParams".
  */
 export interface LogLineParams {
@@ -864,35 +948,51 @@ export interface LogLineParams {
   evalId?: EvalId
 }
 
+/** JSON-RPC error numbers (the declaration-file equivalent of an `as const` object). */
+export declare const ErrorCodes: {
+  readonly PARSE_ERROR: -32700
+  readonly INVALID_REQUEST: -32600
+  readonly METHOD_NOT_FOUND: -32601
+  readonly INVALID_PARAMS: -32602
+  readonly INTERNAL_ERROR: -32603
+  readonly PROTOCOL_VERSION_MISMATCH: -32010
+  readonly EDITOR_ALREADY_ATTACHED: -32011
+  readonly NO_EDITOR_ATTACHED: -32012
+  readonly EDITOR_TIMEOUT: -32013
+  readonly DOC_NOT_FOUND: -32020
+  readonly DOCS_UNAVAILABLE: -32021
+  readonly SHUTTING_DOWN: -32030
+}
+
 /** Requests any attached client sends to layer 2 (method name → params / result). */
 export interface ClientRequests {
   'session.attach': { params: AttachParams; result: AttachResult }
   'session.evaluate': { params: EvaluateParams; result: EvaluateResult }
-  'session.getState': { params: EmptyParams; result: SessionState }
+  'session.getState': { params: EmptyObject; result: SessionState }
   'session.getLog': { params: GetLogParams; result: GetLogResult }
   'session.registerMcp': { params: RegisterMcpParams; result: CommandResult }
-  'session.shutdown': { params: EmptyParams; result: EmptyResult }
+  'session.shutdown': { params: EmptyObject; result: EmptyObject }
   'engine.start': { params: StartEngineParams; result: CommandResult }
-  'engine.stop': { params: EmptyParams; result: CommandResult }
-  'engine.getState': { params: EmptyParams; result: EngineState }
-  'audio.listDevices': { params: EmptyParams; result: AudioDevicesResult }
+  'engine.stop': { params: EmptyObject; result: CommandResult }
+  'engine.getState': { params: EmptyObject; result: EngineState }
+  'audio.listDevices': { params: EmptyObject; result: AudioDevicesResult }
   'audio.selectDevice': { params: SelectDeviceParams; result: CommandResult }
   'audio.analyze': { params: AnalyzeAudioParams; result: AnalyzeAudioResult }
   'plugin.saveState': { params: PluginTarget; result: SavePluginStateResult }
   'plugin.openUi': { params: OpenPluginUiParams; result: PluginUiResult }
   'plugin.closeUi': { params: PluginTarget; result: PluginUiResult }
-  'plugin.openUiAtCursor': { params: EmptyParams; result: PluginUiAtCursorResult }
-  'plugin.list': { params: EmptyParams; result: ListPluginsResult }
-  'plugin.rescan': { params: EmptyParams; result: RescanPluginsResult }
+  'plugin.openUiAtCursor': { params: EmptyObject; result: PluginUiAtCursorResult }
+  'plugin.list': { params: EmptyObject; result: ListPluginsResult }
+  'plugin.rescan': { params: EmptyObject; result: RescanPluginsResult }
   'editor.complete': { params: CompleteParams; result: CompleteResult }
   'editor.getDiagnostics': { params: GetDiagnosticsParams; result: GetDiagnosticsResult }
-  'editor.getState': { params: EmptyParams; result: EditorState }
-  'editor.getDocumentText': { params: EmptyParams; result: DocumentText }
+  'editor.getState': { params: EmptyObject; result: EditorState }
+  'editor.getDocumentText': { params: EmptyObject; result: DocumentText }
   'editor.openFile': { params: OpenFileParams; result: CommandResult }
-  'editor.setSelection': { params: SelectionInput; result: CommandResult }
-  'editor.runSelection': { params: EmptyParams; result: CommandResult }
+  'editor.setSelection': { params: Range; result: CommandResult }
+  'editor.runSelection': { params: EmptyObject; result: CommandResult }
   'editor.editReplace': { params: EditReplaceParams; result: CommandResult }
-  'editor.saveFile': { params: EmptyParams; result: CommandResult }
+  'editor.saveFile': { params: EmptyObject; result: CommandResult }
   'editor.configureFlash': { params: FlashConfigInput; result: FlashConfigResult }
   'docs.get': { params: DocsGetParams; result: DocsGetResult }
   'docs.search': { params: DocsSearchParams; result: DocsSearchResult }
@@ -920,9 +1020,9 @@ export interface ServerNotifications {
 /** Requests layer 2 sends to the attached editor client (the x-editor-request leg of a client request). */
 export interface EditorRequests {
   'editor.openFile': { params: OpenFileParams; result: CommandResult }
-  'editor.setSelection': { params: SelectionInput; result: CommandResult }
-  'editor.runSelection': { params: EmptyParams; result: SelectionSnapshot }
+  'editor.setSelection': { params: Range; result: CommandResult }
+  'editor.runSelection': { params: EmptyObject; result: SelectionSnapshot }
   'editor.editReplace': { params: EditReplaceParams; result: CommandResult }
-  'editor.saveFile': { params: EmptyParams; result: CommandResult }
+  'editor.saveFile': { params: EmptyObject; result: CommandResult }
   'editor.configureFlash': { params: FlashConfigInput; result: FlashConfigResult }
 }

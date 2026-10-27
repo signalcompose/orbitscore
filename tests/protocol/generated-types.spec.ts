@@ -28,4 +28,47 @@ describe('protocol/gen is generated from protocol/session/v1 (protocol:check)', 
       expect(generated, name).toContain(`'${name}':`)
     }
   })
+
+  it('generates the error-name union and readonly numeric ErrorCodes table', () => {
+    const generated = fs.readFileSync(
+      path.join(repoRoot, 'protocol/gen/ts/session/v1/session.d.ts'),
+      'utf8',
+    )
+    expect(generated).toContain('export type ErrorName =')
+    expect(generated).toContain('export declare const ErrorCodes: {')
+    for (const [name, code] of Object.entries(loadSessionSchema()['x-errors'])) {
+      expect(generated).toContain(`readonly ${name}: ${code}`)
+    }
+  })
+
+  it('does not invent numbered public type names for inline schema fragments', () => {
+    const generated = fs.readFileSync(
+      path.join(repoRoot, 'protocol/gen/ts/session/v1/session.d.ts'),
+      'utf8',
+    )
+    expect(generated).not.toMatch(/^export (?:interface|type) \w+\d+\b/m)
+  })
+
+  it('has no differently named definitions with the same structure', () => {
+    const definitions = loadSessionSchema().$defs
+    const byStructure = new Map<string, string[]>()
+    const withoutAnnotations = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(withoutAnnotations)
+      if (value === null || typeof value !== 'object') return value
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([key]) => key !== 'description' && !key.startsWith('x-'))
+          .map(([key, child]) => [key, withoutAnnotations(child)]),
+      )
+    }
+
+    for (const [name, definition] of Object.entries(definitions)) {
+      const structure = JSON.stringify(withoutAnnotations(definition))
+      const names = byStructure.get(structure) ?? []
+      names.push(name)
+      byStructure.set(structure, names)
+    }
+
+    expect([...byStructure.values()].filter((names) => names.length > 1)).toEqual([])
+  })
 })

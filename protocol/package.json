@@ -4,5 +4,17 @@
   "private": true,
   "description": "OrbitScore session protocol definitions (JSON Schema 2020-12) and the types generated from them",
   "license": "Apache-2.0",
-  "author": "Signal compose Inc."
+  "author": "Signal compose Inc.",
+  "type": "module",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.cjs"
+    },
+    "./package.json": "./package.json",
+    "./session/v1/session.schema.json": "./session/v1/session.schema.json",
+    "./gen/ts/session/v1/session": "./gen/ts/session/v1/session.d.ts"
+  }
 }

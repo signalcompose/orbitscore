@@ -17,7 +17,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { compile } from 'json-schema-to-typescript'
-import prettier from 'prettier'
+import * as prettier from 'prettier'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 export const repoRoot = path.resolve(here, '../..')
@@ -67,26 +67,46 @@ function methodTables(schema) {
     } else if (method.direction === 'server-to-client' && method.kind === 'notification') {
       tables.ServerNotifications.push(`  ${key}: ${typeOf(method.params)}`)
     } else {
-      throw new Error(`x-methods.${name}: unsupported direction/kind ${method.direction}/${method.kind}`)
+      throw new Error(
+        `x-methods.${name}: unsupported direction/kind ${method.direction}/${method.kind}`,
+      )
     }
   }
   const doc = {
-    ClientRequests: 'Requests any attached client sends to layer 2 (method name → params / result).',
+    ClientRequests:
+      'Requests any attached client sends to layer 2 (method name → params / result).',
     ClientNotifications: 'Notifications the editor client sends to layer 2.',
     ServerNotifications: 'Notifications layer 2 sends to clients.',
     EditorRequests:
       'Requests layer 2 sends to the attached editor client (the x-editor-request leg of a client request).',
   }
   return Object.entries(tables)
-    .map(([table, rows]) => `/** ${doc[table]} */\nexport interface ${table} {\n${rows.join('\n')}\n}`)
+    .map(
+      ([table, rows]) => `/** ${doc[table]} */\nexport interface ${table} {\n${rows.join('\n')}\n}`,
+    )
     .join('\n\n')
+}
+
+/** `x-errors` を declaration-file での `as const` 相当の表にする。 */
+function errorCodes(schema) {
+  const rows = Object.entries(schema['x-errors'] ?? {}).map(
+    ([name, code]) => `  readonly ${JSON.stringify(name)}: ${code}`,
+  )
+  return [
+    '/** JSON-RPC error numbers (the declaration-file equivalent of an `as const` object). */',
+    'export declare const ErrorCodes: {',
+    ...rows,
+    '}',
+  ].join('\n')
 }
 
 /** スキーマ 1 本 → TS の宣言ファイル 1 本。 */
 async function generateTs(file) {
   const schema = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, file), 'utf8'))
   // `x-` で始まる拡張キーは型の生成に渡さない（`x-methods` は下で対応表にする）。
-  const forCompile = Object.fromEntries(Object.entries(schema).filter(([key]) => !key.startsWith('x-')))
+  const forCompile = Object.fromEntries(
+    Object.entries(schema).filter(([key]) => !key.startsWith('x-')),
+  )
   const types = await compile(forCompile, schema.title, {
     bannerComment: '',
     unreachableDefinitions: true,
@@ -104,12 +124,17 @@ async function generateTs(file) {
     '',
     types,
     '',
+    errorCodes(schema),
+    '',
     methodTables(schema),
     '',
   ].join('\n')
   const config = (await prettier.resolveConfig(path.join(TS_OUT_DIR, 'x.ts'))) ?? {}
   const formatted = await prettier.format(body, { ...config, parser: 'typescript' })
-  return { path: path.join(TS_OUT_DIR, file.replace(/\.schema\.json$/, '.d.ts')), content: formatted }
+  return {
+    path: path.join(TS_OUT_DIR, file.replace(/\.schema\.json$/, '.d.ts')),
+    content: formatted,
+  }
 }
 
 /** 生成物の全部（パスと中身）。書き込まない。 */
@@ -126,7 +151,10 @@ export async function staleOutputs() {
   const outputs = await generateAll()
   const expected = new Set(outputs.map((output) => output.path))
   const stale = outputs
-    .filter((output) => !fs.existsSync(output.path) || fs.readFileSync(output.path, 'utf8') !== output.content)
+    .filter(
+      (output) =>
+        !fs.existsSync(output.path) || fs.readFileSync(output.path, 'utf8') !== output.content,
+    )
     .map((output) => path.relative(repoRoot, output.path))
   // 正本が消えたのに残っている生成物も差として数える。
   if (fs.existsSync(TS_OUT_DIR)) {

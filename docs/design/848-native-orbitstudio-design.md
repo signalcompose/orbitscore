@@ -176,6 +176,9 @@ MCP ツールの名前・引数・戻りは **v1 だけ**関門で、v1 の後�
 | **P-16** | **凍結版 4.4.0 の `/mcp` の Origin 未検証**（#996 に記録だけ・§4.7） | 凍結の例外として直すか、退役まで残すか（owner） | owner の判断が #996 に記録されている | issue **#996**（OPEN）+ 台帳の spec の `ext-retire` | `ext-retire` | — |
 | **P-17** | **Monaco へのパッチ**（N0-a で要ると決まった場合のみ。D-6 の上流の修正 microsoft/vscode#333909 が未マージの間） | 上流の修正を含む Monaco の版へ上げ、パッチを消す | パッチのファイルが無い | 🔴 **期限を機械で切れない**（上流の都合）。代わりに、パッチの適用を Monaco の版に結びつけ、**版を上げた時にパッチが当たらなければ build が落ちる**形にする（N0-a で決める）。パッチのファイルに `PROVISIONAL(P-17)` | `external` | N0-a → 上流 |
 | **P-18** | **`protocol:check` が TS 側だけ**（N0-b で生成ツールが決まるまで。クラウドで先に進める S-rpc の N1-a1・計画 §7.1 の C-2） | TS と Swift の両方を生成し、`protocol:check` が両方の差分ゼロを検査する | `protocol/gen/swift/` に生成物があり、N0-b の往復テスト（3 メッセージ）が緑 | 台帳の spec: `apps/OrbitStudio/Package.swift` が現れた時点で `protocol/gen/swift/` が空なら red（Swift のコードが生成物を使い始める前に閉じる） | `when-exists:apps/OrbitStudio/Package.swift` | S-rpc（N1-a1）→ N0-b |
+| **P-19** | **送り手が相手の MINOR に合わせて `x-since` の追加要素を制限する仕組みが未実装**。v1.0 には 1.1 以降の要素がまだ無いので、実例を伴う検査を今は作れない | 送り手は attach で得た相手の MINOR より新しい、`x-since` の付いたフィールド・メソッド・enum 値を送らない | 最初の 1.1 の追加を入れる PR が、その追加を fixture にして送信側の制限を検査する | `tests/protocol/minor-compat.spec.ts` を最初の protocol 1.1 追加 PR で新設し、`P-19` を記載する | 最初の protocol 1.1 追加 PR | 最初の protocol 1.1 追加 PR |
+| **P-20** | **第 1 リリースの v1 スキーマを固定する基準がまだ無い**。出荷前なので、比較元になる released schema を今作ると未確定の形を固定する | 出荷する v1.0 を `protocol/session/released/1.0/session.schema.json` に固定し、同じ MAJOR の後続スキーマとの差分が追加だけであることを検査する | released schema と、削除・必須化・型変更・閉じた enum の変更を拒否する互換検査がある | リリースの preflight（D-11）: 台帳の spec が released schema と `P-20` を含む `tests/protocol/released-schema-compat.spec.ts` の実在を検査する | `release-1` | R-app（第 1 リリースの版を固定する PR） |
+| **P-21** | **N0-b の Swift 生成物で open enum の未知値を保持できるかが未確認** | `LogKind` などの open enum は、既知でない文字列を受けても decode で throw せず、値を保って往復できる | Swift の生成物へ未知値 `__future_minor_value__` を渡す往復テストが緑 | 台帳の spec: `apps/OrbitStudio/Package.swift` が現れた時点で、`P-21` と未知値を含む `tests/protocol/swift-open-enum.spec.ts` が無ければ red | `when-exists:apps/OrbitStudio/Package.swift` | N0-b |
 
 #### 1.4.2 仕組み — `tests/repo/native-provisional-ledger.ts` と `.spec.ts`（N1-a0 で足す）
 
@@ -377,9 +380,11 @@ host（OrbitStudio.app / orbitscore session CLI。VS Code 拡張〔凍結〕は�
         UDS   : <runtime-dir>/session.sock に /rpc を開く（常に）。既定の runtime-dir は
                 ~/Library/Application Support/OrbitStudio/run（0700・§4.7）
         TCP   : --port を渡した時だけ 127.0.0.1:<port> に /rpc（WebView 専用）・/app/・/orbitscore/**・/docs を開く
-        stdout 1 行目: {"ready":true,"socket":"<path>","port":<bound>|null,"protocol_version":"1.0","token":"<secret>"|null}
-                       ← daemon の StartupReady と同型 + socket + token（🔴 token は TCP を開いた時だけ・秘密を含む行・§4.7 の扱い）
-        stderr: 起動失敗は {"ready":false,"error":{code,message}}   ← daemon の StartupError と同型（秘密を含めない）
+        stdout 1 行目: protocol/session/v1/session.schema.json の ReadyLineOk
+                       {"ready":true,"socket":"<absolute-path>","port":<bound>|null,"protocol_version":"1.0","token":"<secret>"|null}
+                       ← port と token は両方 null か両方あり。token は x-secret（TCP を開いた時だけ・§4.7）
+        stderr: 起動失敗は同じスキーマの ReadyLineError
+                {"ready":false,"error":{"code":<StartupErrorCode>,"message":"..."}}（秘密を含めない）
   └─ session が spawn: orbit-audio-daemon（既存 rust-engine-player.ts・変更なし）
 
 LLM クライアント（Claude Code 等。1 回だけ登録・§6.3）
@@ -389,6 +394,8 @@ LLM クライアント（Claude Code 等。1 回だけ登録・§6.3）
 ```
 
 改訂（10-26・裁定 4）: **`--mcp` を削った**（MCP を話すのは層 2 ではなく中継になった・§6）。**`--port` は WebView のためだけ**にあり、アプリは常に `--port 0` を渡し、headless は既定で TCP を開かない（WebView が無いので要らない）。旧版の ready 行（`port` と `token` だけ）からの変更はこの 3 点で、消費者がテストだけのうちに S-rpc で確定する（一方通行 N-3）。
+
+ready 行は送る側用スキーマで検査する。`ReadyLineOk.socket` は絶対パス、`port` は 1〜65535、token は 32 文字以上である。`StartupErrorCode` は `BAD_ARGUMENTS` / `RUNTIME_DIR_UNSAFE` / `SOCKET_PATH_TOO_LONG` / `SESSION_ALREADY_RUNNING` / `TOKEN_FILE_UNSAFE` / `LISTEN_FAILED` の open enum とし、host は未知の code でも `message` を表示できるようにする。
 
 - **1 host = 1 session = 1 daemon**。host が終了する時は `session.shutdown` を送って待ち、応答が無ければ SIGTERM → SIGKILL。session は自分の daemon を同じ順で畳む（既存 `cli/shutdown.ts` の経路）。**host が SIGKILL で死んだ時に session と daemon が残らない**ことを、gated `native` の teardown で PID オラクル（既存 `orbitAudioDaemonPids()`・`orbitstudio-mcp-gated.spec.ts:544` を helper へ）により確認する（PR-E8 の狭いスライスと同じ形）
 - 🔴 **改訂（10-23）: 子が親の死を知る機構を session に持たせる**（F-1。旧版は検知だけで機構が無かった）。
@@ -639,11 +646,26 @@ handshake   : 接続直後にサーバが {"jsonrpc":"2.0","method":"session.hel
               クライアントは session.attach({token, client:{name,version}, capabilities:["editor"|"observer"|…]}) → {clientId}
               TCP: token の欠落・不一致と、attach より前に来たメソッドは close 1008（§4.7）/ UDS: token は省略してよい（来ても検査しない）。
               attach より前に来たメソッドは UDS でも close 1008（握手の順序はリスナーに依らない）
-versioning  : protocol_version は "MAJOR.MINOR"。MINOR = 追加のみ（新メソッド・新省略可能フィールド）。MAJOR = 破壊。
-              🔴 不一致は黙って縮退せず attach を拒否する（strict・#136 の原則）。app と session は同じ .app に同梱されるので
-              実運用では常に一致し、不一致は「ビルドの混線」= バグとして早く見える
+versioning  : protocol_version は "MAJOR.MINOR"。同じ MAJOR は接続し、MINOR の追加は下の互換規則に従う。MAJOR = 破壊。
+              MAJOR が違う時は PROTOCOL_VERSION_MISMATCH で attach を拒否する。hello / attach の protocol_version は、
+              どの MAJOR でも名前と形を変えない（形を検査する前に MAJOR を読めるため）
 schema      : protocol/session/v1/*.schema.json（JSON Schema 2020-12）を単一の真実にし、TS 型・Swift Codable を生成（§5.8）
 ```
+
+#### 5.2.1 互換の規則（規則 C・2026-10-27）
+
+スキーマの `additionalProperties:false` と閉じた enum は、**自分が送る値を検査する厳格な契約**として維持する。受け手の前方互換は同じスキーマを緩めて表し、送信側の typo を許すことには使わない。
+
+| 種類 | 送り手 | 受け手 |
+|---|---|---|
+| 要求の params（C→S と逆方向 S→C）・C→S の `editor.did*` 通知 | 相手の MINOR より新しいフィールド・メソッド・値を送らない | 厳格。未知のキー・値は `INVALID_PARAMS`。不正な C→S 通知は error の `log.line` を出して editor を 1008 で閉じる |
+| 応答の result・S→C の通知・JSON-RPC エラー | 省略可能なフィールド・通知・エラー名を MINOR で足せる | 寛容。未知のキーと未知の通知は無視し、open enum の未知値は fallback、未知のエラー名は数値 code を正として扱う |
+
+- `session.hello` と `session.attach` の `protocol_version` は、**どの MAJOR でもフィールド名と `ProtocolVersion` の形を変えない**。双方は低い方の MINOR までを送信可能範囲として記録する
+- `x-open-enum` の値の追加は MINOR、印のない enum の値の追加は MAJOR。値の削除・意味の変更は常に MAJOR。v1 の open enum は `LogKind` / `LogLevel` / `EvaluateDiagnostic.kind` / `ErrorName` / `StartupErrorCode` / `DiagnosticTag`。診断の `severity` は LSP / Monaco の固定した 4 段なので理由つきで閉じる
+- 1.1 以後に追加するメソッド・省略可能フィールド・enum 値には、導入版を `x-since: "MAJOR.MINOR"` で付ける。相手の MINOR で送信を制限する仕組みは最初の 1.1 の追加と同じ PR で入れる（台帳 P-19）
+- `@orbitscore/protocol` の `createReceiverSchema` は `additionalProperties:false` を外し、`x-open-enum:true` の `enum` だけを外す。**Ajv の `removeAdditional` は使わない**（`oneOf` の枝を試す途中で入力を書き換えるため）。受け手用を使うのは相手から受ける result / S→C 通知 / エラーだけで、自分が送る値は厳格な正本で検査し続ける
+- 第 1 リリースで正本を `protocol/session/released/1.0/` に固定し、その後の同じ MAJOR の差分が追加だけであることを機械検査する（台帳 P-20）
 
 **なぜ WebSocket か（stdio / Unix ソケットとの比較）**: stdio は親しか繋げない（複数クライアント不可）。Unix ソケットは macOS のパス上限 103 文字を踏む（#830 で実測・`orbitstudio-mcp-gated.spec.ts:103`）。TCP loopback は daemon（`server.rs:19`）と MCP（`mcp-server.ts`）が既に使っており、Swift は `URLSessionWebSocketTask`・WebView は `WebSocket`・Node は `ws`（既存依存）で**新しい依存が 1 つも増えない**。改訂（10-26）: 上の「Unix ソケットは 103 文字を踏む」は**置き場の選び方**の問題で（#830 は `$TMPDIR` + 説明的な接頭辞の下に置いて 105 文字になった）、`~/Library/Application Support/OrbitStudio/run/` の下なら通常は収まる（§4.7 の長さの検査と退避先）。そこで LLM の経路は UDS にした（ブラウザから構造的に届かない）。**WebView は UDS を話せない**ので、WebView の経路は TCP のまま。framing は両方とも WebSocket の 1 フレーム = 1 メッセージで同じ。🔴 改訂（10-26・main の審査）: **Swift のシェル自身が層 2 に繋ぐ時（`session.shutdown`・F-12 の再 attach・状態の監視）は UDS を使う**（非ブラウザのクライアントなので。`URLSessionWebSocketTask` は UDS を話せないので、`Network.framework` の `NWConnection` で UDS の上に WebSocket を張るか、HTTP の upgrade を自前で行う — 手段は A-skeleton で実測）。TCP の `/rpc` は WebView 専用で、Origin の欠落を拒否する規則（§4.7）は Swift のシェルにかからない。UDS で張れないと分かった場合の退避は「Swift が `Origin: http://127.0.0.1:<port>` を明示して TCP に繋ぐ」（規則を緩めない）
 
@@ -831,10 +853,24 @@ log.line (S→C 通知 + ring)
 
 ### 5.5 document 同期（LSP の形だけ借りる）
 
-`editor.didOpen({uri, text, documentDirectory})` / `editor.didChange({uri, version, changes[]})` / `editor.didClose({uri})` / `editor.didChangeSelection({uri, range})` / 改訂（10-23）`editor.didChangeActive({uri: string | null})`（C→S・通知）。層 2 は document の写しを持ち、診断（`diagnostics-analysis.ts` + `plugin-name-diagnostics.ts`）を計算して `editor.diagnostics({uri, items[]})` を push する。**`get_diagnostics`（MCP）と Monaco のマーカーは同じ計算結果**を見る。
+`editor.didOpen({uri, version, text, documentDirectory})` / `editor.didChange({uri, version, changes[]})` / `editor.didClose({uri})` / `editor.didChangeSelection({uri, range, cursor?})` / `editor.didChangeActive({uri: DocumentUri | null})`（C→S・通知）。層 2 は document の写しを持ち、診断（`diagnostics-analysis.ts` + `plugin-name-diagnostics.ts`）を計算する。
+
+wire の座標は **0 始まり・UTF-16 の LSP 形 `Position {line, character}` / `Range {start, end}` の 1 系統**とする。`editor.setSelection`、`EditorState.cursor` / `selection`、`SelectionSnapshot`、`plugin.openUiAtCursor` の `site` もこの型を使う。1 始まりの MCP（`line` / `character`）への変換は中継、1 始まりの Monaco `IPosition {lineNumber, column}` への変換は Monaco adapter にだけ置く（§6）。wire に 1 始まりの別型を作らない。
+
+診断は次の形を正本にする。`version` は Monaco の `IMarkerData.modelVersionId` に渡し、古い版の診断を新しい本文へ貼らない。`editor.getDiagnostics({uri?})` の同じ uri / version の要素は、最後の `editor.diagnostics` 通知と deep-equal である。
+
+```
+Diagnostic              { range: Range, severity, message, code?, source?, tags?: DiagnosticTag[] }
+EditorDiagnosticsParams { uri: DocumentUri, version: integer, items: Diagnostic[] }
+GetDiagnosticsParams    { uri?: DocumentUri }
+GetDiagnosticsResult    { files: EditorDiagnosticsParams[] }
+```
+
+`severity` は `error | warning | info | hint` の閉じた enum、`DiagnosticTag` は `unnecessary | deprecated` から始める open enum である。中継は MCP の凍結形へ返す時だけ range の start を `+1` し、`uri` を絶対 path に直す。`uri` を指定した時は診断 0 件でもその file を返し、省略時は診断のある file だけを返す。
 
 - `editor.didChangeActive` は**前面のウィンドウの document**（キーウィンドウ。Monaco にフォーカスが無くても同じ）を伝え、document の窓が 1 つも無ければ `null`。MCP `evaluate_orbitscore` の IM.6 の第 2 候補（アクティブな `.orbs`・`file:` の uri だけ）と `get_editor_state` はこの値を読む（§5.3.1）。凍結版の `vscode.window.activeTextEditor` に当たる
 - `didOpen` の `documentDirectory` は document の所在の記録で、**評価の基準ではない**。評価の基準は `session.evaluate` の `documentDirectory`（毎回必須・§5.3.1）が唯一の入口で、層 2 は document の写しから基準を推測しない（GUI の ⌘Enter はクライアントが自分の document のディレクトリを渡す）。改訂（10-26）: `session.evaluate` に `target`（どの文書のどの範囲か）が付いても、**この規則は変えない** — `target` は評価の帰属（どの文書の評価か）を運び、基準は運ばない。区切りを文書の写しから決めることは #997 の段階 2 で入りうるが、それは「何を評価するか」の話で、「どこを基準に import を解決するか」とは別の入口のまま保つ
+- path は POSIX の絶対パス、URI は scheme つきとして wire で区別する。層 2 は file URI を文字列のまま比べず、**`fileURLToPath(uri).normalize('NFC')`** にして path と照合する（NFC / NFD の違い、`~`、空白、`#`、`%` を単体テストで守る）。大文字・小文字の違いは未検証で、ここでは規則を足さない
 - F-12 で層 2 を再起動した時は、開いている全 document の `didOpen` と `didChangeActive` を再送する（§12）
 
 ### 5.6 同時性（§12 追加の未検証項目・本書の答え）
@@ -871,23 +907,36 @@ log.line (S→C 通知 + ring)
 
 - 置き場: `protocol/session/v1/`（§8）。形式は **JSON Schema 2020-12**。理由: TS（`json-schema-to-typescript`）・Swift（`quicktype`）・Rust（`typify` / `schemars` の逆）へ**言語をまたいで**生成できる形式はこれしか無い。TypeScript や zod を正本にすると Swift 側は手書きになる
 - 生成物は**コミットする**（`protocol/gen/ts/` `protocol/gen/swift/`）。CI は「生成し直して差分ゼロ」を検査する（`npm run protocol:check`）。理由: Xcode / SwiftPM のビルドに Node を要求しない
-- 🔴 **ツールの選定は N0-b の spike で確定**（本書は候補を挙げるだけ・未検証）。spike の受け入れ: 3 メッセージ（`session.evaluate` 要求 / 応答 / `transport.step`）が TS ↔ Swift で往復して等しい
+- 🔴 **ツールの選定は N0-b の spike で確定**（本書は候補を挙げるだけ・未検証）。spike の受け入れ: (1) 3 メッセージ（`session.evaluate` 要求 / 応答 / `transport.step`）が TS ↔ Swift で往復して等しい (2) Swift の open enum は未知の文字列値で throw せず、値を保って往復できる（台帳 P-21）
 - `surfaces` 拡張キー: 各メソッドに `"x-surfaces": ["gui","mcp"]` を必須にし、D-4 の検査が読む
 - 🔴 **ライセンス（10-26・§14.0 (9)）**: `protocol/` の**定義**（`session/v1/*.schema.json` と生成物 `gen/`）だけを **Apache-2.0** にする。`protocol/LICENSE` を S-rpc の小 PR（N1-a1・スキーマを置く PR）で足す。リポジトリのルートのライセンス（Signal compose Source-Available License v1.0）はそれ以外にかかったまま。理由: 第三者が自分のクライアント（別のエディタ・コントローラ・可視化ツール）を作る時に定義を使えるようにする（裁定 6 の「公開したプロトコルに繋ぐ一般の窓口」の前提）。定義が公開されて使われ始めた後に変えると使った人に影響するので、**スキーマを置く PR と同じ PR で**入れる。owner の意見（原文）「そういう意味ではDSLもApache-2.0でいいと思います。」は**記録だけ**で、本書の他のライセンスの記述は変えない（範囲は §14.0 の第 2 回の記録・#998）
 
-### 5.9 スキーマを書いた時に補ったもの（2026-10-26・S-rpc の N1-a1〔#1001〕・🔴 owner の確認待ち）
+### 5.9 スキーマを書いた時に補ったもの（2026-10-26・S-rpc の N1-a1〔#1001〕、2026-10-27・PR #1008 で追補）
 
-`protocol/session/v1/session.schema.json` を書いた時に、本書だけでは形が決まらなかった所を次のように補った。**束 S-rpc の締めで owner が確かめるまで確定ではない**（消費者がテストだけのうちに直せる・一方通行 N-1）。
+`protocol/session/v1/session.schema.json` を書いた時に、本書だけでは形が決まらなかった所を次のように補った。S-1〜S-7 は最初のスキーマで置いた形、S-8〜S-12 と改訂した S-2 は PR #1008 で main / advisor が採用した v1 の形である。第 1 リリース後の変更は §5.2.1 の MINOR / MAJOR の規則に従う。
 
 | # | 本書の記述 | 補ったもの | 理由 |
 |---|---|---|---|
 | S-1 | §5.8「`x-surfaces: ["gui","mcp"]` を必須に」/ D-4「GUI が呼ぶメソッド ⊆ MCP が呼ぶメソッド」 | 語彙を 4 つにした: `gui`（GUI の操作）/ `mcp`（中継がツールの実装に呼ぶ）/ `editor`（エディタのクライアントが文書の写しを保つための同期と、エディタに描く言語サービス = `editor.did*`・`editor.complete`）/ `infra`（握手・寿命・イベント）。D-4 は `gui` ⇒ `mcp` だけを検査する。あわせて `x-mcp-tools`（そのメソッドを使う MCP ツール）を足し、28 本と対応することを検査する | D-4 を字面どおりに読むと、文書の同期（§5.5）と補完（§5.3.4）が「GUI だけの経路」になる。どちらも操作ではない（同期は写しを保つため・補完は描画）。補完を MCP のツールにすると v1 関門（§6.1・28 本）を破る |
-| S-2 | §5.2「不一致は attach を拒否する（strict）」/ §6.2 RL-5「同じ MAJOR なら繋ぐ（MINOR は追加だけ）」 | `session.attach` の params に `protocol_version` を足し、**MAJOR が違う時だけ** `PROTOCOL_VERSION_MISMATCH` で拒否する。MINOR の違いは繋ぐ（知らないメソッドは `METHOD_NOT_FOUND` で黙らずに返る） | §5.2 の params にクライアントの版が無く、サーバが拒否できない。§5.2 と RL-5 は MINOR の扱いが食い違っていたので RL-5 に合わせた（自動更新の後の古い中継が MINOR 違いで締め出されない） |
+| S-2 | §5.2 の版の規則 / §6.2 RL-5「同じ MAJOR なら繋ぐ（MINOR は追加だけ）」 | **互換の規則 C**を採る。送る側のスキーマは `additionalProperties:false` と閉じた enum のまま厳格にし、受け手は別に作ったスキーマで未知 key と `x-open-enum:true` の未知値だけを許す。`session.attach` に `protocol_version` を足し、MAJOR が違う時だけ `PROTOCOL_VERSION_MISMATCH`。`hello` / `attach` の `protocol_version` はどの MAJOR でも名前と形を変えない。追加には `x-since` を付け、送り手の MINOR 制限は台帳 P-19 で最初の 1.1 に入れる | strict schema を緩めると、自分が誤った形を送る退行まで隠す。一方、受信時まで strict にすると MINOR の追加で古いクライアントを締め出す。送信契約と受信互換を分ければ両方を守れる |
 | S-3 | §5.5 `editor.didOpen({uri, text, documentDirectory})` | `version` を足した（LSP の `TextDocumentItem` と同じ） | §5.3.1 の `target.version` は「`editor.didChange` の version」で、最初の版が `didOpen` に無いと数え始められない |
 | S-4 | §5.5 `editor.didChangeSelection({uri, range})` | 省略可能な `cursor`（選択の動く側。省略時は `range.end`） | `get_editor_state` は `cursor` と `selection` を別に返す。範囲を正規化すると、後ろ向きの選択でカーソルの位置が失われる |
 | S-5 | §5.3.4 逆方向 `editor.*`（S→C） | 中継から届くのは C→S の同名のメソッドで、層 2 がエディタのクライアントへ転送する（スキーマの `x-editor-request`）。`editor.runSelection` だけは往復の中身が違う — エディタは選択の位置（`SelectionSnapshot`）だけを返し、層 2 が subject-block を解決して評価する（§5.4） | §5.3.4 は S→C の側しか書いておらず、中継（クライアント）がどのメソッドで頼むかが無かった |
 | S-6 | §5.3.6 の通知 `plugin.uiClosed` | v1 のスキーマに**まだ入れていない**（MINOR で足す） | daemon の `PluginUiClosed` は engine の中で処理され（`rust-engine-player.ts:655`）、層 2 が受け取る口が無い。台帳 P-07（型付きの出力の口・S-eval）で一緒に足すのを提案する |
 | S-7 | 構造化エラー（`NO_EDITOR_ATTACHED` ほか）の数値 | `x-errors` に数値を置いた（JSON-RPC のサーバ範囲 −32000〜−32099）。エラーの `data.code` に名前を入れる | 本書は名前だけだった |
+| S-8 | §5.5 の document 同期と診断 | wire の座標を 0 始まり・UTF-16 の `Position` / `Range` だけにし、診断を `Diagnostic {range,severity,message,code?,source?,tags?}`、通知を `{uri,version,items}`、取得結果を `{files}` にした。`editor.getDiagnostics` は `{uri?}` | 1 点だけの旧診断では下線の終端と版が無く、Monaco へ古い診断を貼る危険がある。座標の別型は変換漏れと生成型の重複を作る |
+| S-9 | §4.4 の ready 行 | `ReadyLineOk` / `ReadyLineError` / open enum の `StartupErrorCode` を正本にし、成功時の `port` と `token` は両方値か両方 `null`、`token` は 32 文字以上かつ `x-secret` とした | 親が stdout の場当たり的な形を解釈せず、起動失敗を 6 種の安定した code で扱えるようにする。秘密のフィールドを機械的に列挙できるようにする |
+| S-10 | §4.4・§5.3・§5.5 の path / URI | `AbsolutePath` は `^/`、`DocumentUri` は scheme 必須。`documentDirectory`、`workspaceRoot`、socket、WAV、open file は path、`activeUri` と `didChangeActive.uri` は URI または `null` | 空文字・相対 path・file URI を同じ欄で許すと、基準ディレクトリと文書 identity の意味が変わる。サイト内の相対 `path` は対象外 |
+| S-11 | §5.2 の JSON-RPC framing | request / notification / success / error の封筒を `$defs` に置き、request の `id` は string または integer（`null` 不可）、batch は `INVALID_REQUEST` とした | JSON-RPC の一般形に任せると、未対応の `id:null` と batch を実装ごとに違って扱う |
+| S-12 | 生成物とエラー名 | `ErrorName` を open enum とし、`x-errors` から readonly literal の `ErrorCodes` を生成する。`$ref` 横の description は親へ移し、`Position1` のような番号付き別名と同形別名を作らない | `$ref` の sibling を生成器が別型へ展開し、同じ wire 形に複数の名前が生まれていた。エラー番号の手書き転記も防ぐ |
+
+#### 5.9.1 後続への約束（#1009 N1-a2 / #1010 N1-a3）
+
+- #1009 の attach は **token を検査 → `protocol_version` だけを読む → MAJOR を比べる → params 全体の形を検査**の順にする。未知の新フィールドを持つ正当な相手を、版を見る前に strict schema で落とさない
+- #1009 は相手から受け取る result・notification・error data を `@orbitscore/protocol` の受け手用スキーマで寛容に検査し、自分が送る request・result・notification は送る側の厳格なスキーマで検査し続ける。Ajv の `removeAdditional` は使わない
+- #1009 は `id:null` の request と JSON-RPC batch を `INVALID_REQUEST` で拒否する
+- #1009 の `session-core.ts` は生成物の型を import し、手書きの `EvaluateParams` をやめる
+- #1010 は stdout へ出す成功の ready 行と各 `fail()` の失敗行を、送信前にそれぞれ `ReadyLineOk` / `ReadyLineError`（合わせて `ReadyLine`）で検査する
 
 ---
 
@@ -914,6 +963,7 @@ log.line (S→C 通知 + ring)
 - 🔴 docs の在りか: 凍結版は `__dirname` から user（モノレポ → `extension-bundle`）と dev（モノレポだけ）を探す（`mcp-server.ts:151-154`・`mcp-docs.ts`）。層 2 では起動引数 `--docs-dir`（§4.4・複数可）に置き換え、`docs.*` の `site` ごとに在りかを持つ（§5.3.5）。中継の docs 系ツールは `docs.*` の RPC を呼ぶ。同梱の中身は別冊 [`848-docs-structure-design.md`](848-docs-structure-design.md) §6
 - 改訂（10-26）: **TCP の `/mcp` は v1 に無い**（`POST /mcp` → 404）。10-23 の「`/mcp` は `/rpc` と同じリスナー・`--mcp` で有効・アプリの環境設定「MCP ポート」」は削った。HTTP しか話せない MCP クライアントが現れたら、中継に `--http <port>` を MINOR で足す（§5.3.8）
 - **MCP ツール = RPC メソッドの薄い写し**（D-4）。改訂（10-26）: 中継は**RPC のクライアントでしかない**ので、GUI が使わない近道を MCP に作る**手段が無い** — D-4 が宣言の検査だけでなくプロセスの構造で守られる（再検討 2.2）
+- **座標の adapter**: wire は §5.5 の 0 始まり `Position` / `Range` だけを使う。中継は MCP の 1 始まりの `line` / `character` を RPC の前に `-1` し、診断などを MCP へ返す時だけ range の start を `+1` する。Monaco の 1 始まり `lineNumber` / `column` との変換は WebView の Monaco adapter に置く。層 2 の core と schema に 1 始まりの別型を置かない
 - LLM が第一級ユーザーであることの帰結: **アプリを起動しなくても** headless の `orbitscore session` と中継で同じツール集合に到達できる（D-3）。登録は §6.3
 
 ### 6.1 🔴 MCP ツールの v1 関門と、v1 の後に変える時の規則（10-26 新設・裁定 1）
@@ -1423,3 +1473,4 @@ per-PR macOS ランナーは owner 方針で回さない（`rust-ci.yml:1-24`）
 | 2026-10-23 | 改訂（起案: fresh subagent / 審査: main）。§2 を main `7410dcb0`（拡張 4.4.0）で再測し、比較元 `1276ab1f` の日付を 09-14（4.2.0 マージ）に訂正、§2c の判定表を新設。🔴 **セキュリティの結論を反転**: 「認証を付けない」を撤回し `/rpc` と `/mcp` にトークン + Origin（§4.7 の脅威モデル・層 1 は engine 線へ申し送り）。**プロトコルの形を確定**: §5.3 を現行表面の全写像に作り直し（ツール 28・メタ行 8・stdout 4 系統・コマンド 19・HTTP 4・環境変数。漏れ L1〜L11）、`session.evaluate` は状態を持たない（`documentDirectory` 毎回必須・`evalId` をサーバが振る）、`transport.step` に `source`、`log.line` に `level` / `kind`、`docs.*` に `site` / `limit`、`engine.start` に `hostBundleId`、評価の単位は wire に焼かず実装の既定は凍結版と同じ。§4.4 に F-1 の機構（stdin の EOF + 親 PID）、§4.5.1 に層 2 が engine を呼ぶ入口（写し + 差分テスト）、§4.5.2 にネイティブ版のワークスペース、§6 に `tools/list` の順序の契約、§7.3 に WebView の配信元（`/app/` が本命・`file://` は代替ではない）、§10.2 にハーネスがトークンを知る経路。完了条件: D-1（v4.4.0・56 `it`・基準タグ `PARITY_BASELINE_TAG`）/ D-6（再現手順と Monaco の版の固定）/ D-9（4.2.1 の同梱を引き継ぐ）を書き換え、D-10（接続の認証）を追加。F-12 / F-13 を追加。§14 に (22)〜(25)。入力: 再測（`7410dcb0`）・外部参照の調査（2026-10-23）・#987 の設計（`origin/claude/sweet-pasteur-2l1eef`） |
 | 2026-10-26 | owner 裁定を反映（審査: main。起案なし — 裁定の記録と直接の帰結だけ）。§14.0 を新設し、裁定済み 20 件・説明待ち 7 件・全体への意見を原文で記録。(5) 自動更新は **B（含める）** に転じたので §9.3 を改訂。(6) の条件を §9.4、(8) の「1 クライアント = 複数 document」を §5.4、4.4.0 の Origin の issue（#996）を §4.7 に反映。§4.7 の反転・§4.5.1・(22)・(23)・(3)・(7)・(9) は**まだ決まっていない** |
 | 2026-10-26（第 2 回） | 改訂（起案: fresh subagent / 審査: main・起点 `042906b9`）。owner 裁定 第 2 回（7 件 + 全体への意見）を反映し、§14.0 に原文と反映先を記録。(1) **パリティの再定義**: 関門 = 「DSL が実行された結果は拡張版と同じ」+ 能力 / MCP ツールは v1 だけ関門（§6.1・`mcp-tools-v1.spec.ts` が `VERSION` で自動で外れる）/ 拡張版は回帰の検算台（§1.1・D-1 の分類の規則・D-2・§5.3 冒頭・§7.4・§10）/ `document_path` の改行禁止は写さない。(2) **§4.5.1 を段階 1（足場）/ 段階 2（#997・S-eval）に**し、**§1.4 暫定物の台帳**（18 行・印 `PROVISIONAL(P-xx)`・期限 4 種・release モード）と **D-11** を新設。4 ファイルの列挙 134 行に処分を付けた（§1.4.3）。新しく見つけた暫定物: engine の console 出力（P-07）・Monaco のパッチ（P-17）・`protocol:check` が TS 側だけ（P-18）。(3) `session.evaluate` に省略可能な **`target`**（§5.3.1）。(4) **中継**: セキュリティの再検討（2026-10-26）の推奨で、中継 = MCP サーバ・層 2 へは UDS・TCP の `/mcp` は v1 で開かない・TCP の `/rpc` は Origin の欠落も拒否（§4.4・§4.7・§4.7.1・§5.2・§5.3.8・§5.3.9・§6・§6.2・§6.3・§10.2・F-12・F-13・D-10 を書き直し・F-14〜F-17 と **D-12** を新設）。裁定シートの説明文（発見ファイル + `/mcp`）との差 3 点は §14.0 に「裁定 4 の範囲内の実装の選択・main が owner へ説明済み」として記録。裁定 7 の DSL の範囲 = 仕様書だけ・#998 を記録。F-12 の session の再起動を自動に（状態の復帰）。(5) **§4.6 を書き直し**: T-1（N0-d）と判断の規則（m1 の p99 > m0 の p99 + 64 フレームなら PR-Q をゲートへ・提案値）。(6)(7) 拡張版は書き直さない / `protocol/` は Apache-2.0（§5.8・§8）。§2d に判定表。§14.1 (3)(7)(9)(12)(22)(23) を閉じた |
+| 2026-10-27 | N1-a1（PR #1008）で session protocol v1 の戻せない形を確定。§4.4 の `ReadyLine`、§5.2.1 の互換規則 C、§5.5 の診断・0 始まり座標・path/URI 照合、§5.8 の Swift open enum 受け入れ、§5.9 の S-2 改訂と S-8〜S-12、§6 の 1 始まり adapter を追加。暫定物の台帳を P-19〜P-21 の 3 行増やした |
