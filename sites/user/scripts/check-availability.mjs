@@ -194,30 +194,52 @@ for (const lang of Object.values(AVAILABILITY)) {
  *   (c) anywhere in the line, the bold label carries a colon inside or right
  *       after it (`本文 **対応**: …`).
  * Prose that merely contains the word is not a candidate: `入力 -> 対応表`,
- * `<b>対応</b>`, `**対応**していない`, `Availability of plugins varies.`
+ * `<b>対応</b>`, `**対応**していない`, `Availability of plugins varies.`,
+ * `> **対応** は次の通りです。` (rule (b) needs a line name or an unreleased
+ * marker after the label). Inline code spans and HTML comments are removed
+ * before the test (the anchor shape quoted in prose is not an anchor), and
+ * table rows are never candidates.
+ *
+ * Known limits (each needs two slips at once, so it is left to review rather
+ * than widened into prose): a missing `>` *and* a missing colon
+ * (`**対応** OrbitScore …`), a missing space after the label
+ * (`> **対応**OrbitScore …`), an unemphasised label without a colon
+ * (`> 対応 OrbitScore …`), and a single-star label in mid-line (`本文 *対応*: …`).
  */
 const LABEL = String.raw`(?:対応|availability)`
+const EMPHASIS = String.raw`[*_]{1,3}`
 const CONTAINER = String.raw`^\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+)*`
 const LEADING_LABEL_COLON_RE = new RegExp(
-  String.raw`${CONTAINER}(?:[*_]{1,2}\s*)?${LABEL}\s*(?:[*_]{1,2}\s*)?[:：]`,
+  String.raw`${CONTAINER}(?:${EMPHASIS}\s*)?${LABEL}\s*(?:${EMPHASIS}\s*)?[:：]`,
   'i',
 )
 const QUOTED_LABEL_NO_COLON_RE = new RegExp(
-  String.raw`^\s*(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)*[*_]{1,2}\s*${LABEL}\s*[*_]{1,2}(?:\s|$)`,
+  String.raw`^\s*(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)*${EMPHASIS}\s*${LABEL}\s*${EMPHASIS}(?:\s+(?:OrbitScore|OrbitStudio|未リリース|Unreleased)|\s*$)`,
   'i',
 )
 const BOLD_LABEL_COLON_RE = new RegExp(
   String.raw`\*\*\s*${LABEL}\s*(?:[:：]\s*\*\*|\*\*\s*[:：])`,
   'i',
 )
-const isAnchorCandidate = (line) =>
-  LEADING_LABEL_COLON_RE.test(line) ||
-  QUOTED_LABEL_NO_COLON_RE.test(line) ||
-  BOLD_LABEL_COLON_RE.test(line)
+/** Prose that quotes the anchor shape: inline code spans and HTML comments. */
+const stripQuotedShapes = (line) => line.replace(/`+[^`]*`+/g, ' ').replace(/<!--.*?-->/g, ' ')
+const isAnchorCandidate = (line) => {
+  if (/^\s*\|/.test(line)) return false
+  const text = stripQuotedShapes(line)
+  return (
+    LEADING_LABEL_COLON_RE.test(text) ||
+    QUOTED_LABEL_NO_COLON_RE.test(text) ||
+    BOLD_LABEL_COLON_RE.test(text)
+  )
+}
 const HEADING_RE = /^(#{1,6})\s+\S/
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
-/** Anything that tries to be a split-section marker (any case, with or without a colon). */
-const HOST_MARKER_LIKE_RE = /<!--\s*host\b/i
+/**
+ * Anything that tries to be a split-section marker: `host` (any case) followed
+ * by a space, a colon, `=` or the end of the comment. `<!-- host-specific note -->`
+ * is an ordinary comment, not a marker.
+ */
+const HOST_MARKER_LIKE_RE = /<!--\s*host(?:\s|[:=]|-->)/i
 const HOST_MARKER_RE = /^<!-- host: (ext|app) -->$/
 const PARALLEL_ORBITSTUDIO_RE = /^\s*- \*\*OrbitStudio\*\*:/
 const ORBITSTUDIO_RE = /orbitstudio/i
@@ -260,8 +282,15 @@ function walk(dir, out) {
   }
   for (const name of names) {
     const full = path.join(dir, name)
-    const entry = fs.lstatSync(full)
     const rel = relOf(full)
+    let entry
+    try {
+      entry = fs.lstatSync(full)
+    } catch (error) {
+      // A directory that can be listed but not searched hides this entry: report it, keep going.
+      report(errors, rel, 1, 'AV-SYNTAX', `cannot read the entry: ${error.code ?? error.message}`)
+      continue
+    }
     const atSiteRoot = !rel.includes('/')
     if (atSiteRoot && name.startsWith('.')) continue
     if (entry.isSymbolicLink()) {

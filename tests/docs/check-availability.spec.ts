@@ -891,6 +891,7 @@ describe('check-availability.mjs', () => {
         })
         expectRed(r, 'AV-SYNTAX', 'a.md:1')
         expect(r.out).toContain('cannot read the chapter: EACCES')
+        expect(r.out).not.toContain('frontmatter has no')
         expectRed(r, 'AV-HOST', 'b.md:4')
         expect(r.out).not.toContain('Usage error')
       },
@@ -916,5 +917,157 @@ describe('check-availability.mjs', () => {
       expect(r.status, out).toBe(2)
       expect(out).toContain('Usage error: `--root` requires a directory')
     })
+  })
+
+  // R4: 規則 (a)(b)(c) のどれが当たったかを区別できる入力・誤検出しない形・読めない入口を固定する。
+  describe('near-miss rules, quoted shapes and unreadable entries', () => {
+    const under = (line: string) => `## 機能\n\n${line}\n\n本文`
+
+    it.each([
+      [
+        '(a) a non-bold label in a list item',
+        'a.md',
+        '- 対応: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        '(a) a numbered item with a full-width colon',
+        'a.md',
+        '1) 対応：OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        '(a) a non-bold label in a nested quote',
+        'a.md',
+        '>> 対応: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        '(a) an underscore emphasis',
+        'a.md',
+        '_対応_: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        '(a) a triple-star emphasis',
+        'a.md',
+        '> ***対応***: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+      [
+        '(a) a non-bold en label in a quote',
+        'en/a.md',
+        '> Availability: OrbitScore 4.2.0 and later / OrbitStudio 0.1.0 and later',
+      ],
+      ['(b) a bold label alone at the end of the line', 'a.md', '> **対応**'],
+      [
+        '(c) a colon inside the bold label in mid-line',
+        'a.md',
+        '本文 **対応:** OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降',
+      ],
+    ])('rejects %s', (_label, rel, line) => {
+      expectRed(lint({ [rel]: chapter('app', under(line)) }), 'AV-SYNTAX', `${rel}:11`)
+    })
+
+    it.each([
+      [
+        'the anchor shape in inline code',
+        '書式は `> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降` です。',
+      ],
+      ['the bold label in a table cell', '| 項目 | **対応**: macOS |'],
+      ['the anchor shape in an HTML comment', '<!-- > **対応**: OrbitScore 4.2.0 以降 -->'],
+      ['a bold label followed by prose in a quote', '> **対応** は次の通りです。'],
+    ])('does not mistake %s for an availability anchor', (_label, line) => {
+      expectGreen(lint({ 'a.md': chapter('app', line) }))
+    })
+
+    it('keeps a heading that starts with the label a heading', () => {
+      expectGreen(lint({ 'a.md': chapter('app', '## 対応: 一覧\n\n本文') }))
+    })
+
+    it.each([
+      ['a value that is not ext or app', '<!-- host: both -->'],
+      ['no space inside the comment', '<!--host: ext-->'],
+      ['trailing whitespace', '<!-- host: ext --> '],
+      ['an indent', ' <!-- host: ext -->'],
+    ])('rejects a split-section marker with %s', (_label, marker) => {
+      expectRed(
+        lint({ 'a.md': chapter('both+split', `## VS Code で開く\n${marker}\n\n手順`) }),
+        'AV-HOST',
+        'a.md:10',
+      )
+    })
+
+    it('treats a comment that merely starts with the word host as an ordinary comment', () => {
+      expectGreen(
+        lint({
+          'a.md': chapter('both', '<!-- host-specific note: keep this paragraph -->\n\n本文'),
+        }),
+      )
+    })
+
+    it('names the first line that carries a CR, not always line 1', () => {
+      const md = chapter('both', 'x').split('\n')
+      const mixed = [...md.slice(0, 2), ...md.slice(2).map((l) => `${l}\r`)].join('\n')
+      const r = lint({ 'a.md': mixed })
+      expectRed(r, 'AV-SYNTAX', 'a.md:3')
+      expect(r.out).toContain('CRLF')
+    })
+
+    it('normalises lone CR line endings too', () => {
+      const r = lint({ 'a.md': chapter('both', 'x').replace(/\n/g, '\r') })
+      expectRed(r, 'AV-SYNTAX', 'a.md:1')
+      expect(r.out).not.toContain('frontmatter has no')
+    })
+
+    it.each([
+      ['a tab', '\t'],
+      ['an ideographic space', '　'],
+    ])('names trailing %s after an availability line', (_label, tail) => {
+      const line = `> **対応**: OrbitScore 4.2.0 以降 / OrbitStudio 0.1.0 以降${tail}`
+      const r = lint({ 'a.md': chapter('app', under(line)) })
+      expectRed(r, 'AV-SYNTAX', 'a.md:11')
+      expect(r.out).toContain('trailing whitespace after the availability line')
+    })
+
+    it.skipIf(process.getuid?.() === 0)(
+      'reports an unreadable subdirectory and keeps checking the rest',
+      () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orb-availability-'))
+        const sub = path.join(root, 'sub')
+        try {
+          fs.writeFileSync(path.join(root, 'b.md'), chapter('vscode', 'x'))
+          fs.mkdirSync(sub)
+          fs.writeFileSync(path.join(sub, 'a.md'), chapter('both', 'x'))
+          fs.chmodSync(sub, 0o000)
+          const r = spawnSync(process.execPath, [SCRIPT, '--root', root], { encoding: 'utf8' })
+          const out = `${r.stdout}${r.stderr}`
+          expectRed({ status: r.status, out }, 'AV-SYNTAX', 'sub:1')
+          expect(out).toContain('cannot read the directory: EACCES')
+          expectRed({ status: r.status, out }, 'AV-HOST', 'b.md:4')
+          expect(out).not.toContain('Usage error')
+        } finally {
+          fs.chmodSync(sub, 0o755)
+          fs.rmSync(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(process.getuid?.() === 0)(
+      'reports a listable but unsearchable subdirectory instead of crashing',
+      () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orb-availability-'))
+        const sub = path.join(root, 'sub')
+        try {
+          fs.writeFileSync(path.join(root, 'b.md'), chapter('vscode', 'x'))
+          fs.mkdirSync(sub)
+          fs.writeFileSync(path.join(sub, 'a.md'), chapter('both', 'x'))
+          fs.chmodSync(sub, 0o444)
+          const r = spawnSync(process.execPath, [SCRIPT, '--root', root], { encoding: 'utf8' })
+          const out = `${r.stdout}${r.stderr}`
+          expectRed({ status: r.status, out }, 'AV-SYNTAX', 'sub/a.md:1')
+          expect(out).toContain('cannot read the entry: EACCES')
+          expectRed({ status: r.status, out }, 'AV-HOST', 'b.md:4')
+        } finally {
+          fs.chmodSync(sub, 0o755)
+          fs.rmSync(root, { recursive: true, force: true })
+        }
+      },
+    )
   })
 })
