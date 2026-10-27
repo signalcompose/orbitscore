@@ -323,7 +323,7 @@
 | ~~W-22（node 同梱）の裁定が新ラインにも及ぶか~~ | ✅ 10-26 owner 裁定（第 2 回）: **A 同梱**（設計 §14.0 の 5） |
 | ~~bundle id / アプリ名 / 配布物名~~ | ✅ 10-26 owner 裁定: bundle id は `com.signalcompose.orbitstudio`（設計 §14 (10) A） |
 | ~~#848 本文の出力先 `847-…` と本 PR の `848-…` の食い違い~~ | ✅ 解消済み（#848 の本文に `847` は 0 件・`gh issue view 848 --json body` を 2026-10-26 に確認） |
-| ~~DSL の Apache-2.0 の範囲（10-26 第 2 回の裁定 7 の owner の意見）~~ | ✅ owner 確定（2026-10-26）: **DSL の仕様書（文法と意味の文書）だけ**。実装 `packages/engine` はルートのライセンスのまま。扱いは **#998**（設計 §14.0） |
+| ~~DSL の Apache-2.0 の範囲（10-26 第 2 回の裁定 7 の owner の意見）~~ | ✅ **#998 で決着**（PR [#1003](https://github.com/signalcompose/orbitscore/pull/1003)・merge `13bdc2e`・2026-10-26）。owner の改訂（同日）で**仕様書の本文は Apache-2.0 にしない** — ルートのライセンスのまま（© Signal compose Inc.）。代わりに**言語（文法と意味）の実装**を Apache-2.0 の条件で誰にでも許す「実装の許諾」（🔴 **案・法的な文面は未確定**）を仕様書 3 本（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` / `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`）のタイトル直下と README の License 節に置いた。機械が読む言語の定義 2 つ（`packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json` / `packages/vscode-extension/language-configuration.json`）は **Apache-2.0**（`<file>.license` の sidecar + ルート `LICENSE` 冒頭の例外の節）。実装 `packages/engine` はルートのライセンスのまま（設計 §14.0） |
 
 ---
 

@@ -12,7 +12,7 @@
  * protocol 仕様との一致を検証する。
  */
 
-import { ChildProcess, spawn } from 'child_process'
+import type { ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
 import { createInterface } from 'readline'
 import * as fs from 'fs'
@@ -42,6 +42,7 @@ import {
   DaemonQuitError,
   DaemonStartupError,
 } from './errors'
+import { spawnDaemonProcess } from './daemon-spawn'
 import { createDaemonStderrLineRouter, unterminatedTail } from './daemon-stderr-lines'
 import { validateRenderScore, type RenderScore } from './render-score'
 import {
@@ -847,13 +848,8 @@ export class DaemonClient extends EventEmitter {
     audioDevice: string | undefined,
   ): Promise<string> {
     const binary = this.resolveDaemonBinary(explicitPath)
-    // `--audio-device <name>` は daemon 起動時のみ honor される（#484 D1・ランタイム切替は D2）。
-    // 名前が不一致でも daemon は起動を落とさず stderr に警告して host 既定へ縮退する。
-    const args = audioDevice ? ['--audio-device', audioDevice] : []
-    const child = spawn(binary, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: daemonEnv(process.env),
-    })
+    // 引数（`--audio-device`）と stdio（親の死を daemon が知るためのパイプ・#996）は daemon-spawn.ts。
+    const child = spawnDaemonProcess(binary, audioDevice, daemonEnv(process.env))
     this.child = child
 
     const stderrChunks: string[] = []

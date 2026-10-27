@@ -136,7 +136,7 @@ fixture の CLAP test synth は **note-off が来るまで 0.25 振幅の sin �
 
 | # | 層 | 何を証明するか |
 |---|---|---|
-| **E2E-K3** 🔴 | gated E2E | `LOOP` → 音を確認 → **engine を `kill -9`** → 1 s 待つ → **daemon がまだ書いている WAV** の末尾 0.5 s rms < 0.01。**daemon 側の砦をユーザーと同じ経路で証明する唯一のテスト** |
+| **E2E-K3** 🔴 | gated E2E | `LOOP` → 最大 rms > 0.01 で音を確認 → **engine を `kill -9`** → **daemon が 5 s 以内に自分で終了**（#996）。daemon の `_exit` で WAV は鳴っている途中で切れうるため、末尾無音は判定しない |
 | T2（意図的に削除） | gated E2E | `stop_engine` は capture を書く daemon 自体を終了するため silent tail を記録できず、engine 終了後の disconnect cleanup log も取得できない |
 | T1 | gated E2E | `RUN(cb)` → 終端後の窓 rms < 0.01（A1 の受け入れ） |
 | cargo gated | 機能 | note_on → `plugin_all_notes_off()` → `released == 1` → `probe_live_count == 0` |
@@ -146,7 +146,9 @@ fixture の CLAP test synth は **note-off が来るまで 0.25 振幅の sin �
 
 T2 は意図的に受け入れ対象から外した。`stop_engine` が capture writer である daemon を終了するため、
 末尾 window を収録できず、tracing を relay する engine も既に終了しているので cleanup log の有無も
-判定材料にならない。T1 が通常の engine-side release、E2E-K3 が daemon を生かした disconnect fallback を担う。
+判定材料にならない。T1 が通常の engine-side release、E2E-K3 が親 engine の死後に daemon を残さない
+ライフサイクルを担う。daemon が生きる WebSocket 切断時の fallback は `tests/protocol.rs` の
+session-disconnect テスト群が担う。
 
 ### 受け入れ基準
 
@@ -166,7 +168,7 @@ T2 は意図的に受け入れ対象から外した。`stop_engine` が capture 
 |---|---|---|
 | daemon が死ねば鳴らない | **高**（main が `parent_watch.rs` で確認） | child が親死後も自前で出力デバイスを開く経路があれば崩れる |
 | version を上げない | 中 | owner 裁定次第。上げる場合の変更は 3 箇所 |
-| **E2E-K3 のハーネス**（engine の `pgrep`・孤児 daemon の後始末・次テストの engine 再起動） | **中〜低** | flaky なら cargo gated + `protocol.rs` を主証拠に降格し K3 は隔離して報告。**T2 だけでは daemon 側の砦を証明できない**（TS の経路が先に止める） |
+| **E2E-K3 のハーネス**（engine の `pgrep`・失敗時に残った daemon の後始末・次テストの engine 再起動） | **中〜低** | flaky なら実 daemon の親死亡テスト + `protocol.rs` を主証拠に降格し K3 は隔離して報告。**T2 だけでは親死亡時の自己終了を証明できない**（通常の停止経路を通る） |
 | stale の判定を文字列一致でしている | 中 | `WrapError` の variant で判定できる形に寄せる。**文字列で判定しない** |
 | `ReplacePlugin` commit で台帳を消す副作用 | 中 | quarantine 時は消さない分岐にして unit で両方を固定する |
 

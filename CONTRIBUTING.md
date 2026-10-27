@@ -171,6 +171,8 @@ orbitscore/
 
 By contributing to OrbitScore, you agree that your contributions will be licensed under the Signal compose Source-Available License v1.0 — the same license that covers the project as a whole. See [LICENSE](LICENSE) for the full terms.
 
+The exception is the machine-readable language definitions listed in the README's [License](README.md#license) section (each has a companion `.license` file with `SPDX-License-Identifier: Apache-2.0`): contributions to those files are licensed under the Apache License 2.0 only.
+
 Note: This license is Apache 2.0-based with Commons Clause and Fair Revenue Clause. It is not an OSI-approved open source license; it is source-available.
 
 For significant contributions, Signal compose Inc. may request a Contributor License Agreement (CLA) to enable commercial redistribution (e.g. Steam, App Store, Gumroad) of the compiled software. This will be communicated on a per-PR basis when applicable.

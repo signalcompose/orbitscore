@@ -357,8 +357,10 @@ VSCodium → Extension Host → engine プロセス(node cli-audio.js repl)
 - ルート `LICENSE` は Signal compose Source-Available License v1.0（Apache-2.0 基底 + Commons Clause + Fair Revenue Clause）。条文自身が「OSD 上のオープンソースではない」と明記
 - Rust の21 crate が `license.workspace = true`
 - 例外: `orbit-link-audio`（`LicenseRef-Signal-compose-FairTrade-1.0`、feature `link-audio` は default off）、`packages/sc-link-audio`（GPL-2.0-or-later）
+- 例外（2026-10-26・PR [#1003](https://github.com/signalcompose/orbitscore/pull/1003)・merge `13bdc2e`）: **機械が読む言語の定義 2 つは Apache-2.0 のみ**（Commons Clause / Fair Revenue Clause が掛からない）。`packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json` と `packages/vscode-extension/language-configuration.json`。JSON はコメントを持てないので REUSE の慣習に従い `<file>.license` の sidecar に SPDX を置き、全文は `LICENSES/Apache-2.0.txt`。ルート `LICENSE` の冒頭に例外の節がある
+- 同 PR: **DSL の仕様書の本文はルートのライセンスのまま**だが、言語（文法と意味）の実装を Apache-2.0 の条件で誰にでも許す「実装の許諾」を仕様書 3 本と README に置いた（🔴 **案・法的な文面は未確定**）
 - `cargo-deny` で daemon の依存グラフを GPL-free に保つ不変条件あり
-- `CONTRIBUTING.md:176` に PR ごとの CLA を求める旨
+- `CONTRIBUTING.md:178` に PR ごとの CLA を求める旨（同 PR が同節に Apache-2.0 の 1 段落を足して 2 行下がった）
 - `vst3` crate 0.3.0 は crates.io 上で MIT OR Apache-2.0（repo: `coupler-rs/vst3-rs`）
 
 ### 関連ドキュメント

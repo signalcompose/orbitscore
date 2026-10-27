@@ -491,6 +491,31 @@ Commercial licensing inquiries: license@signalcompose.com
 
 Copyright (c) 2026 Signal compose Inc.
 
+### Implementing the OrbitScore DSL
+
+The DSL specification documents stay under this license. Separately, the language they define may be implemented by anyone:
+
+> **実装の許諾 / Implementation grant**（案・未確定 / draft）
+>
+> Signal compose Inc. grants everyone permission to create, use, and distribute implementations of the OrbitScore DSL — software that follows the grammar and semantics defined in the OrbitScore DSL specification documents (listed in the License section of the repository's README) — under the terms of the Apache License, Version 2.0, including the patent license in its Section 3. This grant concerns the language only. It is not a license to the text of the specification documents, which remain under the root LICENSE of this repository (© Signal compose Inc.).
+>
+> Signal compose Inc. は、OrbitScore DSL の仕様書（リポジトリの README の License 節に一覧）が定める文法と意味に沿った実装を作り、使い、配布することを、Apache License 2.0 の条件（第 3 条の特許の許諾を含む）で誰にでも許諾します。この許諾は言語についてのもので、仕様書の本文の許諾ではありません。仕様書の本文はこのリポジトリのルートの LICENSE（© Signal compose Inc.）に従います。英文と食い違う場合は英文が優先します。
+
+The OrbitScore DSL specification documents:
+
+- [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](docs/core/INSTRUCTION_ORBITSCORE_DSL.md)
+- [`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`](docs/specs-v2/PITCH_DSL_SPEC_v1.1.md)
+- [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md)
+
+Each of them carries the same grant right under its title.
+
+The machine-readable definitions of the language — the files editors and other tools use to handle OrbitScore DSL — are licensed under the [Apache License 2.0](LICENSES/Apache-2.0.txt) only (see the exception at the top of [LICENSE](LICENSE)):
+
+- [`packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json`](packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json) (syntax highlighting grammar)
+- [`packages/vscode-extension/language-configuration.json`](packages/vscode-extension/language-configuration.json) (comment and bracket settings)
+
+The session protocol definitions for OrbitStudio (the native macOS app), which will be added under `protocol/`, will be licensed under the Apache License 2.0 and carry their own `LICENSE`.
+
 ## Contributing
 
 Contributions are welcome. Please see `INSTRUCTION_ORBITSCORE_DSL.md` and `IMPLEMENTATION_PLAN.md` for details.
