@@ -43,7 +43,41 @@ Closes #1033
 
 ---
 
+### docs: follow PR #1031 (split RustSec advisory gate) into the work log (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/docs-sync-pr1031` / **追従元**: PR [#1031](https://github.com/signalcompose/orbitscore/pull/1031)（merge commit `2aa309d`・head `21d7b2f1`）
+
+PR #1031（`cargo deny check advisories` を `rust-ci.yml` から分け、依存を変える PR と毎日の main で回す）の追従。
+差分は CI のワークフロー 2 本・`.husky/pre-push`・WORK_LOG で、**DSL / ランタイム / 拡張の表面を 1 つも変えていない**。
+したがって直した先は WORK_LOG の 1 か所だけである。
+
+- #1031 の記録の「🔴 未実施: …（= 検出が生きていること）」が、**PR 自身の CI で解消済みだったのに残っていた**
+  （4 本のコミットのうち最初の `72b8ec5` で書かれ、以降のコミットで更新されなかった）。追記で補正した。
+  通知の経路は、main がマージ後に `workflow_dispatch` で確かめた（下の追記・2026-10-27）
+- 追従不要と判断したものは PR 本文に理由付きで列挙した。要約: `sites/dev/` に CI / git フックを扱う章が無い
+  （`docs/development/WORK_LOG.md:844` が別の追従で同じことを実測済み）・`sites/user/` と `docs/user/` は
+  出荷済みの拡張の使い方だけを書く・`sites/dev/glossary.md:128` の「GPL 依存を `cargo-deny` で gate」は
+  bans / licenses / sources が全 PR で走り続けるので記述のまま正しい
+- 🔴 `.husky/pre-push` の advisory 判定が `rust-advisories.yml` の `paths` と 1 か所ずれている点は
+  PR 本文で報告した（実装は変えない）
+
+Part of #1030
+
+---
+
 ### ci(rust): run RustSec advisories only on dependency changes and daily on main (Oct 26, 2026)
+
+> **2026-10-26 追記（追従ルーチン）**: 下の「🔴 未実施」は**検出については解消済み**だった。この PR の
+> head `21d7b2f1` で `advisory gate (RustSec)` が RUSTSEC-2026-0386 を検出して赤になっており
+> （[run 40399798494](https://github.com/signalcompose/orbitscore/actions/runs/40399798494/job/121842278404)）、
+> 同じ push の `license / dependency gate` は緑だった（＝分けた効果もここで確認できている）。
+> 失敗の通知の経路（通知の段は `schedule` / `workflow_dispatch` だけで走る・
+> `.github/workflows/rust-advisories.yml:76`）は、**マージ後に main が確かめた**（2026-10-27）:
+> #1031 のマージ（`2aa309d`）の後に `workflow_dispatch` で回すと赤になり、追跡 issue #1032
+> （ラベル `rust-advisory`）が自動で開いた（run 40418744985）。#1002 のマージ（`6257a83`）の後に
+> もう一度回すと緑（run 40418998109）。#1032 と #1030 はそれを書いて閉じた。
+> なお本 PR は `advisory gate (RustSec)` が赤のままマージされた（main の `Cargo.lock` に #1002 が
+> 入っていないための期待どおりの赤。main に required status checks は無いのでマージは止まらない）。
 
 **Date**: 2026-10-26 / **ブランチ**: `1030-rust-advisories-schedule` / **Issue**: [#1030](https://github.com/signalcompose/orbitscore/issues/1030)
 
@@ -137,6 +171,26 @@ PR [#995](https://github.com/signalcompose/orbitscore/pull/995)（マージ `4f6
 **追記（main・受け入れの確認）**: 別冊の行の「owner 裁定待ちは §10」は、別冊の冒頭の一文（`848-docs-structure-design.md:6`）が #995 で更新されずに残っていたのを写したもの。§10 自体は 2026-10-26 に全件裁定済みと書いている。INDEX の 2 行と別冊の冒頭を「裁定は §10 / §14.0・残る確認は Q-r2-1 / Q-r2-2」に直した（Q-r2-3 は #996 に `release-gate` が付いていることを `gh issue view 996` で確認）。
 
 Part of #848
+
+---
+
+### docs(license): let anyone implement the DSL under Apache-2.0 while the spec documents keep their license (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon` / **Issue**: [#998](https://github.com/signalcompose/orbitscore/issues/998)
+
+最初は「DSL の仕様書の本文を Apache-2.0 に」で作ったが（SPDX・`LICENSES/Apache-2.0.txt`・LICENSE の例外の節）、同日 owner が方針を変えた（#998 冒頭の「改訂」・「ドキュメントはコピーライトを保持していいのでは？DSL自体はApache2.0でいいと思うけど。」）。同じブランチで作り直した。
+
+- **仕様書の本文はルートのライセンスのまま**（© Signal compose）。SPDX・`LICENSES/`・LICENSE と CONTRIBUTING の例外の記述は main の状態に戻した
+- **実装の許諾**（案・未確定）: 仕様書 3 本（`INSTRUCTION_ORBITSCORE_DSL.md` / `PITCH_DSL_SPEC_v1.1.md` / `SIGNAL_CHAIN_DSL_SPEC_v1.md`）のタイトルの直下と README の License 節に、同じ文面の引用ブロック（英文 + 和文・英文が優先）。「文法と意味に沿った実装を、誰でも Apache License 2.0 の条件（第 3 条の特許の許諾を含む）で作り・使い・配布してよい。仕様書の本文の許諾ではない」。🔴 文面は法的な文書なので、確定は専門家か license@signalcompose.com の確認の後
+- **機械が読む言語の定義**: owner の「一旦推奨で」（同日）で、推奨した 2 つ（`packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json`・`packages/vscode-extension/language-configuration.json`）を Apache-2.0 にした。TextMate 文法の JSON はコメントを持てない。`language-configuration.json` は VS Code が JSONC として読むが、2 つを同じ形に揃えるため REUSE の慣習の `<file>.license` に SPDX を置いた。sidecar を npm / vsce / GitHub が読むわけではなく、効力を持つのはルートの `LICENSE` の例外の節。README に一覧、`CONTRIBUTING.md` に貢献の扱い、`LICENSES/Apache-2.0.txt` に全文（sha256 `cfc7749b…`）。境界の 2 つ（`dsl-method-catalog.ts`・`dsl-surface.ts`）は対象外
+- **検査** `tests/docs/dsl-implementation-grant.spec.ts`（25 件、うち `protocol/` 未作成の 1 件は skip。言語の定義の 11 件を含む: 文法ファイルの全件分類・`.license`・REUSE の包括指定・LICENSE と README の一覧・全文の sha256）: `docs/core/` と `docs/specs-v2/` の全文書の分類（未分類が増えたら red）/ 仕様書のタイトルの直下に節がある / 4 か所の文面が一致 / 仕様書の本文（節の外）に Apache の表記が無い / ほかの文書に節や Apache の SPDX が無い / README の一覧 / ルートの LICENSE が仕様書を切り出していない / `protocol/` が現れたら LICENSE が触れていること。節を消す・1 か所だけ文面を変える・SPDX を戻す・未分類の仕様書を足す・対象外に節を写す・README の一覧から消す、の 6 通りで red を確認
+- **レビュー round 2**: 許諾本文と LICENSE の例外節を sha256 で固定し、ライセンス制御ファイル・SPDX/frontmatter・仕様書拡張子・extension manifest の言語定義参照を漏れなく分類する検査へ強化
+- **参照の再照合**: 3 本の仕様書本文を一次ソースに、行追加でずれた参照と、以前から別箇所を指していた参照（SC.5 / SC.10 / Versioning / `outs:` / diagnostics 設計）を修正
+- 節を足して行がずれた分、dev サイトの機械検証の引用 4 本を `check-citations.mjs --fix` で +6 し（着地先は同じ行）、ずれる前に正しかった散文の参照 `SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47`（SC.1）の ja / en を `42-53` にした
+- **レビュー round 3（main が直接修正）**: 許諾の固定と LICENSE の切り出しは Codex に 2 回出しても塞がりきらなかったので main が直した。節の 1 行目を形で固定（golden は 2 行目以降なので、1 行目の後ろへの追記が 4 か所揃えて通っていた）・ルートの LICENSE 全体を sha256 で固定（「仕様書は CC0」の節や「自由に複製してよい」の 1 文は、語やパスの検査では捕まらない）・ライセンスのファイルは名前の前方一致（`LICENSE-APACHE` / `COPYRIGHT` / `PATENTS` / 単数の `license/`）と、名前だけが当たる 2 つ（`.claude/license.local.md` / `notice.rs`）の理由つきの表・docs / sites の SPDX 表記はライセンスを問わず不可・README 全体と CONTRIBUTING とサイトの設定の Apache の言及を固定・DEVELOPMENT_MAP の取りこぼし 2 か所と 610 の節名（PH.4 → PH.1）
+- 🔴 `protocol/`（S-rpc の #1008 が置く）が入った時は、ルートの LICENSE が `protocol/` に触れる必要がある（検査がそう求める）。その 1 行は owner の文面なので、#1003 と #1008 の後に入る方の PR で足し、LICENSE の golden も同じ PR で更新する
+
+Closes #998
 
 ---
 

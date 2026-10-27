@@ -70,7 +70,7 @@ bus carries its own output target and send targets).
 The DSL samples from the spec, quoted verbatim from its Markdown:
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1885-1889
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1891-1895
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -79,7 +79,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1976-1978
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1982-1984
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -1782,7 +1782,7 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 ## Sources
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing (MX.1–MX.5) normative text
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1340-1352` — PH.2b known v1 constraints, plus the note that the master gain ordering was swapped (#649 PR-O2)
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1346-1358` — PH.2b known v1 constraints, plus the note that the master gain ordering was swapped (#649 PR-O2)
 - `rust/crates/orbit-audio-native/src/output/lines.rs:9-50` / `rust/crates/orbit-audio-native/src/output/render.rs:250-279` — `MasterLine` (rack → gain) / `place_master_into_device`
 - `rust/crates/orbit-audio-native/src/output/startup.rs:2465-2497` — unit test `master_gain_applies_after_the_master_rack_generates_sound` (the only guard on the ordering)
 - `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — design source of truth for the master line and the single multiplication path

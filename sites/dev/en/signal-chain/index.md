@@ -1646,9 +1646,9 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 
 ## Sources
 
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47` — SC.1 two-layer semantics (declaration layer / signal layer)
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 live-coding semantics and the note on failure models (i)/(ii)
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 racks (shape, disabling, deletion, values, LCS, standard plugins, v1 staging)
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:42-53` — SC.1 two-layer semantics (declaration layer / signal layer)
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:178-198` — SC.5 live-coding semantics and the note on failure models (i)/(ii)
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:225-447` — SC.10 racks (shape, disabling, deletion, values, LCS, standard plugins, v1 staging)
 - `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW research (four states, mechanism B) and the settled model
 - `docs/archive/design/628-rack-chain-implementation-design.md:127-291,751-774` — adopted mechanism, rejected options, the 20 decisions
 - `docs/archive/design/628-plan-reset.md:57-120` — early detection ahead of the hardware gate (the pure unit for the gain constants)

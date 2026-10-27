@@ -1,5 +1,11 @@
 # INSTRUCTION_ORBITSCORE_DSL.md
 
+> **実装の許諾 / Implementation grant**（案・未確定 / draft）
+>
+> Signal compose Inc. grants everyone permission to create, use, and distribute implementations of the OrbitScore DSL — software that follows the grammar and semantics defined in the OrbitScore DSL specification documents (listed in the License section of the repository's README) — under the terms of the Apache License, Version 2.0, including the patent license in its Section 3. This grant concerns the language only. It is not a license to the text of the specification documents, which remain under the root LICENSE of this repository (© Signal compose Inc.).
+>
+> Signal compose Inc. は、OrbitScore DSL の仕様書（リポジトリの README の License 節に一覧）が定める文法と意味に沿った実装を作り、使い、配布することを、Apache License 2.0 の条件（第 3 条の特許の許諾を含む）で誰にでも許諾します。この許諾は言語についてのもので、仕様書の本文の許諾ではありません。仕様書の本文はこのリポジトリのルートの LICENSE（© Signal compose Inc.）に従います。英文と食い違う場合は英文が優先します。
+
 ## OrbitScore 2.0.0 — DSL Specification
 
 > **Product version**: OrbitScore **2.0.0**
