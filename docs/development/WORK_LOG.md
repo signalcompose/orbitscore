@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the DSL implementation grant into the planning documents (Oct 27, 2026)
+
+**Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1003` / **追従元**: PR [#1003](https://github.com/signalcompose/orbitscore/pull/1003)（merge `13bdc2e`・`Closes #998`）
+
+docs 追従ルーチン。#1003 は「仕様書の本文は Apache-2.0 にしない / 言語の実装だけを Apache-2.0 の条件で許す / 機械が読む言語の定義 2 つは Apache-2.0」という形で #998 を閉じたが、**計画層の 3 文書が改訂前の「DSL の仕様書だけ Apache-2.0」のまま**だった。
+
+- `docs/planning/NATIVE_DEVELOPMENT_MAP.md`（決着済みの行）と `docs/planning/IMPLEMENTATION_PLAN_NATIVE.md`（裁定 (9)）を #1003 の結果に合わせた。`protocol/` の決定（定義だけ Apache-2.0）はこれに影響されないことを明記（README の License 節が明記している）
+- `docs/planning/NATIVE_MIGRATION_2026-09.md` の「ライセンス構成」に、機械が読む言語の定義 2 つの Apache-2.0 の例外と実装の許諾を足した。同節の `CONTRIBUTING.md:176` は、#1003 が同じ節に 2 行足したので `:178` にした
+- `docs/research/WCTM_COMPOSITION_SKILL_RESEARCH.md` の `INSTRUCTION_ORBITSCORE_DSL.md:14` を `:20` に（許諾の節で 6 行ずれた。着地先は同じ `**Implementation Status**` の行）
+- 🔴 仕様（DSL の構文・意味）は変わっていないので `docs/specs-v2/` と `docs/core/` の本文・`sites/user/`・`docs/user/` は触っていない。`sites/dev/` の引用は #1003 が `--fix` で直し済み（`docs:check` 緑で確認）
+
+---
+
 ### docs(dev-site): follow up #1007 with the Origin rejection and the daemon-side parent watch (Oct 26, 2026)
 
 **Date**: 2026-10-26 / **ブランチ**: `claude/docs-sync-pr1007` / **追従元**: PR [#1007](https://github.com/signalcompose/orbitscore/pull/1007)（マージコミット `42ec6a2`） / **Issue**: [#996](https://github.com/signalcompose/orbitscore/issues/996)
