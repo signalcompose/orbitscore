@@ -34,5 +34,7 @@ module.exports = {
     'node_modules/**',
     'scripts/**',
     'vitest.config.ts',
+    // 生成物（scripts/protocol/generate.mjs が protocol/session/v1 から作る・npm run protocol:check）
+    'protocol/gen/**',
   ],
 }

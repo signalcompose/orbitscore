@@ -293,7 +293,7 @@ export const LEDGER: readonly LedgerEntry[] = [
     id: 'P-18',
     title: 'protocol:check が TS 側だけ（N0-b で生成ツールが決まるまで）',
     deadline: { kind: 'when-exists', path: 'apps/OrbitStudio/Package.swift' },
-    state: 'planned',
+    state: 'open',
     check: (repoRoot) => {
       const ok = hasNonPlaceholderFiles(repoRoot, 'protocol/gen/swift')
       return {
@@ -304,6 +304,56 @@ export const LEDGER: readonly LedgerEntry[] = [
       }
     },
     bundle: 'S-rpc（N1-a1）→ N0-b',
+  },
+  {
+    id: 'P-19',
+    title: '送り手が相手の MINOR に合わせて x-since の追加要素を制限する仕組み',
+    deadline: {
+      kind: 'none',
+      reason:
+        '最初の protocol 1.1 の追加を入れる PR で実装し、その追加自身を fixture にして検査する',
+    },
+    state: 'planned',
+    enforcedBy:
+      'tests/protocol/minor-compat.spec.ts（最初の protocol 1.1 追加 PR で新設し P-19 を含める）',
+    bundle: '最初の protocol 1.1 追加 PR',
+  },
+  {
+    id: 'P-20',
+    title: '第 1 リリースの v1 スキーマを released/1.0 に固定し、後続差分が追加だけか検査する',
+    deadline: { kind: 'release-1' },
+    state: 'planned',
+    check: (repoRoot) => {
+      const released = 'protocol/session/released/1.0/session.schema.json'
+      const spec = 'tests/protocol/released-schema-compat.spec.ts'
+      const specText = read(repoRoot, spec)
+      const ok = fs.existsSync(path.join(repoRoot, released)) && specText?.includes('P-20') === true
+      return {
+        ok,
+        reason: ok
+          ? 'released/1.0 の固定スキーマと追加だけの互換検査がある'
+          : `${released} または P-20 を含む ${spec} が無い`,
+      }
+    },
+    bundle: 'R-app（第 1 リリースの版を固定する PR）',
+  },
+  {
+    id: 'P-21',
+    title: 'Swift の open enum が未知の値を受けても throw しないことの N0-b 受け入れ',
+    deadline: { kind: 'when-exists', path: 'apps/OrbitStudio/Package.swift' },
+    state: 'planned',
+    check: (repoRoot) => {
+      const spec = 'tests/protocol/swift-open-enum.spec.ts'
+      const text = read(repoRoot, spec)
+      const ok = text?.includes('P-21') === true && text.includes('__future_minor_value__')
+      return {
+        ok,
+        reason: ok
+          ? 'Swift の open enum に未知値を渡す往復テストがある'
+          : `${spec} に P-21 と未知値 __future_minor_value__ の検査が無い`,
+      }
+    },
+    bundle: 'N0-b',
   },
 ]
 
