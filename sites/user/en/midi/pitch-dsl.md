@@ -1,6 +1,7 @@
 ---
 title: Pitch DSL (Degrees & Chords)
 description: Degree notation, chord stacks, octave shifts, pattern variables, and repetition
+host: both
 ---
 
 # Pitch DSL (Degrees & Chords)

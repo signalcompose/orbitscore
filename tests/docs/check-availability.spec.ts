@@ -101,9 +101,8 @@ describe('check-availability.mjs', () => {
     const chapters = countSiteChapters()
     expect(chapters).toBe(42)
     expect(r.stdout).toContain(`${chapters} chapter(s) checked`)
-    expect(r.stdout).toContain(
-      '42 chapter(s) exempt from host-dependent rules via HOST_MISSING_BASELINE',
-    )
+    // D-② で全章に host: を付け、免除リスト（HOST_MISSING_BASELINE）は消した。免除が戻らないこと。
+    expect(r.stdout).not.toContain('exempt')
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0)
   })
 

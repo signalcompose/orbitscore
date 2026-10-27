@@ -1,6 +1,7 @@
 ---
 title: Audio Manipulation
 description: How to slice audio files with chop, and shape the sound with volume and pan
+host: both
 ---
 
 # Audio Manipulation

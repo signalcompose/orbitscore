@@ -1,6 +1,7 @@
 ---
 title: Building Patterns
 description: How to use the play() method to build rhythm patterns
+host: both
 ---
 
 # Building Patterns

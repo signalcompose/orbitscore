@@ -1,6 +1,7 @@
 ---
 title: プラグイン音源を鳴らす
 description: seq.instrument() で CLAP / VST3 プラグインを音源として鳴らし、度数記法で演奏する方法を解説します
+host: both
 ---
 
 # プラグイン音源を鳴らす
@@ -34,7 +35,7 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3")  // フルパス
 カタログ名で指定すると、エディタの補完でプラグイン名の候補が出ます。同名のプラグインが CLAP と VST3 の両方にある場合、現状は CLAP が優先されます（この挙動は #658 で見直し予定です）。VST3 版を明示したい場合は `"vst3/Kontakt 8"` のように format を接頭辞で指定してください。vendor が複数ある場合も同様に `"Native Instruments/Kontakt 8"` のように指定して一意化できます。
 
 ::: tip カタログ名が候補に出ないとき
-コマンドパレットから **「OrbitScore: Rescan Plugin Catalog」** を実行すると、インストール済みのプラグインを再スキャンします。新しくインストールしたプラグインが補完に出ない場合はこれを試してください。
+- **OrbitScore**: コマンドパレットから **「OrbitScore: Rescan Plugin Catalog」** を実行すると、インストール済みのプラグインを再スキャンします。新しくインストールしたプラグインが補完に出ない場合はこれを試してください。
 :::
 
 ## 音色の保存と復元（state）

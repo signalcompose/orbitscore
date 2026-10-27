@@ -1,6 +1,7 @@
 ---
 title: OrbitScore とは
 description: OrbitScore は VS Code でライブコーディング音楽を作るための DSL とオーディオエンジンです
+host: both
 ---
 
 # OrbitScore とは
@@ -81,9 +82,7 @@ LOOP(drum)
 ## 動作環境
 
 - macOS Apple Silicon（M1, M2, M3 等の Mac）
-- VS Code または Cursor（バージョン 1.99.0 以上）
-
-Intel Mac、Windows、Linux は未対応です（配布される `.vsix` は arm64 専用です）。
+- **OrbitScore**: VS Code または Cursor（バージョン 1.99.0 以上）。配布される `.vsix` は arm64 専用で、Intel Mac、Windows、Linux は未対応です。
 
 ## 次のステップ
 

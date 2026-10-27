@@ -1,6 +1,7 @@
 ---
 title: Launch Quantize
 description: Using global.quantize() and seq.quantize() to align LOOP launch timing to a grid
+host: both
 ---
 
 # Launch Quantize

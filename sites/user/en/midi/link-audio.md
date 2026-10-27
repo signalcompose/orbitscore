@@ -1,6 +1,7 @@
 ---
 title: LinkAudio (Streaming to Ableton Live)
 description: How to use global.linkAudio() and seq.output() to send OrbitScore audio directly to Ableton Live
+host: both
 ---
 
 # LinkAudio (Streaming to Ableton Live)

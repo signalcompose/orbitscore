@@ -1,6 +1,7 @@
 ---
 title: 複数のシーケンス
 description: kick・snare・hi-hat など複数のシーケンスを同時に鳴らす方法を解説します
+host: both
 ---
 
 # 複数のシーケンス
