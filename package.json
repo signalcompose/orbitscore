@@ -14,7 +14,7 @@
     "docs:build": "npm -w @orbitscore/dev-site run docs:build",
     "docs:build:user": "npm -w @orbitscore/user-site run docs:build",
     "docs:preview": "npm -w @orbitscore/dev-site run docs:preview",
-    "docs:check": "npm -w @orbitscore/dev-site run docs:check",
+    "docs:check": "npm -w @orbitscore/dev-site run docs:check && npm -w @orbitscore/user-site run docs:check",
     "build:copy-user-site": "npm run docs:build:user && bash scripts/copy-user-site.sh",
     "test": "npm -w @orbitscore/engine test",
     "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build && bash scripts/install-engine-deps.sh",

@@ -42,6 +42,8 @@ PR #1007 の追従。元 PR は `docs/research/ENGINE_DAEMON_PROTOCOL.md`（§2.
 - `index.md` の Sources を `server.rs:1-79` → `1-110` に直し、`parent_watch.rs` と #996 / PR #1007 を追加。`index.md` の frontmatter は `verified-against: 42ec6a2` / `verified-at: 2026-10-26`（読み直したのは accept 経路と起動段だけ、と Note に明記）。`oop-children.md` は相互参照 1 節だけなので frontmatter は据え置き
 - 追従不要と判断: `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` と `docs/specs-v2/`（DSL の構文・意味論・`.orbslog` は不変）/ `sites/user/` `docs/user/` と `sites/dev/editor/`（MCP ツールの引数・返り値・エラー挙動は不変。daemon の argv と stdio は利用者が書く語ではない）/ `.github/workflows/rust-ci.yml`・`CLAUDE.md`・`tests/`（ゲート手順と env の追加で、文書化は元 PR が済ませている）
 
+---
+
 ### docs: archive the September 2026 WORK_LOG entries (Oct 27, 2026)
 
 **Date**: 2026-10-27 / **ブランチ**: `1033-worklog-archive-2026-09` / **Issue**: [#1033](https://github.com/signalcompose/orbitscore/issues/1033)
@@ -182,6 +184,31 @@ PR [#995](https://github.com/signalcompose/orbitscore/pull/995)（マージ `4f6
 検証: `npm run docs:build`（user / dev）と `npm run docs:check`（996 citations / 0 failed）が緑。仕様の判断・実装・テストは変更していない。
 
 **追記（main・受け入れの確認）**: 別冊の行の「owner 裁定待ちは §10」は、別冊の冒頭の一文（`848-docs-structure-design.md:6`）が #995 で更新されずに残っていたのを写したもの。§10 自体は 2026-10-26 に全件裁定済みと書いている。INDEX の 2 行と別冊の冒頭を「裁定は §10 / §14.0・残る確認は Q-r2-1 / Q-r2-2」に直した（Q-r2-3 は #996 に `release-gate` が付いていることを `gh issue view 996` で確認）。
+
+---
+
+### docs(user-site): add the availability notation grammar and its lint (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/practical-shannon-91kqon-d1` / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)（計画 `IMPLEMENTATION_PLAN_NATIVE.md` §7.1 の D-①・docs の連続 PR ①）
+
+user サイトを拡張版と OrbitStudio の両方に向けた 1 本の文書として保つための、可用性表記の文法と lint を入れた（別冊 `848-docs-structure-design.md` §3.4・§5・裁定 (16) A）。章への書き込みは次の PR（D-②）。
+
+- **文法**: `sites/user/STYLE_GUIDE.md` に「可用性表記」の節 — frontmatter `host:`（`both` / `app` / `ext` / `both+split`・必須）・分割節の印 `<!-- host: ext|app -->`（見出しの次の行）・段落の併記（`- **OrbitScore**:` / `- **OrbitStudio**:`）・可用性の行（`> **対応**:` / `> **Availability**:` の固定 5 形）。配布線の名前は owner の指定（拡張版 = **OrbitScore** / DSL = **OrbitScore DSL** / ネイティブ版 = **OrbitStudio**・ja / en 共通）。最初は `拡張版` / `Extension` で書いたので、旧い名前の併記の行は `AV-TERM` で red にした
+- **lint** `sites/user/scripts/check-availability.mjs` を `npm run docs:check` に連結（CI の `Check doc citations` で走る）。規則 `AV-HOST` / `AV-SYNTAX` / `AV-PLACE` / `AV-UNRELEASED`（`--release` で red）/ `AV-I18N` / **`AV-HOST-SCOPE`**（owner (20) の条件・台帳 P-13）/ `AV-TERM`
+- **設計との差 2 点**（別冊を同じ PR で改訂）: AV-HOST-SCOPE を `both+split` の章にも掛けた / 分割節の印を見出しの**次の行**に置く（見出しの行に置くと VitePress が `aria-label` に印の文字列を入れることを `createMarkdownRenderer` で確かめた）
+- **暫定**: 章にはまだ `host:` が無いので、lint の `HOST_MISSING_BASELINE`（42 章）で許し、D-② がこの一覧ごと消す。一覧は減らす方向にしか通らない（`host:` を持った章が残っていても、無い章が増えても red）
+- **テスト** `tests/docs/check-availability.spec.ts`（124 件）: 一時ディレクトリに章を作り `--root` で lint を走らせる。STYLE_GUIDE の 5 形 × 2 言語がそのまま通ることも検査する（文書と lint の二重管理を作らない）。lint 側を壊した変異でも各検査が red になることを確認
+- **レビュー反映**: 対象 0 件、可用性アンカーの near miss、未閉鎖 code fence、見出し内の分割印を loud に失敗させ、10 形すべての否定例と `--release` の 4 件を固定した
+- `host:` の YAML コメント・引用符、厳密な引数解析、直下だけの除外、symlink directory の拒否、`HOST_MISSING_BASELINE` の免除件数表示を追加した
+- 判定のテストは `FAIL <file>:<line>  [<rule>]` を 1 文字列として比較し、`a.md:1` が `a.md:12` に誤一致しない形にした
+- **レビュー第 2 ラウンド**: near miss を行頭だけに絞って本文中の「対応」/ `Availability` の誤検出を解消し、frontmatter 内の分割印と、通常・壊れた symlink を `AV-HOST` で拒否するようにした
+- **レビュー第 3 ラウンド（main が直接修正）**: 第 2 ラウンドで near miss を「行頭の 1 つの `>`」に絞りすぎ、R1 では赤だった `- **対応**:`・`1. **対応**:`・`>> **対応**:`・文中の `**対応**:`・小文字の `availability` などが黙って通っていた（同じ箇所が Codex で 2 回落ちたので main が直した。原因は main の R2 の依頼文「行頭の形だけ」）。候補を (a) 容器（字下げ・`>` の繰り返し・リスト記号）を剥がした行頭のラベル + コロン (b) 引用の中の強調したラベル + 空白（コロンの欠落）(c) 行のどこでも太字のラベル + コロン、の 3 つにし、`対応表`・`**対応**していない`・`Availability of plugins` は候補にしない
+- `未リリース（` / `Unreleased (` はコードの外の全行（frontmatter・本文の文章）で探す（文書から grep を外したので lint が唯一の砦）。分割の印の候補は大小・コロンの有無を問わない（`<!-- Host: ext -->` などが黙って通っていた）。`--root` が読めない時だけ exit 2、章やディレクトリが読めない時は lint の誤り（exit 1・他の章も検査を続ける）。BOM・CRLF・可用性の行の末尾の空白は原因を名指しする
+- テストは 82 → 124 件。各形のすべての枠を 1 つずつ崩す（版を 2 桁に・語を 1 つ消す）変種を生成して全部が AV-SYNTAX になることを確かめる。主要な 6 つの修正を 1 つずつ戻して、それぞれ対応するテストが赤になることを確かめた。#1006 の章（`git archive` で取り出したもの）にも当てて 0 エラー
+- **レビュー第 4 ラウンド（main）**: 第 3 ラウンドの確認で、読めないサブディレクトリ（検索できないもの）で `lstatSync` が落ちて他の章の所見が消えること、インラインのコード・表のセル・HTML コメントの中の `**対応**:` と `> **対応** は次の通りです。` を書き損じと誤ることが分かった。`lstat` を try に入れ、候補の判定の前にインラインのコードと HTML コメントを外し、表の行は候補にしない。規則 (b) は「ラベルの後ろが OrbitScore / OrbitStudio / 未リリース / Unreleased か行末」に絞った。強調は `***` まで、分割の印の候補は `host` の後ろが空白・コロン・`=`・コメントの終わりの時だけ（`<!-- host-specific note -->` はふつうのコメント）
+- 2 つの書き損じが重なる形（`>` もコロンも無い・ラベルの直後に空白が無い など）は、本文の誤検出と引き換えになるので広げず、lint の冒頭に既知の限界として書いた
+- テストは 124 → 148 件（規則 (a)(b)(c) のどれが当たったかを区別できる入力・誤検出しない 4 形・見出し・分割の印の 4 形・CR の位置・単独の CR・タブと全角空白・読めない / 検索できないサブディレクトリ）。直した 6 か所を 1 つずつ戻して、それぞれ対応するテストが赤になることを確認
+- `.husky/pre-push` の失敗文言に可用性表記の lint を足した
 
 Part of #848
 

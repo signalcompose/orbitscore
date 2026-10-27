@@ -7,7 +7,8 @@
   "scripts": {
     "docs:dev": "vitepress dev .",
     "docs:build": "vitepress build .",
-    "docs:preview": "vitepress preview ."
+    "docs:preview": "vitepress preview .",
+    "docs:check": "node scripts/check-availability.mjs"
   },
   "devDependencies": {
     "mermaid": "^11.4.1",

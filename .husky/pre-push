@@ -70,9 +70,11 @@ push_refs=$(cat)
 # 「Check doc citations」と同じコマンドを、ここで先回りする。
 # 🔴 `--fix` は付けない。行番号を合わせるだけで**別の関数へ着地しうる**（緑は「行が合った」証明に
 # すぎない）ので、直すのは人が着地先を見てから。
+# user サイトの可用性表記の lint（`sites/user/scripts/check-availability.mjs`・FAIL 行に規則 ID）も
+# 同じ `docs:check` で走る。
 npm run docs:check ||
-  die "docs:check failed — 'cd sites/dev && node scripts/check-citations.mjs --fix' の後、着地先を目視で照合してから push すること。"
-echo "[pre-push] ✓ doc citations verified."
+  die "docs:check failed — 引用なら 'cd sites/dev && node scripts/check-citations.mjs --fix' の後、着地先を目視で照合してから push すること。[AV-…] なら sites/user/STYLE_GUIDE.md「可用性表記」に合わせて直すこと。"
+echo "[pre-push] ✓ doc citations and availability notation verified."
 
 printf '%s\n' "$push_refs" | paths_in_push rust_paths_changed || exit 0
 
