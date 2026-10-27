@@ -31,7 +31,41 @@ Closes #1033
 
 ---
 
+### docs: follow PR #1031 (split RustSec advisory gate) into the work log (Oct 26, 2026)
+
+**Date**: 2026-10-26 / **ブランチ**: `claude/docs-sync-pr1031` / **追従元**: PR [#1031](https://github.com/signalcompose/orbitscore/pull/1031)（merge commit `2aa309d`・head `21d7b2f1`）
+
+PR #1031（`cargo deny check advisories` を `rust-ci.yml` から分け、依存を変える PR と毎日の main で回す）の追従。
+差分は CI のワークフロー 2 本・`.husky/pre-push`・WORK_LOG で、**DSL / ランタイム / 拡張の表面を 1 つも変えていない**。
+したがって直した先は WORK_LOG の 1 か所だけである。
+
+- #1031 の記録の「🔴 未実施: …（= 検出が生きていること）」が、**PR 自身の CI で解消済みだったのに残っていた**
+  （4 本のコミットのうち最初の `72b8ec5` で書かれ、以降のコミットで更新されなかった）。追記で補正した。
+  通知の経路は、main がマージ後に `workflow_dispatch` で確かめた（下の追記・2026-10-27）
+- 追従不要と判断したものは PR 本文に理由付きで列挙した。要約: `sites/dev/` に CI / git フックを扱う章が無い
+  （`docs/development/WORK_LOG.md:844` が別の追従で同じことを実測済み）・`sites/user/` と `docs/user/` は
+  出荷済みの拡張の使い方だけを書く・`sites/dev/glossary.md:128` の「GPL 依存を `cargo-deny` で gate」は
+  bans / licenses / sources が全 PR で走り続けるので記述のまま正しい
+- 🔴 `.husky/pre-push` の advisory 判定が `rust-advisories.yml` の `paths` と 1 か所ずれている点は
+  PR 本文で報告した（実装は変えない）
+
+Part of #1030
+
+---
+
 ### ci(rust): run RustSec advisories only on dependency changes and daily on main (Oct 26, 2026)
+
+> **2026-10-26 追記（追従ルーチン）**: 下の「🔴 未実施」は**検出については解消済み**だった。この PR の
+> head `21d7b2f1` で `advisory gate (RustSec)` が RUSTSEC-2026-0386 を検出して赤になっており
+> （[run 40399798494](https://github.com/signalcompose/orbitscore/actions/runs/40399798494/job/121842278404)）、
+> 同じ push の `license / dependency gate` は緑だった（＝分けた効果もここで確認できている）。
+> 失敗の通知の経路（通知の段は `schedule` / `workflow_dispatch` だけで走る・
+> `.github/workflows/rust-advisories.yml:76`）は、**マージ後に main が確かめた**（2026-10-27）:
+> #1031 のマージ（`2aa309d`）の後に `workflow_dispatch` で回すと赤になり、追跡 issue #1032
+> （ラベル `rust-advisory`）が自動で開いた（run 40418744985）。#1002 のマージ（`6257a83`）の後に
+> もう一度回すと緑（run 40418998109）。#1032 と #1030 はそれを書いて閉じた。
+> なお本 PR は `advisory gate (RustSec)` が赤のままマージされた（main の `Cargo.lock` に #1002 が
+> 入っていないための期待どおりの赤。main に required status checks は無いのでマージは止まらない）。
 
 **Date**: 2026-10-26 / **ブランチ**: `1030-rust-advisories-schedule` / **Issue**: [#1030](https://github.com/signalcompose/orbitscore/issues/1030)
 

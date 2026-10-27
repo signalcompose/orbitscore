@@ -56,7 +56,8 @@ paths_in_push() {
 
 rust_paths_changed() { grep -q '^rust/'; }
 
-# GitHub Actions の rust-advisories.yml の paths と同期する。
+# GitHub Actions の rust-advisories.yml の paths のうち、依存の入力（Cargo.lock / Cargo.toml / deny.toml）と同期する。
+# ワークフロー自身（rust-advisories.yml）の変更は CI 側だけで見る（ローカルの勧告の判定には関係しない）。
 advisory_input_paths_changed() {
   grep -Eq '^rust/(Cargo\.lock|Cargo\.toml|deny\.toml|.+/Cargo\.toml)$'
 }
