@@ -17,7 +17,7 @@ deep-research ハーネス（**Sonnet 5 × 13 agents**）: 自社資産の実地
 
 ## 最重要訂正（Orient の成果）
 
-1. **「Pitch DSL v1.1 は Phase 1 開発中」という前提は古い — 誤り。** 実際は **v1.1 Pitch DSL は Phases 1/2/3/R/4 実装・テスト済み**（`INSTRUCTION_ORBITSCORE_DSL.md:14`・2.0.0 リリース同梱・WORK_LOG 6.131・git tag v2.0.0）。度数記法・`^N`・`mode()`・`[ ]` コード・`import chords`・タイ/`.hold()` まで揃っており、**単旋律リフを書く機能ブロッカーは無い**。
+1. **「Pitch DSL v1.1 は Phase 1 開発中」という前提は古い — 誤り。** 実際は **v1.1 Pitch DSL は Phases 1/2/3/R/4 実装・テスト済み**（`INSTRUCTION_ORBITSCORE_DSL.md:20`・2.0.0 リリース同梱・WORK_LOG 6.131・git tag v2.0.0）。度数記法・`^N`・`mode()`・`[ ]` コード・`import chords`・タイ/`.hold()` まで揃っており、**単旋律リフを書く機能ブロッカーは無い**。
    ⚠️ **Epic #224 の子 issue チェックリスト（#225-#242）は全未チェックのまま stale**（実態と乖離）— **owner 確認/クローズ検討を推奨**。
 2. **試聴経路の空白**: `npm run midi-run <file.orbs>` が実エンジン経路（parser→度数解決→MidiScheduler）で IAC へ実時間送信 — **owner の試聴は今日可能**。ただしファイル化・音声レンダは無い（`--capture`/`ORBIT_CAPTURE_WAV` は grep 0 件 = #307 未着手どおり）→ 機械解析はシンボリック層（ScheduledMidiNote[]）で行うのが現実的（音声は E6 に分離）。
 3. `.claude/skills/` の前例は `vitepress-learning-site` の 1 つのみ（SKILL.md + references/ + assets/ 構成）— これを構造テンプレとする。
