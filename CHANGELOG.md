@@ -18,15 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Claude Code（2.1.323 で確認）と Node の MCP SDK は `Origin` を付けないので、これまでどおり繋がる
   - 同梱の docs の配信は対象外（ブラウザで開く経路のため）
 - **audio daemon の WebSocket が、`Origin` ヘッダの付いた接続を 403 で拒否する** ([`#996`](https://github.com/signalcompose/orbitscore/issues/996) / [`#1007`](https://github.com/signalcompose/orbitscore/pull/1007))
+- 依存の tokio を RUSTSEC-2026-0386 の修正版へ上げた ([`#1002`](https://github.com/signalcompose/orbitscore/pull/1002))
 
 ### Fixed
 
 - **engine が終わった後に audio daemon が残り続けることがあった** ([`#996`](https://github.com/signalcompose/orbitscore/issues/996) / [`#1007`](https://github.com/signalcompose/orbitscore/pull/1007))。daemon は親（engine）の終了を検知して自分も終わる
-- 依存の tokio を RUSTSEC-2026-0386 の修正版へ上げた ([`#1002`](https://github.com/signalcompose/orbitscore/pull/1002))
 
 ### Changed
 
-- `LICENSE`: DSL の実装を Apache-2.0 の条件で誰でも作れるようにした（仕様書の本文は従来の条件のまま） ([`#1003`](https://github.com/signalcompose/orbitscore/pull/1003))
+- 言語の定義 2 ファイル（TextMate の文法と language-configuration）を Apache-2.0 にした（`LICENSE` の例外の節・各ファイルの `.license`・`LICENSES/Apache-2.0.txt`） ([`#1003`](https://github.com/signalcompose/orbitscore/pull/1003))
+- README と DSL の仕様書に、DSL の実装の許諾の案（未確定）を載せた ([`#1003`](https://github.com/signalcompose/orbitscore/pull/1003))
 
 ## [4.4.0] - 2026-10-23
 

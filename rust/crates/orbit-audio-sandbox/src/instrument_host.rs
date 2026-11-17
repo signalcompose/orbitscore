@@ -57,17 +57,17 @@ impl VoiceTable {
     }
 
     fn for_matching(&mut self, addr: VoiceAddr, mut f: impl FnMut(&mut u16)) {
-        for port in 0..MAX_TRACKED_PORTS {
+        for (port, channels) in self.counts.iter_mut().enumerate() {
             if addr.port_index != -1 && usize::try_from(addr.port_index).ok() != Some(port) {
                 continue;
             }
-            for channel in 0..MIDI_CHANNELS {
+            for (channel, notes) in channels.iter_mut().enumerate() {
                 if addr.channel != -1 && usize::try_from(addr.channel).ok() != Some(channel) {
                     continue;
                 }
-                for note in 0..MIDI_KEYS {
+                for (note, count) in notes.iter_mut().enumerate() {
                     if addr.key == -1 || usize::try_from(addr.key).ok() == Some(note) {
-                        f(&mut self.counts[port][channel][note]);
+                        f(count);
                     }
                 }
             }

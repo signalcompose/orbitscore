@@ -254,6 +254,42 @@ function postJson(
   })
 }
 
+function requestWithoutBody(
+  port: number,
+  method: 'GET' | 'DELETE',
+  opts: { sessionId?: string; path?: string; originHeader?: string } = {},
+): Promise<RawResponse> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = { accept: 'application/json, text/event-stream' }
+    if (opts.sessionId) headers['mcp-session-id'] = opts.sessionId
+    if (opts.originHeader !== undefined) headers.origin = opts.originHeader
+
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: opts.path ?? '/mcp',
+        method,
+        headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8')
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            json: raw ? JSON.parse(raw) : undefined,
+          })
+        })
+      },
+    )
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 function getPath(port: number, path: string): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request({ hostname: '127.0.0.1', port, path, method: 'GET' }, (res) => {
@@ -1174,7 +1210,60 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(logs.some((message) => message.includes('MCP session opened'))).toBe(true)
   })
 
-  it.each(['null', 'same-origin'] as const)(
+  it('rejects an Origin-bearing tools/call on an established session before invoking its handler', async () => {
+    const { handlers, calls } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await postJson(
+      handle.port,
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_engine_state', arguments: {} },
+      },
+      { sessionId: client.sessionId, originHeader: 'https://example.com' },
+    )
+
+    expect(res.status).toBe(403)
+    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('rejects an Origin-bearing GET on an established session with 403', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await requestWithoutBody(handle.port, 'GET', {
+      sessionId: client.sessionId,
+      originHeader: 'https://example.com',
+    })
+
+    expect(res.status).toBe(403)
+    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+  })
+
+  it('rejects an Origin-bearing DELETE without closing the established session', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const rejected = await requestWithoutBody(handle.port, 'DELETE', {
+      sessionId: client.sessionId,
+      originHeader: 'https://example.com',
+    })
+
+    expect(rejected.status).toBe(403)
+    expect((rejected.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    expect((await client.toolsList()).status).toBe(200)
+  })
+
+  it.each(['', 'null', 'same-origin'] as const)(
     'rejects Origin: %s on POST /mcp',
     async (originCase) => {
       const { handlers } = createStubHandlers()
@@ -1192,6 +1281,24 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
     },
   )
+
+  it('truncates a rejected Origin to 200 characters in the log', async () => {
+    const { handlers } = createStubHandlers()
+    const logs: string[] = []
+    handle = await startTestServer(handlers, (message) => logs.push(message))
+    const originHeader = 'x'.repeat(300)
+
+    const res = await postJson(
+      handle.port,
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { originHeader },
+    )
+
+    expect(res.status).toBe(403)
+    expect(logs).toContain(
+      `MCP request rejected — Origin header present: ${originHeader.slice(0, 200)}`,
+    )
+  })
 
   it('allows initialize POST /mcp when the Origin header is absent', async () => {
     const { handlers } = createStubHandlers()

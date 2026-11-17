@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix: address the PR #1044 review round 1 and the Rust 1.100 clippy lints (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+`/code:pr-review-team` ラウンド 1（code-reviewer・silent-failure-hunter・pr-test-analyzer・comment-analyzer）と、並行の fresh な監査（不在証明・外部 API の意味論・横断の設計整合）の指摘を 1 通にまとめて Codex に出した。
+
+- **テストの穴 2 つ（Important）**: 拒否のテストがどれも「セッションの無い `initialize` の POST」だけで、検査を POST だけに狭める変更や、新規セッションの時だけ検査する変更を通してしまっていた → 開いたセッションへの `tools/call`（ハンドラが呼ばれないこと）・GET・DELETE（セッションが閉じないこと）に Origin を付けて 403 を見るテストを 3 本。空の `Origin:` の行と、ログの Origin が 200 文字で切れることのテストも足した（`it` は 51 → 56）。main が sandbox の外で 3 種の変異を当てた: 検査を外す → 8 本 red / POST だけに狭める → GET・DELETE の 2 本 red / `mcp-session-id` が無い時だけ検査する → 既存セッションの 3 本 red
+- **CHANGELOG のライセンスの項目の誤り（Important・監査が発見）**: main が PR の題から「`LICENSE` で DSL の実装を Apache-2.0 にした」と書いていたが、`v4.4.0..HEAD` の `LICENSE` の差分は「言語の定義 2 ファイル（TextMate の文法と language-configuration）を Apache-2.0 にする例外の節」だけで、実装の許諾は README と仕様書の「案・未確定」だった → 2 項目に分けて正した。RUSTSEC の tokio の更新は Security 節へ移した
+- **dev サイトの古い参照（Important）**: `architecture-overview.md:692`（ja / en）の `mcp-server.ts:128-319` は main の時点で既に古かった（9 月 12 日の範囲・関数は main で 135-339）。`docs:check` は ``// file:行`` の形の引用しか検査しないので見えていなかった → `135-352`。listen の引用も `:327-331`
+- **Rust 1.100 の clippy（CI）**: CI の stable が 1.100.0 に上がり、`orbit-audio-sandbox/src/instrument_host.rs` の `for_matching`（3 件）と `orbit-clap-host/src/buffers.rs` のテストのループ（1 件・前の crate が落ちて隠れていた）が `needless_range_loop` で落ちていた。どちらも添字のループを `iter_mut()` に書き換えた（意味は同じ・`allow` で黙らせていない）。main が手元に 1.100.0 を入れ、下流の 12 crate を touch して検査し直させて 0 件・既定の版の clippy と fmt も緑・2 crate のテスト 146 passed
+- 設計 848: P-16 の行に「4.4.1 は gated の題名を変えないので基準タグは v4.4.0 のまま」、§4.7 の結びに「4.4.1 で直した」
+- 採らなかったもの: README の「4.4.1 is released.」と dev サイトの Note の過去形（前回 `f77191e2` と同じく、マージの直後にタグを打つ）/ 403 の本文に手がかりを足す案（凍結版は最小に）
+- 監査の確かめたこと（欠陥なし）: リポジトリと文書が案内する接続元に Origin を付けるものは無い（列挙表は PR のレビューの記録）/ Node は重複した Origin を `, ` で結合し、空の Origin は `""` で届く → どちらも拒否 / ブラウザが Origin を付けない GET・HEAD は、有効なセッション ID を得る手段が無いので穴にならない / daemon 側の拒否と規則がそろっている
+
+Part of #1043
+
+---
+
 ### refactor: apply the /simplify findings on PR #1044 (Nov 18, 2026)
 
 **Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)

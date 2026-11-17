@@ -280,6 +280,7 @@ export async function startOrbitScoreMcpServer(opts: {
       // HTTP's Security Warning requires servers to validate. We intentionally have
       // no Origin allowlist: Claude Code, MCP SDK clients, and the E2E harness are
       // not browsers and do not send Origin.
+      // Any request carrying Origin, even empty or "null", is rejected with 403.
       const origin = req.headers.origin?.slice(0, 200)
       if (origin !== undefined) {
         log(`MCP request rejected — Origin header present: ${origin}`)

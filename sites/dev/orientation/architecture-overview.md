@@ -234,7 +234,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 サーバーは loopback にしか bind しません。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:326-330
+// packages/vscode-extension/src/mcp-server.ts:327-331
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -689,7 +689,7 @@ export const DSL_VERSION = '2.0'
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)
-- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
+- `packages/vscode-extension/src/mcp-server.ts:135-352` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
 - `packages/engine/src/cli-audio.ts:1-41` — CLI entry point
 - `packages/engine/src/cli/execute-command.ts:105-113` — `repl` サブコマンドのルーティング
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: interpreter 生成 → boot → REPL 開始
