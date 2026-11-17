@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): reject /mcp requests that carry an Origin header, and move release.yml to macos-26 (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)
+
+凍結版 4.4.1 の直し（owner 判断 2026-11-18・判断シート A10「S-eval が入る前の main から 4.4.1 を出し、そのタグから枝を切る」）。設計 848 の暫定台帳 P-16 に記録していた、出荷済み 4.4.0 の拡張の `/mcp` の穴を閉じる。daemon 側の同じ穴は #996 で 10-26 に閉じている（下の項目）。
+
+- `packages/vscode-extension/src/mcp-server.ts`: `/mcp` への要求に `Origin` ヘッダがあれば、値に依らず（`null`・自分自身と同じ origin も）403 と `forbidden: Origin header not allowed` を返す。置き場所は `pathname !== '/mcp'` の 404 の後・body を読む前なので、docs の配信（ブラウザが普通に開く経路）には効かず、拒否した要求はセッションを作らない。Host の許可リスト（DNS rebinding 対策）は先に走ったまま。Host の検査だけでは、同じマシンのブラウザのページが `http://127.0.0.1:<port>/mcp` へ直に送る要求（Host は正しい）を止められない。MCP 仕様の Streamable HTTP の Security Warning が Origin の検証を求めている
+- 正規の接続元が Origin を付けないことを実測した（記録用のサーバを `.mcp.json` の 39123 に立てて受けた）: **Claude Code 2.1.323**（`claude mcp get orbitscore` の接続確認・POST 2 回と GET 1 回）と **Node の MCP SDK 1.29.0** の `StreamableHTTPClientTransport` はどちらも `origin` が無かった。gated E2E のハーネス（`tests/e2e/helpers/mcp-client.ts:38`）は `http.request` を直に使い、Origin を付けない
+- テスト 5 本（`mcp-server.spec.ts` に 4・`mcp-server-docs-http.spec.ts` に 1）: Origin つきの `initialize` → 403 でセッションが開かれない（その後の Origin なしは開く）/ `Origin: null` → 403 / 自分と同じ origin → 403 / Origin なし → 200 / docs の `GET /docs` は Origin があっても同じ status。main が sandbox の外で: 実装を外すと拒否の 3 本が red・戻すと 51 本 green / **検査を経路の振り分けより前に移す変異**で docs の 1 本が red（`/mcp` だけに効くことの固定が働いている）
+- `.github/workflows/release.yml:51`: `macos-14`（2026-11-02 に GitHub Actions から廃止・actions/runner-images#13518）→ `macos-26`。この workflow は `packages/engine/**`・`packages/vscode-extension/**` を変える PR でも走るので、S-eval と engine の TS 側の PR より前に直す必要があった
+- 実装は Codex（`gpt-5.6-sol`・effort high）。sandbox の中では localhost に bind できずテストが走らなかったので、検証は main が sandbox の外で行った
+
+Part of #1043
+
+---
+
 ### docs: follow the user-site availability lint into the command and tooling references (Oct 27, 2026)
 
 **Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1004` / **追従元**: PR [#1004](https://github.com/signalcompose/orbitscore/pull/1004)（マージコミット `526c1e3`） / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)

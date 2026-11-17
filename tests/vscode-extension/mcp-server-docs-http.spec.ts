@@ -164,10 +164,14 @@ interface RawResponse {
   body: string
 }
 
-function getPath(port: number, pathname: string): Promise<RawResponse> {
+function getPath(
+  port: number,
+  pathname: string,
+  headers: Record<string, string> = {},
+): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { hostname: '127.0.0.1', port, path: pathname, method: 'GET' },
+      { hostname: '127.0.0.1', port, path: pathname, method: 'GET', headers },
       (res) => {
         const chunks: Buffer[] = []
         res.on('data', (c: Buffer) => chunks.push(c))
@@ -281,6 +285,16 @@ describe('OrbitScore MCP server — docs serving (real HTTP)', () => {
 
     expect(res.status).toBe(302)
     expect(res.headers.location).toBe('/orbitscore/dev/')
+  })
+
+  it('does not apply Origin rejection to GET /docs', async () => {
+    handle = await startTestServer(createStubHandlers())
+
+    const withoutOrigin = await getPath(handle.port, '/docs')
+    const withOrigin = await getPath(handle.port, '/docs', { origin: 'https://example.com' })
+
+    expect(withOrigin.status).toBe(withoutOrigin.status)
+    expect(withOrigin.status).not.toBe(403)
   })
 
   if (!docsDistExists) {
