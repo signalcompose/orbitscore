@@ -675,7 +675,7 @@ export const DSL_VERSION = '2.0'
 - **`AudioEngineBackend` の契約面**: optional メソッドの一覧と、SC 側が実装していないものを表にする
 - **`RustEnginePlayer` のクロックマッピング**: `StreamStats` (1Hz) で anchor を補正する仕組みと lookahead の実測値
 - **`DaemonClient` の recovery**: daemon crash 検出 → respawn → `establishSession()` の再実行の流れ (#389)
-- **MCP ツール面の全体像**: `mcp-server.ts` に登録されている 26 個の `registerTool` の分類 (engine 操作 / editor 操作 / 観測)
+- **MCP ツール面の全体像**: `mcp-tools-engine.ts`（7 個）・`mcp-tools-editor.ts`（12 個）・`mcp-tools-plugins.ts`（7 個）に登録されている計 26 個の `registerTool` の分類 (engine 操作 / editor 操作 / 観測)
 - **extension ↔ engine 間の型境界**: `engine-startup-runtime.ts` が engine の compiled JS を `require()` する構造の管理方法 (対になっていた `resolveScsynthForUI()` は #502 で削除)
 - **daemon の graceful shutdown ギャップ (#448)**: SIGTERM ハンドラ不在と `ParentWatch` による child 側防御
 

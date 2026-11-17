@@ -255,7 +255,7 @@ Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
   at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
 ```
 
-なぜ読み込みの時点なのでしょうか。`extension.ts` は `./mcp-server` から import していて (`extension.ts:14`)、その `mcp-server.ts` は MCP SDK をトップレベルの `require` で読み込むからです。
+なぜ読み込みの時点なのでしょうか。`extension.ts` は `./mcp-server` から import していて (`extension.ts:14`)、`mcp-server.ts` が import する `mcp-sdk.ts` は MCP SDK をトップレベルの `require` で読み込むからです。
 
 ```typescript
 // packages/vscode-extension/src/mcp-sdk.ts:37-43

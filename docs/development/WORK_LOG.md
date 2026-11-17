@@ -17,11 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): fix the prose that still places split-out code in mcp-server.ts (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+ラウンド 3 の comment-analyzer が、行番号の無い散文にも #887 の分割の前の記述（「`mcp-server.ts` が SDK を `require` で読む」「`mcp-server.ts` の 26 個の `registerTool`」）が残っていると指摘した（Important 4）。ラウンドごとに同じ型が少しずつ出ていたので、Codex に **`sites/dev/` で `mcp-server.ts` に触れる散文を全部（ja / en で 26 か所前後）今のコードと突き合わせる**形で出した。
+
+- 直した 5 か所（ja / en）: `vscode-architecture.md:258` の SDK の `require` → `mcp-sdk.ts`（`mcp-server.ts` に `require` は 0 件）/ `architecture-overview.md:678` の `registerTool` → `mcp-tools-engine.ts` 7・`mcp-tools-editor.ts` 12・`mcp-tools-plugins.ts` 7（`mcp-server.ts` は 0 件・main が `grep -c` で数え直した）/ en の `mcp-and-gated-e2e.md:1522` の閉じていないバッククォート（前からあった）
+- 🔴 **Codex の直しのうち 1 つを main が戻した**: `mcp-and-gated-e2e.md:835-842`（ja / en）は `tests/e2e/helpers/run-score.ts:258-270` を**そのまま写した引用**で、古いのは引用元のソースのコメント（`run-score.ts:260` の「`mcp-server.ts` の tool 説明」）そのもの。Codex は引用の中の 1 行を `// ...` に替え、見出しに注記を足していたが、引用は元と一字一句同じであるべきなので戻した。`run-score.ts:260` のコメントの古さは、この PR の範囲（凍結版 4.4.1）の外として残す
+- `docs:check` は 1010 verified / 0 failed
+
+Part of #1043
+
+---
+
 ### docs(dev-site): re-anchor every prose reference to mcp-server.ts (Nov 18, 2026)
 
 **Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
 
-`/code:pr-review-team` ラウンド 2 の comment-analyzer が、ラウンド 1 で直した行の 1 行上（`architecture-overview.md:691` の `mcp-server.ts:9-28`・中身は import）も古いと指摘した。1 件ずつ直すとラウンドごとに同じ一覧から 1 つずつ見つかって収束しないので、**範囲を「この PR が変えた `mcp-server.ts` を指す dev サイトの散文の参照すべて」と決めて一度に直した**（4 ページ × ja / en の 12 か所）。
+`/code:pr-review-team` ラウンド 2 の comment-analyzer が、ラウンド 1 で直した行の 1 行上（`architecture-overview.md:691` の `mcp-server.ts:9-28`・中身は import）も古いと指摘した。1 件ずつ直すとラウンドごとに同じ一覧から 1 つずつ見つかって収束しないので、**範囲を「この PR が変えた `mcp-server.ts` を指す dev サイトの散文の参照すべて」と決めて一度に直した**（3 ページ × ja / en。行番号つきの参照 12 か所のうち古かった 5 か所 × 2 言語。コミットの本文の「4 ページ × 12 か所」は main の数え違い — ラウンド 3 の code-reviewer が指摘）。
 
 - 古かったのは 9 月のファイル分割（#887・`mcp-sdk.ts`・`mcp-types.ts` への切り出し）の前の行: 設計コメント `:9-28` → `mcp-server.ts:31-40` / SDK を `require` で読む理由 → `mcp-sdk.ts:1-7` / `OrbitScoreToolHandlers` の seam `mcp-server.ts:233-286` → `mcp-types.ts:184-235` / SDK と `zod` の `require` `mcp-server.ts:52-80` → `mcp-sdk.ts:38-72` / `startOrbitScoreMcpServer()` `:128-319` → `:135-352`（説明に「Origin の拒否」を足した）
 - main が各参照の最初と最後の行を表示して、説明と中身が合うことを確かめた。`docs:check`（``// path:行`` の形の引用だけを検査する）は 1010 verified / 0 failed のまま

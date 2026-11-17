@@ -675,7 +675,7 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - **The `AudioEngineBackend` contract surface**: tabulate the optional methods and which ones the SC side does not implement
 - **`RustEnginePlayer`'s clock mapping**: the mechanism that corrects the anchor with `StreamStats` (1Hz), and the measured lookahead value
 - **`DaemonClient` recovery**: the flow from daemon crash detection → respawn → re-running `establishSession()` (#389)
-- **The whole MCP tool surface**: classifying the 26 `registerTool` calls in `mcp-server.ts` (engine ops / editor ops / observability)
+- **The whole MCP tool surface**: classifying the 26 `registerTool` calls in `mcp-tools-engine.ts` (7), `mcp-tools-editor.ts` (12), and `mcp-tools-plugins.ts` (7) (engine ops / editor ops / observability)
 - **The type boundary between extension and engine**: how the structure in which `engine-startup-runtime.ts` `require()`s the engine's compiled JS is managed (its counterpart `resolveScsynthForUI()` was removed in #502)
 - **The daemon's graceful-shutdown gap (#448)**: the absence of a SIGTERM handler and the child-side defense via `ParentWatch`
 

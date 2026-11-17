@@ -255,7 +255,7 @@ Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
   at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
 ```
 
-Why at load time? Because `extension.ts` imports from `./mcp-server` (`extension.ts:14`), and `mcp-server.ts` loads the MCP SDK with a top-level `require`.
+Why at load time? Because `extension.ts` imports from `./mcp-server` (`extension.ts:14`), and `mcp-sdk.ts`, imported by `mcp-server.ts`, loads the MCP SDK with a top-level `require`.
 
 ```typescript
 // packages/vscode-extension/src/mcp-sdk.ts:37-43
