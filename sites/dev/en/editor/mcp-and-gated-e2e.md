@@ -1516,10 +1516,11 @@ The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/co
 
 ## Sources
 
-- `packages/vscode-extension/src/mcp-server.ts:9-28` — file header (Agent Bridge origin; why the SDK is loaded via `require`)
-- `packages/vscode-extension/src/mcp-server.ts:233-286` — the `OrbitScoreToolHandlers` seam
+- `packages/vscode-extension/src/mcp-server.ts:31-40` — file header (Agent Bridge origin)
+- `packages/vscode-extension/src/mcp-sdk.ts:1-7` — why the SDK is loaded via `require` (evaluated before `activate()`; #873)
+- `packages/vscode-extension/src/mcp-types.ts:184-235` — the `OrbitScoreToolHandlers` seam
 - `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — the `registerTool` calls (split out of `buildServer()` into three files in #887 bundle F) ()` (source of the tool catalogue)
-- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing)
+- `packages/vscode-extension/src/mcp-server.ts:135-352` — `startOrbitScoreMcpServer()` (session management, Host allowlist, docs serving, `/mcp` routing, Origin rejection)
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` merge and URL construction
 - `packages/vscode-extension/src/extension.ts:139-149` / `301-312` — output-channel ring buffer and monkey-patch
 - `packages/vscode-extension/src/extension.ts:151-289` — playhead state and decoration application

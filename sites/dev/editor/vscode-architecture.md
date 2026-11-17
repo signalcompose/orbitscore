@@ -1187,7 +1187,7 @@ flowchart TD
 - `packages/vscode-extension/src/dsl-method-catalog.ts:1-14` — 補完語彙の複製とテストによる一致強制
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由 (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
-- `packages/vscode-extension/src/mcp-server.ts:52-80` — MCP SDK と `zod` のトップレベル `require`。`activate()` より前に評価されるので、同梱漏れは activation 全体を落とす (#873)
+- `packages/vscode-extension/src/mcp-sdk.ts:38-72` — MCP SDK と `zod` のトップレベル `require`。`activate()` より前に評価されるので、同梱漏れは activation 全体を落とす (#873)
 - `packages/vscode-extension/package.json:430-431` — `build` / `build:clean` の末尾に付いた `install-extension-deps.sh` (#873)
 - `scripts/install-bundle-deps.sh:13-37` — hoist 問題そのものの説明と、engine 2 件 / 拡張 1 件の事故の対応表、esbuild への移行 (#875) を stopgap と呼ぶ理由
 - `scripts/install-extension-deps.sh:10-28` — 同梱先が `dist/node_modules` である 2 つの理由と、`--no-dependencies` に至った経緯

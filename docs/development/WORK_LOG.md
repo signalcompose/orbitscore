@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): re-anchor every prose reference to mcp-server.ts (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+`/code:pr-review-team` ラウンド 2 の comment-analyzer が、ラウンド 1 で直した行の 1 行上（`architecture-overview.md:691` の `mcp-server.ts:9-28`・中身は import）も古いと指摘した。1 件ずつ直すとラウンドごとに同じ一覧から 1 つずつ見つかって収束しないので、**範囲を「この PR が変えた `mcp-server.ts` を指す dev サイトの散文の参照すべて」と決めて一度に直した**（4 ページ × ja / en の 12 か所）。
+
+- 古かったのは 9 月のファイル分割（#887・`mcp-sdk.ts`・`mcp-types.ts` への切り出し）の前の行: 設計コメント `:9-28` → `mcp-server.ts:31-40` / SDK を `require` で読む理由 → `mcp-sdk.ts:1-7` / `OrbitScoreToolHandlers` の seam `mcp-server.ts:233-286` → `mcp-types.ts:184-235` / SDK と `zod` の `require` `mcp-server.ts:52-80` → `mcp-sdk.ts:38-72` / `startOrbitScoreMcpServer()` `:128-319` → `:135-352`（説明に「Origin の拒否」を足した）
+- main が各参照の最初と最後の行を表示して、説明と中身が合うことを確かめた。`docs:check`（``// path:行`` の形の引用だけを検査する）は 1010 verified / 0 failed のまま
+- 参照の直しは Codex（`gpt-5.6-sol`・effort high）
+
+Part of #1043
+
+---
+
 ### fix: address the PR #1044 review round 1 and the Rust 1.100 clippy lints (Nov 18, 2026)
 
 **Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)

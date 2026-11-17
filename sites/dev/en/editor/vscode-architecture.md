@@ -1188,7 +1188,7 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/dsl-method-catalog.ts:1-14` — duplication of the completion vocabulary and test-enforced equality
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark` (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
-- `packages/vscode-extension/src/mcp-server.ts:52-80` — the top-level `require` of the MCP SDK and `zod`. Evaluated before `activate()`, so a bundling gap takes down activation entirely (#873)
+- `packages/vscode-extension/src/mcp-sdk.ts:38-72` — the top-level `require` of the MCP SDK and `zod`. Evaluated before `activate()`, so a bundling gap takes down activation entirely (#873)
 - `packages/vscode-extension/package.json:430-431` — `install-extension-deps.sh` appended to `build` / `build:clean` (#873)
 - `scripts/install-bundle-deps.sh:13-37` — the hoisting problem itself, the table of the two engine-side and one extension-side incidents, and why the esbuild migration (#875) is called the destination rather than this stopgap
 - `scripts/install-extension-deps.sh:10-28` — the two reasons the destination is `dist/node_modules`, and the path to `--no-dependencies`

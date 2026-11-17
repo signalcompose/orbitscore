@@ -688,7 +688,7 @@ export const DSL_VERSION = '2.0'
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
-- `packages/vscode-extension/src/mcp-server.ts:9-28` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)
+- `packages/vscode-extension/src/mcp-server.ts:31-40` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)
 - `packages/vscode-extension/src/mcp-server.ts:135-352` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
 - `packages/engine/src/cli-audio.ts:1-41` — CLI entry point
 - `packages/engine/src/cli/execute-command.ts:105-113` — `repl` サブコマンドのルーティング
