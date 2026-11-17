@@ -1174,33 +1174,24 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(logs.some((message) => message.includes('MCP session opened'))).toBe(true)
   })
 
-  it('rejects the literal Origin: null on POST /mcp', async () => {
-    const { handlers } = createStubHandlers()
-    handle = await startTestServer(handlers)
+  it.each(['null', 'same-origin'] as const)(
+    'rejects Origin: %s on POST /mcp',
+    async (originCase) => {
+      const { handlers } = createStubHandlers()
+      handle = await startTestServer(handlers)
+      const originHeader =
+        originCase === 'same-origin' ? `http://127.0.0.1:${handle.port}` : originCase
 
-    const res = await postJson(
-      handle.port,
-      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
-      { originHeader: 'null' },
-    )
+      const res = await postJson(
+        handle.port,
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+        { originHeader },
+      )
 
-    expect(res.status).toBe(403)
-    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
-  })
-
-  it('rejects a same-origin Origin header on POST /mcp', async () => {
-    const { handlers } = createStubHandlers()
-    handle = await startTestServer(handlers)
-
-    const res = await postJson(
-      handle.port,
-      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
-      { originHeader: `http://127.0.0.1:${handle.port}` },
-    )
-
-    expect(res.status).toBe(403)
-    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
-  })
+      expect(res.status).toBe(403)
+      expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    },
+  )
 
   it('allows initialize POST /mcp when the Origin header is absent', async () => {
     const { handlers } = createStubHandlers()

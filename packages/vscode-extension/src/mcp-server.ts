@@ -161,9 +161,6 @@ export async function startOrbitScoreMcpServer(opts: {
   // allowedHosts/enableDnsRebindingProtection but marks them deprecated in
   // favor of doing exactly this in the HTTP layer we already own.)
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`])
-  // Host validation blocks DNS rebinding, but a page on this machine can fetch
-  // loopback /mcp with a valid Host. Browsers add Origin, which Streamable
-  // HTTP's Security Warning requires servers to validate.
 
   const createSession = async (): Promise<SessionEntry> => {
     const entry: Partial<SessionEntry> = {}
@@ -278,6 +275,11 @@ export async function startOrbitScoreMcpServer(opts: {
         res.end(JSON.stringify({ error: 'not found' }))
         return
       }
+      // Host validation blocks DNS rebinding, but a page on this machine can fetch
+      // loopback /mcp with a valid Host. Browsers add Origin, which Streamable
+      // HTTP's Security Warning requires servers to validate. We intentionally have
+      // no Origin allowlist: Claude Code, MCP SDK clients, and the E2E harness are
+      // not browsers and do not send Origin.
       const origin = req.headers.origin?.slice(0, 200)
       if (origin !== undefined) {
         log(`MCP request rejected — Origin header present: ${origin}`)

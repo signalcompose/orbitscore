@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor: apply the /simplify findings on PR #1044 (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+`/simplify`（再利用・簡素化・効率・修正の深さの 4 観点）の指摘のうち 3 点を当てた。振る舞いは変えていない。
+
+- `mcp-server.ts`: Origin の検査の理由のコメントが Host の許可リストの直後（110 行上）にあり、許可リストの説明に読めた（2 観点が同じ指摘）→ 検査の直上へ移し、**Origin の許可リストを意図して置かない**ことと理由（正規の接続元はブラウザではなく Origin を付けない）を足した
+- `release.yml:137` のコメントの文法（`ships` → `ship`）
+- `mcp-server.spec.ts`: Origin の値だけが違う拒否のテスト 2 本（`null`・同じ origin）を `it.each` に。「セッションを作らない」を見る最初の 1 本と、正の対照（Origin なし → 200）は残した。`it` の数は 51 のまま。検査を無効にする変異で拒否の 3 本が red
+- 採らなかったもの: 正の対照の 1 本を消す案（拒否と対になる対照として置いたもの）/ 403 の書き出しを共通の関数にする案（2 か所 3 行・凍結版の範囲外。4 観点のうち 2 観点も「不要」）
+- 🔴 確認の途中で、zsh が引用なしの変数を単語に分けないために vitest にパスが 1 つの引数で渡り、**テストが 1 本も選ばれずに何も出ない**回があった。結果はパスを直書きして取り直した
+
+Part of #1043
+
+---
+
 ### chore(release): bump the extension to 4.4.1 (Nov 18, 2026)
 
 **Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)

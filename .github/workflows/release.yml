@@ -134,7 +134,7 @@ jobs:
           VSIX_CHECK=$(mktemp -d)
           # Resolve the exact .vsix path; fail loudly if the glob produced 0 or >1 hits
           # (multiple hits would indicate a stale build artifact polluting the verify).
-          # NOTE: avoid bash 4+ `mapfile` — macOS runners ships system bash 3.2 (Apple/GPLv3 reasons).
+          # NOTE: avoid bash 4+ `mapfile` — macOS runners ship system bash 3.2 (Apple/GPLv3 reasons).
           # Use globbing into a positional array instead (bash 3.2-safe).
           shopt -s nullglob
           VSIX_FILES=(packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)
