@@ -234,7 +234,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:324-328
+// packages/vscode-extension/src/mcp-server.ts:326-330
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
