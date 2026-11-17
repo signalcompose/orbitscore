@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 4.4.1 (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)
+
+拡張版 OrbitScore を 4.4.1 として出す準備（下の直しと、v4.4.0 の後に main へ入った #1002・#1007・#1003 を含む）。
+
+- 現在の版を名乗る 19 か所を 4.4.0 → 4.4.1（前回 `f77191e2` と同じ 11 ファイル: `package.json`・`CLAUDE.md`・`README.md`・`docs/core/INDEX.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・dev サイトの 6 ページ）。dev サイトの Note 行に「v4.4.1 まで版表記だけ追従」の 1 文。**基準タグ `v4.4.0`（`PARITY_BASELINE_TAG`・設計 848 の D-1 など）と歴史の記述は変えていない**（4.4.0 は 102 → 83 か所）
+- `CHANGELOG.md` に [4.4.1] 節（Security 2・Fixed 2・Changed 1）と比較リンク
+- `.github/workflows/release.yml` のコメント 2 か所に残っていた `macos-14` を直した（`:91` → `macos-26`・`:137` → `macOS runners`。macOS の `/bin/bash` が 3.2 という主張は変わらない）
+- 直しで `mcp-server.ts` が 10 行ずれ、dev サイトの引用 2 つ（`architecture-overview.md:237` の ja / en）が崩れていたので `:314-318` → `:324-328`。`npm run docs:check` は 1010 verified / 0 failed。🔴 直しのコミットの pre-commit フックは全テストを回したが引用は検査しなかった — 引用の崩れは `docs:check` を別に走らせて見つけた
+- 設計 848 の台帳 P-16 を「#1043 で閉じた」に。鎖（未マージ）の `tests/repo/native-provisional-ledger.ts` の P-16 の `state` は、鎖に main を取り込む時に閉じる
+- 版の置き換えは Codex（`gpt-5.6-sol`・effort high）。CHANGELOG・設計・WORK_LOG は main
+
+Part of #1043
+
+---
+
 ### fix(extension): reject /mcp requests that carry an Origin header, and move release.yml to macos-26 (Nov 18, 2026)
 
 **Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)
