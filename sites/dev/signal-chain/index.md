@@ -6,7 +6,7 @@ verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-06 に #780 / #789（PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・マージ前ゲートの 2 つの欠陥）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-06 に #780 / #789（PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・マージ前ゲートの 2 つの欠陥）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-11-18 に [#1043](https://github.com/signalcompose/orbitscore/issues/1043)（PR [#1044](https://github.com/signalcompose/orbitscore/pull/1044)・廃止された `macos-14` から `macos-26` へ）まで**実機 CI の runner image の表記だけ**追従しました。
 
 # SC-1. ラック — チェーンを値として書く（SC.10）
 
@@ -1310,7 +1310,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 リテラル `b"db"` との比較を足したのはその修正です。`contract.rs` はプラグインを in-process で
 起こす（`load_from_clack`）ため、ubuntu の `cargo test --workspace` でも走ります。
 
-実機側は `release.yml`（macos-14）が bundle を組んで rack child の `#[ignore]` テストを回し、
+実機側は `release.yml`（macos-26）が bundle を組んで rack child の `#[ignore]` テストを回し、
 さらに packaging 後の `.vsix` の中に `std-plugins/Gain.clap` があることを確かめます。
 
 ```yaml
