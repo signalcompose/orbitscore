@@ -1506,10 +1506,11 @@ npm run test:e2e:cold-install
 
 ## Sources
 
-- `packages/vscode-extension/src/mcp-server.ts:9-28` — ファイルヘッダ（Agent Bridge の出自・SDK を `require` で読む理由）
-- `packages/vscode-extension/src/mcp-server.ts:233-286` — `OrbitScoreToolHandlers` seam
+- `packages/vscode-extension/src/mcp-server.ts:31-40` — ファイルヘッダ（Agent Bridge の出自）
+- `packages/vscode-extension/src/mcp-sdk.ts:1-7` — SDK を `require` で読む理由（`activate()` より前に評価される・#873）
+- `packages/vscode-extension/src/mcp-types.ts:184-235` — `OrbitScoreToolHandlers` seam
 - `packages/vscode-extension/src/mcp-tools-engine.ts` / `mcp-tools-editor.ts` / `mcp-tools-plugins.ts` — `registerTool` 群（#887 束 F で `buildServer()` から 3 ファイルへ切り出した。ツールカタログの出典）
-- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
+- `packages/vscode-extension/src/mcp-server.ts:135-352` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング・Origin の拒否）
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` マージと URL 組み立て
 - `packages/vscode-extension/src/extension.ts:139-149` / `301-312` — 出力チャネルのリングバッファと monkey-patch
 - `packages/vscode-extension/src/extension.ts:151-289` — playhead の状態と decoration 適用

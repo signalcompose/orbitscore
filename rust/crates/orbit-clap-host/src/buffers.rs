@@ -563,8 +563,8 @@ mod tests {
         let mut b =
             HostAudioBuffers::from_config(mk_config(1, None, AudioPortLayout::Stereo, 4), rc);
         // ch0=1.0, ch1=0.0 → downmix 0.5。
-        for i in 0..4 {
-            b.output_port_channels[0][i] = 1.0;
+        for sample in b.output_port_channels[0].iter_mut().take(4) {
+            *sample = 1.0;
         }
         let mut dest = vec![0.0f32; 4]; // 4 frames mono
         b.add_to_cpal_buffer(&mut dest);

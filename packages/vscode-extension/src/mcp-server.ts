@@ -275,6 +275,19 @@ export async function startOrbitScoreMcpServer(opts: {
         res.end(JSON.stringify({ error: 'not found' }))
         return
       }
+      // Host validation blocks DNS rebinding, but a page on this machine can fetch
+      // loopback /mcp with a valid Host. Browsers add Origin, which Streamable
+      // HTTP's Security Warning requires servers to validate. We intentionally have
+      // no Origin allowlist: Claude Code, MCP SDK clients, and the E2E harness are
+      // not browsers and do not send Origin.
+      // Any request carrying Origin, even empty or "null", is rejected with 403.
+      const origin = req.headers.origin?.slice(0, 200)
+      if (origin !== undefined) {
+        log(`MCP request rejected — Origin header present: ${origin}`)
+        res.writeHead(403, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'forbidden: Origin header not allowed' }))
+        return
+      }
       const body = req.method === 'POST' ? await readJsonBody(req) : undefined
       const sessionId = req.headers['mcp-session-id']
       const existing = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined

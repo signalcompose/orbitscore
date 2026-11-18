@@ -48,7 +48,7 @@ env:
 jobs:
   release:
     name: Build, package and publish
-    runs-on: macos-14 # Apple Silicon runner — arm64 is the only supported macOS target (PROJECT_RULES.md "Platform Support")
+    runs-on: macos-26 # Apple Silicon runner — arm64 is the only supported macOS target (PROJECT_RULES.md "Platform Support")
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -88,7 +88,7 @@ jobs:
       # the .vsix (#377). Must run before "Build engine + extension TypeScript" --
       # that script is best-effort (warns + exit 0 if the binary is missing), so
       # ordering here determines whether the release .vsix ships with the daemon.
-      # runner is macos-14 (Apple Silicon) -- matches the daemon's only bundled
+      # runner is macos-26 (Apple Silicon) -- matches the daemon's only bundled
       # target (darwin-arm64).
       - name: Build OOP-both Rust daemon and CLAP child binaries
         run: |
@@ -134,7 +134,7 @@ jobs:
           VSIX_CHECK=$(mktemp -d)
           # Resolve the exact .vsix path; fail loudly if the glob produced 0 or >1 hits
           # (multiple hits would indicate a stale build artifact polluting the verify).
-          # NOTE: avoid bash 4+ `mapfile` — macos-14 ships system bash 3.2 (Apple/GPLv3 reasons).
+          # NOTE: avoid bash 4+ `mapfile` — macOS runners ship system bash 3.2 (Apple/GPLv3 reasons).
           # Use globbing into a positional array instead (bash 3.2-safe).
           shopt -s nullglob
           VSIX_FILES=(packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)

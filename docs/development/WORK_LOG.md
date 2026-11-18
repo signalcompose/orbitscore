@@ -17,6 +17,102 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): fix the prose that still places split-out code in mcp-server.ts (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+ラウンド 3 の comment-analyzer が、行番号の無い散文にも #887 の分割の前の記述（「`mcp-server.ts` が SDK を `require` で読む」「`mcp-server.ts` の 26 個の `registerTool`」）が残っていると指摘した（Important 4）。ラウンドごとに同じ型が少しずつ出ていたので、Codex に **`sites/dev/` で `mcp-server.ts` に触れる散文を全部（ja / en で 26 か所前後）今のコードと突き合わせる**形で出した。
+
+- 直した 5 か所（ja / en）: `vscode-architecture.md:258` の SDK の `require` → `mcp-sdk.ts`（`mcp-server.ts` に `require` は 0 件）/ `architecture-overview.md:678` の `registerTool` → `mcp-tools-engine.ts` 7・`mcp-tools-editor.ts` 12・`mcp-tools-plugins.ts` 7（`mcp-server.ts` は 0 件・main が `grep -c` で数え直した）/ en の `mcp-and-gated-e2e.md:1522` の閉じていないバッククォート（前からあった）
+- 🔴 **Codex の直しのうち 1 つを main が戻した**: `mcp-and-gated-e2e.md:835-842`（ja / en）は `tests/e2e/helpers/run-score.ts:258-270` を**そのまま写した引用**で、古いのは引用元のソースのコメント（`run-score.ts:260` の「`mcp-server.ts` の tool 説明」）そのもの。Codex は引用の中の 1 行を `// ...` に替え、見出しに注記を足していたが、引用は元と一字一句同じであるべきなので戻した。`run-score.ts:260` のコメントの古さは、この PR の範囲（凍結版 4.4.1）の外として残す
+- `docs:check` は 1010 verified / 0 failed
+
+Part of #1043
+
+---
+
+### docs(dev-site): re-anchor every prose reference to mcp-server.ts (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+`/code:pr-review-team` ラウンド 2 の comment-analyzer が、ラウンド 1 で直した行の 1 行上（`architecture-overview.md:691` の `mcp-server.ts:9-28`・中身は import）も古いと指摘した。1 件ずつ直すとラウンドごとに同じ一覧から 1 つずつ見つかって収束しないので、**範囲を「この PR が変えた `mcp-server.ts` を指す dev サイトの散文の参照すべて」と決めて一度に直した**（3 ページ × ja / en。行番号つきの参照 12 か所のうち古かった 5 か所 × 2 言語。コミットの本文の「4 ページ × 12 か所」は main の数え違い — ラウンド 3 の code-reviewer が指摘）。
+
+- 古かったのは 9 月のファイル分割（#887・`mcp-sdk.ts`・`mcp-types.ts` への切り出し）の前の行: 設計コメント `:9-28` → `mcp-server.ts:31-40` / SDK を `require` で読む理由 → `mcp-sdk.ts:1-7` / `OrbitScoreToolHandlers` の seam `mcp-server.ts:233-286` → `mcp-types.ts:184-235` / SDK と `zod` の `require` `mcp-server.ts:52-80` → `mcp-sdk.ts:38-72` / `startOrbitScoreMcpServer()` `:128-319` → `:135-352`（説明に「Origin の拒否」を足した）
+- main が各参照の最初と最後の行を表示して、説明と中身が合うことを確かめた。`docs:check`（``// path:行`` の形の引用だけを検査する）は 1010 verified / 0 failed のまま
+- 参照の直しは Codex（`gpt-5.6-sol`・effort high）
+
+Part of #1043
+
+---
+
+### fix: address the PR #1044 review round 1 and the Rust 1.100 clippy lints (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+`/code:pr-review-team` ラウンド 1（code-reviewer・silent-failure-hunter・pr-test-analyzer・comment-analyzer）と、並行の fresh な監査（不在証明・外部 API の意味論・横断の設計整合）の指摘を 1 通にまとめて Codex に出した。
+
+- **テストの穴 2 つ（Important）**: 拒否のテストがどれも「セッションの無い `initialize` の POST」だけで、検査を POST だけに狭める変更や、新規セッションの時だけ検査する変更を通してしまっていた → 開いたセッションへの `tools/call`（ハンドラが呼ばれないこと）・GET・DELETE（セッションが閉じないこと）に Origin を付けて 403 を見るテストを 3 本。空の `Origin:` の行と、ログの Origin が 200 文字で切れることのテストも足した（`it` は 51 → 56）。main が sandbox の外で 3 種の変異を当てた: 検査を外す → 8 本 red / POST だけに狭める → GET・DELETE の 2 本 red / `mcp-session-id` が無い時だけ検査する → 既存セッションの 3 本 red
+- **CHANGELOG のライセンスの項目の誤り（Important・監査が発見）**: main が PR の題から「`LICENSE` で DSL の実装を Apache-2.0 にした」と書いていたが、`v4.4.0..HEAD` の `LICENSE` の差分は「言語の定義 2 ファイル（TextMate の文法と language-configuration）を Apache-2.0 にする例外の節」だけで、実装の許諾は README と仕様書の「案・未確定」だった → 2 項目に分けて正した。RUSTSEC の tokio の更新は Security 節へ移した
+- **dev サイトの古い参照（Important）**: `architecture-overview.md:692`（ja / en）の `mcp-server.ts:128-319` は main の時点で既に古かった（9 月 12 日の範囲・関数は main で 135-339）。`docs:check` は ``// file:行`` の形の引用しか検査しないので見えていなかった → `135-352`。listen の引用も `:327-331`
+- **Rust 1.100 の clippy（CI）**: CI の stable が 1.100.0 に上がり、`orbit-audio-sandbox/src/instrument_host.rs` の `for_matching`（3 件）と `orbit-clap-host/src/buffers.rs` のテストのループ（1 件・前の crate が落ちて隠れていた）が `needless_range_loop` で落ちていた。どちらも添字のループを `iter_mut()` に書き換えた（意味は同じ・`allow` で黙らせていない）。main が手元に 1.100.0 を入れ、下流の 12 crate を touch して検査し直させて 0 件・既定の版の clippy と fmt も緑・2 crate のテスト 146 passed
+- 設計 848: P-16 の行に「4.4.1 は gated の題名を変えないので基準タグは v4.4.0 のまま」、§4.7 の結びに「4.4.1 で直した」
+- 採らなかったもの: README の「4.4.1 is released.」と dev サイトの Note の過去形（前回 `f77191e2` と同じく、マージの直後にタグを打つ）/ 403 の本文に手がかりを足す案（凍結版は最小に）
+- 監査の確かめたこと（欠陥なし）: リポジトリと文書が案内する接続元に Origin を付けるものは無い（列挙表は PR のレビューの記録）/ Node は重複した Origin を `, ` で結合し、空の Origin は `""` で届く → どちらも拒否 / ブラウザが Origin を付けない GET・HEAD は、有効なセッション ID を得る手段が無いので穴にならない / daemon 側の拒否と規則がそろっている
+
+Part of #1043
+
+---
+
+### refactor: apply the /simplify findings on PR #1044 (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
+
+`/simplify`（再利用・簡素化・効率・修正の深さの 4 観点）の指摘のうち 3 点を当てた。振る舞いは変えていない。
+
+- `mcp-server.ts`: Origin の検査の理由のコメントが Host の許可リストの直後（110 行上）にあり、許可リストの説明に読めた（2 観点が同じ指摘）→ 検査の直上へ移し、**Origin の許可リストを意図して置かない**ことと理由（正規の接続元はブラウザではなく Origin を付けない）を足した
+- `release.yml:137` のコメントの文法（`ships` → `ship`）
+- `mcp-server.spec.ts`: Origin の値だけが違う拒否のテスト 2 本（`null`・同じ origin）を `it.each` に。「セッションを作らない」を見る最初の 1 本と、正の対照（Origin なし → 200）は残した。`it` の数は 51 のまま。検査を無効にする変異で拒否の 3 本が red
+- 採らなかったもの: 正の対照の 1 本を消す案（拒否と対になる対照として置いたもの）/ 403 の書き出しを共通の関数にする案（2 か所 3 行・凍結版の範囲外。4 観点のうち 2 観点も「不要」）
+- コメントを動かして `mcp-server.ts` の後半が 2 行ずれ、dev サイトの引用 2 つ（`architecture-overview.md:237` の ja / en）が再び崩れた → `:324-328` → `:326-330`（別コミット）。このコミットのフックも引用を検査しなかった
+- 🔴 確認の途中で、zsh が引用なしの変数を単語に分けないために vitest にパスが 1 つの引数で渡り、**テストが 1 本も選ばれずに何も出ない**回があった。結果はパスを直書きして取り直した
+
+Part of #1043
+
+---
+
+### chore(release): bump the extension to 4.4.1 (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)
+
+拡張版 OrbitScore を 4.4.1 として出す準備（下の直しと、v4.4.0 の後に main へ入った #1002・#1007・#1003 を含む）。
+
+- 現在の版を名乗る 19 か所を 4.4.0 → 4.4.1（前回 `f77191e2` と同じ 11 ファイル: `package.json`・`CLAUDE.md`・`README.md`・`docs/core/INDEX.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・dev サイトの 6 ページ）。dev サイトの Note 行に「v4.4.1 まで版表記だけ追従」の 1 文。**基準タグ `v4.4.0`（`PARITY_BASELINE_TAG`・設計 848 の D-1 など）と歴史の記述は変えていない**（4.4.0 は 102 → 83 か所）
+- `CHANGELOG.md` に [4.4.1] 節（Security 2・Fixed 2・Changed 1）と比較リンク
+- `.github/workflows/release.yml` のコメント 2 か所に残っていた `macos-14` を直した（`:91` → `macos-26`・`:137` → `macOS runners`。macOS の `/bin/bash` が 3.2 という主張は変わらない）
+- 直しで `mcp-server.ts` が 10 行ずれ、dev サイトの引用 2 つ（`architecture-overview.md:237` の ja / en）が崩れていたので `:314-318` → `:324-328`。`npm run docs:check` は 1010 verified / 0 failed。🔴 直しのコミットの pre-commit フックは全テストを回したが引用は検査しなかった — 引用の崩れは `docs:check` を別に走らせて見つけた
+- 設計 848 の台帳 P-16 を「#1043 で閉じた」に。鎖（未マージ）の `tests/repo/native-provisional-ledger.ts` の P-16 の `state` は、鎖に main を取り込む時に閉じる
+- 版の置き換えは Codex（`gpt-5.6-sol`・effort high）。CHANGELOG・設計・WORK_LOG は main
+
+Part of #1043
+
+---
+
+### fix(extension): reject /mcp requests that carry an Origin header, and move release.yml to macos-26 (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)
+
+凍結版 4.4.1 の直し（owner 判断 2026-11-18・判断シート A10「S-eval が入る前の main から 4.4.1 を出し、そのタグから枝を切る」）。設計 848 の暫定台帳 P-16 に記録していた、出荷済み 4.4.0 の拡張の `/mcp` の穴を閉じる。daemon 側の同じ穴は #996 で 10-26 に閉じている（下の項目）。
+
+- `packages/vscode-extension/src/mcp-server.ts`: `/mcp` への要求に `Origin` ヘッダがあれば、値に依らず（`null`・自分自身と同じ origin も）403 と `forbidden: Origin header not allowed` を返す。置き場所は `pathname !== '/mcp'` の 404 の後・body を読む前なので、docs の配信（ブラウザが普通に開く経路）には効かず、拒否した要求はセッションを作らない。Host の許可リスト（DNS rebinding 対策）は先に走ったまま。Host の検査だけでは、同じマシンのブラウザのページが `http://127.0.0.1:<port>/mcp` へ直に送る要求（Host は正しい）を止められない。MCP 仕様の Streamable HTTP の Security Warning が Origin の検証を求めている
+- 正規の接続元が Origin を付けないことを実測した（記録用のサーバを `.mcp.json` の 39123 に立てて受けた）: **Claude Code 2.1.323**（`claude mcp get orbitscore` の接続確認・POST 2 回と GET 1 回）と **Node の MCP SDK 1.29.0** の `StreamableHTTPClientTransport` はどちらも `origin` が無かった。gated E2E のハーネス（`tests/e2e/helpers/mcp-client.ts:38`）は `http.request` を直に使い、Origin を付けない
+- テスト 5 本（`mcp-server.spec.ts` に 4・`mcp-server-docs-http.spec.ts` に 1）: Origin つきの `initialize` → 403 でセッションが開かれない（その後の Origin なしは開く）/ `Origin: null` → 403 / 自分と同じ origin → 403 / Origin なし → 200 / docs の `GET /docs` は Origin があっても同じ status。main が sandbox の外で: 実装を外すと拒否の 3 本が red・戻すと 51 本 green / **検査を経路の振り分けより前に移す変異**で docs の 1 本が red（`/mcp` だけに効くことの固定が働いている）
+- `.github/workflows/release.yml:51`: `macos-14`（2026-11-02 に GitHub Actions から廃止・actions/runner-images#13518）→ `macos-26`。この workflow は `packages/engine/**`・`packages/vscode-extension/**` を変える PR でも走るので、S-eval と engine の TS 側の PR より前に直す必要があった
+- 実装は Codex（`gpt-5.6-sol`・effort high）。sandbox の中では localhost に bind できずテストが走らなかったので、検証は main が sandbox の外で行った
+
+Part of #1043
+
+---
+
 ### docs: follow the user-site availability lint into the command and tooling references (Oct 27, 2026)
 
 **Date**: 2026-10-27 / **ブランチ**: `claude/docs-sync-pr1004` / **追従元**: PR [#1004](https://github.com/signalcompose/orbitscore/pull/1004)（マージコミット `526c1e3`） / **Issue**: [#848](https://github.com/signalcompose/orbitscore/issues/848)

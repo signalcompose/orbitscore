@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-11-18
+
+修正のリリース。DSL・audio シーケンスの意味論・wire・出力は変更なし。
+
+### Security
+
+- **MCP サーバ（`/mcp`）が、`Origin` ヘッダの付いた要求を 403 で拒否する** ([`#1043`](https://github.com/signalcompose/orbitscore/issues/1043))
+  - ブラウザは要求に `Origin` を付けるので、同じマシンで開いた Web ページから `http://127.0.0.1:<port>/mcp` を直接叩かれるのを止める。値は見ない（`null` や同じ origin も拒否）。拒否した要求はセッションを作らない
+  - Claude Code（2.1.323 で確認）と Node の MCP SDK は `Origin` を付けないので、これまでどおり繋がる
+  - 同梱の docs の配信は対象外（ブラウザで開く経路のため）
+- **audio daemon の WebSocket が、`Origin` ヘッダの付いた接続を 403 で拒否する** ([`#996`](https://github.com/signalcompose/orbitscore/issues/996) / [`#1007`](https://github.com/signalcompose/orbitscore/pull/1007))
+- 依存の tokio を RUSTSEC-2026-0386 の修正版へ上げた ([`#1002`](https://github.com/signalcompose/orbitscore/pull/1002))
+
+### Fixed
+
+- **engine が終わった後に audio daemon が残り続けることがあった** ([`#996`](https://github.com/signalcompose/orbitscore/issues/996) / [`#1007`](https://github.com/signalcompose/orbitscore/pull/1007))。daemon は親（engine）の終了を検知して自分も終わる
+
+### Changed
+
+- 言語の定義 2 ファイル（TextMate の文法と language-configuration）を Apache-2.0 にした（`LICENSE` の例外の節・各ファイルの `.license`・`LICENSES/Apache-2.0.txt`） ([`#1003`](https://github.com/signalcompose/orbitscore/pull/1003))
+- README と DSL の仕様書に、DSL の実装の許諾の案（未確定）を載せた ([`#1003`](https://github.com/signalcompose/orbitscore/pull/1003))
+
 ## [4.4.0] - 2026-10-23
 
 修正と小さな機能追加のリリース。audio シーケンスの意味論・wire・出力は変更なし。
@@ -235,7 +257,8 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
 - ローカル / オフライン閲覧手順を README に追記
 - README に学習サイト (web) セクションを追加
 
-[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.4.0...HEAD
+[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v4.4.1...HEAD
+[4.4.1]: https://github.com/signalcompose/orbitscore/compare/v4.4.0...v4.4.1
 [4.4.0]: https://github.com/signalcompose/orbitscore/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/signalcompose/orbitscore/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/signalcompose/orbitscore/compare/v4.2.0...v4.2.1

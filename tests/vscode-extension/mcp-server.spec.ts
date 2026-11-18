@@ -181,7 +181,10 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
 
 // ── Server bring-up (ephemeral port, retry on EADDRINUSE) ──────────────────
 
-async function startTestServer(handlers: OrbitScoreToolHandlers): Promise<McpServerHandle> {
+async function startTestServer(
+  handlers: OrbitScoreToolHandlers,
+  log: (message: string) => void = () => {},
+): Promise<McpServerHandle> {
   let lastErr: unknown
   for (let attempt = 0; attempt < 15; attempt++) {
     const port = 20000 + Math.floor(Math.random() * 20000)
@@ -190,7 +193,7 @@ async function startTestServer(handlers: OrbitScoreToolHandlers): Promise<McpSer
         port,
         version: '0.0.0-test',
         handlers,
-        log: () => {},
+        log,
       })
     } catch (err) {
       lastErr = err
@@ -212,7 +215,7 @@ interface RawResponse {
 function postJson(
   port: number,
   body: unknown,
-  opts: { sessionId?: string; path?: string; hostHeader?: string } = {},
+  opts: { sessionId?: string; path?: string; hostHeader?: string; originHeader?: string } = {},
 ): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body))
@@ -223,6 +226,7 @@ function postJson(
     }
     if (opts.sessionId) headers['mcp-session-id'] = opts.sessionId
     if (opts.hostHeader) headers.host = opts.hostHeader
+    if (opts.originHeader !== undefined) headers.origin = opts.originHeader
 
     const req = http.request(
       {
@@ -247,6 +251,42 @@ function postJson(
     )
     req.on('error', reject)
     req.end(payload)
+  })
+}
+
+function requestWithoutBody(
+  port: number,
+  method: 'GET' | 'DELETE',
+  opts: { sessionId?: string; path?: string; originHeader?: string } = {},
+): Promise<RawResponse> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = { accept: 'application/json, text/event-stream' }
+    if (opts.sessionId) headers['mcp-session-id'] = opts.sessionId
+    if (opts.originHeader !== undefined) headers.origin = opts.originHeader
+
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: opts.path ?? '/mcp',
+        method,
+        headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8')
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            json: raw ? JSON.parse(raw) : undefined,
+          })
+        })
+      },
+    )
+    req.on('error', reject)
+    req.end()
   })
 }
 
@@ -1147,6 +1187,128 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     )
     expect(res.status).toBe(403)
     expect((res.json as { error?: string }).error).toContain('Host')
+  })
+
+  it('rejects an initialize POST with an Origin header before opening a session', async () => {
+    const { handlers } = createStubHandlers()
+    const logs: string[] = []
+    handle = await startTestServer(handlers, (message) => logs.push(message))
+
+    const res = await postJson(
+      handle.port,
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { originHeader: 'https://example.com' },
+    )
+
+    expect(res.status).toBe(403)
+    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    expect(logs.some((message) => message.includes('MCP session opened'))).toBe(false)
+
+    const client = new McpTestClient(handle.port)
+    const allowed = await client.initialize()
+    expect(allowed.status).toBe(200)
+    expect(logs.some((message) => message.includes('MCP session opened'))).toBe(true)
+  })
+
+  it('rejects an Origin-bearing tools/call on an established session before invoking its handler', async () => {
+    const { handlers, calls } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await postJson(
+      handle.port,
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_engine_state', arguments: {} },
+      },
+      { sessionId: client.sessionId, originHeader: 'https://example.com' },
+    )
+
+    expect(res.status).toBe(403)
+    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('rejects an Origin-bearing GET on an established session with 403', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await requestWithoutBody(handle.port, 'GET', {
+      sessionId: client.sessionId,
+      originHeader: 'https://example.com',
+    })
+
+    expect(res.status).toBe(403)
+    expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+  })
+
+  it('rejects an Origin-bearing DELETE without closing the established session', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const rejected = await requestWithoutBody(handle.port, 'DELETE', {
+      sessionId: client.sessionId,
+      originHeader: 'https://example.com',
+    })
+
+    expect(rejected.status).toBe(403)
+    expect((rejected.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    expect((await client.toolsList()).status).toBe(200)
+  })
+
+  it.each(['', 'null', 'same-origin'] as const)(
+    'rejects Origin: %s on POST /mcp',
+    async (originCase) => {
+      const { handlers } = createStubHandlers()
+      handle = await startTestServer(handlers)
+      const originHeader =
+        originCase === 'same-origin' ? `http://127.0.0.1:${handle.port}` : originCase
+
+      const res = await postJson(
+        handle.port,
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+        { originHeader },
+      )
+
+      expect(res.status).toBe(403)
+      expect((res.json as { error?: string }).error).toBe('forbidden: Origin header not allowed')
+    },
+  )
+
+  it('truncates a rejected Origin to 200 characters in the log', async () => {
+    const { handlers } = createStubHandlers()
+    const logs: string[] = []
+    handle = await startTestServer(handlers, (message) => logs.push(message))
+    const originHeader = 'x'.repeat(300)
+
+    const res = await postJson(
+      handle.port,
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { originHeader },
+    )
+
+    expect(res.status).toBe(403)
+    expect(logs).toContain(
+      `MCP request rejected — Origin header present: ${originHeader.slice(0, 200)}`,
+    )
+  })
+
+  it('allows initialize POST /mcp when the Origin header is absent', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+
+    const res = await client.initialize()
+
+    expect(res.status).toBe(200)
+    expect(res.headers['mcp-session-id']).toBeTypeOf('string')
   })
 
   it('register_mcp_server is listed ONLY when the optional handler is provided, and round-trips args', async () => {

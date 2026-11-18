@@ -6,7 +6,7 @@ verified-at: "2026-09-12"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。 さらに 2026-09-18 に v4.2.1 のリリース（PR [#962](https://github.com/signalcompose/orbitscore/pull/962)・#954 cold install した `.vsix` への user サイト同梱）まで**拡張の版表記だけ**追従しました。 さらに 2026-10-05 に v4.3.0 のリリース（[#975](https://github.com/signalcompose/orbitscore/issues/975)・#967 音高の乱数 `r` / `rr` / `random.<mode>`）まで**拡張の版表記だけ**追従しました。 さらに 2026-10-23 に v4.4.0 のリリース（[#992](https://github.com/signalcompose/orbitscore/issues/992)・#966 `evaluate_orbitscore` の基準ディレクトリ / #982 VST3 の controller state）まで**拡張の版表記だけ**追従しました。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-12 に #883（拡張 4.0.0 / `DSL_VERSION` 2.0）まで**バージョン節だけ**、同じく 2026-09-12 に #878（PR [#889](https://github.com/signalcompose/orbitscore/pull/889)・engine を VS Code 同梱の Node で起動し、daemon へは `ELECTRON_RUN_AS_NODE` を渡さない）まで**engine / daemon の spawn 節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。 さらに 2026-09-13 に #926（PR [#928](https://github.com/signalcompose/orbitscore/pull/928)）の 4.1.0 リリースまで**拡張の版表記だけ**追従しました。 さらに 2026-09-14 に v4.2.0 のリリース（PR [#941](https://github.com/signalcompose/orbitscore/pull/941)・#939 カーソル位置のプラグイン UI / #940 ホスト前面時の floating）まで**拡張の版表記だけ**追従しました。 さらに 2026-09-18 に v4.2.1 のリリース（PR [#962](https://github.com/signalcompose/orbitscore/pull/962)・#954 cold install した `.vsix` への user サイト同梱）まで**拡張の版表記だけ**追従しました。 さらに 2026-10-05 に v4.3.0 のリリース（[#975](https://github.com/signalcompose/orbitscore/issues/975)・#967 音高の乱数 `r` / `rr` / `random.<mode>`）まで**拡張の版表記だけ**追従しました。 さらに 2026-10-23 に v4.4.0 のリリース（[#992](https://github.com/signalcompose/orbitscore/issues/992)・#966 `evaluate_orbitscore` の基準ディレクトリ / #982 VST3 の controller state）まで**拡張の版表記だけ**追従しました。 さらに 2026-11-18 に v4.4.1 のリリース（[#1043](https://github.com/signalcompose/orbitscore/issues/1043)・`/mcp` が `Origin` つきの要求を 403 で拒否する）まで**拡張の版表記だけ**追従しました。
 
 # 0-2. アーキテクチャ全景
 
@@ -234,7 +234,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 サーバーは loopback にしか bind しません。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:314-318
+// packages/vscode-extension/src/mcp-server.ts:327-331
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -627,10 +627,10 @@ export const DSL_VERSION = '2.0'
 
 - **`ENGINE_VERSION`**: `2.0.0` — `.orbslog` の meta ヘッダが名乗る版。MIDI 出力 + Pitch DSL + session log を含む WCTM milestone
 - **DSL spec バージョン**: `2.0` — DSL spec の軸 (`ENGINE_VERSION` とも拡張の版とも別)
-- **VS Code 拡張の package version**: `4.4.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
+- **VS Code 拡張の package version**: `4.4.1` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.4.0` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
+上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `4.4.1` の食い違いは事故ではなく設計です。#883 では暗黙終端を廃止する互換性のない変更により、拡張を 4.0.0、`DSL_VERSION` を 2.0 に上げました。
 
 なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '2.0'` (DSL spec 版) とは軸が違います。
 
@@ -675,7 +675,7 @@ export const DSL_VERSION = '2.0'
 - **`AudioEngineBackend` の契約面**: optional メソッドの一覧と、SC 側が実装していないものを表にする
 - **`RustEnginePlayer` のクロックマッピング**: `StreamStats` (1Hz) で anchor を補正する仕組みと lookahead の実測値
 - **`DaemonClient` の recovery**: daemon crash 検出 → respawn → `establishSession()` の再実行の流れ (#389)
-- **MCP ツール面の全体像**: `mcp-server.ts` に登録されている 26 個の `registerTool` の分類 (engine 操作 / editor 操作 / 観測)
+- **MCP ツール面の全体像**: `mcp-tools-engine.ts`（7 個）・`mcp-tools-editor.ts`（12 個）・`mcp-tools-plugins.ts`（7 個）に登録されている計 26 個の `registerTool` の分類 (engine 操作 / editor 操作 / 観測)
 - **extension ↔ engine 間の型境界**: `engine-startup-runtime.ts` が engine の compiled JS を `require()` する構造の管理方法 (対になっていた `resolveScsynthForUI()` は #502 で削除)
 - **daemon の graceful shutdown ギャップ (#448)**: SIGTERM ハンドラ不在と `ParentWatch` による child 側防御
 
@@ -688,8 +688,8 @@ export const DSL_VERSION = '2.0'
 - `packages/vscode-extension/src/engine-process.ts:645-683` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
 - `packages/vscode-extension/src/agent-handlers.ts:72-79` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する
 - `packages/vscode-extension/src/engine-startup-runtime.ts:14-20` — `resolveDaemonBinaryForExtension()`
-- `packages/vscode-extension/src/mcp-server.ts:9-28` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)
-- `packages/vscode-extension/src/mcp-server.ts:128-319` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
+- `packages/vscode-extension/src/mcp-server.ts:31-40` — MCP サーバーの設計コメント (Agent Bridge、127.0.0.1 bind)
+- `packages/vscode-extension/src/mcp-server.ts:135-352` — `startOrbitScoreMcpServer()`: Streamable HTTP、DNS rebinding 対策、listen
 - `packages/engine/src/cli-audio.ts:1-41` — CLI entry point
 - `packages/engine/src/cli/execute-command.ts:105-113` — `repl` サブコマンドのルーティング
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: interpreter 生成 → boot → REPL 開始
