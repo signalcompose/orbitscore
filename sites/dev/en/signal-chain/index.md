@@ -6,7 +6,7 @@ verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #780 / #789 (PR [#789](https://github.com/signalcompose/orbitscore/pull/789), the two defects in the pre-merge gate) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #780 / #789 (PR [#789](https://github.com/signalcompose/orbitscore/pull/789), the two defects in the pre-merge gate) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time. It was further brought up to [#1043](https://github.com/signalcompose/orbitscore/issues/1043) (PR [#1044](https://github.com/signalcompose/orbitscore/pull/1044) — from the retired `macos-14` to `macos-26`) on 2026-11-18 — **the hardware-CI runner image name only**.
 
 # SC-1. Racks — Writing a Chain as a Value (SC.10)
 
@@ -1339,7 +1339,7 @@ which made it a tautology — "rewrite the constant and both sides move together
 `b"db"` is that fix. Because `contract.rs` instantiates the plugin in-process
 (`load_from_clack`), it also runs under `cargo test --workspace` on ubuntu.
 
-On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack child's
+On the hardware side, `release.yml` (macos-26) builds the bundle, runs the rack child's
 `#[ignore]` tests, and then verifies that `std-plugins/Gain.clap` is present inside the packaged
 `.vsix`.
 

@@ -17,6 +17,32 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): follow PR #1044 into the rack chapter's release runner image (Nov 18, 2026)
+
+**Date**: 2026-11-18 / **ブランチ**: `claude/docs-sync-pr1044` / **追従元**: PR [#1044](https://github.com/signalcompose/orbitscore/pull/1044)（マージコミット `7484e89`） / **Issue**: [#1043](https://github.com/signalcompose/orbitscore/issues/1043)
+
+凍結版 4.4.1 の PR が `.github/workflows/release.yml:51` の runner を `macos-14`（2026-11-02 に
+GitHub Actions から廃止）→ `macos-26` へ動かしたが、dev サイトの SC-1（ラック）の散文が
+runner image を `macos-14` と名指ししたまま残っていた。PR 自身は `release.yml` の中のコメント
+2 か所は直していたが、サイト側の散文は範囲に入っていなかった。
+
+- `sites/dev/signal-chain/index.md:1313` / `sites/dev/en/signal-chain/index.md:1342` の
+  `release.yml`（macos-14）→ `macos-26`。すぐ下の引用ブロック（`release.yml:99-105`）は
+  runner に触れていないので変わらない
+- 両ページの Note に「runner image の表記だけ追従した」の 1 文。`verified-against` /
+  `verified-at` は**動かしていない** — 直したのは 1 語で、ページ全体を再検証していないため
+  （`vscode-architecture.md` の版表記だけの追従と同じ扱い）
+- `npm run docs:check` は 1010 verified / 0 failed・user サイト 0 error。両サイトのビルドも緑
+
+追従不要と判断したもの（理由は PR 本文）: `rust/` の clippy 2 件（`needless_range_loop` の
+書き換え・振る舞い同一・サイトから引用されていない）/ `sites/user/` `docs/user/`（MCP の
+HTTP 表面を書いていない・現在の版を名乗る記述が無い）/ `docs/specs-v2/`（DSL の変更なし）/
+sites/dev の editor 章（凍結版の実装差分・CLAUDE.md の凍結規則）。
+
+Part of #1043
+
+---
+
 ### docs(dev-site): fix the prose that still places split-out code in mcp-server.ts (Nov 18, 2026)
 
 **Date**: 2026-11-18 / **ブランチ**: `1043-frozen-441` / **PR**: [#1044](https://github.com/signalcompose/orbitscore/pull/1044)
